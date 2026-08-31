@@ -28,6 +28,10 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
+from app.modules.agent.domain.ports import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
@@ -65,14 +69,25 @@ from app.modules.agent.tools.snooze.models import (
 logger = get_logger(__name__)
 
 
+def _scope_allows(scope: object) -> bool:
+    """Whether one usage window still has headroom.
+
+    `get_usage_limits` answers with a `dict[str, object]`, so each window
+    arrives untyped. Anything unreadable counts as allowed: this list only
+    names the limits to report, and the decision to block was already made by
+    the `allowed` flag above.
+    """
+    return not isinstance(scope, dict) or bool(scope.get("allowed", True))
+
+
 class TurnCoordinator:
     """Starts the run that answers a message, and stops the one in flight."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: object,
-        agent_repository: object,
+        conversation_repository: ConversationRepository,
+        agent_repository: AgentRepository,
         approvals: ApprovalCoordinator,
         pauses: PauseResume,
         usage_service: UsageService | None,
@@ -317,11 +332,8 @@ class TurnCoordinator:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id
-        )
-        validate_conversation_access(
-            conversation,
+        conversation = validate_conversation_access(
+            await self.conversation_repository.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
@@ -437,7 +449,7 @@ class TurnCoordinator:
                 ("user weekly", "user_weekly"),
                 ("user monthly", "user_monthly"),
             )
-            if not limits[key]["allowed"]
+            if not _scope_allows(limits[key])
         ]
         raise UsageLimitExceededError(
             "LLM usage limit exceeded: "

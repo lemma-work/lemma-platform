@@ -108,6 +108,46 @@ def test_scenarios_do_not_mock():
     )
 
 
+def test_a_scenario_waits_on_a_named_budget():
+    """No scenario invents its own deadline.
+
+    `eventually` says the bound "lives in one place. When CI is loaded and
+    everything is three times slower, one number moves." That was not true:
+    thirty-two call sites carried eight different literals, tuned one at a time
+    against whatever a shared deployment did that day, and a run failed on
+    whichever happened to be tightest. Naming them says what is being waited
+    for — a change becoming visible, a run settling, a model acting, background
+    work landing — and puts each number back in one place.
+
+    Only `eventually`'s own bound is policed. An HTTP client timeout is how long
+    one request may take, and a socket wait that proves nothing arrives is paid
+    on every green run rather than only on a failing one; neither is this kind
+    of bound, and both are still written as numbers on purpose.
+    """
+    offenders: list[str] = []
+    for path in _scenario_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
+            )
+            if name not in {"eventually", "waits_for_an_approval_in"}:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "timeout":
+                    continue
+                if isinstance(keyword.value, ast.Constant):
+                    offenders.append(f"{path.relative_to(SUITE)}:{keyword.value.lineno}")
+    assert not offenders, (
+        "wait on a named budget from `harness.waiting` rather than a literal, so "
+        "one number moves when the deployment is slow:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_scenarios_do_not_sleep():
     """No scenario waits by sleeping.
 

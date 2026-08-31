@@ -14,6 +14,7 @@ import time
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.waiting import UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Connectors and accounts"),
@@ -99,7 +100,7 @@ async def test_a_hanging_provider_is_given_up_on(connected):
                 f"{auth_config['name']}/operations/{SLOW}/execute",
                 json={"payload": {}},
             ),
-            timeout=90.0,
+            timeout=UNTIL_A_RUN_SETTLES,
         )
     except TimeoutError:  # pragma: no cover - the failure this is looking for
         raise AssertionError(

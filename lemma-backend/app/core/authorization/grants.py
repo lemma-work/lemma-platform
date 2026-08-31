@@ -45,9 +45,21 @@ HUMAN_GRANTEE_TYPES: tuple[str, ...] = ("ROLE", "POD_MEMBER")
 
 
 class ResourceGrantInputProtocol(Protocol):
-    resource_type: ResourceType
-    resource_name: str
-    permission_ids: list[str]
+    """What `normalize_pod_resource_grants` reads off a grant.
+
+    Read-only properties rather than attributes: a `Protocol` declaring plain
+    attributes requires them to be *settable*, which quietly excludes every
+    frozen dataclass -- and the callers here pass exactly that.
+    """
+
+    @property
+    def resource_type(self) -> ResourceType: ...
+
+    @property
+    def resource_name(self) -> str: ...
+
+    @property
+    def permission_ids(self) -> list[str]: ...
 
 
 def ensure_grant_uses_resource_name(data: Any) -> Any:

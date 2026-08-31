@@ -27,6 +27,7 @@ for its own effect before doing it again.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -38,8 +39,10 @@ from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.errors import UnknownApprovalError
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.ports import ConversationRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
+    JsonObject,
     MessageDraft,
     MessageKind,
 )
@@ -55,13 +58,28 @@ from app.modules.agent.services.pause_resume import PauseResume
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class PausedCall:
+    """The pausing tool call a resolve is about.
+
+    A record rather than the `dict[str, object]` this used to be: the lookup
+    already proves the run id is present and the kind is one of the pausing
+    tools, and a dict threw both facts away one line later -- so every field had
+    to be re-derived, `str()`-ed or re-checked at each use.
+    """
+
+    agent_run_id: UUID
+    kind: str
+    tool_args: JsonObject
+
+
 class ApprovalCoordinator:
     """Turns a resolved pause into a persisted decision and a resumed run."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: object,
+        conversation_repository: ConversationRepository,
         resume_returns: ResumeToolReturnBuilder,
         pauses: PauseResume,
     ) -> None:
@@ -122,9 +140,9 @@ class ApprovalCoordinator:
             # deleted, so a recorded decision always has its call. Guard anyway —
             # we cannot faithfully rebuild a resume without the original call.
             raise UnknownApprovalError()
-        kind = str(paused["kind"])
-        tool_args = paused["tool_args"] if isinstance(paused["tool_args"], dict) else {}
-        paused_run_id = paused["agent_run_id"]
+        kind = paused.kind
+        tool_args = paused.tool_args
+        paused_run_id = paused.agent_run_id
 
         if decision_row is None:
             # Fresh resolve: record the decision. The unique (conversation,
@@ -366,17 +384,37 @@ class ApprovalCoordinator:
         message: Message,
         user_id: UUID,
     ) -> Message | None:
+        # Re-established rather than assumed: the caller's filter proves the
+        # call id and the tool name, but none of that survives being passed as a
+        # `Message`. A call missing any of the three cannot have a faithful
+        # return synthesized for it.
+        tool_call_id = message.tool_call_id
+        tool_name = message.tool_name
+        agent_run_id = message.agent_run_id
+        if tool_call_id is None or tool_name is None or agent_run_id is None:
+            # Only the run id is genuinely unproven here, and losing it is not
+            # cosmetic: the pause stays unresolved, so the next run rebuilds a
+            # history still showing an open question nobody can now answer.
+            # Said out loud because the alternative is a conversation that
+            # quietly stops making sense.
+            logger.warning(
+                "agent.conversation_approvals.pause_without_run_skipped.degraded",
+                conversation_id=str(conversation.id),
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+            )
+            return None
         tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
         decision_tool_name = (
             "ask_user"
-            if message.tool_name == "ask_user"
+            if tool_name == "ask_user"
             else str(tool_args.get("tool_name") or "request_approval")
         )
-        response = {"superseded_by_new_message": True}
+        response: JsonObject = {"superseded_by_new_message": True}
         recorded = await self.conversation_repository.record_approval_decision(
             conversation_id=conversation.id,
-            approval_id=message.tool_call_id,
-            agent_run_id=message.agent_run_id,
+            approval_id=tool_call_id,
+            agent_run_id=agent_run_id,
             tool_name=decision_tool_name,
             decision=AgentRunApprovalDecision.DENY,
             response=response,
@@ -388,25 +426,25 @@ class ApprovalCoordinator:
             return None
         existing_return = await self.conversation_repository.get_tool_return(
             conversation_id=conversation.id,
-            tool_call_id=message.tool_call_id,
+            tool_call_id=tool_call_id,
         )
         if existing_return is not None:
             return None
         return_tool_name, tool_result = await self.resume_returns.build(
             conversation=conversation,
             user_id=user_id,
-            kind=message.tool_name,
+            kind=tool_name,
             tool_args=tool_args,
             decision=AgentRunApprovalDecision.DENY,
             response=response,
-            paused_agent_run_id=message.agent_run_id,
+            paused_agent_run_id=agent_run_id,
             deliver_to_host=False,
         )
         return await self.conversation_repository.append_message(
             conversation_id=conversation.id,
-            agent_run_id=message.agent_run_id,
+            agent_run_id=agent_run_id,
             draft=MessageDraft.of_tool_return(
-                tool_call_id=message.tool_call_id,
+                tool_call_id=tool_call_id,
                 tool_name=return_tool_name,
                 tool_result=tool_result,
             ),
@@ -417,12 +455,12 @@ class ApprovalCoordinator:
         *,
         conversation_id: UUID,
         approval_id: str,
-    ) -> dict[str, object] | None:
+    ) -> PausedCall | None:
         """The pausing tool call for an approval, regardless of decision state.
 
         Addressed directly by ``tool_call_id`` (not a message-window scan) so a
         long conversation can't hide the original call during resume
-        reconciliation. Returns ``{agent_run_id, kind, tool_args}`` or ``None``.
+        reconciliation.
         """
         message = await self.conversation_repository.get_tool_call(
             conversation_id=conversation_id,
@@ -430,16 +468,17 @@ class ApprovalCoordinator:
         )
         if (
             message is None
+            or message.tool_name is None
             or message.tool_name not in PAUSING_TOOL_NAMES
             or message.agent_run_id is None
         ):
             return None
         tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
-        return {
-            "agent_run_id": message.agent_run_id,
-            "kind": message.tool_name,
-            "tool_args": tool_args,
-        }
+        return PausedCall(
+            agent_run_id=message.agent_run_id,
+            kind=message.tool_name,
+            tool_args=tool_args,
+        )
 
     async def oldest_unresolved_pause(
         self,

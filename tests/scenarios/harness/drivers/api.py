@@ -19,12 +19,34 @@ Two conventions worth knowing:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 
 JSON = dict[str, Any]
+
+#: How many times a throttled request is sent again before giving up, and how
+#: long to wait between tries. Doubling from a fifth of a second gives about
+#: three seconds in total — long enough to ride out the bursts this suite
+#: creates, short enough that a deployment which is genuinely refusing still
+#: fails inside a scenario's own deadline rather than eating it.
+_THROTTLE_ATTEMPTS = 5
+_THROTTLE_BACKOFF_SECONDS = 0.2
+
+
+def _is_throttling(response: httpx.Response) -> bool:
+    """A 429 that means "slow down", not one that means "you are over a limit"."""
+    if response.status_code != 429:
+        return False
+    try:
+        code = str((response.json() or {}).get("code") or "")
+    except Exception:
+        # A throttle from a proxy or gateway need not answer in our JSON shape,
+        # and an unreadable body is not evidence of a deliberate refusal.
+        return True
+    return code != "USAGE_LIMIT_EXCEEDED"
 
 
 class UnexpectedResponse(AssertionError):
@@ -95,7 +117,7 @@ class ApiDriver:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
 
     async def call(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        response = await self._send(method, path, **kwargs)
+        response = await self._send_through_throttling(method, path, **kwargs)
         if not self._session_ran_out(response):
             return response
         # Renew once and try again. Once, because a second 401 after a fresh
@@ -108,7 +130,33 @@ class ApiDriver:
             await self._renew()  # type: ignore[misc]
         finally:
             self._renewing = False
-        return await self._send(method, path, **kwargs)
+        return await self._send_through_throttling(method, path, **kwargs)
+
+    async def _send_through_throttling(
+        self, method: str, path: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Send, and try again while the deployment is asking us to slow down.
+
+        A throttling 429 is the deployment saying "ask again shortly". It is
+        never the product being broken, and every client worth the name retries
+        it — so a scenario that reports one as a failure is reporting the
+        suite's own burstiness as a defect. This suite is a burst by nature:
+        hundreds of requests from one runner against a deployment other people
+        are also using. Three scenarios died on a 429 in a single run, and the
+        signup that seeds the whole tenant died on one in another.
+
+        Deliberately narrow, in the same way the 401 renewal below is. A spend
+        cap also answers 429, and *that* one is a promise
+        (`test_work_over_the_limit_is_refused_clearly` asserts it): a refusal
+        naming the limit it hit is an answer, not a "come back later", so it is
+        returned untouched and only an unnamed throttle is retried.
+        """
+        for attempt in range(_THROTTLE_ATTEMPTS):
+            response = await self._send(method, path, **kwargs)
+            if not _is_throttling(response) or attempt == _THROTTLE_ATTEMPTS - 1:
+                return response
+            await asyncio.sleep(_THROTTLE_BACKOFF_SECONDS * (2**attempt))
+        return response
 
     def _session_ran_out(self, response: httpx.Response) -> bool:
         """A 401 on a request that carried a token, and that we can do something about.

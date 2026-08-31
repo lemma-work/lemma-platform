@@ -16,11 +16,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import HttpUrl
+from pydantic import HttpUrl, SecretStr
 
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
+    RuntimeCredentials,
     reveal_credentials,
 )
 from app.modules.agent.domain.sentinels import UnsetType
@@ -39,7 +40,7 @@ class ProviderProfilePatch:
     base_url_changed: bool
     headers: dict[str, str]
     model_settings: dict[str, object]
-    credentials: ApiKeyRuntimeCredentials | None
+    credentials: RuntimeCredentials | None
     rediscover: bool
     config_changed: bool
 
@@ -141,7 +142,7 @@ def _next_credentials(*, api_key, stored_credentials, is_anthropic: bool):
         if is_anthropic:
             raise ValueError("An Anthropic-compatible profile requires an API key")
         return None
-    return ApiKeyRuntimeCredentials(api_key=str(api_key).strip())
+    return ApiKeyRuntimeCredentials(api_key=SecretStr(str(api_key).strip()))
 
 
 def resolve_catalog_names(profile, model_names, discovered) -> list[str]:

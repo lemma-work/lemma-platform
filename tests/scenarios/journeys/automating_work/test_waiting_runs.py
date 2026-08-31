@@ -10,7 +10,7 @@ second time.
 from __future__ import annotations
 
 from harness import capability, covers, journey, proves, scenario
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_A_RUN_SETTLES
 
 pytestmark = [
     journey("Automating work"),
@@ -57,7 +57,7 @@ async def _a_waiting_run(alice, pod):
         lambda: alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}"),
         lambda state: str(state.get("status")).upper() == "WAITING",
         describe="the run to stop on the person it needs",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     return workflow, waiting
 
@@ -107,7 +107,7 @@ async def test_answering_resumes_the_run(world):
             str(state.get("status")).upper() in {"COMPLETED", "FAILED", "CANCELLED"}
         ),
         describe="the run to carry on once it was answered",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert str(finished.get("status")).upper() == "COMPLETED", (
         f"the run resumed and then did not finish cleanly: {finished}"
@@ -142,7 +142,7 @@ async def test_a_repeated_answer_resumes_once(world):
             str(state.get("status")).upper() in {"COMPLETED", "FAILED", "CANCELLED"}
         ),
         describe="the run to reach a terminal state",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert str(finished.get("status")).upper() == "COMPLETED", (
         f"submitting the same answer twice broke the run: {finished} "
@@ -176,7 +176,7 @@ async def test_cancelling_a_live_run_stops_it(world):
         lambda: alice.api.get(f"/pods/{pod['id']}/workflow-runs/{run['id']}"),
         lambda state: str(state.get("status")).upper() == "CANCELLED",
         describe="the run to report itself stopped",
-        timeout=60.0,
+        timeout=UNTIL_A_RUN_SETTLES,
     )
     assert str(stopped.get("status")).upper() == "CANCELLED", stopped
 

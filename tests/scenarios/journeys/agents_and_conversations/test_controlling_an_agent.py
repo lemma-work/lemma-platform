@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.waiting import UNTIL_A_MODEL_ACTS
 
 pytestmark = [journey("Agents and conversations"), capability("Stay in control")]
 
@@ -103,7 +104,7 @@ async def test_a_message_sent_mid_run_is_answered(pod):
     assert isinstance(added["started_new_run"], bool)
 
     await alice.waits_for_the_run_to_settle(
-        conversation=conversation, in_pod=the_pod, timeout=90.0
+        conversation=conversation, in_pod=the_pod, timeout=UNTIL_A_MODEL_ACTS
     )
     messages = await alice.messages_in(conversation, in_pod=the_pod)
 
