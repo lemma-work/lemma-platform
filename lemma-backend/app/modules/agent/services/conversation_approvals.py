@@ -385,13 +385,24 @@ class ApprovalCoordinator:
         user_id: UUID,
     ) -> Message | None:
         # Re-established rather than assumed: the caller's filter proves the
-        # call id, and a persisted tool call always names its tool and its run,
-        # but none of that survives being passed as a `Message`. A call missing
-        # any of the three cannot have a faithful return synthesized for it.
+        # call id and the tool name, but none of that survives being passed as a
+        # `Message`. A call missing any of the three cannot have a faithful
+        # return synthesized for it.
         tool_call_id = message.tool_call_id
         tool_name = message.tool_name
         agent_run_id = message.agent_run_id
         if tool_call_id is None or tool_name is None or agent_run_id is None:
+            # Only the run id is genuinely unproven here, and losing it is not
+            # cosmetic: the pause stays unresolved, so the next run rebuilds a
+            # history still showing an open question nobody can now answer.
+            # Said out loud because the alternative is a conversation that
+            # quietly stops making sense.
+            logger.warning(
+                "agent.conversation_approvals.pause_without_run_skipped.degraded",
+                conversation_id=str(conversation.id),
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+            )
             return None
         tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
         decision_tool_name = (

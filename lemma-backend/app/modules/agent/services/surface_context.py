@@ -16,7 +16,21 @@ from __future__ import annotations
 from typing import TypedDict
 from uuid import UUID
 
+from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
+
+logger = get_logger(__name__)
+
+#: The metadata keys `_text` narrows. Named once so the drop warning can say
+#: which of them was discarded without each call site repeating itself.
+_TEXT_KEYS = (
+    "surface_platform",
+    "external_channel_id",
+    "external_thread_id",
+    "external_user_id",
+    "external_message_id",
+    "agent_display_name",
+)
 
 
 class SurfaceContext(TypedDict):
@@ -43,6 +57,7 @@ def surface_context_from_conversation(conversation: Conversation) -> SurfaceCont
     """The surface fields a tool context needs, or nulls when there is no surface."""
     metadata = conversation.metadata or {}
     surface_id = metadata.get("surface_id")
+    _warn_about_dropped_text(conversation, metadata)
     return {
         "surface_id": UUID(str(surface_id)) if surface_id else None,
         "surface_platform": _text(metadata.get("surface_platform")),
@@ -64,9 +79,41 @@ def _text(value: object) -> str | None:
     int on the wire and `str()`-ed by its adapter), so this narrows rather than
     converts. Metadata that somehow holds another type used to reach pydantic
     and fail the whole run at context construction; dropping the one field is
-    the smaller loss.
+    the smaller loss. `_warn_about_dropped_text` is what keeps it from being a
+    silent one.
     """
     return value if isinstance(value, str) else None
+
+
+def _warn_about_dropped_text(conversation: Conversation, metadata: object) -> None:
+    """Say so when `_text` is about to discard a field.
+
+    Once per conversation naming every offender, rather than once per field:
+    metadata that holds the wrong type usually holds it for the whole surface,
+    and six lines would say the same thing six times.
+
+    This should never fire. If it does, a reply is going to the wrong place or
+    nowhere -- an agent with no `external_channel_id` has nothing to answer on
+    -- and the field it names is where the surface that wrote it went wrong.
+    """
+    if not isinstance(metadata, dict):
+        return
+    dropped = sorted(
+        key
+        for key in _TEXT_KEYS
+        if (value := metadata.get(key)) is not None and not isinstance(value, str)
+    )
+    if not dropped:
+        return
+    logger.warning(
+        "agent.surface_context.non_text_metadata_dropped.degraded",
+        conversation_id=str(conversation.id),
+        # Joined, not a list: the log pipeline drops a list-valued field and
+        # keeps only its name, so `metadata_fields=[...]` would have reported
+        # that something called `metadata_fields` went missing and left the
+        # actual names -- the whole point of the line -- out of the record.
+        metadata_fields=",".join(dropped),
+    )
 
 
 def _parsed_event_metadata(payload: object) -> object:
