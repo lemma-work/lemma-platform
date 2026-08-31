@@ -398,6 +398,46 @@ async def test_a_non_email_surface_passes_straight_through(monkeypatch):
     assert "surface_identity_email" not in service.create_surface.await_args.kwargs
 
 
+def test_normalize_resend_inbound_passes_the_headers_through():
+    """The headers reach the parser, not just the threading fields.
+
+    The parser authenticates the `From:` from `Authentication-Results` when the
+    payload carries it. Normalizing read the headers for subject and message-id
+    and then dropped them, so that branch never ran on this path: a payload that
+    *did* carry a verdict arrived with none, and no verdict means nobody vouched
+    for the sender — they become a stranger and no conversation opens.
+    """
+    vouched = (
+        "amazonses.com; spf=pass smtp.mailfrom=example.com; "
+        "dkim=pass header.i=@example.com; dmarc=pass header.from=example.com"
+    )
+    normalized = _normalize_resend_inbound(
+        {
+            "type": "email.received",
+            "data": {
+                "email_id": "em_1",
+                "from": "someone@example.com",
+                "to": ["inbox@pods.example"],
+                "subject": "Hello",
+                "text": "Body",
+                "headers": {
+                    "message-id": "<a@example.com>",
+                    "authentication-results": vouched,
+                },
+            },
+        }
+    )
+
+    assert normalized["headers"] == {
+        "message-id": "<a@example.com>",
+        "authentication-results": vouched,
+    }
+
+    event = ResendInboundParser().parse(normalized)
+    assert event is not None
+    assert event.sender_authentication == "PASS"
+
+
 def test_normalize_resend_inbound_handles_envelope_and_shapes():
     normalized = _normalize_resend_inbound(
         {
