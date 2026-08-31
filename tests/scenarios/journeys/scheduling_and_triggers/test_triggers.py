@@ -11,7 +11,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually, never
+from harness.waiting import eventually, never, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [
     journey("Scheduling and triggers"),
@@ -61,7 +61,7 @@ async def test_a_record_change_fires_a_schedule(watched_table):
         lambda: _runs(alice, schedule, pod),
         bool,
         describe="the datastore schedule to fire",
-        timeout=60.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert fired, "a watched insert must produce a firing"
 

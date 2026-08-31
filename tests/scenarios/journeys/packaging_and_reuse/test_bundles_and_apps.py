@@ -7,7 +7,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 pytestmark = [journey("Packaging and reuse"), capability("Take a pod with you")]
 
@@ -43,7 +43,7 @@ async def test_a_pod_exports_to_a_downloadable_bundle(pod):
         ),
         lambda payload: str(payload.get("status")).upper() in TERMINAL_EXPORT,
         describe="the export to finish",
-        timeout=90.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert str(finished["status"]).upper() == "READY", finished
     assert finished.get("download_url") or finished.get("url"), (
