@@ -22,8 +22,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0023_schedule_pod_default_target"
-down_revision = "0022_org_names_not_unique"
+revision = "0025_schedule_pod_default_target"
+down_revision = "0024_drop_surface_schedule_id"
 branch_labels = None
 depends_on = None
 
