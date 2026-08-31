@@ -419,47 +419,15 @@ def _assert_billed_coherently(usage_event: dict, model_name: str) -> None:
     )
 
 
-@pytest.mark.real_llm
-# Two real runs per model, and a catalog may hold a reasoning model that spends
-# minutes on one of them. This lane is local and manual -- it is not in front of
-# the merge button, so the per-test budget that applies there does not apply
-# here, and waiting on a slow model is not a reason to leave it uncovered.
-@pytest.mark.timeout(900)
-@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
-@pytest.mark.parametrize("model_name", system_lemma_model_names())
-async def test_every_configured_model_streams_and_bills_what_it_used(
+async def _assert_model_streams_and_bills(
     authenticated_client,
-    fixed_test_org,
-    fixed_test_user,
-    worker,
-    monkeypatch,
-    model_name,
-):
-    """Every model in the catalog must survive a streamed run and bill for it.
-
-    Parametrised over the configured catalog rather than named models, because
-    both failures this covers are per-model and neither is reachable from the
-    default one.
-
-    A model whose endpoint validates its input rejects a request carrying a
-    non-standard `stream_options` field, and the run never completes -- so the
-    first half of this test is simply that it does, for every model shipped.
-
-    A model that repeats an already-cumulative usage total on every chunk gets
-    its prompt counted once per chunk if the streaming handler adds instead of
-    replaces. That fails nothing and raises no error; it just bills a number
-    nobody can explain. So the second half asks the same agent two questions of
-    the same size, one answered briefly and one at length, and holds the prompt
-    cost to the question rather than to the answer.
-    """
-    _ = worker
-    real_api_key = system_lemma_api_key()
-    monkeypatch.setenv("LEMMA_OPENAI_API_KEY", real_api_key)
-    monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
-    org_id = fixed_test_org["id"]
-    user_id = fixed_test_user["id"]
-    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-
+    *,
+    org_id: str,
+    user_id: str,
+    pod_id: str,
+    model_name: str,
+) -> None:
+    """Ask one model two questions of the same size and check what it charged."""
     create_agent = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
         json={
@@ -500,8 +468,12 @@ async def test_every_configured_model_streams_and_bills_what_it_used(
 
     # The two runs really did stream at different lengths, which is what makes
     # the comparison below meaningful rather than incidental.
-    assert long_run["output_tokens"] > _A_LONG_ANSWER, long_run
-    assert long_run["output_tokens"] > short_run["output_tokens"], (short_run, long_run)
+    assert long_run["output_tokens"] > _A_LONG_ANSWER, (model_name, long_run)
+    assert long_run["output_tokens"] > short_run["output_tokens"], (
+        model_name,
+        short_run,
+        long_run,
+    )
 
     growth = long_run["input_tokens"] / short_run["input_tokens"]
     assert growth < _PROMPT_COST_GROWTH_LIMIT, (
@@ -510,6 +482,65 @@ async def test_every_configured_model_streams_and_bills_what_it_used(
         f"({short_run['input_tokens']} -> {long_run['input_tokens']}). The "
         f"prompt is being counted once per streamed chunk rather than once."
     )
+
+
+@pytest.mark.real_llm
+# Two real runs for every model in the catalog, and a catalog may hold a
+# reasoning model that spends minutes on one of them. This lane is local and
+# manual -- it is not in front of the merge button, so the per-test budget that
+# applies there does not, and waiting on a slow model is not a reason to leave
+# it uncovered.
+@pytest.mark.timeout(1800)
+@pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+async def test_every_configured_model_streams_and_bills_what_it_used(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    worker,
+    monkeypatch,
+):
+    """Every model in the catalog must survive a streamed run and bill for it.
+
+    Covers the configured catalog rather than named models, because both
+    failures below are per-model and neither is reachable from the default one.
+
+    A model whose endpoint validates its input rejects a request carrying a
+    non-standard `stream_options` field, and the run never completes -- so the
+    first half of this test is simply that it does, for every model shipped.
+
+    A model that repeats an already-cumulative usage total on every chunk gets
+    its prompt counted once per chunk if the streaming handler adds instead of
+    replaces. That fails nothing and raises no error; it just bills a number
+    nobody can explain. So the second half asks each model two questions of the
+    same size, one answered briefly and one at length, and holds the prompt cost
+    to the question rather than to the answer.
+
+    One test looping the catalog, not one parametrised per model: the catalog is
+    read from the environment, so parametrising makes the collected test count
+    differ between a developer's machine and CI -- and the census gate that
+    exists to notice a suite quietly dropping out cannot tell that apart from a
+    suite quietly dropping out.
+    """
+    _ = worker
+    models = system_lemma_model_names()
+    if not models:
+        pytest.skip("No models configured in LEMMA_OPENAI_MODEL_NAMES.")
+
+    real_api_key = system_lemma_api_key()
+    monkeypatch.setenv("LEMMA_OPENAI_API_KEY", real_api_key)
+    monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
+    org_id = fixed_test_org["id"]
+    user_id = fixed_test_user["id"]
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+    for model_name in models:
+        await _assert_model_streams_and_bills(
+            authenticated_client,
+            org_id=org_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            model_name=model_name,
+        )
 
 
 @pytest.mark.skipif(
