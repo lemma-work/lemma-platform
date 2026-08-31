@@ -169,7 +169,7 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
         conversation_id=run.conversation_id,
         sequence=max(0, run.messages[0].sequence - 1) if run.messages else 0,
         agent_run_id=run.id,
-        role=MessageRole.USER.value,
+        role=MessageRole.USER,
         kind=MessageKind.NOTIFICATION,
         text=(
             f"{SYNTHETIC_NOTICE_PREFIX} {dropped} earlier exchange(s) in this "
@@ -254,7 +254,7 @@ def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
             # Anthropic to the front of the system prompt, ahead of the whole
             # cacheable prefix -- and this text changes as runs age out, so it
             # invalidated the breakpoint on every turn.
-            role=MessageRole.USER.value,
+            role=MessageRole.USER,
             kind=MessageKind.NOTIFICATION,
             text=(
                 f"{SYNTHETIC_NOTICE_PREFIX} earlier agent run summarized: "
@@ -300,7 +300,7 @@ def _replayable_final(
         conversation_id=run.conversation_id,
         sequence=final.sequence,
         agent_run_id=run.id,
-        role=MessageRole.USER.value,
+        role=MessageRole.USER,
         kind=MessageKind.NOTIFICATION,
         text=(
             f"{SYNTHETIC_NOTICE_PREFIX} that run ended with the result of "

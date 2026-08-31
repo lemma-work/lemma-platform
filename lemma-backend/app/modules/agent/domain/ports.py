@@ -190,6 +190,8 @@ class ConversationRepository(Protocol):
 
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 
+    async def count_queued_user_messages(self, agent_run_id: UUID) -> int: ...
+
     async def list_agent_runs_with_messages(
         self,
         conversation_id: UUID,

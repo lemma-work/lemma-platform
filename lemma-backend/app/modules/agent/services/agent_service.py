@@ -169,7 +169,7 @@ class AgentService:
         from app.composition.agent_memory import derive_agent_memory_grant
 
         await derive_agent_memory_grant(
-            self.agent_repository.uow,
+            self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
             toolsets=agent.toolsets,

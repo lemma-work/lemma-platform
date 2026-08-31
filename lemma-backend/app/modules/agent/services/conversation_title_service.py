@@ -24,7 +24,8 @@ from __future__ import annotations
 from uuid import UUID
 
 from opentelemetry import metrics
-from pydantic_ai import Agent as PydanticAIAgent, ModelSettings, UsageLimits
+from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -76,7 +77,7 @@ _TITLE_USAGE_LIMITS = UsageLimits(
 # title prompt used 246 completion tokens with 239 of them reasoning, and the
 # same call with reasoning_effort='none' produced the identical title in 5.
 # Providers that don't recognize this key ignore it.
-_TITLE_MODEL_SETTINGS: ModelSettings = {"openai_reasoning_effort": "none"}
+_TITLE_MODEL_SETTINGS: OpenAIChatModelSettings = {"openai_reasoning_effort": "none"}
 
 _TITLE_SYSTEM_PROMPT = (
     "You generate a concise title for a chat conversation. "
