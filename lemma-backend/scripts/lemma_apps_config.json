@@ -869,7 +869,7 @@
   {
     "name": "github",
     "title": "GitHub",
-    "description": "GitHub connector for repositories, issues, pull requests, gists, and releases.",
+    "description": "GitHub connector for repositories, issues, pull requests, reviews, releases and Actions. Backed by a GitHub App.",
     "auth_method": "OAUTH2",
     "kind": "http",
     "system_oauth": {
@@ -881,13 +881,7 @@
       "token_url": "https://github.com/login/oauth/access_token",
       "revoke_url": "",
       "userinfo_url": "https://api.github.com/user",
-      "default_scopes": [
-        "repo",
-        "workflow",
-        "read:org",
-        "gist",
-        "read:user"
-      ],
+      "default_scopes": [],
       "extra_params": {}
     },
     "agent_instruction": "Use GitHub to manage repositories, issues, pull requests, reviews, releases, and GitHub Actions. Read and write repo content, triage issues with labels, assignees and milestones, review pull requests, and read code scanning, Dependabot and secret scanning alerts.\nFor Actions: list and inspect workflow runs and their jobs, download run or job logs and artifacts, dispatch a workflow, and cancel or re-run one. Secrets and variables can be listed but not changed.\nTo write several files as one commit, use the git data operations (git_create_blob, git_create_tree, git_create_commit, git_update_ref) rather than one repos_create_or_update_file_contents per file; git_get_ref, git_update_ref, git_delete_ref and git_list_matching_refs take a whole ref path such as heads/main.\nProjects v2 exists only in GitHub's GraphQL API -- use github_graphql_request for it. For any other REST endpoint the curated operations do not cover, use github_http_request.",

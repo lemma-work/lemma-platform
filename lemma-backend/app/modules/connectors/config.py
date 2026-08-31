@@ -16,7 +16,7 @@ the legacy shared ``GOOGLE_CLIENT_ID`` / ``GOOGLE_CLIENT_SECRET``.
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -151,6 +151,39 @@ class ConnectorSettings(BaseSettings):
         description=(
             "How many external SQL engines to keep pooled. Evicting disposes "
             "the engine, so this bounds open connections to customer databases."
+        ),
+    )
+    connector_github_app_slug: Optional[str] = Field(
+        default=None,
+        description=(
+            "The GitHub App's URL slug, as in github.com/apps/<slug>. Needed to "
+            "send someone to install the App; the OAuth half works without it, "
+            "but a user token can only reach repositories the App is installed "
+            "on, so an uninstalled App authorizes fine and then sees nothing. "
+            "Env: CONNECTOR_GITHUB_APP_SLUG."
+        ),
+    )
+    connector_github_app_private_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "PEM for the GitHub App, used to mint short-lived installation "
+            "tokens. Only needed to act as the app rather than as the person; "
+            "the default is to act as the person. Accepts a literal PEM or one "
+            "with escaped newlines. Env: CONNECTOR_GITHUB_APP_PRIVATE_KEY."
+        ),
+    )
+    connector_github_app_private_key_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to the .pem GitHub hands you, as an alternative to inlining "
+            "it. Env: CONNECTOR_GITHUB_APP_PRIVATE_KEY_PATH."
+        ),
+    )
+    connector_github_app_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "The GitHub App's webhook secret, used to verify inbound trigger "
+            "deliveries. Env: CONNECTOR_GITHUB_APP_WEBHOOK_SECRET."
         ),
     )
     connector_encryption_key: Optional[str] = Field(

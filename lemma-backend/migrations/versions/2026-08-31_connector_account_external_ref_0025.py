@@ -29,7 +29,9 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0025_connector_account_external_ref"
+# `alembic_version.version_num` is varchar(32); a longer id fails the
+# version bump at the very end of the upgrade and rolls the whole thing back.
+revision = "0025_account_external_ref"
 down_revision = "0024_drop_surface_schedule_id"
 branch_labels = None
 depends_on = None
