@@ -1,14 +1,11 @@
-from contextlib import suppress
-from datetime import datetime, timedelta, timezone
 import secrets
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from app.core.domain.uow import IUnitOfWork
 from app.core.domain.errors import DomainError
-from app.modules.connectors.services.account_identity import (
-    resolve_account_identity,
-)
+from app.core.domain.uow import IUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import (
     AccountEntity,
     AccountStatus,
@@ -20,39 +17,39 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
 )
-from app.modules.connectors.domain.connector import (
-    ConnectorEntity,
-    AuthScheme,
-    AuthProvider,
-    ConnectorKind,
-    ComposioProviderCapability,
-    KindSpec,
-    OAuth2CredentialConfig,
-)
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
-from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
-from app.modules.connectors.domain.install_binding import resolve_external_ref
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    AuthScheme,
+    ComposioProviderCapability,
+    ConnectorEntity,
+    ConnectorKind,
+    KindSpec,
+    OAuth2CredentialConfig,
+)
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
     ConnectorNotFoundError,
+    ConnectorValidationError,
     ConnectRequestNotFoundError,
     ConnectRequestStateRequiredError,
-    ConnectorValidationError,
     CredentialsNotFoundError,
     OAuthWorkflowError,
     UnsupportedAuthProviderError,
 )
+from app.modules.connectors.domain.install_binding import resolve_external_ref
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
-    ConnectorOperationRepositoryPort,
-    ConnectorRepositoryPort,
     AppOperationGatewayPort,
     AuthProviderPort,
     AuthProviderRegistryPort,
+    ConnectorOperationRepositoryPort,
+    ConnectorRepositoryPort,
     ConnectRequestRepositoryPort,
     OAuthRedirectUriBuilderPort,
     OrganizationAccessPort,
@@ -61,8 +58,19 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
+from app.modules.connectors.services.account_identity import (
+    resolve_account_identity,
+)
+from app.modules.connectors.services.account_profile import (
+    load_native_account_profile,
+    profile_to_dict,
+)
+from app.modules.connectors.services.account_revocation import revoke_one
 from app.modules.connectors.services.auth.mcp_install_authorization import (
     negotiate_mcp_authorization,
+)
+from app.modules.connectors.services.auth_config_schemas import (
+    default_auth_config_schema,
 )
 from app.modules.connectors.services.auth_install_resolver import (
     composio_capability,
@@ -70,12 +78,11 @@ from app.modules.connectors.services.auth_install_resolver import (
     provider_value,
     resolve_auth_install,
 )
-from app.modules.connectors.services.auth_config_schemas import (
-    default_auth_config_schema,
-)
-from app.modules.connectors.services.account_profile import (
-    load_native_account_profile,
-    profile_to_dict,
+from app.modules.connectors.services.connect_request_lifecycle import (
+    assert_still_open,
+    stored_code_verifier,
+    stored_provider_state,
+    without_spent_secrets,
 )
 from app.modules.connectors.services.install_provisioning import (
     discover_install_operations,
@@ -89,56 +96,8 @@ from app.modules.connectors.services.install_update import update_install
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
 )
-from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
-
-
-def _stored_code_verifier(connect_request: ConnectRequestEntity) -> str | None:
-    """The verifier minted when the redirect was built, if there was one."""
-    return (connect_request.attributes or {}).get("code_verifier")
-
-
-# How long a started connection may take to come back. Long enough for a person
-# to read a consent screen, find a password manager and pass an MFA prompt;
-# short enough that a leaked `state` is not a standing capability.
-_CONNECT_REQUEST_TTL = timedelta(minutes=30)
-
-
-def _assert_connect_request_is_still_open(
-    connect_request: ConnectRequestEntity,
-) -> None:
-    """Refuse a callback for a flow that is finished, failed, or stale.
-
-    The status was written on every path and read on none, so a `state` was a
-    permanent bearer capability meaning "attach a connector account to this
-    user in this org". It travels through the provider's redirect, so it lands
-    in browser history, proxy logs and Referer headers -- and replaying it with
-    a fresh authorization code obtained for the same client stores the
-    replayer's provider identity as an account belonging to whoever started the
-    flow. Their agents and schedules then act through the attacker's account.
-
-    Single use and time-bounded, together: expiry alone still allows a replay
-    inside the window, and single use alone leaves an abandoned request valid
-    forever.
-    """
-    if connect_request.status is not ConnectRequestStatus.PENDING:
-        raise ConnectRequestNotFoundError()
-    started = connect_request.created_at
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) - started > _CONNECT_REQUEST_TTL:
-        raise ConnectRequestNotFoundError()
-
-
-def _stored_provider_state(connect_request: ConnectRequestEntity) -> str | None:
-    """What the provider called this authorization when we started it.
-
-    For Composio it is the connection request's id, which is the only thing
-    tying a callback to the flow that began it -- see the check in
-    `ComposioAuthProvider.exchange_code_for_credentials`.
-    """
-    return (connect_request.attributes or {}).get("provider_state")
 
 
 def _pkce_verifier_for(install: ResolvedAuthInstall) -> str | None:
@@ -965,7 +924,7 @@ class ConnectorService:
         pending_request = await self.connect_request_repository.get_by_state(state)
         if not pending_request:
             raise ConnectRequestNotFoundError()
-        _assert_connect_request_is_still_open(pending_request)
+        assert_still_open(pending_request)
 
         user_id = pending_request.user_id
         auth_config = await self._resolve_auth_config(
@@ -987,8 +946,8 @@ class ConnectorService:
                 # caller put in the URL. A scheme that identifies the resulting
                 # connection by a query parameter has no other way to tell
                 # whether the callback belongs to the flow it is completing.
-                state=_stored_provider_state(pending_request),
-                code_verifier=_stored_code_verifier(pending_request),
+                state=stored_provider_state(pending_request),
+                code_verifier=stored_code_verifier(pending_request),
             )
         except DomainError:
             raise
@@ -1113,14 +1072,7 @@ class ConnectorService:
             )
 
         pending_request.status = ConnectRequestStatus.SUCCESS
-        # The verifier has been spent. It is stored in plaintext and the row is
-        # kept, so leaving it behind keeps a used secret readable for no reason.
-        if pending_request.attributes:
-            pending_request.attributes = {
-                key: value
-                for key, value in pending_request.attributes.items()
-                if key != "code_verifier"
-            }
+        pending_request.attributes = without_spent_secrets(pending_request)
         await self.connect_request_repository.update(pending_request)
         await self.uow.commit()
 
@@ -1311,31 +1263,15 @@ class ConnectorService:
             self._resolve_auth_install(connector, auth_config) if connector else None
         )
 
-        # `auth_install` is None when the connector has left the catalog. The
-        # provider needs it to know who to revoke with, and Composio's would
-        # dereference it -- into a broad except that logs and moves on, so the
-        # token stays live at the provider with nothing to say so.
-        if (
-            account.credentials
-            and auth_install is not None
-            and self._should_revoke_account(
-                connector=connector,
-                auth_config=auth_config,
-            )
+        if account.credentials and self._should_revoke_account(
+            connector=connector, auth_config=auth_config
         ):
-            try:
-                auth_provider = self._get_auth_provider_by_name(
-                    self._provider_value(auth_config)
-                )
-                await auth_provider.revoke_connection(
-                    install=auth_install,
-                    credentials=self._to_oauth_credentials(account.credentials),
-                    user_id=user_id,
-                )
-            except Exception:
-                logger.error(
-                    "connectors.connector_service.revoke.failed", exc_info=True
-                )
+            await revoke_one(
+                self._get_auth_provider_by_name(self._provider_value(auth_config)),
+                install=auth_install,
+                credentials=self._to_oauth_credentials(account.credentials),
+                user_id=user_id,
+            )
 
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
@@ -1397,17 +1333,12 @@ class ConnectorService:
         await self.uow.commit()
 
         for user_id, credentials in credentials_to_revoke:
-            # Best-effort, as before: a provider that will not revoke must not
-            # strand the account rows in Lemma. But skip rather than call with
-            # no install -- see `delete_account`.
-            if auth_install is None:
-                break
-            with suppress(Exception):
-                await auth_provider.revoke_connection(
-                    install=auth_install,
-                    credentials=credentials,
-                    user_id=user_id,
-                )
+            await revoke_one(
+                auth_provider,
+                install=auth_install,
+                credentials=credentials,
+                user_id=user_id,
+            )
 
         for account in accounts:
             await self.account_repository.delete(account.id)

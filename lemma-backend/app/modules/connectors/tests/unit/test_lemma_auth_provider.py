@@ -281,3 +281,45 @@ async def test_no_resource_is_sent_when_the_install_names_none():
     )
 
     assert "resource" not in FakeOAuth2Session.last_authorization
+
+
+def test_a_secretless_client_gets_a_verifier_and_a_secret_bearing_one_does_not():
+    """PKCE has to actually be switched on for the clients that depend on it.
+
+    A mutation making `_pkce_verifier_for` always return `None` passed the unit
+    and e2e lanes in full: PKCE would be silently off for every dynamically
+    registered client, and an authorization code intercepted on the redirect
+    would be redeemable, which for a public client is the only thing stopping
+    it. The signature change that carried this parameter is what broke Composio
+    in production, and nothing asserted the parameter was ever populated.
+    """
+    from app.modules.connectors.services.connector_service import _pkce_verifier_for
+
+    public_client = _mcp_install()
+    verifier = _pkce_verifier_for(public_client)
+    assert verifier, "a client with no secret has only PKCE to prove itself"
+    assert len(verifier) >= 43, "RFC 7636 wants at least 43 characters of entropy"
+
+    assert _pkce_verifier_for(public_client) != verifier, "must not be reused"
+
+    # A confidential client proves itself with the secret. Sending a challenge
+    # to a provider that never agreed to one is a way to break a working flow.
+    assert _pkce_verifier_for(_install()) is None
+
+
+def test_an_install_with_no_oauth_at_all_asks_for_no_verifier():
+    """A credential-managed install reaches the same helper."""
+    from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+    from app.modules.connectors.services.connector_service import _pkce_verifier_for
+
+    install = ResolvedAuthInstall(
+        connector_id="mcp",
+        kind=ConnectorKind.MCP,
+        auth_scheme=AuthScheme.API_KEY,
+        auth_config_id=uuid4(),
+        organization_id=uuid4(),
+        config_source=AuthConfigSource.ORG_CUSTOM,
+        config={},
+        oauth2=None,
+    )
+    assert _pkce_verifier_for(install) is None

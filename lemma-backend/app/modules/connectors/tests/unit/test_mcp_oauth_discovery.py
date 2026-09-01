@@ -11,6 +11,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.core.net.url_guard import UnsafeUrlError
 from app.modules.connectors.services.auth.mcp_oauth import (
     McpAuthorizationUnavailable,
     discover_authorization_server,
@@ -24,9 +25,10 @@ _MCP_URL = f"{_ORIGIN}/mcp"
 
 
 def _client(handler) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), follow_redirects=True
-    )
+    # Redirects off, matching production: `request_guarded` follows them so
+    # that each hop is re-checked. A test client that follows them itself would
+    # certify a guard that is not running.
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 def _as_metadata(**overrides) -> dict:
@@ -223,3 +225,42 @@ async def test_a_refused_registration_is_reported_not_returned_empty():
             await register_client(
                 server, redirect_uri="https://lemma.example/callback", client=client
             )
+
+
+async def test_an_endpoint_pointing_inside_the_network_is_refused():
+    """The endpoints come out of a document a tenant's server controls, and the
+    token endpoint is later handed to authlib -- a plain httpx client with no
+    guard anywhere on that path. So a metadata document naming an internal
+    address would have the backend POST an authorization code to it.
+
+    A mutation test showed this guard could be deleted with both the unit and
+    e2e lanes still green, which is how it came to be written without one.
+    """
+    handler, _ = _server(
+        as_metadata=_as_metadata(
+            token_endpoint="http://169.254.169.254/latest/meta-data/token"
+        )
+    )
+    async with _client(handler) as client:
+        with pytest.raises(UnsafeUrlError):
+            await discover_authorization_server(_MCP_URL, client=client)
+
+
+async def test_a_redirect_to_the_metadata_service_is_not_followed():
+    """`assert_safe_url` on the first URL proves nothing about the second. The
+    client must not follow redirects itself -- a public host answering
+    `307 -> 169.254.169.254` is the whole bypass."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/mcp":
+            return httpx.Response(401, json={})
+        if request.url.path.startswith("/.well-known/oauth-protected-resource"):
+            return httpx.Response(
+                307,
+                headers={"location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        return httpx.Response(404, json={})
+
+    async with _client(handler) as client:
+        with pytest.raises(UnsafeUrlError):
+            await discover_authorization_server(_MCP_URL, client=client)
