@@ -1954,7 +1954,12 @@ class TestPodAgentLifecycle:
 
         listed = await authenticated_client.get(f"/pods/{pod_id}/agents")
         assert listed.status_code == 200, listed.text
-        assert [item["name"] for item in listed.json()["items"]] == ["lifecycle_agent"]
+        # The pod's own assistant is listed beside it, and sorts last: ids are
+        # time-ordered and its row is created with the pod.
+        assert [item["name"] for item in listed.json()["items"]] == [
+            "lifecycle_agent",
+            DEFAULT_POD_AGENT_NAME,
+        ]
 
         fetched = await authenticated_client.get(
             f"/pods/{pod_id}/agents/lifecycle_agent"
