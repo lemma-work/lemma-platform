@@ -41,6 +41,8 @@ type SendMessageOptions = {
     metadata?: Record<string, unknown> | null;
     conversationMetadata?: Record<string, unknown> | null;
     title?: string | null;
+    /** Address one agent for this turn; it must be in the conversation. */
+    agentName?: string | null;
 };
 
 export type Message = SdkAssistantRenderableMessage;
@@ -618,6 +620,7 @@ export function AIAssistantProvider({
                         ...options.metadata,
                 }
                     : undefined,
+                agentName: options?.agentName,
             });
         } catch (error) {
             throw error;

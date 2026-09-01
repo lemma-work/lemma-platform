@@ -33,6 +33,8 @@ import {
   formatDurationCompact,
   isFinalResultToolName,
   isRenderableUserInteractionInvocation,
+  messageAgentId,
+  messageSenderUserId,
   messageTextContent,
   messageTimeMs,
   normalizeAgentToolName,
@@ -129,6 +131,28 @@ export interface ChatTurn {
   failedCount: number;
   isLive: boolean;
   hasPendingInteraction: boolean;
+  /** Who sent the turn. Null for anything an agent or the system started. */
+  senderUserId: string | null;
+  /**
+   * Which agent answered the turn. Null until the first assistant message
+   * arrives, and on a turn nothing answered. A conversation can hold several
+   * agents, so an answer that does not say which one produced it is one the
+   * reader cannot attribute.
+   */
+  agentId: string | null;
+  /**
+   * The message was delivered and no agent picked it up — a room where nobody
+   * was addressed and the router chose silence. Shown, because a turn that
+   * simply stops looks identical to one that broke.
+   */
+  unanswered: boolean;
+  /**
+   * True when this turn's working was withheld because somebody else sent it.
+   * Distinct from a turn that simply did no work: one has nothing to show, the
+   * other has something the reader may not see, and the UI says so rather than
+   * rendering an inexplicably empty turn.
+   */
+  traceWithheld: boolean;
 }
 
 // --- classification tables --------------------------------------------------
@@ -266,6 +290,16 @@ export interface BuildChatTurnsOptions {
   isRunActive: boolean;
   podId: string | null;
   conversationId: string | null;
+  /**
+   * Who is reading. In a conversation with more than one person in it, a turn's
+   * trace — its tool calls, its results, its thinking — belongs to whoever sent
+   * the turn, not to the room: tool arguments carry what they asked and tool
+   * results carry data their grants reached. The answer is everyone's.
+   *
+   * Null or undefined withholds nothing, which is every conversation that has
+   * only ever had one person in it.
+   */
+  viewerId?: string | null;
 }
 
 interface MutableTurn extends ChatTurn {
@@ -308,6 +342,15 @@ function turnIdForUserMessage(
   return unique(`turn-${inheritedId ?? messageId}`);
 }
 
+/** Whether the server stored this message with nobody answering it. */
+function wentUnanswered(message: AssistantRenderableMessage): boolean {
+  const metadata = (message.metadata ?? message.message_metadata) as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  return metadata?.answered_by_agent === false;
+}
+
 function newTurn(id: string, userMessage: AssistantRenderableMessage | null): MutableTurn {
   return {
     id,
@@ -324,6 +367,10 @@ function newTurn(id: string, userMessage: AssistantRenderableMessage | null): Mu
     failedCount: 0,
     isLive: false,
     hasPendingInteraction: false,
+    senderUserId: userMessage ? messageSenderUserId(userMessage) : null,
+    agentId: null,
+    unanswered: userMessage ? wentUnanswered(userMessage) : false,
+    traceWithheld: false,
     artifactByPath: new Map(),
     resourceIds: new Set(),
   };
@@ -335,6 +382,7 @@ export function buildChatTurns({
   isRunActive,
   podId,
   conversationId,
+  viewerId,
 }: BuildChatTurnsOptions): ChatTurn[] {
   const turns: MutableTurn[] = [];
   let current: MutableTurn | null = null;
@@ -548,6 +596,13 @@ export function buildChatTurns({
     const isLastRow = rowIndex === lastRowIndex;
     const turn = ensureTurn(`turn-${row.id || rowIndex}`);
 
+    // The first assistant message to carry one names the turn's agent. Later
+    // ones cannot change it: a turn is answered by one agent, and letting a
+    // trailing message overwrite it would relabel a turn mid-render.
+    if (turn.agentId === null) {
+      turn.agentId = messageAgentId(message);
+    }
+
     // A clustered row's own timestamp is its newest message's; the turn's span
     // is the span of the row's source messages.
     for (const sourceIndex of row.sourceIndexes) {
@@ -667,6 +722,21 @@ export function buildChatTurns({
     }
   }
 
+  // Somebody else's working. Applied here rather than while collecting, so the
+  // counts stay true to what the run did — the pill says "worked for 9m" about
+  // work that happened, and hiding the steps must not rewrite the history.
+  // Dropped whole: a trace half-shown is a tool call whose result is missing,
+  // which reads as a failure rather than as a redaction.
+  if (viewerId) {
+    for (const turn of turns) {
+      if (turn.senderUserId && turn.senderUserId !== viewerId && turn.trace.length > 0) {
+        turn.trace = [];
+        turn.subagentParts = [];
+        turn.traceWithheld = true;
+      }
+    }
+  }
+
   // Nothing to say and nothing to show: drop. (Empty turns are how stray
   // whitespace-only messages used to render as sliver bubbles.)
   const visibleTurns = turns.filter((turn) => (
@@ -783,6 +853,12 @@ export function chatTurnFingerprint(turn: ChatTurn): string {
     turn.thinkingCount,
     turn.failedCount,
     turn.hasPendingInteraction ? 1 : 0,
+    // Both, because the turn re-renders when either changes: the byline is
+    // keyed off the sender, and the withheld notice replaces the trace pill.
+    turn.senderUserId ?? "",
+    turn.agentId ?? "",
+    turn.unanswered ? 1 : 0,
+    turn.traceWithheld ? 1 : 0,
     turn.userMessage?.id ?? "",
     items,
     trace,

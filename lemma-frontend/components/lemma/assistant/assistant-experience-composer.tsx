@@ -4,6 +4,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
+  Bot,
   Table,
   FileText,
 } from "@/components/ui/icons";
@@ -39,6 +40,12 @@ export interface AssistantExperienceComposerBodyProps {
   hasPendingFileUploads: boolean;
   runtimeLabel: string | null;
   composerModelControl: ReactNode;
+  /**
+   * Who is in the conversation. Rendered here rather than in the header because
+   * the header is optional -- the pod conversation route turns it off -- and a
+   * control that only exists on some surfaces is one nobody can find.
+   */
+  participantsControl?: ReactNode;
   onUploadSelection: (files: FileList | null) => void;
   onDraftChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -60,6 +67,7 @@ export function AssistantExperienceComposerBody({
   isConversationBusy,
   hasPendingFileUploads,
   runtimeLabel,
+  participantsControl,
   composerModelControl,
   onUploadSelection,
   onDraftChange,
@@ -83,7 +91,11 @@ export function AssistantExperienceComposerBody({
               className="lemma-assistant-resource-mention-button flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-[var(--row-bg)]"
             >
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--row-border)] bg-[var(--card-bg)] text-[var(--text-tertiary)]">
-                {mention.kind === "table" ? <Table className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+                {mention.kind === "agent"
+                  ? <Bot className="h-3.5 w-3.5" />
+                  : mention.kind === "table"
+                    ? <Table className="h-3.5 w-3.5" />
+                    : <FileText className="h-3.5 w-3.5" />}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium text-[var(--text-primary)]">{mention.label}</span>
@@ -123,9 +135,14 @@ export function AssistantExperienceComposerBody({
         isAttaching={controller.isUploadingFiles}
         density={density === 'compact' ? 'tight' : 'roomy'}
         className={cn(radius === 'none' && 'rounded-none')}
-        controls={composerModelControl ?? (runtimeLabel ? (
-          <span className="truncate px-2 py-1 text-xs text-[var(--text-secondary)]">{runtimeLabel}</span>
-        ) : null)}
+        controls={(
+          <>
+            {participantsControl}
+            {composerModelControl ?? (runtimeLabel ? (
+              <span className="truncate px-2 py-1 text-xs text-[var(--text-secondary)]">{runtimeLabel}</span>
+            ) : null)}
+          </>
+        )}
       />
     </div>
   );

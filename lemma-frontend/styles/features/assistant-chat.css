@@ -62,6 +62,120 @@
     padding-left: var(--space-1);
 }
 
+/* Who is speaking, in a room with more than one voice in it. Above the bubble
+   and aligned with it, the way a group thread names a speaker. Both are absent
+   in a plain one-to-one chat, so that case looks exactly as it did.
+
+   The two differ only in which edge they hang from: a person's message is
+   right-aligned and an agent's is left, and a label that did not follow its
+   bubble would read as belonging to the turn above. */
+.lchat-user-sender,
+.lchat-agent-sender {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+}
+
+.lchat-user-sender {
+    padding-right: var(--space-1);
+    /* The face follows the bubble to the right edge, so name and avatar read
+       as one label rather than as two things at opposite ends of the row. */
+    flex-direction: row-reverse;
+}
+
+/* A face beside a name. Small enough to sit on the byline's own line rather
+   than claim a column, which is what keeps the bubble layout intact. */
+.lchat-avatar {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-5);
+    height: var(--space-5);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    color: var(--text-on-brand);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.02em;
+}
+
+/* Eight swatches, one lightness, so a room of faces reads as one set and none
+   of them shouts. Chosen from an id so it survives a rename. */
+.lchat-avatar-c0 { background-color: hsl(212 58% 42%); }
+.lchat-avatar-c1 { background-color: hsl(340 58% 42%); }
+.lchat-avatar-c2 { background-color: hsl(152 58% 42%); }
+.lchat-avatar-c3 { background-color: hsl(32 58% 42%); }
+.lchat-avatar-c4 { background-color: hsl(268 58% 42%); }
+.lchat-avatar-c5 { background-color: hsl(190 58% 42%); }
+.lchat-avatar-c6 { background-color: hsl(8 58% 42%); }
+.lchat-avatar-c7 { background-color: hsl(96 58% 42%); }
+
+.lchat-avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Three dots while a turn is in flight and has said nothing yet. The pill that
+   follows says what it is doing; this says only that somebody is there, which
+   is the whole job -- a reader watching a blank turn cannot tell a slow answer
+   from a dead one. */
+.lchat-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+}
+
+.lchat-typing span {
+    width: var(--space-1-5);
+    height: var(--space-1-5);
+    border-radius: var(--radius-full);
+    background-color: var(--text-tertiary);
+    animation: lchat-typing-bounce 1.2s var(--ease-standard) infinite;
+}
+
+.lchat-typing span:nth-child(2) { animation-delay: 0.15s; }
+.lchat-typing span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes lchat-typing-bounce {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-25%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* The dots still say "someone is there"; they simply stop moving. */
+    .lchat-typing span { animation: none; opacity: 0.6; }
+}
+
+.lchat-agent-sender {
+    align-self: flex-start;
+    padding-left: var(--space-1);
+    margin-bottom: var(--space-1);
+}
+
+/* The message landed and nobody answered it. Quiet, and on the reader's side
+   rather than the agents' -- it is a fact about their message, not a reply. */
+.lchat-unanswered {
+    align-self: flex-end;
+    padding-right: var(--space-1);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-style: italic;
+}
+
+/* Work was done here that this reader may not see. Deliberately quieter than
+   the status pill it stands in for: it is a fact about the turn, not something
+   to open. */
+.lchat-trace-withheld {
+    align-self: flex-start;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-style: italic;
+}
+
 /* --- day separators ---------------------------------------------------------- */
 
 /* A bare stamp, centred — no rules on either side. */

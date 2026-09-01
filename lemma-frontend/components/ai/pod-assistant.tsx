@@ -33,6 +33,10 @@ import {
   type AssistantPresentation,
 } from "@/components/pod/pod-layout-context";
 import { useDatastoreFiles, useTables } from "@/lib/hooks/use-datastores";
+import { ConversationParticipants } from "@/components/conversations/conversation-participants";
+import { useConversationParticipants } from "@/lib/hooks/use-assistants";
+import { useProfile } from "@/lib/hooks/use-user";
+import { formatAgentName } from "@/lib/utils/agents";
 import { cn } from "@/lib/utils";
 import { getConversationStatusView, type ConversationStatusView } from "@/lib/utils/conversations";
 import { useAIAssistant, useAIAssistantTranscript } from "./ai-assistant-context";
@@ -271,6 +275,15 @@ function PodAssistantSurface({
   // Subscribed separately from the rest of the assistant: this is the surface
   // that draws the transcript, so it is the one that should re-render per flush.
   const transcript = useAIAssistantTranscript();
+  // Who is reading, so a transcript with more than one person in it can
+  // attribute a turn and keep somebody else's working out of it.
+  const { data: profile } = useProfile();
+  // The roster, for attributing a turn to whoever sent it. Only fetched for the
+  // conversation actually open.
+  const { data: participants } = useConversationParticipants(
+    assistant.conversationPodId,
+    assistant.openedConversationId,
+  );
   // Rebuilt only when one of the two contexts it reads changes, never merely
   // because this component rendered. Both context values are memoized by the
   // provider, so on a keystroke — which re-renders this surface whenever a
@@ -291,6 +304,17 @@ function PodAssistantSurface({
     }));
 
     const seenFiles = new Set<string>();
+    const agentMentions = (participants ?? [])
+      .filter((participant) => !!participant.agent_id && !!participant.display_name)
+      .map((participant) => ({
+        id: `agent:${participant.agent_id}`,
+        kind: "agent" as const,
+        label: formatAgentName(participant.display_name as string),
+        // The same token the send resolves against, so what the composer
+        // inserts and what the server reads are one string.
+        insertText: `@${participant.display_name}`,
+        detail: "Agent in this conversation",
+      }));
     const fileMentions = (filesData?.items ?? [])
       .map(getFileMentionPath)
       .filter((path) => {
@@ -306,13 +330,23 @@ function PodAssistantSurface({
         detail: path,
       }));
 
-    return [...tableMentions, ...fileMentions];
-  }, [filesData, tablesData?.items]);
+    // Agents first: in a conversation with several of them, who answers is
+    // the question being asked, and a table is not competing for that slot.
+    return [...agentMentions, ...tableMentions, ...fileMentions];
+  }, [filesData, tablesData?.items, participants]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <AssistantExperienceView
         controller={controller}
+        viewerId={profile?.id ?? null}
+        participants={participants ?? []}
+        participantsControl={(
+          <ConversationParticipants
+            podId={assistant.conversationPodId}
+            conversationId={assistant.openedConversationId}
+          />
+        )}
         title={title}
         subtitle={subtitle}
         placeholder={placeholder}

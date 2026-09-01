@@ -29,6 +29,8 @@ import {
   type AssistantRenderableMessage,
 } from "lemma-sdk";
 import { cn } from "@/lib/utils";
+import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
+import { AssistantAvatar } from "./assistant-avatar";
 import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { InlineLoader } from "@/components/brand/loader";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -496,6 +498,13 @@ export interface AssistantTurnViewProps {
   onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
   renderMessageContent: (args: AssistantMessageRenderArgs) => ReactNode;
   renderToolInvocation?: (args: AssistantToolRenderArgs) => ReactNode;
+  /**
+   * What to call the person who sent a turn. Absent while the conversation
+   * holds one voice, which is what keeps a plain one-to-one chat unlabelled.
+   */
+  resolveSenderName?: (userId: string) => string | null;
+  /** What to call the agent that answered a turn. Absent for the same reason. */
+  resolveAgentName?: (agentId: string) => string | null;
 }
 
 // Memoized against the turn fingerprint: `buildChatTurns` rebuilds every turn
@@ -511,8 +520,33 @@ export const AssistantTurnView = memo(function AssistantTurnView({
   onResolveUserApproval,
   renderMessageContent,
   renderToolInvocation,
+  resolveSenderName,
+  resolveAgentName,
 }: AssistantTurnViewProps) {
   const userTimestamp = turn.userMessage?.createdAt ? formatTimeStamp(turn.userMessage.createdAt.getTime()) : null;
+  // Everybody's own name, including the reader's. It was "You" for your own
+  // messages, which is how a messenger does it and was wrong here: with two
+  // windows open it is genuinely ambiguous whose "You" you are looking at, and
+  // a name is never ambiguous. Slack shows you your own name for this reason.
+  //
+  // Both resolvers are absent while the conversation holds a single voice, so
+  // a plain one-to-one chat renders exactly as it did.
+  const senderName = turn.senderUserId && resolveSenderName
+    ? resolveSenderName(turn.senderUserId)
+    : null;
+  // The pod assistant has no agent row, so a turn it answered carries no id,
+  // and the fallback names it rather than leaving a blank where every other
+  // turn has a name.
+  //
+  // But not while the turn is still streaming and unattributed: the bubble is
+  // built client-side from token deltas, before any frame says who is
+  // answering, so falling back there labelled every live reply as the default
+  // agent — batman's answers included. No name for a moment is honest; the
+  // wrong name is not.
+  const agentUnknownWhileLive = turn.isLive && !turn.agentId;
+  const agentName = resolveAgentName && turn.items.length > 0 && !agentUnknownWhileLive
+    ? (turn.agentId ? resolveAgentName(turn.agentId) : DEFAULT_RESPONDER_NAME)
+    : null;
   const showStatusPill = turn.isLive || turn.trace.length > 0;
   // The assistant's stamp rides under the turn's last beat, not every bubble.
   const assistantStamp = !turn.isLive && turn.items.length > 0 ? formatTimeStamp(turn.endedAtMs) : null;
@@ -572,6 +606,12 @@ export const AssistantTurnView = memo(function AssistantTurnView({
     >
       {turn.userMessage && turn.userMessage.content.trim() ? (
         <div className="lchat-user">
+          {senderName ? (
+            <div className="lchat-user-sender">
+              <AssistantAvatar name={senderName} seed={turn.senderUserId} />
+              <span>{senderName}</span>
+            </div>
+          ) : null}
           <div className="lchat-bubble lchat-bubble-user group relative">
             {speechContent(turn.userMessage.content, turn.userMessage, "user", turn.userMessage.id)}
             <HoverCopyButton text={turn.userMessage.content} side="left" />
@@ -586,7 +626,37 @@ export const AssistantTurnView = memo(function AssistantTurnView({
           Live: it is the typing indicator — it rides the frontier, after the
           newest beat, so "what it is doing right now" is never stranded above
           the bubbles it is producing. */}
+      {agentName ? (
+        <div className="lchat-agent-sender">
+          <AssistantAvatar name={agentName} seed={turn.agentId} />
+          <span>{agentName}</span>
+        </div>
+      ) : null}
+
+      {/* In flight and nothing said yet. A blank turn cannot be told apart
+          from a dead one, and the status pill only appears once there is work
+          to describe. */}
+      {turn.isLive && turn.items.length === 0 ? (
+        <div className="lchat-typing" aria-label="typing">
+          <span /><span /><span />
+        </div>
+      ) : null}
+
+      {/* Delivered, and nobody picked it up. Said plainly: an unanswered turn
+          and a broken one look the same otherwise, and the reader cannot tell
+          which they are looking at. */}
+      {turn.unanswered ? (
+        <div className="lchat-unanswered">No agent replied to this</div>
+      ) : null}
+
       {!turn.isLive ? statusPill : null}
+
+      {/* Something happened here that this reader may not see. Said plainly,
+          rather than leaving a turn that jumps from a question to an answer
+          with no sign that any work was done in between. */}
+      {turn.traceWithheld ? (
+        <div className="lchat-trace-withheld">Worked privately</div>
+      ) : null}
 
       {turn.items.map((item) => {
         if (item.kind === "notice") {

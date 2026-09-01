@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import type {
   AgentRuntimeConfig,
@@ -27,6 +28,7 @@ import {
 } from "lemma-sdk";
 // Rows → turns: the conversation-shaped model (ask, work pill, speech,
 // artifacts, interaction cards) the transcript renders.
+import { addressedAgentName } from "@/lib/assistant/addressed-agent";
 import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
 import { thisComputer } from "@/lib/desktop/this-computer";
@@ -41,6 +43,7 @@ import type {
 import type {
   AssistantControllerView,
   AssistantExperienceCustomizationProps,
+  AssistantParticipant,
   AssistantResourceMention,
   LemmaAssistantAppearance,
   LemmaAssistantDensity,
@@ -175,6 +178,23 @@ export interface AssistantExperienceViewProps extends AssistantExperienceCustomi
   showHeader?: boolean;
   showModelPicker?: boolean;
   showNewConversationButton?: boolean;
+  /**
+   * Who is reading. Passed in rather than fetched: this view is used by the pod
+   * assistant, the agent test panel and the flow run inspector, and only the
+   * first of those is a conversation somebody else can be in.
+   *
+   * Omitting it withholds nothing, which is the correct default for a
+   * transcript nobody else can see.
+   */
+  viewerId?: string | null;
+  /**
+   * Everyone in the conversation. Only used to put a name on somebody else's
+   * turn, so an empty list simply means no bylines — which is right for the
+   * conversations that have only ever had one person in them.
+   */
+  participants?: AssistantParticipant[];
+  /** Rendered in the composer's control row. See the composer prop. */
+  participantsControl?: ReactNode;
   onNavigateResource?: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -197,6 +217,9 @@ export function AssistantExperienceView({
   draft: controlledDraft,
   onDraftChange,
   showConversationList = false,
+  viewerId = null,
+  participants,
+  participantsControl,
   appearance = "default",
   density = "comfortable",
   chromeStyle,
@@ -358,12 +381,50 @@ export function AssistantExperienceView({
   }, [draft, resizeComposer]);
 
   const displayMessageRows = useMemo(() => buildDisplayMessageRows(controllerMessages), [controllerMessages]);
+  // Built once per roster rather than scanned per turn: a long transcript
+  // renders every turn and each one would otherwise walk the whole list.
+  const senderNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const participant of participants ?? []) {
+      if (participant.user_id && participant.display_name) {
+        names.set(participant.user_id, participant.display_name);
+      }
+    }
+    return names;
+  }, [participants]);
+  const agentNamesById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const participant of participants ?? []) {
+      if (participant.agent_id && participant.display_name) {
+        names.set(participant.agent_id, participant.display_name);
+      }
+    }
+    return names;
+  }, [participants]);
+  // Every turn is labelled once the room holds more than one voice -- two
+  // people, or an agent that is not the only one who could have answered.
+  // Below that there is nothing to disambiguate and a name on every bubble is
+  // just noise, which is why a plain one-to-one chat is left alone.
+  const named = senderNames.size > 1 || agentNamesById.size > 1;
+  const resolveSenderName = useMemo(
+    () => (named
+      ? (userId: string) => senderNames.get(userId) ?? null
+      : undefined),
+    [named, senderNames],
+  );
+  const resolveAgentName = useMemo(
+    () => (named
+      ? (agentId: string) => agentNamesById.get(agentId) ?? null
+      : undefined),
+    [named, agentNamesById],
+  );
 
   const displayResourcePodId = currentPodIdFromBrowserPath();
   const chatTurns = useMemo(
     () => buildChatTurns({
       rows: displayMessageRows,
       messages: controllerMessages,
+      viewerId,
       // A send in flight counts as live, not just a run the server has already
       // confirmed. The turn goes on screen the moment you press enter, but the
       // conversation is not reported RUNNING for a few hundred milliseconds
@@ -376,7 +437,7 @@ export function AssistantExperienceView({
       podId: displayResourcePodId,
       conversationId: activeConversationId,
     }),
-    [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId],
+    [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId, viewerId],
   );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
@@ -467,6 +528,15 @@ export function AssistantExperienceView({
     : null;
   const liveRunStatus = statusPlacement === "inline" ? runStatusModel : null;
 
+  // The agents in the room, by the name an `@mention` would use. Rebuilt only
+  // when the roster changes, not per keystroke.
+  const agentNames = useMemo(
+    () => (participants ?? [])
+      .filter((participant) => participant.agent_id && participant.display_name)
+      .map((participant) => participant.display_name as string),
+    [participants],
+  );
+
   const handleSubmit = useCallback(async () => {
     if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
     const message = draft.trim();
@@ -476,8 +546,17 @@ export function AssistantExperienceView({
     // rather than starting a second one. Otherwise identical to a send —
     // attachments included, because the two go to the same endpoint shape and a
     // dropped file with no explanation is worse than either outcome.
-    await (isConversationBusy ? steerMessage(message) : sendMessage(message));
-  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
+    if (isConversationBusy) {
+      // A steer joins the run already going, so it never picks a new responder.
+      await steerMessage(message);
+      return;
+    }
+    // `@name` in the text is what routes the turn. Read here rather than on the
+    // server: the composer already knows who is in the room, and a name the
+    // server had to guess at could reach an agent nobody added.
+    const addressed = addressedAgentName(message, agentNames);
+    await sendMessage(message, addressed ? { agentName: addressed } : undefined);
+  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft, agentNames]);
 
   // Only the empty state offers suggestions, and it renders under
   // `showEmptyState={isConversationEmpty}` — which requires nothing to be
@@ -735,6 +814,8 @@ export function AssistantExperienceView({
             onNavigateResource={onNavigateResource}
             renderMessageContent={renderMessageContent}
             renderToolInvocation={renderToolInvocation}
+            resolveSenderName={resolveSenderName}
+            resolveAgentName={resolveAgentName}
             showAssistantErrorInTranscript={showAssistantErrorInTranscript}
             assistantErrorTitle={assistantErrorTitle}
             assistantErrorDetails={assistantErrorDetails}
@@ -773,6 +854,7 @@ export function AssistantExperienceView({
           hasPendingFileUploads={hasPendingFileUploads}
           runtimeLabel={runtimeLabel}
           composerModelControl={composerModelControl}
+          participantsControl={participantsControl}
           onUploadSelection={(files) => { void handleUploadSelection(files); }}
           onDraftChange={(event) => {
             setDraft(event.target.value);

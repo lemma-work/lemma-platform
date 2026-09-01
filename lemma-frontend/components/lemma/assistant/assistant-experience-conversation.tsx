@@ -74,6 +74,10 @@ export interface AssistantExperienceConversationProps {
   onNavigateResource?: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
   renderMessageContent: (args: AssistantMessageRenderArgs) => ReactNode;
   renderToolInvocation?: (args: AssistantToolRenderArgs) => ReactNode;
+  /** What to call whoever sent a turn. Absent in a one-person conversation. */
+  resolveSenderName?: (userId: string) => string | null;
+  /** What to call the agent that answered. Absent when only one could have. */
+  resolveAgentName?: (agentId: string) => string | null;
   showAssistantErrorInTranscript: boolean;
   assistantErrorTitle: string;
   assistantErrorDetails: string;
@@ -119,6 +123,8 @@ export const AssistantExperienceConversation = memo(function AssistantExperience
   onNavigateResource,
   renderMessageContent,
   renderToolInvocation,
+  resolveSenderName,
+  resolveAgentName,
   showAssistantErrorInTranscript,
   assistantErrorTitle,
   assistantErrorDetails,
@@ -218,6 +224,8 @@ export const AssistantExperienceConversation = memo(function AssistantExperience
               onResolveUserApproval={onResolveUserApproval}
               renderMessageContent={renderMessageContent}
               renderToolInvocation={renderToolInvocation}
+              resolveSenderName={resolveSenderName}
+              resolveAgentName={resolveAgentName}
             />
           </Fragment>
         );

@@ -152,6 +152,62 @@ export function useConversations(podId: string, assistantName: string, params?: 
     });
 }
 
+/**
+ * Everyone in a conversation: the people, and the agents present.
+ *
+ * Read on open rather than folded into the conversation query, because the
+ * transcript needs it to attribute a turn and the conversation list does not.
+ */
+export function useConversationParticipants(
+    podId: string | null | undefined,
+    conversationId: string | null | undefined,
+) {
+    return useQuery({
+        queryKey: ['conversation-participants', podId, conversationId],
+        queryFn: () => getLemmaClient(podId || undefined).conversations.listParticipants(
+            conversationId as string,
+            { pod_id: podId ?? undefined },
+        ),
+        enabled: !!podId && !!conversationId,
+    });
+}
+
+export function useAddConversationParticipant(podId: string | null | undefined) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ conversationId, ...subject }: {
+            conversationId: string;
+            user_id?: string | null;
+            agent_name?: string | null;
+        }) => getLemmaClient(podId || undefined).conversations.addParticipant(
+            conversationId, subject, { pod_id: podId ?? undefined },
+        ),
+        onSuccess: (_result, variables) => {
+            queryClient.invalidateQueries({
+                queryKey: ['conversation-participants', podId, variables.conversationId],
+            });
+        },
+    });
+}
+
+export function useRemoveConversationParticipant(podId: string | null | undefined) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ conversationId, ...subject }: {
+            conversationId: string;
+            user_id?: string | null;
+            agent_id?: string | null;
+        }) => getLemmaClient(podId || undefined).conversations.removeParticipant(
+            conversationId, subject, { pod_id: podId ?? undefined },
+        ),
+        onSuccess: (_result, variables) => {
+            queryClient.invalidateQueries({
+                queryKey: ['conversation-participants', podId, variables.conversationId],
+            });
+        },
+    });
+}
+
 export function useScopedConversations(
     scope: ConversationScope,
     params?: { limit?: number; cursor?: string; enabled?: boolean; archived?: boolean },

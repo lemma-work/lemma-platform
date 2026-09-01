@@ -12,12 +12,26 @@ export type LemmaAssistantAppearance = "default" | "minimal" | "borderless" | "c
 export type LemmaAssistantDensity = "compact" | "comfortable" | "spacious";
 export type LemmaAssistantRadius = "none" | "sm" | "md" | "lg" | "xl";
 
+/**
+ * One participant, as the transcript needs them: an id to match a turn's sender
+ * against, and something to call them. Structural rather than the SDK's
+ * response type, so this view can be handed a roster from anywhere.
+ */
+export interface AssistantParticipant {
+  user_id?: string | null;
+  agent_id?: string | null;
+  display_name?: string | null;
+  role?: string;
+}
+
 export interface AssistantConversationListItem {
   id: string;
   title?: string | null;
   status?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  /** Null is the pod's default assistant, which has no agent row of its own. */
+  agent_id?: string | null;
 }
 
 export interface AssistantControllerView {
@@ -48,7 +62,7 @@ export interface AssistantControllerView {
   completedActions: AssistantAction[];
   streamingTool?: AssistantStreamingTool | null;
   selectConversation(conversationId: string | null): void;
-  sendMessage(content: string, options?: { forceNewConversation?: boolean }): Promise<void>;
+  sendMessage(content: string, options?: { forceNewConversation?: boolean; agentName?: string | null }): Promise<void>;
   /** Append a follow-up to a conversation that already has a run in flight. */
   steerMessage(content: string): Promise<void>;
   retryFailedMessage?(): Promise<void>;
@@ -95,7 +109,11 @@ export interface EmptyStateSuggestion {
 
 export interface AssistantResourceMention {
   id: string;
-  kind: "file" | "table";
+  /**
+   * An agent is not a resource, but it is mentioned the same way, and one
+   * typeahead is what makes `@` mean one thing in the composer rather than two.
+   */
+  kind: "file" | "table" | "agent";
   label: string;
   insertText: string;
   detail?: string;
