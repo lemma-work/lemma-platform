@@ -38,11 +38,11 @@ class SurfaceChromeMixin:
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         """Ask, in-chat, which agent answers in a channel. Default: unsupported."""
-        del credentials, trigger_id, channel_id, channel_label, agent_names
+        del credentials, trigger_id, channel_id, channel_label, agent_name
         del surface_id
         return False
 

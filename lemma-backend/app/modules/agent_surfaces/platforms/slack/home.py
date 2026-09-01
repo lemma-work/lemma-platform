@@ -96,7 +96,7 @@ class SlackHomeSurface:
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         """Open the "who answers here?" modal.
@@ -114,7 +114,7 @@ class SlackHomeSurface:
                 view=channel_setup_modal(
                     channel_id=channel_id,
                     channel_label=channel_label,
-                    agent_names=agent_names,
+                    agent_name=agent_name,
                     surface_id=surface_id,
                 ),
             )

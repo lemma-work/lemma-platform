@@ -263,10 +263,15 @@ async def create_surface(
         if request.default_agent_name
         else None
     )
+    # Naming no agent means the pod's own assistant, whose row id is the pod's.
+    # A surface belongs to exactly one agent, so "unowned" is not a state it can
+    # be created in -- it used to be, and that is what let one column mean both
+    # "who answers here" and "whose bot is this".
+    agent_id = agent.id if agent else pod_id
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
-        agent_id=agent.id if agent else None,
+        agent_id=agent_id,
         action=Permissions.AGENT_UPDATE,
     )
 
@@ -381,10 +386,15 @@ async def update_surface(
         if request.default_agent_name
         else None
     )
+    # Naming no agent means the pod's own assistant, whose row id is the pod's.
+    # A surface belongs to exactly one agent, so "unowned" is not a state it can
+    # be created in -- it used to be, and that is what let one column mean both
+    # "who answers here" and "whose bot is this".
+    agent_id = agent.id if agent else pod_id
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
-        agent_id=agent.id if agent else None,
+        agent_id=agent_id,
         action=Permissions.AGENT_UPDATE,
     )
 
@@ -402,7 +412,10 @@ async def update_surface(
     )
     updated = await service.update_surface(
         surface_id=existing.id,
-        agent_id=agent.id if agent else None,
+        # Clearing the name means handing the surface back to the pod's own
+        # assistant, not leaving it ownerless -- a surface answers as exactly
+        # one agent, and there is no "none" for it to be.
+        agent_id=agent_id,
         update_agent_id=update_agent_id,
         config=config,
         credential_mode=(

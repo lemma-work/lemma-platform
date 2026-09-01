@@ -856,9 +856,13 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         ),
         summarization_model=None,
     )
-    guard = processors[-1]
-
-    compacted = await guard(history)
+    # Run the chain the way production does rather than reaching for one stage
+    # by position: the ceiling guard stopped being the last processor when
+    # `_ensure_leading_user_message` was added after it, and picking `[-1]`
+    # silently started asserting against a stage that does no trimming at all.
+    compacted: list[object] = list(history)
+    for processor in processors:
+        compacted = await processor(compacted)
 
     assert count_model_message_tokens(compacted) <= ceiling
     assert compacted[-1] is history[-1], "the most recent turn must survive"

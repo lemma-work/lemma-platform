@@ -16,7 +16,7 @@ import pytest
 
 from harness import capability, covers, journey, proves, scenario
 from harness.steps.datastore import column
-from harness.waiting import eventually
+from harness.waiting import UNTIL_BACKGROUND_WORK_LANDS, eventually
 
 pytestmark = [
     journey("Scheduling and triggers"),
@@ -186,7 +186,7 @@ async def test_a_firing_starts_a_conversation_with_the_assistant(world, run):
         lambda: alice.runs_of_schedule(schedule, in_pod=pod),
         bool,
         describe="the assistant's schedule to fire",
-        timeout=60.0,
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert fired, "a schedule targeting the assistant must actually fire"
     # Dispatched to an agent target — the assistant is one, it just has no row.

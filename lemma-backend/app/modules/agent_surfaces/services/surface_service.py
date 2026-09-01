@@ -234,7 +234,12 @@ class AgentSurfaceService(
             self,
             self.surface_repository.uow,
             pod_id=pod_id,
-            agent_id=getattr(agent, "id", None),
+            # No agent named means the pod's own assistant, whose row id is
+            # the pod's. The *name* stays None regardless, because it is what
+            # the address is built from and the assistant's stored name is the
+            # internal `pod_default` -- that would mint `pod-default.acme@` for
+            # a pod that answers at `acme@`.
+            agent_id=getattr(agent, "id", None) or pod_id,
             agent_name=getattr(agent, "name", None),
             platform=platform,
             name=name,

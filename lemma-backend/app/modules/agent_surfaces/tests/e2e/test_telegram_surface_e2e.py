@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent_surfaces.config import surface_settings
 import json
 from uuid import UUID
@@ -84,7 +85,9 @@ async def test_telegram_built_in_dm_surface_uses_default_agent_and_replies(
         script=[script_text("E2E agent reply [TELEGRAM]")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.agent_name is None
+    # The assistant answers, and it has a name now -- it used to be named by
+    # having none.
+    assert context.agent_name == DEFAULT_POD_AGENT_NAME
     assert context.surface_id == UUID(surface["id"])
 
     conversation = await _conversation_by_external_thread(
@@ -93,7 +96,9 @@ async def test_telegram_built_in_dm_surface_uses_default_agent_and_replies(
         external_thread_id="111222333",
     )
     assert conversation is not None
-    assert conversation["agent_id"] is None
+    # Answered by the assistant, which now names itself by its row rather
+    # than by the absence of one.
+    assert conversation["agent_id"] == pod_id
 
     telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
     assert telegram_messages[-1]["chat_id"] == "111222333"

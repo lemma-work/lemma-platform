@@ -188,14 +188,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         return await self._home(credentials).open_channel_setup_modal(
             trigger_id=trigger_id,
             channel_id=channel_id,
             channel_label=channel_label,
-            agent_names=agent_names,
+            agent_name=agent_name,
             surface_id=surface_id,
         )
 
