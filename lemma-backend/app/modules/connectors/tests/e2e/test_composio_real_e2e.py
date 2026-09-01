@@ -477,14 +477,22 @@ async def test_composio_oauth_connect_and_reconnect_human(
 # =============================================================================
 # Webhook — Composio webhook signature verification
 # =============================================================================
-@pytest.mark.provider
 @pytest.mark.asyncio
-async def test_composio_webhook_signature_verification():
-    secret = connector_settings.composio_webhook_secret or _env_value(
-        "COMPOSIO_WEBHOOK_SECRET"
+async def test_composio_webhook_signature_verification(monkeypatch):
+    """Not `provider`-marked, and it supplies its own secret.
+
+    This is a security control -- it is what stops anyone posting a forged
+    Composio webhook -- and it was running nowhere. `provider` is excluded from
+    every CI lane there is (`UNIT_MARKERS`, `E2E_SHARD_MARKERS`, and the
+    protected weekly lane all say `not provider`), and on top of that it
+    skipped without `COMPOSIO_WEBHOOK_SECRET`. Nothing about it needs a
+    provider: the signature is a local HMAC, so the secret is just a key the
+    test can choose.
+    """
+    secret = "whsec_test_only_not_a_real_secret"
+    monkeypatch.setattr(
+        connector_settings, "composio_webhook_secret", secret, raising=False
     )
-    if not secret:
-        pytest.skip("Webhook verification requires COMPOSIO_WEBHOOK_SECRET.")
 
     from app.composition.schedule_connectors import (
         ComposioWebhookVerifier,
@@ -521,10 +529,16 @@ async def test_composio_webhook_signature_verification():
     result = await verifier.verify(payload, headers)
     assert result["raw_payload"]["connection_id"] == "ca_test_connection"
 
-    # A tampered signature is rejected.
+    # A tampered signature is rejected. Asserting on the message rather than on
+    # bare `Exception`: an `AttributeError` from a broken refactor satisfies
+    # `pytest.raises(Exception)`, so the negative case would have kept passing
+    # while verifying nothing.
     bad_headers = {
         **headers,
         "webhook-signature": "v1," + base64.b64encode(b"wrong").decode(),
     }
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as rejected:
         await verifier.verify(payload, bad_headers)
+    assert "signature" in str(rejected.value).lower(), (
+        f"rejected for the wrong reason: {rejected.value!r}"
+    )
