@@ -414,3 +414,67 @@ class TestThroughTheDispatcher:
         )
         result = await dispatcher.execute(request)
         assert result["rows"][0]["n"] == 50
+
+
+class TestTheRowCapActuallyBoundsTheFetch:
+    """A cap that only slices an already-materialised list is not a cap.
+
+    `row_cap` was applied with `fetchmany` on a buffered result, so asyncpg had
+    drained every row into the worker before the cap was consulted. Measured
+    against a two-million-row query on this same database: 460 MB resident and
+    1.0s to hand back 101 rows. The tenant writes the SQL, so the row count is
+    theirs to choose and nothing bounded it.
+    """
+
+    async def test_a_huge_result_costs_neither_time_nor_memory(
+        self, connection_config, credentials
+    ):
+        import resource
+        import time
+
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        started = time.perf_counter()
+        result = await _run(
+            SqlExecutor(),
+            "query",
+            {
+                "query": (
+                    "SELECT repeat('x', 100) AS c FROM generate_series(1, 2000000)"
+                )
+            },
+            connection_config,
+            credentials,
+        )
+        elapsed = time.perf_counter() - started
+        growth_mb = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) / 1e6
+
+        assert result["truncated"] is True
+        assert len(result["rows"]) <= 1000
+        # Generous next to the 460 MB the buffered path cost, and far below it:
+        # the point is that the fetch stopped, not that it was merely quick.
+        assert growth_mb < 100, (
+            f"fetched the whole result into memory ({growth_mb:.0f} MB)"
+        )
+        assert elapsed < 10, f"drained the whole result before capping ({elapsed:.1f}s)"
+
+    async def test_a_colon_bearing_query_still_runs(
+        self, connection_config, credentials
+    ):
+        """Streaming needs a statement object, and `text()` reads `:name` as a
+        bind -- so the escaping that avoids it has to leave jsonb literals,
+        `::` casts and time strings working. The old path sidestepped this by
+        going to the driver verbatim; this is what replaces that guarantee."""
+        result = await _run(
+            SqlExecutor(),
+            "query",
+            {"query": """SELECT '{"a":1}'::jsonb AS j, '12:30:00'::time AS t"""},
+            connection_config,
+            credentials,
+        )
+        # `_coerce_row` stringifies anything that is not a scalar, so the jsonb
+        # arrives as a repr rather than a mapping. That is this executor's
+        # existing contract and not what this test is about -- what matters
+        # here is that the statement ran at all rather than being rejected for
+        # a bind parameter nobody wrote.
+        assert result["rows"][0]["j"] == "{'a': 1}"
+        assert result["rows"][0]["t"] == "12:30:00"
