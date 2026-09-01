@@ -9,6 +9,8 @@ opening any UoW.
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+
 import pytest
 
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -170,6 +172,11 @@ def _named_agent():
     return SimpleNamespace(id=uuid4(), name="agent", description=None)
 
 
+def _pod_assistant():
+    """The pod default, which is identified by its sentinel id and nothing else."""
+    return SimpleNamespace(id=DEFAULT_POD_AGENT_ID, name="assistant", description=None)
+
+
 def _conversation(is_pod_assistant: bool):
     return SimpleNamespace(id=uuid4(), is_pod_assistant=is_pod_assistant)
 
@@ -192,8 +199,12 @@ async def test_default_assistant_brief_never_overlaps_uows(stubbed):
     factory = RecordingUoWFactory()
     builder = AgentContextBriefBuilder(factory)
     await builder.build(
-        agent=_named_agent(),
-        conversation=_conversation(True),  # pod assistant -> full inventory path
+        # The *agent* selects the inventory path. It used to be the
+        # conversation, which is how a named agent answering an `@mention` in a
+        # pod-default conversation was handed the pod assistant's brief -- one
+        # that lists the pod's agents, itself included.
+        agent=_pod_assistant(),
+        conversation=_conversation(True),
         user_id=uuid4(),
         pod_id=uuid4(),
     )
@@ -251,12 +262,16 @@ async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
 
 
 async def test_the_two_brief_shapes_never_share_a_cache_entry(stubbed, monkeypatch):
-    """The correctness guard on dropping the conversation id.
+    """The correctness guard on the cache key.
 
-    Whether the conversation is the pod default assistant selects between the
-    full pod inventory and the agent's own grants -- two different briefs from
-    the same agent, pod and user. That is the one thing the conversation
-    contributes, so it has to stay in the key.
+    The pod assistant sees the full pod inventory; a named agent sees only its
+    own grants. Two different briefs, and the agent is what tells them apart --
+    so two agents in the *same* conversation must not be served each other's.
+
+    This used to turn on the conversation instead. That is what let a named
+    agent answering an `@mention` in a pod-default conversation be handed the
+    inventory brief, read its own name in the agent list, and try to relay the
+    message to itself.
     """
     monkeypatch.setattr(
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
@@ -266,12 +281,13 @@ async def test_the_two_brief_shapes_never_share_a_cache_entry(stubbed, monkeypat
     agent = _named_agent()
     uid, pid = uuid4(), uuid4()
 
+    conversation = _conversation(True)
     granted = await builder.build(
-        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+        agent=agent, conversation=conversation, user_id=uid, pod_id=pid
     )
     opened_after_first = factory.opened
     inventory = await builder.build(
-        agent=agent, conversation=_conversation(True), user_id=uid, pod_id=pid
+        agent=_pod_assistant(), conversation=conversation, user_id=uid, pod_id=pid
     )
 
     assert factory.opened > opened_after_first  # rebuilt, not served the other

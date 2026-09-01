@@ -40,13 +40,16 @@ from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.services.conversation_access import (
+    POD_ASSISTANT_AGENT_ID,
     require_agent_action,
     resolve_agent,
+    resolve_agent_for_path,
     resolve_expected_agent_id,
     validate_conversation_access,
 )
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.turn_routing import UNROUTED, TurnRoutingMixin
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -65,7 +68,7 @@ from app.modules.agent.tools.snooze.models import (
 logger = get_logger(__name__)
 
 
-class TurnCoordinator:
+class TurnCoordinator(TurnRoutingMixin):
     """Starts the run that answers a message, and stops the one in flight."""
 
     def __init__(
@@ -93,6 +96,7 @@ class TurnCoordinator:
         content: str,
         agent_name: str | None,
         message_metadata: dict[str, object] | None,
+        branch_from_run_id: UUID | None = None,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it.
 
@@ -101,11 +105,47 @@ class TurnCoordinator:
         """
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.
+        # `agent_name` names an agent for this turn: the conversation's own
+        # agent answers when nobody says otherwise, and an agent added to the
+        # conversation answers when somebody addresses it. The access check the
+        # caller already ran has refused a name that is neither.
         agent = await resolve_agent(
             conversation,
             user_id=user_id,
             agent_repository=self.agent_repository,
         )
+
+        # Nobody named an agent, and the room holds more than one. Ask who this
+        # is for -- and accept "nobody" as an answer, because in a room with
+        # people in it most of what is said is not for an agent.
+        answering_agent = agent
+        answered_by_name = agent_name
+        if agent_name is not None and agent_name != agent.name:
+            # Addressed somebody other than the conversation's own agent. The
+            # access check the caller already ran refused a name that is not
+            # present, so this only resolves one that is.
+            answering_agent = await resolve_agent_for_path(
+                self.agent_repository,
+                pod_id=conversation.pod_id,
+                agent_name=agent_name,
+            )
+        if agent_name is None:
+            routed = await self._route_unaddressed(
+                conversation,
+                content=content,
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+            if routed is not UNROUTED:
+                if routed is None:
+                    return await self._store_without_answering(
+                        conversation,
+                        content=content,
+                        user_id=user_id,
+                        message_metadata=message_metadata,
+                    )
+                answering_agent = routed
+                answered_by_name = routed.name
 
         await self.conversation_repository.lock_conversation(conversation.id)
         active_run = await self.conversation_repository.get_active_agent_run_for_update(
@@ -129,7 +169,7 @@ class TurnCoordinator:
             )
             selected_agent_runtime = (
                 conversation.agent_runtime
-                or agent.agent_runtime
+                or answering_agent.agent_runtime
                 or await default_agent_runtime_for_pod(
                     self.uow, pod_id=conversation.pod_id
                 )
@@ -141,8 +181,25 @@ class TurnCoordinator:
             )
             active_run = await self.conversation_repository.create_agent_run(
                 conversation_id=conversation.id,
-                agent_id=conversation.agent_id,
+                # The agent answering this turn: the conversation's own, unless
+                # somebody addressed another one present in it.
+                #
+                # The pod assistant has no row of its own -- `resolve_agent`
+                # synthesises it with a sentinel id -- and this column carries a
+                # foreign key. So an addressed agent is written only when it is
+                # a real one; naming the pod default lands back on NULL, which
+                # is already how a conversation says "the pod assistant".
+                agent_id=(
+                    None
+                    if answering_agent.id == POD_ASSISTANT_AGENT_ID
+                    else answering_agent.id
+                ),
                 agent_runtime=selected_agent_runtime,
+                triggered_by_user_id=user_id,
+                # Where this carried on from. Only set when a person picked an
+                # earlier run to branch at; a run with no parent is on the
+                # trunk and sees the whole conversation.
+                parent_run_id=branch_from_run_id,
                 metadata={"source": "user_message"},
             )
 
@@ -162,6 +219,7 @@ class TurnCoordinator:
             draft=MessageDraft.of_text(
                 content,
                 role=MessageRole.USER,
+                sender_user_id=user_id,
                 metadata=metadata,
             ),
         )
@@ -174,7 +232,7 @@ class TurnCoordinator:
                         agent_run_id=active_run.id,
                         user_id=user_id,
                         pod_id=pod_id,
-                        agent_name=agent_name,
+                        agent_name=answered_by_name,
                     )
                 ]
             )
@@ -200,6 +258,7 @@ class TurnCoordinator:
         return AgentRunStartResult(
             conversation_id=conversation.id,
             agent_run_id=active_run.id,
+            agent_id=active_run.agent_id,
             started_new_run=started_new_run,
         )
 
@@ -283,6 +342,8 @@ class TurnCoordinator:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=agent_runtime,
+            # The queued messages are the owner's; nothing else queued them.
+            triggered_by_user_id=conversation.user_id,
             metadata={
                 "source": "queued_messages",
                 "queued_behind_agent_run_id": str(completed_run_id),

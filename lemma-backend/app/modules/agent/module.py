@@ -41,6 +41,9 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_controller import (
         router as conversation,
     )
+    from app.modules.agent.api.controllers.conversation_open_controller import (
+        router as conversation_open,
+    )
 
     # serve_router is included before the main widget router (more specific path).
     from app.modules.agent.api.controllers.widget_controller import (
@@ -53,6 +56,9 @@ def _routers():
         agent_host,
         runtime_config,
         tool,
+        # Before the general router: `/conversations/open` must not be read as
+        # `/conversations/{conversation_id}`.
+        conversation_open,
         conversation,
         widget_serve,
         widget,

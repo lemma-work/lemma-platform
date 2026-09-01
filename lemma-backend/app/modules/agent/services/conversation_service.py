@@ -14,8 +14,15 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
+from app.core.authorization.dependencies import assert_pod_membership
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.participants import ConversationParticipant
+from app.modules.agent.infrastructure.conversation_participant_store import (
+    add_participant as add_conversation_participant,
+    remove_participant as remove_conversation_participant,
+)
 from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     resolve_expected_agent_id,
@@ -32,6 +39,7 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
+    ConversationValidationError,
 )
 from app.modules.agent.domain.ports import (
     AgentRepository,
@@ -164,6 +172,129 @@ class ConversationService:
         )
         await self._apply_inherited_cwd(conversation, parent_id=parent_id)
         return await self.conversation_repository.create_conversation(conversation)
+
+    async def open_conversation(
+        self,
+        *,
+        pod_id: UUID,
+        agent_name: str | None,
+        user_id: UUID,
+    ) -> tuple[Conversation, bool]:
+        """The conversation this person is having with this agent.
+
+        Returns it with whether it had to be opened. This is what "talking to
+        an agent" resolves to: one persistent conversation per agent rather
+        than a new one per session, so the last thing said is still there.
+        Explicitly creating another is still possible and still
+        `create_conversation` -- this is only what happens when nobody said
+        which one they meant.
+
+        The permission check is `create_conversation`'s, reached on the create
+        branch. Resolving is a read of the caller's own conversations, and the
+        row it returns is one they already own.
+        """
+        agent = (
+            await resolve_agent_for_path(
+                self.agent_repository, pod_id=pod_id, agent_name=agent_name
+            )
+            if agent_name is not None
+            else None
+        )
+        existing = await self.conversation_repository.find_persistent_conversation(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=agent.id if agent else None,
+        )
+        if existing is not None:
+            return existing, False
+        created = await self.create_conversation(
+            pod_id=pod_id,
+            agent_name=agent_name,
+            user_id=user_id,
+        )
+        return created, True
+
+    async def list_participants(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> list[ConversationParticipant]:
+        """Who is in this conversation. Members only -- asking is reading it."""
+        conversation = await self.conversation_repository.get_conversation(
+            conversation_id
+        )
+        validate_conversation_access(conversation, user_id=user_id, pod_id=pod_id)
+        return conversation.participants
+
+    async def add_participant(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        member_user_id: UUID | None = None,
+        agent_name: str | None = None,
+    ) -> ConversationParticipant:
+        """Add one person or one agent to a conversation.
+
+        Adding somebody is a grant. Their own working stays theirs, but every
+        answer in the conversation is now said to them -- including answers
+        produced from data they could not have reached themselves.
+        """
+        conversation = await self.conversation_repository.get_conversation(
+            conversation_id
+        )
+        validate_conversation_access(conversation, user_id=user_id, pod_id=pod_id)
+        agent = (
+            await resolve_agent_for_path(
+                self.agent_repository, pod_id=pod_id, agent_name=agent_name
+            )
+            if agent_name is not None
+            else None
+        )
+        if (member_user_id is None) == (agent is None):
+            raise ConversationValidationError(
+                "Name exactly one of user_id or agent_name"
+            )
+        if member_user_id is not None:
+            # Membership of a conversation cannot exceed membership of the pod
+            # it lives in: a conversation is narrower than a pod, never wider.
+            # Built for the person being added, not the caller -- the question
+            # is whether *they* belong here.
+            member_ctx = await create_authorization_data_service(
+                self.uow
+            ).build_user_context(user_id=member_user_id, pod_id=pod_id)
+            assert_pod_membership(member_ctx, "be added to a conversation in this pod")
+        return await add_conversation_participant(
+            self.uow.session,
+            conversation_id=conversation_id,
+            user_id=member_user_id,
+            agent_id=agent.id if agent else None,
+        )
+
+    async def remove_participant(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        member_user_id: UUID | None = None,
+        agent_id: UUID | None = None,
+    ) -> bool:
+        conversation = await self.conversation_repository.get_conversation(
+            conversation_id
+        )
+        validate_conversation_access(conversation, user_id=user_id, pod_id=pod_id)
+        if (member_user_id is None) == (agent_id is None):
+            raise ConversationValidationError("Name exactly one of user_id or agent_id")
+        return await remove_conversation_participant(
+            self.uow.session,
+            conversation_id=conversation_id,
+            user_id=member_user_id,
+            agent_id=agent_id,
+        )
 
     async def _apply_inherited_cwd(
         self,
@@ -376,6 +507,7 @@ class ConversationService:
         pod_id: UUID,
         agent_name: str | None = None,
         message_metadata: dict[str, object] | None = None,
+        branch_from_run_id: UUID | None = None,
         require_execute_grant: bool = True,
     ) -> AgentRunStartResult:
         conversation = await self._get_or_create_conversation_for_message(
@@ -414,6 +546,7 @@ class ConversationService:
             content=content,
             agent_name=agent_name,
             message_metadata=message_metadata,
+            branch_from_run_id=branch_from_run_id,
         )
 
     async def _get_or_create_conversation_for_message(

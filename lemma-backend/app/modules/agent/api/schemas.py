@@ -144,6 +144,31 @@ class AgentListResponse(BaseModel):
     next_page_token: str | None = None
 
 
+class ConversationParticipantResponse(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    #: Exactly one of these is set. A person row is who may read the
+    #: conversation; an agent row is the roster a mention resolves against.
+    user_id: UUID | None = None
+    agent_id: UUID | None = None
+    role: str
+    #: What to call them on screen: a name, or an email, or nothing.
+    display_name: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConversationParticipantListResponse(BaseModel):
+    items: list[ConversationParticipantResponse]
+
+
+class AddConversationParticipantRequest(BaseModel):
+    """Add one person or one agent. Naming both, or neither, is rejected."""
+
+    user_id: UUID | None = None
+    agent_name: str | None = None
+
+
 class ConversationResponse(BaseModel):
     id: UUID
     user_id: UUID
@@ -163,6 +188,10 @@ class ConversationResponse(BaseModel):
     last_run_error: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
+    #: Everyone in it, people and agents. Carried on the conversation rather
+    #: than fetched separately because the transcript needs it to attribute a
+    #: message the moment it renders one.
+    participants: list[ConversationParticipantResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -198,7 +227,11 @@ class ConversationListResponse(BaseModel):
 
 class AgentRunStartResponse(BaseModel):
     conversation_id: UUID
-    agent_run_id: UUID
+    #: Null when the message was stored and no agent is answering it. See
+    #: `AgentRunStartResult`.
+    agent_run_id: UUID | None = None
+    #: Which agent is answering. Null for the pod's default assistant.
+    agent_id: UUID | None = None
     started_new_run: bool
 
     model_config = ConfigDict(from_attributes=True)
@@ -209,6 +242,13 @@ class MessageResponse(BaseModel):
     conversation_id: UUID
     sequence: int
     agent_run_id: UUID | None = None
+    #: Which person wrote this, when a person did. Null on everything an agent
+    #: produced, and on user messages predating the column.
+    sender_user_id: UUID | None = None
+    #: The agent that produced it, when an agent did. Null on anything a person
+    #: wrote. A conversation can be answered by more than one agent, so this is
+    #: what lets a transcript put a name on an answer.
+    agent_id: UUID | None = None
     role: str
     kind: MessageKind
     text: str | None = None
@@ -266,6 +306,13 @@ class UpdateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     metadata: JsonObject | None = None
+    #: Address one agent for this turn, as an `@mention` does. It must already
+    #: be in the conversation: naming one that is not is refused, so a name
+    #: typed into a message cannot reach an agent nobody added.
+    agent_name: str | None = None
+    #: Branch a subthread from an earlier run. The new run sees that run and
+    #: everything leading to it, and no sibling branch sees this one.
+    branch_from_run_id: UUID | None = None
 
 
 class CreateAgentRequest(BaseModel):

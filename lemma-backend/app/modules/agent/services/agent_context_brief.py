@@ -68,10 +68,9 @@ _MAX_COLUMNS = 40
 # rebuild on nearly every run to protect against variation that does not exist.
 #
 # Nothing in the rendered brief is conversation-derived. The build reads the pod,
-# the user and either the pod inventory or the agent's grants; the only thing it
-# takes from the conversation is whether this is the pod default assistant, which
-# selects between those two branches -- so that boolean belongs in the key and
-# the conversation id does not.
+# the user and either the pod inventory or the agent's grants, selected by
+# whether the running agent is the pod default -- so that boolean belongs in the
+# key and the conversation id does not.
 _BriefKey = tuple[UUID, UUID, UUID, bool]
 _brief_cache: RedisJsonCache | None = None
 
@@ -143,9 +142,15 @@ class AgentContextBriefBuilder:
         toolsets: Collection[AgentToolset] = (),
     ) -> str:
         # The pod default assistant runs with the user's permissions and sees the
-        # whole pod; named agents see only what they're granted. This is the one
-        # thing the conversation contributes, so it is resolved into the key.
-        is_default = conversation.is_pod_assistant or agent.id == DEFAULT_POD_AGENT_ID
+        # whole pod; named agents see only what they're granted.
+        #
+        # The agent that is *running* decides which of the two it gets, not the
+        # conversation it is running in. These agreed while the answering agent
+        # was always the conversation's own; an `@mention` breaks that, and the
+        # conversation winning handed a named agent the pod assistant's brief --
+        # which lists the pod's agents, including itself. It read its own name
+        # there as somebody else and tried to relay the message to itself.
+        is_default = agent.id == DEFAULT_POD_AGENT_ID
         with run_phase("context_brief") as span:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
             cached = await _get_cached_brief(key)

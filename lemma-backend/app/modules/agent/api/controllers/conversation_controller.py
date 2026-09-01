@@ -391,6 +391,8 @@ async def send_message(
                 content=data.content,
                 pod_id=pod_id,
                 message_metadata=data.metadata,
+                agent_name=data.agent_name,
+                branch_from_run_id=data.branch_from_run_id,
             )
 
     return await start_and_stream_run(
@@ -439,6 +441,12 @@ async def append_message(
             content=data.content,
             pod_id=pod_id,
             message_metadata=data.metadata,
+            # The same request body as the streaming send, so the same fields
+            # have to mean the same thing. Reading `content` here and ignoring
+            # `agent_name` is how a mention worked on one endpoint and vanished
+            # on the other.
+            agent_name=data.agent_name,
+            branch_from_run_id=data.branch_from_run_id,
         )
     return AgentRunStartResponse.model_validate(result)
 
