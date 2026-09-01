@@ -69,10 +69,21 @@ def _dig(source: Any, path: tuple[str, ...]) -> str | None:
     return text if text and len(text) <= _MAX_REF_LENGTH else None
 
 
-def resolve_external_ref(
-    connector_id: str, credentials: dict[str, Any] | None
-) -> str | None:
-    """The upstream tenant this account's events will arrive under, if any."""
+def resolve_external_ref(connector_id: str, credentials: Any) -> str | None:
+    """The upstream tenant this account's events will arrive under, if any.
+
+    Takes a credential in either shape it actually arrives in. Callers hold a
+    typed `OAuthCredentials` on the OAuth paths and a plain mapping on the
+    credential-managed ones, and `_dig` only walks mappings -- so while this
+    declared a dict, every OAuth account silently resolved to `None` and the
+    column stayed empty for all of them. A routing key that is always absent
+    fails quietly, which is why it went unnoticed.
+    """
+    if credentials is None:
+        return None
+    if not isinstance(credentials, dict):
+        dump = getattr(credentials, "model_dump", None)
+        credentials = dump() if callable(dump) else None
     if not credentials:
         return None
     key = (connector_id or "").strip().lower()

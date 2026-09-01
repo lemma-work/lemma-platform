@@ -1311,9 +1311,17 @@ class ConnectorService:
             self._resolve_auth_install(connector, auth_config) if connector else None
         )
 
-        if account.credentials and self._should_revoke_account(
-            connector=connector,
-            auth_config=auth_config,
+        # `auth_install` is None when the connector has left the catalog. The
+        # provider needs it to know who to revoke with, and Composio's would
+        # dereference it -- into a broad except that logs and moves on, so the
+        # token stays live at the provider with nothing to say so.
+        if (
+            account.credentials
+            and auth_install is not None
+            and self._should_revoke_account(
+                connector=connector,
+                auth_config=auth_config,
+            )
         ):
             try:
                 auth_provider = self._get_auth_provider_by_name(
@@ -1390,7 +1398,10 @@ class ConnectorService:
 
         for user_id, credentials in credentials_to_revoke:
             # Best-effort, as before: a provider that will not revoke must not
-            # strand the account rows in Lemma.
+            # strand the account rows in Lemma. But skip rather than call with
+            # no install -- see `delete_account`.
+            if auth_install is None:
+                break
             with suppress(Exception):
                 await auth_provider.revoke_connection(
                     install=auth_install,

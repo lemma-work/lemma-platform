@@ -84,6 +84,13 @@ class AccountRepositoryPort(Protocol):
         cursor: UUID | None = None,
     ) -> Tuple[Sequence[AccountEntity], UUID | None]: ...
 
+    async def promote_next_default(
+        self,
+        user_id: UUID,
+        auth_config_id: UUID,
+        exclude_account_id: UUID,
+    ) -> Optional[AccountEntity]: ...
+
 
 class ConnectRequestRepositoryPort(Protocol):
     async def create(self, entity: ConnectRequestEntity) -> ConnectRequestEntity: ...
