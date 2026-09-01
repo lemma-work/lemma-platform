@@ -27,7 +27,7 @@ Resend address.
 
 | Table | Meaning |
 | --- | --- |
-| `agent_surfaces` | Pod/platform/name, agent/account binding, routing, identity and send policy |
+| `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
 | `agent_surface_conversation_links` | External channel/thread to agent conversation mapping |
 

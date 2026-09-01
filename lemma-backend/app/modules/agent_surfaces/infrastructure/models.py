@@ -66,8 +66,14 @@ class AgentSurface(UUIDAuditBase):
     )
     # Stable, pod-unique identifier addressed by the API (like agent names).
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), index=True, nullable=True
+    # Whose surface this is, and the only question this column answers. It used
+    # to answer two -- "who answers here by default" inbound and "whose bot is
+    # this" outbound -- with null meaning the assistant to one and "nobody's, so
+    # anyone may borrow it" to the other. CASCADE rather than SET NULL because
+    # a nulled row was indistinguishable from the assistant's own surface, which
+    # is how a pod ended up answering from a deleted agent's address.
+    agent_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), index=True, nullable=False
     )
 
     surface_type: Mapped[str] = mapped_column(String(50), index=True)

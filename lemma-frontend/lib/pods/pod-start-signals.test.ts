@@ -17,6 +17,14 @@ describe('resolvePodStartMode', () => {
         expect(resolvePodStartMode(signals())).toBe('fresh');
     });
 
+    it('still reads as fresh when the only agent is the one every pod is born with', () => {
+        // The assistant became a real agent row, so it arrives in this list for
+        // a pod nobody has touched. Counting it would make a new pod look like
+        // one somebody had started building.
+        expect(resolvePodStartMode(signals({ agents: [{ name: 'pod_default' }] }))).toBe('fresh');
+        expect(resolvePodStartMode(signals({ agents: [{ name: 'triage' }] }))).toBe('forming');
+    });
+
     it('agrees with Home once a pod is operating', () => {
         const mode = resolvePodStartMode(signals({
             agents: [{ name: 'triage' }],

@@ -49,7 +49,7 @@ import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ConversationAgentPicker } from '@/components/conversations/conversation-agent-picker';
 import { ResourceCover } from '@/components/shared/resource-identity';
 import { cn } from '@/lib/utils';
-import { formatAgentName } from '@/lib/utils/agents';
+import { formatAgentName, isPodDefaultAgentName } from '@/lib/utils/agents';
 import { humanizeName } from '@/lib/utils/display-name';
 import { isConversationRunningStatus, normalizeConversationStatus } from '@/lib/utils/conversations';
 import { describeScheduleConfig, getScheduleTargetKind, getScheduleTargetName } from '@/lib/utils/schedules';
@@ -176,14 +176,14 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         isLoadingHomeConversations;
     const podHomeResourceSignals = useMemo<PodHomeResourceSignals>(() => ({
         appCount: homeAppPages.length,
-        agentCount: homeAgentsData?.items?.length || 0,
+        agentCount: (homeAgentsData?.items ?? []).filter((agent) => !isPodDefaultAgentName(agent.name)).length,
         workflowCount: homeFlows.length,
         surfaceCount: homeSurfaces.length,
         activeSurfaceCount: homeSurfaces.filter((surface) => String(surface.status || '').toUpperCase() === 'ACTIVE').length,
         scheduleCount: 0,
         conversationCount: homeConversations.length,
         hasUsedWorkflow: false,
-    }), [homeAgentsData?.items?.length, homeAppPages.length, homeConversations.length, homeFlows.length, homeSurfaces]);
+    }), [homeAgentsData?.items, homeAppPages.length, homeConversations.length, homeFlows.length, homeSurfaces]);
     const starterMode = resolvePodHomeStarterMode(podHomeResourceSignals);
     const showStarterHome = podAccess.isBuilder && !isLoadingHomeState && starterMode === 'fresh';
 
@@ -915,7 +915,7 @@ function PodAgentWorkflowKanban({
     }));
     const starterMode = resolvePodHomeStarterMode({
         ...baseResourceSignals,
-        agentCount: agents.length,
+        agentCount: agents.filter((agent) => !isPodDefaultAgentName(agent.name)).length,
         workflowCount: workflows.length,
         scheduleCount: schedules.length,
         conversationCount: conversations.length,

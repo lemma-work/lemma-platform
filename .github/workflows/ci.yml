@@ -390,6 +390,13 @@ jobs:
         run: uv run python scripts/verify_reliability_migration.py
         env:
           MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
+      # Seeds the shapes the verifier above does not: an agentless surface, a
+      # conversation naming nobody. Resets the schema first, so it must run
+      # after that one rather than beside it.
+      - name: Verify pod default agent migration
+        run: uv run python scripts/verify_pod_default_agent_migration.py
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
 
   # Was three jobs -- "Python SDK + CLI tests" (48s), "lemma-stack unit" (24s)
   # and "Install experience" (50s). All three were gated on the same filter,

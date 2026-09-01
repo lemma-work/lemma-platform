@@ -28,7 +28,8 @@ class CreateScheduleRequest:
         schedule_type (ScheduleType): Type of schedule source.
         account_id (None | Unset | UUID): Connected connector account used to provision provider-backed webhook
             schedules.
-        agent_name (None | str | Unset):
+        agent_name (None | str | Unset): Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the
+            pod's default assistant, which has no name of its own.
         config (CreateScheduleRequestConfig | Unset):
         connector_trigger_id (None | str | Unset): Connector trigger id for agent WEBHOOK schedules. Do not provide this
             for workflow schedules; workflow WEBHOOK schedules derive it from the workflow start configuration.
@@ -36,6 +37,10 @@ class CreateScheduleRequest:
             schedule, not the workflow start.
         filter_output_schema (CreateScheduleRequestFilterOutputSchemaType0 | None | Unset): Optional schema for the
             schedule-level filter output. Filters belong to the schedule, not the workflow start.
+        instruction (None | str | Unset): What the target should do when this fires, in your own words. Reaches an agent
+            as the run's conversation instructions, layered after the agent's own. Required when targeting the default
+            assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides
+            whether to fire.
         name (None | str | Unset): Stable pod-scoped schedule name used for import/export upserts.
         visibility (None | str | Unset):
         workflow_name (None | str | Unset):
@@ -50,6 +55,7 @@ class CreateScheduleRequest:
     filter_output_schema: (
         CreateScheduleRequestFilterOutputSchemaType0 | None | Unset
     ) = UNSET
+    instruction: None | str | Unset = UNSET
     name: None | str | Unset = UNSET
     visibility: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
@@ -102,6 +108,12 @@ class CreateScheduleRequest:
         else:
             filter_output_schema = self.filter_output_schema
 
+        instruction: None | str | Unset
+        if isinstance(self.instruction, Unset):
+            instruction = UNSET
+        else:
+            instruction = self.instruction
+
         name: None | str | Unset
         if isinstance(self.name, Unset):
             name = UNSET
@@ -139,6 +151,8 @@ class CreateScheduleRequest:
             field_dict["filter_instruction"] = filter_instruction
         if filter_output_schema is not UNSET:
             field_dict["filter_output_schema"] = filter_output_schema
+        if instruction is not UNSET:
+            field_dict["instruction"] = instruction
         if name is not UNSET:
             field_dict["name"] = name
         if visibility is not UNSET:
@@ -238,6 +252,15 @@ class CreateScheduleRequest:
             d.pop("filter_output_schema", UNSET)
         )
 
+        def _parse_instruction(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        instruction = _parse_instruction(d.pop("instruction", UNSET))
+
         def _parse_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -273,6 +296,7 @@ class CreateScheduleRequest:
             connector_trigger_id=connector_trigger_id,
             filter_instruction=filter_instruction,
             filter_output_schema=filter_output_schema,
+            instruction=instruction,
             name=name,
             visibility=visibility,
             workflow_name=workflow_name,

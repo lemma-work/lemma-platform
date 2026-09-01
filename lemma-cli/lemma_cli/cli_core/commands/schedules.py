@@ -137,8 +137,25 @@ def create_schedule(
     name: str | None = typer.Option(
         None, "--name", help="Stable pod-scoped schedule name for import/export."
     ),
-    agent: str | None = typer.Option(None, "--agent"),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        help=(
+            "Pod agent to wake, by name. Pass POD_DEFAULT to wake the pod's "
+            "default assistant, which has no name of its own; that target "
+            "requires --instruction."
+        ),
+    ),
     workflow: str | None = typer.Option(None, "--workflow"),
+    instruction: str | None = typer.Option(
+        None,
+        "--instruction",
+        help=(
+            "What the target should do when this fires. Required with "
+            "--agent POD_DEFAULT. Unlike --filter, which decides whether to "
+            "fire at all, this directs the work afterwards."
+        ),
+    ),
     cron: str | None = typer.Option(None, "--cron"),
     at: str | None = typer.Option(
         None, "--at", help="ISO timestamp for a one-time schedule."
@@ -212,6 +229,7 @@ def create_schedule(
                     "agent_name": agent,
                     "workflow_name": workflow,
                     "config": config,
+                    "instruction": instruction or extra.get("instruction"),
                     "account_id": account,
                     "connector_trigger_id": connector_trigger
                     or extra.get("connector_trigger_id"),

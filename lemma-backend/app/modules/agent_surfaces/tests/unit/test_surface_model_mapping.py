@@ -43,7 +43,9 @@ def _row(**overrides) -> AgentSurface:
     row.updated_at = now
     row.pod_id = uuid4()
     row.name = "slack"
-    row.agent_id = None
+    # A surface always has an owner; the pod's own assistant is the one whose
+    # row id is its pod's.
+    row.agent_id = row.pod_id
     row.surface_type = "SLACK"
     row.mode = "DM"
     row.event_mode = "WEBHOOK"

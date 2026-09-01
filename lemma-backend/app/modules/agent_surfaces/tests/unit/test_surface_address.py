@@ -20,6 +20,7 @@ def _surface(platform=SurfacePlatform.TELEGRAM, **overrides) -> AgentSurfaceEnti
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),

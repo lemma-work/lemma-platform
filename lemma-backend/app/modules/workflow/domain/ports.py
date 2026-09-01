@@ -142,8 +142,14 @@ class AgentPort(ABC):
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: Dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> UUID:
-        """Starts an agent conversation execution and returns the conversation ID."""
+        """Starts an agent conversation execution and returns the conversation ID.
+
+        ``instructions`` is what this particular run is for, as opposed to what
+        the agent is for. It becomes the conversation's instructions, which the
+        prompt layers after the agent's own.
+        """
         ...
 
     @abstractmethod

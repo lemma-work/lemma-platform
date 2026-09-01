@@ -59,8 +59,8 @@ name** everywhere (`slack`, `gmail`, …) — there is no separate surface id to
   granted per *agent*, by giving it the `MESSAGING` toolset — see `agents.md`.
   A surface setting would be a second gate an editor had to find before a grant
   they had already made took effect.
-- **`default_agent_name`** — the pod agent that answers. Per-channel routing can
-  send specific channels to other agents.
+- **`default_agent_name`** — the agent this surface *is*. One surface answers as
+  exactly one agent; give an agent that needs its own bot its own app.
 
 **Status** is one of `ACTIVE`, `PENDING_ADMIN_CONSENT` (Teams, awaiting tenant
 admin), `NEEDS_SETUP`, `INACTIVE`, `ERROR`. Only `ACTIVE` accepts inbound events.
@@ -74,8 +74,8 @@ sender to a delegated pod user, opens or reuses the right conversation, runs the
 and posts the reply back on-platform in the correct thread/channel. **Your agent never
 sees a webhook, a signing secret, or a raw platform payload** — it runs in a conversation
 exactly as if the user had messaged it in Lemma's own chat. You configure *who answers*
-(`default_agent_name`, channel routes) and *who's allowed* (`identity`); the system does
-the rest.
+(`default_agent_name`), *where* (`config.channels`, an allow-list) and *who's allowed*
+(`identity`); the system does the rest.
 
 (Don't confuse this with a `WEBHOOK` *schedule*, the explicit path for system-event
 automation — `schedules-and-triggers.md`. A surface's `event_mode=WEBHOOK` is just the
@@ -143,9 +143,10 @@ lemma surfaces delete slack --yes                             # frees the accoun
 - **DM assistant.** A `DM` surface maps one external identity to one pod
   conversation until the reset window — always set `dm_conversation_reset_after_hours`
   so threads don't grow forever.
-- **Channel triage (Slack/Teams).** Default agent for general channels, with
-  `config.channels` routing `#billing` or `#security` to specialist agents. The
-  agent replies in-thread where the platform supports it.
+- **Channel triage (Slack/Teams).** `config.channels` is the allow-list of
+  channels this surface's agent answers in; the agent replies in-thread where the
+  platform supports it. A specialist agent for `#billing` needs its own app —
+  `GET /surface-setup/slack/manifest?agent_name=…` builds one named for it.
 - **Shared mailbox (Gmail/Outlook).** An `EMAIL` surface turns a mailbox into an
   agent inbox; use `identity.allowed_domains` / `allowed_email_addresses` so only
   trusted senders are answered.
@@ -173,7 +174,7 @@ Configured surfaces **round-trip in pod bundles** as
   "is_enabled": true,
   "config": {
     "dm_conversation_reset_after_hours": 24,
-    "channels": [{ "channel_id": "C123", "channel_name": "support", "agent_name": "support-agent" }],
+    "channels": [{ "channel_id": "C123", "channel_name": "support" }],
     "identity": { "allowed_domains": ["example.com"] }
   }
 }

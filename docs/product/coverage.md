@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 156 |
+| `covered` | 158 |
 | `gap` | 2 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **162** |
+| **total** | **164** |
 
-Scenario tests declaring a promise: 373.
+Scenario tests declaring a promise: 381.
 
 ## Contract coverage
 
@@ -206,7 +206,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
-| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_deleting_the_target_takes_the_schedule` |
+| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_deleting_the_target_takes_the_schedule`, `test_a_firing_starts_a_conversation_with_the_assistant` |
+| `PS-SCHED-031` A schedule says what the work is, not just when it happens | `covered` | `test_a_schedule_keeps_its_instruction`, `test_the_instruction_and_the_condition_are_both_kept`, `test_the_instruction_can_be_edited` |
+| `PS-SCHED-032` The pod's own assistant can be put on a schedule | `covered` | `test_the_default_assistant_is_a_schedulable_target`, `test_the_assistant_needs_an_instruction`, `test_retargeting_to_the_assistant_replaces_the_agent`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 
 ## [Sharing and permissions](journeys/sharing-and-permissions.md)
 
@@ -229,9 +231,9 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a platform | `gap` | `test_a_surface_reads_back`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-001` A person connects a pod's agent to a platform | `gap` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
-| `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_deleting_a_surface_stops_it` |
+| `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |

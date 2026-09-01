@@ -37,18 +37,15 @@ class SurfaceIdentityConfigInput(BaseModel):
 
 
 class SurfaceChannelRouteInput(BaseModel):
-    """One channel's routing, in the same three states the domain models.
+    """One channel this surface's agent may be spoken to in.
 
-    ``use_pod_assistant`` is not a synonym for an absent ``agent_name`` — see
-    :class:`SurfaceChannelRoute`. Omitting it here is what silently turned an
-    explicit "the pod assistant answers here", picked from inside Slack, back
-    into "unconfigured" on the next save from the web UI.
+    An allow-list entry. A surface belongs to exactly one agent, so a channel
+    says *where*, never *who* — it used to name an agent, back when one bot
+    could serve several.
     """
 
     channel_id: str | None = None
     channel_name: str | None = None
-    agent_name: str | None = None
-    use_pod_assistant: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -56,10 +53,6 @@ class SurfaceChannelRouteInput(BaseModel):
     def validate_channel_ref(self) -> "SurfaceChannelRouteInput":
         if not self.channel_id and not self.channel_name:
             raise ValueError("channel_id or channel_name is required")
-        if self.use_pod_assistant and self.agent_name:
-            raise ValueError(
-                "use_pod_assistant and agent_name are different answers; set one"
-            )
         return self
 
 
@@ -78,34 +71,17 @@ class SurfaceTelegramConfigInput(BaseModel):
 
 
 class SurfaceSlackConfigInput(BaseModel):
-    """The Slack settings a *caller* owns.
-
-    Not the per-person DM agent map: that is written from inside Slack — each
-    person picks their own in the App Home — so it is readable here and never
-    writable, which keeps one editor from reassigning everybody.
-
-    ``dedicated_to_agent`` is the caller's, though, and has to be: it says this
-    app was made as one agent's own bot, which is a fact about why the app
-    exists and cannot be read off the surface. Setting it is what withdraws the
-    per-person choice, so it is the one Slack setting that decides whether the
-    other is offered at all.
-    """
+    """The Slack settings a caller owns."""
 
     app_name: str | None = None
-    dedicated_to_agent: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
 
 class SurfaceSlackConfigResponse(BaseModel):
-    """Slack settings as read back. ``dm_agent_by_user`` maps a Slack user id to
-    the agent that person chose, or ``__pod_assistant__`` when they explicitly
-    chose the pod assistant. A user absent from the map has never chosen and
-    falls to the surface default."""
+    """Slack settings as read back."""
 
     app_name: str | None = None
-    dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
-    dedicated_to_agent: bool = False
 
 
 class SurfaceBehaviorConfigInput(BaseModel):
@@ -128,8 +104,6 @@ class SurfaceBehaviorConfigInput(BaseModel):
 class SurfaceChannelRouteResponse(BaseModel):
     channel_id: str | None = None
     channel_name: str | None = None
-    agent_name: str | None = None
-    use_pod_assistant: bool = False
 
 
 class AvailableSurfaceChannelResponse(BaseModel):
@@ -177,12 +151,7 @@ def surface_config_from_input(
     *,
     channel_routes: list[SurfaceChannelRoute],
 ) -> SurfaceConfig:
-    """Build the domain config from API input (channel routes pre-resolved
-    from agent names by the controller).
-
-    ``slack.dm_agent_by_user`` is deliberately absent: it is written from
-    inside Slack and never carried on a create, which has no one's choices yet.
-    """
+    """Build the domain config from API input."""
     return SurfaceConfig(
         dm_conversation_reset_after_hours=config_input.dm_conversation_reset_after_hours,
         identity=SurfaceIdentityPolicy(
@@ -192,18 +161,15 @@ def surface_config_from_input(
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
-        slack=SurfaceSlackConfig(
-            app_name=config_input.slack.app_name,
-            dedicated_to_agent=config_input.slack.dedicated_to_agent,
-        ),
+        slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
     )
 
 
 class SurfaceCreateRequest(BaseModel):
     """Body for `POST /pods/{pod_id}/surfaces` — creates one surface.
 
-    A pod may have several surfaces of the same ``platform`` (different
-    bots/accounts, each routed to its own agent); ``name`` is the stable,
+    A pod may have several surfaces of the same ``platform`` — one bot per
+    agent is the model, not the exception; ``name`` is the stable,
     pod-unique identifier used to address it afterward. When omitted, it
     defaults to the lowercased platform (so the common single-surface-per-
     platform case needs no name at all) — pick an explicit name to create a

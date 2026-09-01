@@ -18,8 +18,18 @@ or surfaces; target modules decide how to execute the fire.
 
 ## Data and schedule types
 
-`schedules` stores target, active state, type-specific config, optional filter
-instruction/schema, and external scheduler metadata. `schedule_runs` is the
+`schedules` stores target, active state, type-specific config, an optional
+instruction, optional filter instruction/schema, and external scheduler
+metadata. The target is two columns, `agent_id` and `workflow_id`, kept
+exclusive by `ck_schedules_single_target`. The pod's default assistant is named
+through `agent_id` like any other agent: its `agents` row carries the pod's own
+id, so a foreign key reaches it and the target needs no third arm. On the wire
+that target reads as `agent_name: "POD_DEFAULT"`, the selector the API takes
+rather than the row's internal name. `instruction` says what the target should *do* when the
+schedule fires and reaches an agent as its run's conversation instructions;
+`filter_instruction` decides whether to fire at all. A schedule targeting the
+default assistant must carry an instruction, because that assistant has no
+standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other

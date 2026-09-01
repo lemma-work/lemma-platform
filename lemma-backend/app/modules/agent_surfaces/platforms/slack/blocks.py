@@ -152,11 +152,6 @@ CHANNEL_SETUP_BLOCK_ID = "lemma_channel_agent"
 CHANNEL_SETUP_SELECT_ACTION_ID = "lemma_channel_agent_select"
 
 # Value used for the pod's default responder — the surface default, which is
-# stored as an empty agent_name on the route rather than as a named agent. The
-# value is on the wire and never changes; the *label* beside it is display copy,
-# and it is the same name the app shows in its own sidebar.
-POD_ASSISTANT_VALUE = "__pod_assistant__"
-
 # What the pod's default responder is called wherever a person can read it. See
 # `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
 # picking a responder in Slack and someone picking one in the app are choosing
@@ -168,32 +163,16 @@ def channel_setup_modal(
     *,
     channel_id: str,
     channel_label: str | None,
-    agent_names: list[str],
+    agent_name: str,
     surface_id: str | None = None,
 ) -> dict[str, Any]:
-    """The "who answers here?" modal.
+    """The "answer here?" confirmation.
 
-    Two dependent choices cannot live in a message — Slack messages can't
-    cascade one select off another — which is the whole reason this is a modal
-    and the reason the ephemeral carries a button rather than a form.
-
-    The default responder is offered first because it is the answer for someone
-    who has not built a named agent yet, and it is what an empty route means.
+    It used to ask *who* answers, offering every agent in the pod. One app is
+    one agent now, so the only question left is whether this channel is a place
+    that agent may be spoken to -- an allow-list entry rather than a choice.
     """
     where = f"#{channel_label}" if channel_label else "this channel"
-    options = [
-        {
-            "text": {"type": "plain_text", "text": DEFAULT_RESPONDER_NAME},
-            "value": POD_ASSISTANT_VALUE,
-        }
-    ]
-    options.extend(
-        {
-            "text": {"type": "plain_text", "text": _truncate(name, 74)},
-            "value": name,
-        }
-        for name in agent_names[:99]
-    )
     return {
         "type": "modal",
         "callback_id": CHANNEL_SETUP_VIEW_CALLBACK_ID,
@@ -203,26 +182,18 @@ def channel_setup_modal(
             {"channel_id": channel_id, "surface_id": surface_id},
             separators=(",", ":"),
         ),
-        "title": {"type": "plain_text", "text": "Who answers here?"},
-        "submit": {"type": "plain_text", "text": "Save"},
+        "title": {"type": "plain_text", "text": "Answer here?"},
+        "submit": {"type": "plain_text", "text": "Allow"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"Pick who replies when someone mentions Lemma in *{where}*.",
-                },
-            },
-            {
-                "type": "input",
-                "block_id": CHANNEL_SETUP_BLOCK_ID,
-                "label": {"type": "plain_text", "text": "Answered by"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": CHANNEL_SETUP_SELECT_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": "Choose an agent"},
-                    "options": options,
+                    "text": (
+                        f"`{agent_name}` will reply when someone mentions it in "
+                        f"*{where}*."
+                    ),
                 },
             },
         ],
@@ -250,61 +221,4 @@ def fallback_text(message: str) -> str:
     return collapsed[: _FALLBACK_TEXT_LIMIT - 1].rstrip() + "…"
 
 
-DM_AGENT_SETUP_ACTION_ID = "lemma_dm_agent_setup"
-DM_AGENT_VIEW_CALLBACK_ID = "lemma_dm_agent_view"
-DM_AGENT_BLOCK_ID = "lemma_dm_agent"
-DM_AGENT_SELECT_ACTION_ID = "lemma_dm_agent_select"
 CHANNEL_ROUTE_EDIT_ACTION_ID = "lemma_channel_route_edit"
-
-
-def dm_agent_modal(
-    *, agent_names: list[str], current: str | None, surface_id: str | None = None
-) -> dict[str, Any]:
-    """Pick who answers *your* DMs.
-
-    Per person, not per workspace: two people in the same Slack can talk to
-    different agents, which is the limit Slack used to impose and no longer has
-    to.
-    """
-    options = [
-        {
-            "text": {"type": "plain_text", "text": DEFAULT_RESPONDER_NAME},
-            "value": POD_ASSISTANT_VALUE,
-        }
-    ]
-    options.extend(
-        {"text": {"type": "plain_text", "text": _truncate(name, 74)}, "value": name}
-        for name in agent_names[:99]
-    )
-    element: dict[str, Any] = {
-        "type": "static_select",
-        "action_id": DM_AGENT_SELECT_ACTION_ID,
-        "placeholder": {"type": "plain_text", "text": "Choose an agent"},
-        "options": options,
-    }
-    selected = next((o for o in options if o["value"] == (current or "")), None)
-    if selected is not None:
-        element["initial_option"] = selected
-    return {
-        "type": "modal",
-        "callback_id": DM_AGENT_VIEW_CALLBACK_ID,
-        "private_metadata": surface_id or "",
-        "title": {"type": "plain_text", "text": "Who answers you?"},
-        "submit": {"type": "plain_text", "text": "Save"},
-        "close": {"type": "plain_text", "text": "Cancel"},
-        "blocks": [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "This only changes *your* direct messages. Everyone else keeps theirs.",
-                },
-            },
-            {
-                "type": "input",
-                "block_id": DM_AGENT_BLOCK_ID,
-                "label": {"type": "plain_text", "text": "Answered by"},
-                "element": element,
-            },
-        ],
-    }

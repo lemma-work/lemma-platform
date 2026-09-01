@@ -58,6 +58,7 @@ class AgentControlAdapter(AgentPort):
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get_by_pod_and_name(
             pod_id=pod_id,
@@ -65,7 +66,35 @@ class AgentControlAdapter(AgentPort):
         )
         if agent is None:
             raise AgentNotFoundError("Workflow agent target was not found")
+        return await self._start_conversation(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            agent_runtime=agent.agent_runtime,
+            input_data=input_data,
+            pod_id=pod_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            workflow_run_id=workflow_run_id,
+            source=source,
+            conversation_metadata=conversation_metadata,
+            instructions=instructions,
+        )
 
+    async def _start_conversation(
+        self,
+        *,
+        agent_id: UUID | None,
+        agent_name: str,
+        agent_runtime: AgentRuntimeConfig | None,
+        input_data: dict[str, Any],
+        pod_id: UUID,
+        user_id: UUID,
+        conversation_id: UUID | None,
+        workflow_run_id: UUID | None,
+        source: str,
+        conversation_metadata: dict[str, Any] | None,
+        instructions: str | None,
+    ) -> UUID:
         metadata = {**(conversation_metadata or {}), "source": source}
         if workflow_run_id is not None:
             metadata["workflow_run_id"] = str(workflow_run_id)
@@ -73,10 +102,16 @@ class AgentControlAdapter(AgentPort):
             "user_id": user_id,
             "pod_id": pod_id,
             "organization_id": await self._get_pod_organization_id(pod_id),
-            "agent_id": agent.id,
-            "title": f"Workflow run: {agent.name}",
+            "agent_id": agent_id,
+            "title": f"Workflow run: {agent_name}",
             "type": ConversationType.TASK,
             "metadata": metadata,
+            # What the trigger asked for, in the author's words. Lands in the
+            # system prompt as `# Conversation Instructions`, after the agent's
+            # own instruction — so a named agent keeps its identity and gains a
+            # task, and the default assistant, whose instruction is empty, gets
+            # the only thing telling it why it woke up.
+            "instructions": instructions,
         }
         if conversation_id is not None:
             entity_values["id"] = conversation_id
@@ -93,12 +128,12 @@ class AgentControlAdapter(AgentPort):
         else:
             conversation = await self.conversation_repo.create_conversation(entity)
 
-        runtime = agent.agent_runtime or await self._default_agent_runtime_for_pod(
+        runtime = agent_runtime or await self._default_agent_runtime_for_pod(
             pod_id=pod_id
         )
         run = await self.conversation_repo.create_agent_run(
             conversation_id=conversation.id,
-            agent_id=agent.id,
+            agent_id=agent_id,
             agent_runtime=runtime,
             metadata=metadata,
         )
@@ -122,7 +157,7 @@ class AgentControlAdapter(AgentPort):
                     agent_run_id=run.id,
                     user_id=user_id,
                     pod_id=pod_id,
-                    agent_name=agent.name,
+                    agent_name=agent_name,
                 )
             ]
         )
@@ -138,6 +173,7 @@ class AgentControlAdapter(AgentPort):
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, Any] | None = None,
+        instructions: str | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get(agent_id)
         if agent is None or agent.pod_id != pod_id:
@@ -151,6 +187,7 @@ class AgentControlAdapter(AgentPort):
             workflow_run_id=workflow_run_id,
             source=source,
             conversation_metadata=conversation_metadata,
+            instructions=instructions,
         )
 
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, Any]:

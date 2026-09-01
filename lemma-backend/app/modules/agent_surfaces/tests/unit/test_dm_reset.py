@@ -27,6 +27,7 @@ def _surface(*, mode: SurfaceMode = SurfaceMode.DM, reset_hours: int = 24):
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         mode=mode,

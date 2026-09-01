@@ -68,7 +68,9 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         pod_id,
         config={"type": "TELEGRAM"},
     )
-    assert default_agent_surface["agent_id"] is None
+    # A surface always has an owner; naming no agent means the assistant,
+    # whose row id is its pod's.
+    assert default_agent_surface["agent_id"] == pod_id
     assert default_agent_surface["uses_default_agent"] is True
 
     listed = await authenticated_client.get(f"/pods/{pod_id}/surfaces")
@@ -113,7 +115,9 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         json={"default_agent_name": None},
     )
     assert reset_to_default.status_code == 200, reset_to_default.text
-    assert reset_to_default.json()["agent_id"] is None
+    # Clearing the name hands the surface back to the pod's own assistant,
+    # whose row id is the pod's -- not to nobody.
+    assert reset_to_default.json()["agent_id"] == pod_id
     assert reset_to_default.json()["uses_default_agent"] is True
 
     # Disable rides on the same PATCH via is_enabled (distinct from delete).
@@ -271,8 +275,6 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
             },
         },
     )
-    route_agent = await _create_agent(authenticated_client, pod_id)
-
     created = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
         json={
@@ -280,9 +282,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
             "account_id": str(account.id),
             "config": {
                 "identity": {"allowed_domains": ["Lemma.Test "]},
-                "channels": [
-                    {"channel_id": "C-ROUTED", "agent_name": route_agent["name"]}
-                ],
+                "channels": [{"channel_id": "C-ROUTED"}],
                 "dm_conversation_reset_after_hours": 6,
             },
         },
@@ -302,16 +302,11 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
-    # Routes mirror the input exactly: agent referenced by name, presence means active.
+    # A channel is a place, not a choice: the surface's one agent answers
+    # everywhere it is allowed, so a route carries no agent to mirror.
     # Channels are always mention-gated (no per-route requires_mention toggle).
-    assert set(route) == {
-        "channel_id",
-        "channel_name",
-        "agent_name",
-        "use_pod_assistant",
-    }
+    assert set(route) == {"channel_id", "channel_name"}
     assert route["channel_id"] == "C-ROUTED"
-    assert route["agent_name"] == route_agent["name"]
 
     # A partial update (only one config field) leaves identity + channels intact.
     partial = await authenticated_client.patch(
@@ -1041,10 +1036,13 @@ async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
     await db_session.execute(
         sql_text(
             "INSERT INTO agent_surfaces "
-            "(id, pod_id, name, surface_type, mode, event_mode, credential_mode,"
-            " config, status, created_at, updated_at) "
-            "VALUES (gen_random_uuid(), :pod_id, 'legacy-gmail', 'GMAIL', 'DM',"
-            " 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE', now(), now())"
+            "(id, pod_id, agent_id, name, surface_type, mode, event_mode,"
+            " credential_mode, config, status, created_at, updated_at) "
+            # `agent_id` is the pod's own, which is the assistant's row id --
+            # every surface has an owner.
+            "VALUES (gen_random_uuid(), :pod_id, :pod_id, 'legacy-gmail',"
+            " 'GMAIL', 'DM', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
+            " now(), now())"
         ),
         {"pod_id": pod_id},
     )

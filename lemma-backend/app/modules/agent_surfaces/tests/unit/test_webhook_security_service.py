@@ -43,6 +43,7 @@ async def test_verify_surface_request_uses_surface_telegram_secret(monkeypatch):
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(type="TELEGRAM"),

@@ -9,6 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
+from ..models.agent_kind import AgentKind
 from ..models.agent_toolset import AgentToolset
 from ..types import UNSET, Unset
 
@@ -44,6 +45,19 @@ class AgentActionResponse:
         description (None | str | Unset):
         icon_url (None | str | Unset):
         input_schema (AgentActionResponseInputSchemaType0 | None | Unset):
+        kind (AgentKind | Unset): Whether somebody made this agent, or the pod came with it.
+
+            The pod's default assistant used to be the absence of an agent: a
+            conversation naming nobody, synthesised at runtime against one sentinel id
+            shared by every pod. That absence could not be pointed at by a foreign key,
+            so anything wanting to name it grew its own way of saying so — a boolean on
+            the schedule, a second boolean on a channel route, a magic string in a map
+            of who answers whose DMs.
+
+            A kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is
+            pinned by check constraints to exactly one row per pod, whose id is the
+            pod's own — so "is this the default assistant?" stays a comparison rather
+            than a query, which matters on paths that answer it per request.
         metadata (AgentActionResponseMetadataType0 | None | Unset):
         output_schema (AgentActionResponseOutputSchemaType0 | None | Unset):
         toolsets (list[AgentToolset] | Unset):
@@ -62,6 +76,7 @@ class AgentActionResponse:
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     input_schema: AgentActionResponseInputSchemaType0 | None | Unset = UNSET
+    kind: AgentKind | Unset = UNSET
     metadata: AgentActionResponseMetadataType0 | None | Unset = UNSET
     output_schema: AgentActionResponseOutputSchemaType0 | None | Unset = UNSET
     toolsets: list[AgentToolset] | Unset = UNSET
@@ -126,6 +141,10 @@ class AgentActionResponse:
         else:
             input_schema = self.input_schema
 
+        kind: str | Unset = UNSET
+        if not isinstance(self.kind, Unset):
+            kind = self.kind.value
+
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -174,6 +193,8 @@ class AgentActionResponse:
             field_dict["icon_url"] = icon_url
         if input_schema is not UNSET:
             field_dict["input_schema"] = input_schema
+        if kind is not UNSET:
+            field_dict["kind"] = kind
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if output_schema is not UNSET:
@@ -271,6 +292,13 @@ class AgentActionResponse:
 
         input_schema = _parse_input_schema(d.pop("input_schema", UNSET))
 
+        _kind = d.pop("kind", UNSET)
+        kind: AgentKind | Unset
+        if isinstance(_kind, Unset):
+            kind = UNSET
+        else:
+            kind = AgentKind(_kind)
+
         def _parse_metadata(
             data: object,
         ) -> AgentActionResponseMetadataType0 | None | Unset:
@@ -335,6 +363,7 @@ class AgentActionResponse:
             description=description,
             icon_url=icon_url,
             input_schema=input_schema,
+            kind=kind,
             metadata=metadata,
             output_schema=output_schema,
             toolsets=toolsets,

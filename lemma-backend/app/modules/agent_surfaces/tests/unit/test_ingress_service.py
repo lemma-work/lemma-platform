@@ -9,12 +9,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.contracts import AgentKind
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
-    SurfaceChannelRoute,
     SurfaceCredentialMode,
     SurfaceIdentityPolicy,
     ParsedInboundSurfaceEvent,
@@ -276,13 +276,13 @@ def _build_service(
     conversation_service = AsyncMock()
     conversation_service.agent_repository = SimpleNamespace(
         get=AsyncMock(
-            return_value=SimpleNamespace(name="Surface Agent")
+            return_value=SimpleNamespace(name="Surface Agent", kind=AgentKind.USER)
             if any(surface.agent_id for surface in resolved_surfaces)
             else None
         ),
         get_by_pod_and_name=AsyncMock(
             side_effect=lambda *, pod_id, name: SimpleNamespace(
-                id=_ROUTE_AGENT_IDS.get(name, uuid4()), name=name
+                id=_ROUTE_AGENT_IDS.get(name, uuid4()), name=name, kind=AgentKind.USER
             )
         ),
     )
@@ -789,16 +789,20 @@ async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes
     service.conversation_link_repository.update_last_event.assert_not_called()
 
 
-async def test_prepare_webhook_routes_slack_channel_from_surface_config():
-    route_agent_id = uuid4()
+async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
+    """A channel says *where*, not *who*.
+
+    The stored route below still carries `agent_name` -- a config written when
+    one bot could serve several agents. It is not read: the surface has one
+    agent, and that is who answers everywhere the surface is allowed. Stale keys
+    parse rather than raising, which is what lets old rows keep working without
+    a data migration.
+    """
     surface = _slack_surface()
     surface.mode = SurfaceMode.DM
-    surface.config = SurfaceConfig(
-        channels=[
-            SurfaceChannelRoute(channel_id="C999", agent_name="Channel Agent"),
-        ]
+    surface.config = SurfaceConfig.model_validate(
+        {"channels": [{"channel_id": "C999", "agent_name": "Channel Agent"}]}
     )
-    _ROUTE_AGENT_IDS["Channel Agent"] = route_agent_id
     user_id = uuid4()
     conversation = _conversation(surface, user_id)
     event = _slack_channel_event(channel_id="C999")
@@ -826,7 +830,7 @@ async def test_prepare_webhook_routes_slack_channel_from_surface_config():
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == conversation.id
     created_link = service.conversation_link_repository.create.await_args.args[0]
-    assert created_link.routed_agent_id == route_agent_id
+    assert created_link.routed_agent_id == surface.agent_id
     assert created_link.route_key == "channel:C999"
     assert created_link.conversation_kind == "CHANNEL"
 
@@ -2599,6 +2603,7 @@ def _resend_surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="resend",
         surface_type=SurfacePlatform.RESEND,
         mode=SurfaceMode.EMAIL,

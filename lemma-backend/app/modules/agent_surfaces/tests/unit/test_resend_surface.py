@@ -31,7 +31,7 @@ def test_resend_is_email_and_default_webhook_binding():
     surface = AgentSurfaceEntity.create(
         pod_id=uuid4(),
         surface_type=SurfacePlatform.RESEND,
-        agent_id=None,
+        agent_id=uuid4(),
         config=SurfaceConfig(),
         credential_mode=SurfaceCredentialMode.SYSTEM,
         account_id=None,
@@ -136,9 +136,10 @@ async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
     )
 
     with pytest.raises(AgentSurfaceValidationError, match="needs an inbound address"):
+        pod_id = uuid4()
         await service.create_surface(
-            pod_id=uuid4(),
-            agent_id=None,
+            pod_id=pod_id,
+            agent_id=pod_id,
             platform=SurfacePlatform.RESEND,
             name="resend",
             config=SurfaceConfig(),
@@ -818,6 +819,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="resend-mailtest",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),

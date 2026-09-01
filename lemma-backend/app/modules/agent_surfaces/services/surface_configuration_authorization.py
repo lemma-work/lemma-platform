@@ -7,6 +7,7 @@ from uuid import UUID
 from aiohttp import ClientError
 from slack_sdk.errors import SlackApiError
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
@@ -122,7 +123,10 @@ class SurfaceConfigurationAuthorizationMixin:
     async def _can_configure_surface(self, *, surface, ctx, action: str) -> bool:
         if not await ctx.can(action):
             return False
-        if surface.agent_id is None:
+        # Same rule as everywhere else: the assistant is pod-scoped. Without
+        # this, giving it a row would newly require a grant on it to configure
+        # the pod's own mailbox -- a tightening nobody asked for.
+        if is_pod_default_agent(surface.agent_id, pod_id=surface.pod_id):
             return True
         return await ctx.can(
             action,

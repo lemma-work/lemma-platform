@@ -7,7 +7,6 @@ to the inbound/outbound event shapes the rest of that module describes.
 
 from __future__ import annotations
 
-from typing import ClassVar
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,23 +35,23 @@ class SurfaceIdentityPolicy(BaseModel):
 
 
 class SurfaceChannelRoute(BaseModel):
-    """Routes one platform channel to an agent (by pod-unique agent name).
+    """One channel this surface's agent may be spoken to in.
 
-    Three states, not two — conflating the last two silently sends "the pod
-    assistant" to whichever agent the surface happens to default to:
+    An allow-list entry, not a routing rule. A surface belongs to exactly one
+    agent, so a channel says *where* that agent can be reached, never *who*
+    answers — the answer is always ``surface.agent_id``.
 
-    * ``agent_name`` set — that named agent answers.
-    * ``use_pod_assistant`` — the pod's own assistant answers, which is a
-      conversation with *no* agent at all, not a fallback.
-    * neither — unconfigured, so the surface default answers.
+    It used to name an agent, because one bot could serve several. That needed
+    a third state on top ("the pod assistant answers here") which no name could
+    express, since the assistant had no row to be named by. Both are gone: one
+    bot, one agent, and a channel is a place rather than a choice.
 
-    A route existing means it is active; remove it to stop routing the channel.
+    A route existing means the channel is allowed; remove it to stop answering
+    there.
     """
 
     channel_id: str | None = None
     channel_name: str | None = None
-    agent_name: str | None = None
-    use_pod_assistant: bool = False
 
     def matches(self, *, channel_id: str, channel_name: str) -> bool:
         route_channel_id = str(self.channel_id or "").strip()
@@ -91,61 +90,18 @@ class SurfaceTelegramConfig(BaseModel):
 class SurfaceSlackConfig(BaseModel):
     """Slack-only settings for a surface.
 
-    ``dm_agent_by_user`` is the per-person answer to "who am I talking to?" —
-    Slack external user id to pod-unique agent name. Slack DMs otherwise route
-    to one agent for the whole workspace (``surface.agent_id``), which is the
-    single hard limit the platform used to impose on us. A person picks their
-    own agent; anyone who has not picked keeps the surface default, so this is
-    additive and needs no migration.
-
     ``app_name`` mirrors :class:`SurfaceTelegramConfig` — the pod app to offer
     from the channel's bookmark bar and App Home, Slack's nearest equivalent to
     Telegram's chat menu button.
 
-    ``dedicated_to_agent`` says this Slack app *is* one agent — an app made and
-    named for it, rather than the workspace's one shared bot. It has to be
-    stated rather than inferred: ``surface.agent_id`` is set either way, holding
-    the sole responder here and merely the default there, and nothing else tells
-    the two apart. Where it is true the per-person choice above is not offered
-    and not read, because a bot that answers as one agent cannot honour a
-    request for another — leaving the picker up would invite people out of the
-    bot they are standing in.
+    This used to carry the per-person "who answers my DMs?" map, and a
+    ``dedicated_to_agent`` flag saying whether to honour it. Both existed
+    because one Slack app could serve several agents and ``surface.agent_id``
+    could not say which of them it really was. One app is one agent now, so the
+    question has one answer and neither field has anything left to decide.
     """
 
-    # Stored when someone explicitly picks the pod assistant. Deleting the
-    # entry instead would make "chose the pod assistant" identical to "never
-    # chose", so their pick would silently read as the surface default.
-    POD_ASSISTANT: ClassVar[str] = "__pod_assistant__"
-
-    dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
     app_name: str | None = None
-    dedicated_to_agent: bool = False
-
-    def choice_for_user(self, external_user_id: str | None) -> str | None:
-        """Whatever this person picked — an agent name, the pod-assistant
-        sentinel, or None for "never picked".
-
-        Always None on a dedicated bot. Choices made before it became one are
-        kept rather than erased — pointing this bot back at the shared model
-        restores them — but they are not read while it answers as one agent.
-        """
-        if not external_user_id or self.dedicated_to_agent:
-            return None
-        return self.dm_agent_by_user.get(str(external_user_id)) or None
-
-    def agent_for_user(self, external_user_id: str | None) -> str | None:
-        """The named agent this person chose. None for the pod assistant *or*
-        for no choice — callers that must tell those apart use
-        :meth:`chose_pod_assistant`."""
-        choice = self.choice_for_user(external_user_id)
-        return None if choice == self.POD_ASSISTANT else choice
-
-    def chose_pod_assistant(self, external_user_id: str | None) -> bool:
-        return self.choice_for_user(external_user_id) == self.POD_ASSISTANT
-
-    def offers_dm_agent_choice(self) -> bool:
-        """Whether to show, and honour, "who answers my DMs?" on this surface."""
-        return not self.dedicated_to_agent
 
 
 class SurfaceConfig(BaseModel):

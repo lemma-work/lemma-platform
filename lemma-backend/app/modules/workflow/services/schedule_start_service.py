@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
@@ -73,6 +74,23 @@ def _accept_inactive_one_time_fire(
     return configured == occurred_at and schedule_event_id == expected_event_id
 
 
+def _agent_target_ref(schedule, *, pod_id: UUID) -> ResourceRef:
+    """What ``agent.execute`` is asked about for this target.
+
+    The pod's own assistant is asked about pod-scoped. Its row's id *is* the
+    pod's, so both arms name the same thing -- but the resource type is not
+    cosmetic: grants match on (type, id), and an AGENT-typed check would newly
+    hit the resource-owner shortcut for whoever created the pod.
+    """
+    if is_pod_default_agent(schedule.agent_id, pod_id=pod_id):
+        return ResourceRef.pod(pod_id)
+    return ResourceRef(
+        resource_type=ResourceType.AGENT,
+        resource_id=schedule.agent_id,
+        pod_id=pod_id,
+    )
+
+
 class ScheduleStartService:
     """Handles schedule.fired events for workflows."""
 
@@ -84,6 +102,32 @@ class ScheduleStartService:
         return await create_authorization_data_service(self._uow).build_user_context(
             user_id=user_id,
             pod_id=pod_id,
+        )
+
+    async def _start_agent_for_schedule(
+        self,
+        schedule,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        trigger: TriggerContext,
+        target_run_id: str,
+    ) -> UUID:
+        """Start the conversation this firing hands over to.
+
+        One arm, because the pod's own assistant is looked up by id like every
+        other agent now. The schedule's instruction rides along either way: an
+        agent's standing instruction says what it is for, and this says what
+        *this run* is for.
+        """
+        return await self._engine.agent_adapter.run_agent_by_id(
+            agent_id=schedule.agent_id,
+            input_data=trigger.to_context_value(),
+            pod_id=pod_id,
+            user_id=user_id,
+            conversation_id=UUID(target_run_id),
+            source="SCHEDULE",
+            instructions=schedule.instruction,
         )
 
     async def handle_schedule_fired(
@@ -109,9 +153,7 @@ class ScheduleStartService:
         # 2. A schedule targeting a workflow or agent.
         schedule_repo = ScheduleRepository(self._uow)
         schedule = await schedule_repo.get(UUID(schedule_id))
-        if schedule is None or (
-            schedule.workflow_id is None and schedule.agent_id is None
-        ):
+        if schedule is None or not schedule.has_target:
             logger.debug(
                 "workflow.schedule_start_service.no_target_schedule.observed",
                 schedule_id=schedule_id,
@@ -196,21 +238,16 @@ class ScheduleStartService:
                 )
                 await ctx.require(
                     Permissions.AGENT_EXECUTE,
-                    ResourceRef(
-                        resource_type=ResourceType.AGENT,
-                        resource_id=schedule.agent_id,
-                        pod_id=pod_id,
-                    ),
+                    _agent_target_ref(schedule, pod_id=pod_id),
                 )
                 ctx_token = set_current_context(ctx)
                 try:
-                    conversation_id = await self._engine.agent_adapter.run_agent_by_id(
-                        agent_id=schedule.agent_id,
-                        input_data=trigger.to_context_value(),
+                    conversation_id = await self._start_agent_for_schedule(
+                        schedule,
                         pod_id=pod_id,
                         user_id=execution_user_id,
-                        conversation_id=UUID(target_run_id),
-                        source="SCHEDULE",
+                        trigger=trigger,
+                        target_run_id=target_run_id,
                     )
                 finally:
                     reset_current_context(ctx_token)

@@ -30,6 +30,7 @@ from __future__ import annotations
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.core.authorization.delegation import effective_agent_id
 from app.composition.agent_notifications import (
     check_notifications,
     resolve_recipient,
@@ -157,11 +158,13 @@ async def message_user(
         title=_title_for(request),
         body=request.message,
         actor_user_id=deps.user_id,
-        # The pod assistant's id is an authorization sentinel, not a row in
-        # `agents` — and `notifications.actor_agent_id` is a foreign key to that
-        # table, so passing it through fails the insert and loses the message.
-        # The column is nullable precisely for actors that are not agents.
-        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
+        # Normalised, because a delegation token can still name the assistant
+        # by the sentinel this module predates -- and that id is not a row in
+        # `agents`, while `notifications.actor_agent_id` is a foreign key to
+        # that table. Passing it raw fails the insert, and the failure escapes
+        # before commit, so the notification row is rolled back too and the
+        # recipient gets nothing at all.
+        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
         # Display name first, but fall back to the pod-unique name: the display
         # name comes from surface metadata and is None for any run that did not
         # start on a surface, which would silently drop the attribution header.
@@ -273,8 +276,7 @@ async def list_pod_members(
         limit=request.limit,
         # Whose reach to report. Same sentinel handling as message_user: the pod
         # assistant is not a row in `agents`, and its surfaces are the ones with
-        # no agent of their own.
-        actor_agent_id=None if deps.is_pod_default_agent else deps.workload_id,
+        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
     )
     if result is None:
         return ListPodMembersResponse(

@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.errors import AgentValidationError
 from app.modules.agent.services.agent_service import AgentService
 from app.modules.test_support.authz import allow_all_context
@@ -45,10 +46,14 @@ def _service(monkeypatch, agent):
 
 
 def _agent():
+    # `kind` is read before the instruction rules are: the pod's own assistant
+    # is refused outright rather than validated. A double without it asserts
+    # against a shape no real agent has.
     return SimpleNamespace(
         id=uuid4(),
         user_id=uuid4(),
         name="reporter",
+        kind=AgentKind.USER,
         instruction="Report on the week.",
         toolsets=[],
     )

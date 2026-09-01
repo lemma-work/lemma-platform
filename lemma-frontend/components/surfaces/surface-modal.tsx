@@ -279,15 +279,12 @@ export function SurfaceModal({
         const base = draftFromSurface(existingSurface);
         if (pendingChannelRow.current) {
             pendingChannelRow.current = false;
-            // Routed to the agent whose page opened this, because that is the
-            // whole reason someone clicked "add channel" from there.
-            setDraft({ ...base, channels: [...base.channels, blankChannelRow(agentName)] });
+            // No agent to carry: the surface has one, and clicking "add
+            // channel" from its page is only saying where it may answer.
+            setDraft({ ...base, channels: [...base.channels, blankChannelRow()] });
             return;
         }
         setDraft(base);
-        // `agentName` is fixed for the life of a modal target; re-reading it here
-        // would only rebuild the draft and discard edits in flight.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [existingSurface]);
 
     // The manager bot creates the surface server-side, so completion arrives by
@@ -468,15 +465,11 @@ export function SurfaceModal({
                 ? {
                       channels: draft.channels
                           .filter((route) => route.channel_id)
+                          // A channel is a place, not a choice: the surface's
+                          // one agent answers everywhere it is allowed.
                           .map((route) => ({
                               channel_id: route.channel_id,
                               channel_name: route.channel_name || null,
-                              // Sent apart, never derived from an empty name:
-                              // "Lem answers here" and "nobody has
-                              // said" both leave agent_name null, and the API
-                              // rejects a route that claims to be both.
-                              agent_name: route.use_pod_assistant ? null : route.agent_name,
-                              use_pod_assistant: route.use_pod_assistant,
                           })),
                   }
                 : {}),
@@ -489,12 +482,6 @@ export function SurfaceModal({
                   }
                 : {}),
             send_policy: { allow_send: draft.allowSend },
-            // Slack's alone: it governs the App Home picker, which no other
-            // platform has. Sending it everywhere would put a Slack-shaped
-            // field on a Telegram surface's config for nothing to read.
-            ...(definition.platform === 'SLACK'
-                ? { slack: { dedicated_to_agent: draft.dedicatedToAgent } }
-                : {}),
         };
 
         try {
@@ -716,7 +703,6 @@ export function SurfaceModal({
                                 onDraftChange={patchDraft}
                                 availableChannels={availableChannels}
                                 isLoadingChannels={isLoadingChannels}
-                                defaultRouteAgent={agentName}
                                 customAppHref={
                                     definition.platform === 'SLACK' && !usesOwnApp
                                         ? `/pod/${podId}/connectors`
@@ -897,15 +883,10 @@ function defaultMode(entry: Parameters<typeof hasSystemIdentity>[0]): SurfaceIde
     return hasSystemIdentity(entry) ? 'SYSTEM' : 'CUSTOM';
 }
 
-/** An unfilled route row. The channel is picked in the modal; the agent is not,
- * because the page that opened it already answered that. */
-function blankChannelRow(agentName: string | null) {
-    return {
-        channel_id: '',
-        channel_name: '',
-        agent_name: agentName,
-        use_pod_assistant: agentName === null,
-    };
+/** An unfilled row on the channel allow-list. Only the channel is asked for:
+ * who answers is the surface's one agent. */
+function blankChannelRow() {
+    return { channel_id: '', channel_name: '' };
 }
 
 function emptyDraft(): ConfigureDraft {
@@ -915,7 +896,6 @@ function emptyDraft(): ConfigureDraft {
         allowedDomains: '',
         allowedEmails: '',
         allowSend: false,
-        dedicatedToAgent: false,
     };
 }
 
@@ -927,15 +907,12 @@ function draftFromSurface(surface: AssistantSurface): ConfigureDraft {
         channels: (config.channels || []).map((route) => ({
             channel_id: route.channel_id || '',
             channel_name: route.channel_name || '',
-            agent_name: route.agent_name ?? null,
-            use_pod_assistant: Boolean(route.use_pod_assistant),
         })),
         allowedDomains: (identity.allowed_domains || []).join(', '),
         allowedEmails: (identity.allowed_email_addresses || []).join(', '),
         allowSend: Boolean(
             (config as { send_policy?: { allow_send?: boolean } }).send_policy?.allow_send,
         ),
-        dedicatedToAgent: Boolean(config.slack?.dedicated_to_agent),
     };
 }
 

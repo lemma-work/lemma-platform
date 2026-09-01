@@ -9,6 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
+from ..models.agent_kind import AgentKind
 from ..models.agent_toolset import AgentToolset
 from ..types import UNSET, Unset
 
@@ -44,6 +45,19 @@ class AgentSummaryResponse:
             grants (list[AgentResourcePermissionResponse] | None | Unset):
             has_pinned_runtime (bool | Unset):  Default: False.
             icon_url (None | str | Unset):
+            kind (AgentKind | Unset): Whether somebody made this agent, or the pod came with it.
+
+                The pod's default assistant used to be the absence of an agent: a
+                conversation naming nobody, synthesised at runtime against one sentinel id
+                shared by every pod. That absence could not be pointed at by a foreign key,
+                so anything wanting to name it grew its own way of saying so — a boolean on
+                the schedule, a second boolean on a channel route, a magic string in a map
+                of who answers whose DMs.
+
+                A kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is
+                pinned by check constraints to exactly one row per pod, whose id is the
+                pod's own — so "is this the default assistant?" stays a comparison rather
+                than a query, which matters on paths that answer it per request.
             metadata (AgentSummaryResponseMetadataType0 | None | Unset):
             takes_input (bool | Unset):  Default: False.
             toolsets (list[AgentToolset] | Unset):
@@ -61,6 +75,7 @@ class AgentSummaryResponse:
     grants: list[AgentResourcePermissionResponse] | None | Unset = UNSET
     has_pinned_runtime: bool | Unset = False
     icon_url: None | str | Unset = UNSET
+    kind: AgentKind | Unset = UNSET
     metadata: AgentSummaryResponseMetadataType0 | None | Unset = UNSET
     takes_input: bool | Unset = False
     toolsets: list[AgentToolset] | Unset = UNSET
@@ -114,6 +129,10 @@ class AgentSummaryResponse:
         else:
             icon_url = self.icon_url
 
+        kind: str | Unset = UNSET
+        if not isinstance(self.kind, Unset):
+            kind = self.kind.value
+
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -155,6 +174,8 @@ class AgentSummaryResponse:
             field_dict["has_pinned_runtime"] = has_pinned_runtime
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
+        if kind is not UNSET:
+            field_dict["kind"] = kind
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if takes_input is not UNSET:
@@ -236,6 +257,13 @@ class AgentSummaryResponse:
 
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
 
+        _kind = d.pop("kind", UNSET)
+        kind: AgentKind | Unset
+        if isinstance(_kind, Unset):
+            kind = UNSET
+        else:
+            kind = AgentKind(_kind)
+
         def _parse_metadata(
             data: object,
         ) -> AgentSummaryResponseMetadataType0 | None | Unset:
@@ -280,6 +308,7 @@ class AgentSummaryResponse:
             grants=grants,
             has_pinned_runtime=has_pinned_runtime,
             icon_url=icon_url,
+            kind=kind,
             metadata=metadata,
             takes_input=takes_input,
             toolsets=toolsets,

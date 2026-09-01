@@ -746,6 +746,39 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
     assert entity.filter_output_schema == {"type": "object"}
 
 
+async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeypatch):
+    """An exported Lem schedule has to import back as one.
+
+    The assistant has no agent row, so an export cannot record an `agent_id`
+    for it — it records the selector under `agent_name`, and this is the half
+    that turns that back into a target. `instruction` rides in the same
+    allow-list, and without it the create path would refuse the schedule the
+    export came from.
+    """
+    root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "overnight" / "overnight.json",
+        {
+            "name": "overnight",
+            "schedule_type": "TIME",
+            "agent_name": "POD_DEFAULT",
+            "config": {"cron": "0 9 * * *"},
+            "instruction": "Check the overnight queue.",
+        },
+    )
+    fake = FakeScheduleService()
+    monkeypatch.setattr(
+        "app.modules.schedule.api.dependencies.get_schedule_service",
+        lambda uow: fake,
+    )
+    await _grant_applier(root).apply_step(_step(StepKind.SCHEDULE, "overnight"))
+
+    assert len(fake.created) == 1
+    entity = fake.created[0]
+    assert entity.agent_name == "POD_DEFAULT"
+    assert entity.instruction == "Check the overnight queue."
+
+
 # --- surfaces (connectors) ---------------------------------------------------
 
 

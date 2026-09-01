@@ -16,10 +16,8 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.platforms.slack.blocks import DEFAULT_RESPONDER_NAME
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
-    _create_agent,
     _create_agent_surface,
     _ensure_connector_account,
     _load_slack_dm_fixture,
@@ -191,22 +189,11 @@ async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
     )
-    channel_agent = await _create_agent(
-        authenticated_client,
-        pod_id,
-    )
+    # An allow-list entry, not a route: the surface's own agent answers in
+    # `#support` as it does in its DMs, so both halves below land on `dm_agent`.
     route_update = await authenticated_client.patch(
         f"/pods/{pod_id}/surfaces/slack",
-        json={
-            "config": {
-                "channels": [
-                    {
-                        "channel_id": "C-SUPPORT",
-                        "agent_name": channel_agent["name"],
-                    }
-                ]
-            }
-        },
+        json={"config": {"channels": [{"channel_id": "C-SUPPORT"}]}},
     )
     assert route_update.status_code == 200, route_update.text
 
@@ -260,7 +247,7 @@ async def test_slack_dm_and_channel_surfaces_route_through_shared_webhook(
     channel_conversation = await _conversation_by_external_thread(
         authenticated_client,
         pod_id=pod_id,
-        agent_name=channel_agent["name"],
+        agent_name=dm_agent["name"],
         external_thread_id="1700000000.200200",
     )
     assert channel_conversation is not None
@@ -379,10 +366,12 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
     fake_slack,
     message_store,
 ):
-    """The "Choose who answers" button opens the real modal (live agent
-    names), and submitting it persists a channel route that a later mention
-    actually uses -- the full ``surface_configuration.py`` dispatch, not just
-    a direct DB write."""
+    """The "Answer here?" button opens the real modal, and submitting it adds
+    the channel to the allow-list a later mention actually uses -- the full
+    ``surface_configuration.py`` dispatch, not just a direct DB write.
+
+    It used to ask *which* agent. One app is one agent now, so the modal names
+    the surface's own and the only thing to confirm is the place."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 
@@ -393,10 +382,6 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
     )
-    specialist = await _create_agent(
-        authenticated_client, pod_id, name="Specialist Agent"
-    )
-
     handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
 
     open_payload = {
@@ -416,11 +401,8 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
     view_repr = str(opens[-1]["view"])
     assert "lemma_channel_setup_view" in view_repr
     assert "C-SUPPORT" in view_repr
-    assert specialist["name"] in view_repr
-    # Read the label from the module that renders it. Pinning the string here
-    # meant a copy change turned this into a failure about the modal rather
-    # than about the name, which is what it was.
-    assert DEFAULT_RESPONDER_NAME in view_repr
+    # It names the surface's own agent, because that is who will answer.
+    assert surface["agent_name"] in view_repr
 
     submit_payload = {
         "type": "view_submission",
@@ -431,15 +413,9 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
             "private_metadata": json.dumps(
                 {"channel_id": "C-SUPPORT", "surface_id": str(surface["id"])}
             ),
-            "state": {
-                "values": {
-                    "lemma_channel_agent": {
-                        "lemma_channel_agent_select": {
-                            "selected_option": {"value": specialist["name"]}
-                        }
-                    }
-                }
-            },
+            # No values to read: the modal confirms a place, and Slack sends an
+            # empty state for a view with nothing to fill in.
+            "state": {"values": {}},
         },
     }
     submitted = await handler.try_handle_channel_setup(
@@ -454,14 +430,10 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
     )
     assert updated.status_code == 200, updated.text
     routes = updated.json()["config"]["channels"]
-    assert any(
-        route["channel_id"] == "C-SUPPORT" and route["agent_name"] == specialist["name"]
-        for route in routes
-    ), routes
+    assert any(route["channel_id"] == "C-SUPPORT" for route in routes), routes
 
-    # Prove the route is live, not merely persisted: a mention in that
-    # channel now reaches the specialist agent rather than the surface
-    # default.
+    # Prove the allow-list is live, not merely persisted: a mention in that
+    # channel now reaches the surface's agent.
     channel_payload = _slack_channel_payload(
         text="need the specialist",
         channel_id="C-SUPPORT",
@@ -478,101 +450,8 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
     conversation = await _conversation_by_external_thread(
         authenticated_client,
         pod_id=pod_id,
-        agent_name=specialist["name"],
+        agent_name=surface["agent_name"],
         external_thread_id="1700000000.400400",
-    )
-    assert conversation is not None
-
-
-async def test_slack_dm_agent_modal_open_then_submit_routes_dm(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-):
-    """The DM "who answers you?" modal opens with live agent names, and
-    submitting it changes only *this* person's DM routing -- proven by a
-    follow-up DM actually reaching the chosen agent."""
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
-
-    pod_id = test_pod["id"]
-    account = await _slack_config_account(db_session, fixed_test_user, fake_slack)
-    _, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
-    )
-    specialist = await _create_agent(
-        authenticated_client, pod_id, name="DM Specialist Agent"
-    )
-
-    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
-
-    open_payload = {
-        "type": "block_actions",
-        "trigger_id": "trigger-dm-setup-1",
-        "team": {"id": "T0123456"},
-        "user": {"id": "U0123456"},
-        "actions": [{"action_id": "lemma_dm_agent_setup"}],
-    }
-    handled = await handler.try_handle_channel_setup(
-        SurfacePlatformWebhookIngress(source="slack", payload=open_payload, headers={})
-    )
-    assert handled is True
-
-    opens = await wait_for_messages(message_store, "SLACK_VIEWS_OPEN", min_count=1)
-    view_repr = str(opens[-1]["view"])
-    assert "lemma_dm_agent_view" in view_repr
-    assert specialist["name"] in view_repr
-
-    submit_payload = {
-        "type": "view_submission",
-        "team": {"id": "T0123456"},
-        "user": {"id": "U0123456"},
-        "view": {
-            "callback_id": "lemma_dm_agent_view",
-            "private_metadata": str(surface["id"]),
-            "state": {
-                "values": {
-                    "lemma_dm_agent": {
-                        "lemma_dm_agent_select": {
-                            "selected_option": {"value": specialist["name"]}
-                        }
-                    }
-                }
-            },
-        },
-    }
-    submitted = await handler.try_handle_channel_setup(
-        SurfacePlatformWebhookIngress(
-            source="slack", payload=submit_payload, headers={}
-        )
-    )
-    assert submitted is True
-
-    # Submitting also republishes the Home tab for this viewer.
-    publishes = await wait_for_messages(
-        message_store, "SLACK_VIEWS_PUBLISH", min_count=1
-    )
-    assert specialist["name"] in str(publishes[-1]["view"])
-
-    dm_payload = _load_slack_dm_fixture(
-        text="hello after picking my agent", ts="1700000000.500500"
-    )
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
-        script=[script_text("DM specialist here")],
-    )
-    assert isinstance(context, SurfaceChatContext)
-    conversation = await _conversation_by_external_thread(
-        authenticated_client,
-        pod_id=pod_id,
-        agent_name=specialist["name"],
-        external_thread_id="1700000000.500500",
     )
     assert conversation is not None
 

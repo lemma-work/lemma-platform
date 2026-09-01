@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from uuid import uuid4
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.config import settings
 
 import pytest
@@ -165,8 +166,13 @@ async def test_home_returns_pods_with_their_apps_agents_and_roles(
     assert body["role"] == "ORG_OWNER"
     pod = next(item for item in body["pods"] if item["id"] == pod_id)
     assert pod["name"] == pod_name
-    assert len(pod["agents"]) == 1
-    assert pod["agents"][0]["description"].endswith("desc")
+    # Two: the one just made, and the pod's own assistant, which has had a real
+    # agent row since it stopped being synthesised from the absence of one.
+    made, assistant = sorted(
+        pod["agents"], key=lambda agent: agent["name"] == DEFAULT_POD_AGENT_NAME
+    )
+    assert made["description"].endswith("desc")
+    assert assistant["name"] == DEFAULT_POD_AGENT_NAME
     assert len(pod["apps"]) == 1
     assert pod["apps"][0]["url"] is None, (
         "this install serves no app host, so there is no address to report; "
@@ -433,7 +439,8 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
     home_pods = home.json()["pods"]
     assert len(home_pods) == 4
     assert all(len(pod["apps"]) == 2 for pod in home_pods)
-    assert all(len(pod["agents"]) == 2 for pod in home_pods)
+    # Two seeded above, plus the pod's own assistant, which is a real row now.
+    assert all(len(pod["agents"]) == 3 for pod in home_pods)
 
     with capsys.disabled():
         print(

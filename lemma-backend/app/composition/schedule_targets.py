@@ -40,7 +40,12 @@ class SqlAlchemyScheduleTargetResolver:
     def _agent_target(agent) -> ScheduleTarget | None:
         if agent is None:
             return None
-        return ScheduleTarget(id=agent.id, pod_id=agent.pod_id, name=agent.name)
+        return ScheduleTarget(
+            id=agent.id,
+            pod_id=agent.pod_id,
+            name=agent.name,
+            instruction=agent.instruction,
+        )
 
     @staticmethod
     def _workflow_target(workflow) -> ScheduleTarget | None:

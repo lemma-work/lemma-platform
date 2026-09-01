@@ -24,6 +24,16 @@ class ScheduleType(str, Enum):
     DATASTORE = "DATASTORE"  # Datastore row events
 
 
+#: Said by the request schemas (as a field-scoped 422) and by the service (as a
+#: 400, for bundle import, which never sees the schemas). One string, because a
+#: person hitting this rule through the API and through a bundle should be told
+#: the same thing.
+INSTRUCTION_REQUIRED = (
+    "This agent has no standing instruction of its own, so a schedule that "
+    "wakes it must say what it should do when it fires."
+)
+
+
 class TimeScheduleConfig(BaseModel):
     """Configuration for time-based schedules."""
 
@@ -212,6 +222,12 @@ class ScheduleEntity(Entity):
     # Type-specific config
     config: dict[str, Any] = Field(default_factory=dict)
 
+    # What the target should do when this fires, in the author's own words.
+    # Distinct from `filter_instruction`, which decides *whether* to fire:
+    # this one directs the work once the firing is settled. It reaches an
+    # agent target as the run's conversation instructions.
+    instruction: str | None = None
+
     # LLM-based event filtering
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
@@ -253,6 +269,11 @@ class ScheduleEntity(Entity):
             return DatastoreScheduleConfig(**self.config)
         return None
 
+    @property
+    def has_target(self) -> bool:
+        """Whether anything is wired to this schedule's firing."""
+        return self.agent_id is not None or self.workflow_id is not None
+
 
 class ScheduleCreateEntity(BaseModel):
     """Entity for creating a schedule."""
@@ -266,6 +287,7 @@ class ScheduleCreateEntity(BaseModel):
     agent_name: str | None = None
     workflow_name: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
+    instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
@@ -291,6 +313,7 @@ class ScheduleUpdateEntity(BaseModel):
     workflow_id: UUID | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
+    instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
     is_active: bool | None = None

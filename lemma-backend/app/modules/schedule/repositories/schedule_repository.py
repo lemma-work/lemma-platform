@@ -30,6 +30,7 @@ from app.modules.schedule.domain.value_objects import (
     parse_datastore_operation,
 )
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.schedule.repositories.schedule_filters import list_filters
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -88,6 +89,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             agent_id=entity.agent_id,
             workflow_id=entity.workflow_id,
             config=entity.config,
+            instruction=entity.instruction,
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
             account_id=entity.account_id,
@@ -326,22 +328,17 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         else:
             stmt = select(Schedule).where(Schedule.is_internal.is_(False))
 
-        if schedule_type:
-            stmt = stmt.where(Schedule.schedule_type == schedule_type)
-        if is_active is not None:
-            stmt = stmt.where(Schedule.is_active == is_active)
-        if pod_id:
-            stmt = stmt.where(Schedule.pod_id == pod_id)
-        if user_id:
-            stmt = stmt.where(Schedule.user_id == user_id)
-        if agent_id:
-            stmt = stmt.where(Schedule.agent_id == agent_id)
-        if workflow_id:
-            stmt = stmt.where(Schedule.workflow_id == workflow_id)
-        if name:
-            stmt = stmt.where(Schedule.name == name)
-        if cursor is not None:
-            stmt = stmt.where(Schedule.id > cursor)
+        for clause in list_filters(
+            schedule_type=schedule_type,
+            is_active=is_active,
+            pod_id=pod_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            workflow_id=workflow_id,
+            name=name,
+            cursor=cursor,
+        ):
+            stmt = stmt.where(clause)
 
         stmt = (
             stmt.options(selectinload(Schedule.agent), selectinload(Schedule.workflow))

@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.modules.agent.contracts import AgentKind
+from app.modules.agent_surfaces.platforms.slack.blocks import (
+    DEFAULT_RESPONDER_NAME,
+)
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.permissions import Permissions
@@ -174,10 +178,6 @@ class SurfaceConfigurationMixin(
         if kind == "starter_prompt":
             async with connection_released(self.uow.session):
                 await self._send_starter_prompt(adapter, credentials, setup)
-        elif kind == "open_dm":
-            await self._open_dm_setup(adapter, credentials, setup, surface, ctx)
-        elif kind == "submit_dm":
-            await self._submit_dm_setup(adapter, credentials, setup, surface, ctx)
         elif kind == "open":
             await self._open_channel_setup(
                 adapter, credentials, setup, surface, ctx, channel_id
@@ -196,61 +196,10 @@ class SurfaceConfigurationMixin(
             prompt=str(setup.get("prompt") or ""),
         )
 
-    async def _open_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
-        # A dedicated bot publishes no "Change" button, but a Home tab rendered
-        # before it became one still carries a live button — Slack keeps the
-        # view until it is republished. Opening a picker there would offer a
-        # choice this bot cannot honour, so it is refused at the action too.
-        if not surface.config.slack.offers_dm_agent_choice():
-            return
-        agents = await self._visible_agents(
-            surface=surface, ctx=ctx, action=Permissions.AGENT_READ
-        )
-        async with connection_released(self.uow.session):
-            await adapter.open_dm_agent_modal(
-                credentials=credentials,
-                trigger_id=str(setup.get("trigger_id") or ""),
-                agent_names=[agent.name for agent in agents],
-                current=surface.config.slack.choice_for_user(
-                    setup.get("actor_external_user_id")
-                ),
-                surface_id=str(surface.id),
-            )
-
-    async def _submit_dm_setup(self, adapter, credentials, setup, surface, ctx) -> None:
-        # Same stale-view case as `_open_dm_setup`, one step later: a modal
-        # opened before this became a dedicated bot can still be submitted.
-        # Storing the choice would be writing a preference nothing will read.
-        if not surface.config.slack.offers_dm_agent_choice():
-            return
-        agent_name = await self._validated_agent_choice(
-            surface=surface,
-            ctx=ctx,
-            agent_name=setup.get("agent_name"),
-            action=Permissions.AGENT_READ,
-        )
-        if setup.get("agent_name") and agent_name is None:
-            return
-        external_user_id = str(setup.get("actor_external_user_id") or "")
-        await self._set_dm_agent_for_user(
-            surface=surface,
-            external_user_id=external_user_id,
-            agent_name=agent_name,
-        )
-        await self._publish_home(
-            surface=surface,
-            adapter=adapter,
-            credentials=credentials,
-            external_user_id=external_user_id,
-            ctx=ctx,
-        )
-
     async def _open_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
-        agents = await self._visible_agents(
-            surface=surface, ctx=ctx, action=Permissions.AGENT_UPDATE
-        )
+        agent_name = await self._surface_agent_name(surface)
         async with connection_released(self.uow.session):
             await adapter.open_channel_setup_modal(
                 credentials=credentials,
@@ -259,52 +208,22 @@ class SurfaceConfigurationMixin(
                 channel_label=await adapter.channel_name(
                     credentials=credentials, channel_id=channel_id
                 ),
-                agent_names=[agent.name for agent in agents],
+                agent_name=agent_name,
                 surface_id=str(surface.id),
             )
 
     async def _submit_channel_setup(
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
-        agent_name = await self._validated_agent_choice(
-            surface=surface,
-            ctx=ctx,
-            agent_name=setup.get("agent_name"),
-            action=Permissions.AGENT_UPDATE,
-        )
-        if setup.get("agent_name") and agent_name is None:
-            return
-        await self._route_channel_to_agent(
-            surface=surface, channel_id=channel_id, agent_name=agent_name
-        )
+        agent_name = await self._surface_agent_name(surface)
+        await self._allow_channel(surface=surface, channel_id=channel_id)
         async with connection_released(self.uow.session):
             await adapter.send_channel_setup_prompt(
                 credentials=credentials,
                 channel_id=channel_id,
                 user_id=str(setup.get("actor_external_user_id") or ""),
-                confirmed_agent=agent_name or "the pod assistant",
+                confirmed_agent=agent_name,
             )
-
-    async def _set_dm_agent_for_user(
-        self,
-        *,
-        surface,
-        external_user_id: str,
-        agent_name: str | None,
-    ) -> None:
-        """Record who answers one person's DMs.
-
-        Choosing the pod assistant stores a sentinel rather than removing the
-        entry — absence means "never chose", which resolves to the surface
-        default agent, and that is a different answer.
-        """
-        if not external_user_id:
-            return
-        chosen = dict(surface.config.slack.dm_agent_by_user)
-        chosen[external_user_id] = agent_name or surface.config.slack.POD_ASSISTANT
-        surface.config.slack.dm_agent_by_user = chosen
-        await self.surface_repository.update(surface)
-        await self.uow.commit()
 
     async def _publish_home(
         self, *, surface, adapter, credentials, external_user_id: str, ctx
@@ -323,19 +242,12 @@ class SurfaceConfigurationMixin(
                 credentials=credentials,
                 user_id=external_user_id,
                 pod_name=str(getattr(pod, "name", "") or "") or None,
-                dm_agent_name=(
-                    None
-                    if surface.config.slack.chose_pod_assistant(external_user_id)
-                    else (
-                        surface.config.slack.agent_for_user(external_user_id)
-                        or await self._agent_name_for_agent_id(surface.agent_id)
-                    )
-                ),
+                agent_name=await self._surface_agent_name(surface),
+                # The channels this bot answers in. The second element used to
+                # be the agent routed to that channel; there is one agent now,
+                # so it is the same for every row and the Home tab says it once.
                 channel_routes=[
-                    (
-                        route.channel_id,
-                        None if route.use_pod_assistant else route.agent_name,
-                    )
+                    (route.channel_id, None)
                     for route in surface.config.channels
                     if route.channel_id
                 ],
@@ -347,7 +259,6 @@ class SurfaceConfigurationMixin(
                 ),
                 workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
                 logo_url=surface_settings.slack_home_logo_url,
-                offers_dm_agent_choice=surface.config.slack.offers_dm_agent_choice(),
             )
 
     async def _home_apps(
@@ -391,18 +302,12 @@ class SurfaceConfigurationMixin(
             return []
         return [(app.name, f"https://{app.public_slug}.{domain}") for app in apps]
 
-    async def _route_channel_to_agent(
-        self,
-        *,
-        surface,
-        channel_id: str,
-        agent_name: str | None,
-    ) -> None:
-        """Point one channel at one agent, replacing any existing route.
+    async def _allow_channel(self, *, surface, channel_id: str) -> None:
+        """Add one channel to the list this surface's agent answers in.
 
-        ``agent_name=None`` means the pod's own assistant — which is what an
-        empty ``agent_name`` on a route already resolves to, so the two agree
-        without a special case downstream.
+        It used to point the channel at a chosen agent. A surface has one agent
+        now, so a channel is a place rather than a choice, and adding it twice
+        is the same as adding it once.
         """
         if not channel_id:
             return
@@ -411,16 +316,17 @@ class SurfaceConfigurationMixin(
             for route in surface.config.channels
             if str(route.channel_id or "") != channel_id
         ]
-        routes.append(
-            SurfaceChannelRoute(
-                channel_id=channel_id,
-                agent_name=agent_name,
-                use_pod_assistant=agent_name is None,
-            )
-        )
+        routes.append(SurfaceChannelRoute(channel_id=channel_id))
         surface.config.channels = routes
         await self.surface_repository.update(surface)
         await self.uow.commit()
+
+    async def _surface_agent_name(self, surface) -> str:
+        """What this surface's agent is called in front of a person."""
+        agent = await self.conversation_service.agent_repository.get(surface.agent_id)
+        if agent is None or agent.kind is AgentKind.POD_DEFAULT:
+            return DEFAULT_RESPONDER_NAME
+        return agent.name
 
     def _adapter_for_request(self, request):
         if isinstance(request, SurfaceDirectWebhookIngress):

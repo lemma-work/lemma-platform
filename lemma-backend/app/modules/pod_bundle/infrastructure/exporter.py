@@ -36,7 +36,6 @@ from lemma_pod_bundle.layout import (
 )
 from lemma_pod_bundle.normalize import (
     _attach_permissions_payload,
-    _normalize_agent_payload,
     _normalize_app_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
@@ -47,6 +46,7 @@ from lemma_pod_bundle.normalize import (
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
+from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
 from app.core.authorization.context import Context
 from app.core.concurrency.offload import run_blocking
 from app.core.helpers.slug import slugify
@@ -233,7 +233,6 @@ class BundleExporter:
             build_record_service,
             build_table_service,
             build_function_service,
-            get_agent_service,
             get_schedule_service,
             get_workflow_service,
         )
@@ -354,40 +353,14 @@ class BundleExporter:
 
             # --- agents -------------------------------------------------------
             if "agents" in selected:
-                agent_service = get_agent_service(uow)
-                agents, _ = await agent_service.list_agents(
-                    pod_id=pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
+                await export_agents(
+                    uow,
+                    root=root,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                    ctx=ctx,
+                    grants_payload=_resource_grants_payload,
                 )
-                for summary in sorted(agents, key=lambda a: str(a.name or "")):
-                    agent_name = str(summary.name or "")
-                    agent = await agent_service.get_agent_by_name(
-                        pod_id=pod_id,
-                        name=agent_name,
-                        requester_user_id=user_id,
-                        ctx=ctx,
-                    )
-                    dir_ = root / "agents" / agent_name
-                    dir_.mkdir(parents=True, exist_ok=True)
-                    payload = _normalize_agent_payload(_agent_response_dict(agent))
-                    grantee_id = getattr(agent, "id", None)
-                    if grantee_id is not None:
-                        grants = await _resource_grants_payload(
-                            uow,
-                            pod_id=pod_id,
-                            grantee_type="AGENT",
-                            grantee_id=grantee_id,
-                        )
-                        # Attach even an EMPTY grant list — see
-                        # _resource_grants_payload for why None differs from [].
-                        if grants is not None:
-                            payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(
-                        payload,
-                        field_name="instruction",
-                        file_name="instruction.md",
-                        resource_dir=dir_,
-                    )
-                    _write_json(dir_ / f"{agent_name}.json", payload)
                 done += 1
                 await on_progress(done, total)
 
