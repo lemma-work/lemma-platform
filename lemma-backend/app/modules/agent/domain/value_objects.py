@@ -273,131 +273,15 @@ DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES = 40
 DEFAULT_HISTORY_HARD_TOKEN_CEILING = 117_760
 
 
-class MessageRole(str, Enum):
-    USER = "user"
-    ASSISTANT = "assistant"
-    SYSTEM = "system"
-    TOOL = "tool"
-
-
-class MessageKind(str, Enum):
-    """Discriminates the flat message body.
-
-    A message carries exactly one kind. Textual kinds use ``text``; tool kinds
-    use ``tool_name``/``tool_call_id`` plus ``tool_args`` (call) or
-    ``tool_result`` (return). There is no nested ``content`` object.
-    """
-
-    TEXT = "TEXT"
-    NOTIFICATION = "NOTIFICATION"
-    THINKING = "THINKING"
-    TOOL_CALL = "TOOL_CALL"
-    TOOL_RETURN = "TOOL_RETURN"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "MessageKind | None":
-        # Case-insensitive so a lowercase kind from a harness payload or a
-        # pre-migration row still resolves to the CAPS member.
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip().upper()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
-
-
-TEXTUAL_MESSAGE_KINDS = frozenset(
-    {MessageKind.TEXT, MessageKind.NOTIFICATION, MessageKind.THINKING}
+# Re-exported: these moved to `domain.messages` when this file reached the
+# per-file limit, and every caller still imports them from here.
+from app.modules.agent.domain.messages import (  # noqa: E402
+    TEXTUAL_MESSAGE_KINDS as TEXTUAL_MESSAGE_KINDS,
+    WORKING_MESSAGE_KINDS as WORKING_MESSAGE_KINDS,
+    MessageDraft as MessageDraft,
+    MessageKind as MessageKind,
+    MessageRole as MessageRole,
 )
-
-
-class MessageDraft(BaseModel):
-    """Harness-produced message before durable DB id/sequence assignment.
-
-    Flat by construction: the body lives directly on the draft instead of a
-    nested ``content`` union, so there is no ``content.content`` indirection.
-    Build via the ``of_*`` constructors to keep call sites readable.
-    """
-
-    role: MessageRole
-    kind: MessageKind
-    text: str | None = None
-    tool_name: str | None = None
-    tool_call_id: str | None = None
-    tool_args: JsonValue = None
-    tool_result: JsonValue = None
-    metadata: JsonObject | None = None
-
-    @classmethod
-    def of_text(
-        cls,
-        text: str,
-        *,
-        role: MessageRole = MessageRole.ASSISTANT,
-        metadata: JsonObject | None = None,
-    ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.TEXT, text=text, metadata=metadata)
-
-    @classmethod
-    def of_thinking(
-        cls,
-        text: str,
-        *,
-        role: MessageRole = MessageRole.ASSISTANT,
-        metadata: JsonObject | None = None,
-    ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.THINKING, text=text, metadata=metadata)
-
-    @classmethod
-    def of_notification(
-        cls,
-        text: str,
-        *,
-        role: MessageRole = MessageRole.ASSISTANT,
-        metadata: JsonObject | None = None,
-    ) -> "MessageDraft":
-        return cls(
-            role=role, kind=MessageKind.NOTIFICATION, text=text, metadata=metadata
-        )
-
-    @classmethod
-    def of_tool_call(
-        cls,
-        *,
-        tool_name: str,
-        tool_call_id: str,
-        tool_args: JsonValue = None,
-        role: MessageRole = MessageRole.ASSISTANT,
-        metadata: JsonObject | None = None,
-    ) -> "MessageDraft":
-        return cls(
-            role=role,
-            kind=MessageKind.TOOL_CALL,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            tool_args=tool_args,
-            metadata=metadata,
-        )
-
-    @classmethod
-    def of_tool_return(
-        cls,
-        *,
-        tool_call_id: str,
-        tool_name: str | None = None,
-        tool_result: JsonValue = None,
-        role: MessageRole = MessageRole.TOOL,
-        metadata: JsonObject | None = None,
-    ) -> "MessageDraft":
-        return cls(
-            role=role,
-            kind=MessageKind.TOOL_RETURN,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            tool_result=tool_result,
-            metadata=metadata,
-        )
 
 
 class AgentEventType(str, Enum):
@@ -542,10 +426,19 @@ class HarnessOptions:
 
 
 class AgentRunStartResult(BaseModel):
-    """Result returned after adding a user message to a conversation."""
+    """Result returned after adding a user message to a conversation.
+
+    ``agent_run_id`` is None when the message was stored and nobody is
+    answering it -- a room with several agents in it where none was addressed
+    and the router chose silence. That is an ordinary outcome, not a failure:
+    most of what is said in a room with people in it is not for an agent.
+    """
 
     conversation_id: UUID
-    agent_run_id: UUID
+    agent_run_id: UUID | None = None
+    #: Which agent is answering, so a client can name the reply while it is
+    #: still streaming. Null for the pod's default assistant, which has no row.
+    agent_id: UUID | None = None
     started_new_run: bool
 
 
