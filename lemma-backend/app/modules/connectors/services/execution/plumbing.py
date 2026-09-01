@@ -75,6 +75,23 @@ def _upstream_status(exc: Exception) -> int | None:
 _UPSTREAM_MESSAGE_LIMIT = 2000
 
 
+def _response_text(exc: Exception) -> str | None:
+    """The response body, when there is one that can be read.
+
+    `.text` is a property that *raises* on a streaming response nobody has read
+    -- and MCP speaks streamable HTTP, so that is the common case here, not an
+    exotic one. `getattr` does not help: it only swallows a missing attribute,
+    not an exception raised by a property that exists.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return None
+
+
 def _upstream_message(exc: Exception) -> str | None:
     """What the provider said, passed through.
 
@@ -88,7 +105,7 @@ def _upstream_message(exc: Exception) -> str | None:
     provider error arrives unchanged; it is here for the gateway that echoes a
     request header back in its error page.
     """
-    body = getattr(getattr(exc, "response", None), "text", None)
+    body = _response_text(exc)
     if isinstance(body, str) and body.strip():
         text = body
     elif _upstream_status(exc) is not None:

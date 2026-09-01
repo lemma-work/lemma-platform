@@ -197,6 +197,7 @@ class AuthProviderPort(Protocol):
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> tuple[str, str]: ...
 
     async def exchange_code_for_credentials(
@@ -205,6 +206,7 @@ class AuthProviderPort(Protocol):
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials: ...
 
     async def refresh_credentials(

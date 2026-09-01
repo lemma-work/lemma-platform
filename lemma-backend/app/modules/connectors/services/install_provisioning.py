@@ -19,6 +19,7 @@ from uuid import UUID
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorValidationError,
@@ -103,6 +104,7 @@ async def discover_install_operations(
     *,
     repository: Any,
     uow: Any,
+    credentials: dict[str, Any] | None = None,
 ) -> int:
     """Populate an install's operations, if its kind discovers them.
 
@@ -132,7 +134,7 @@ async def discover_install_operations(
         spec=connector.spec_for(auth_config.kind),
     )
     try:
-        found = await KindDispatcher(registry).discover(install, None)
+        found = await KindDispatcher(registry).discover(install, credentials)
     except ConnectorDomainError as exc:
         logger.warning(
             "connectors.connector_service.auth_config_operation_discovery.failed",
@@ -185,4 +187,74 @@ async def refresh_install_operations(
         connector,
         repository=service.auth_config_operation_repository,
         uow=service.uow,
+        credentials=await discovery_credentials(service, auth_config),
+    )
+
+
+async def discovery_credentials(
+    service: Any, auth_config: AuthConfigEntity
+) -> dict[str, Any] | None:
+    """A connected account's credentials, for an install that keeps none itself.
+
+    Most installs carry whatever discovery needs in their own config -- an MCP
+    server's ``bearer_token``, a database URL. An install authorized by OAuth
+    carries nothing: the token belongs to the account, so discovering with the
+    install alone reaches the server unauthenticated and is refused. That is
+    what a real OAuth-protected MCP server did, answering 401 to a tool listing
+    and leaving the install with zero operations.
+
+    Any connected account will do. The tool list is a property of the server,
+    not of who is asking, so this is not a choice between different answers --
+    it is a choice of which valid token to ask with.
+    """
+    accounts = await service.account_repository.list_by_auth_config(auth_config.id)
+    for account in accounts:
+        if account.status is not AccountStatus.CONNECTED or not account.credentials:
+            continue
+        try:
+            credentials = await service.get_account_credentials(
+                account.id, account.user_id, auth_config.organization_id
+            )
+        except ConnectorDomainError as exc:
+            # One unusable account should not stop discovery from trying the
+            # next: a revoked token here is ordinary, not exceptional.
+            logger.info(
+                "connectors.connector_service.discovery_credentials.skipped",
+                auth_config_id=auth_config.id,
+                error_type=type(exc).__name__,
+            )
+            continue
+        return credentials.model_dump(exclude_none=True)
+    return None
+
+
+async def discover_operations_for_new_account(
+    service: Any, auth_config: AuthConfigEntity
+) -> None:
+    """Fill in an OAuth install's operations once somebody has connected.
+
+    An install whose credential lives on the account cannot be discovered when
+    it is created -- there is no account yet -- so it is committed with zero
+    operations and the first connection is the earliest moment discovery can
+    succeed. Without this the install stays empty until an operator finds the
+    refresh endpoint, which is not something a person connecting an MCP server
+    should have to know about.
+
+    Only when the install has none. The tool list belongs to the server, so
+    re-running it for the second and later people to connect would re-ask the
+    same question and answer it the same way.
+    """
+    repository = getattr(service, "auth_config_operation_repository", None)
+    if repository is None:
+        return
+    existing = await repository.list_by_auth_config(auth_config.id, limit=1)
+    if existing:
+        return
+    connector = await service.get_connector(auth_config.connector_id)
+    await discover_install_operations(
+        auth_config,
+        connector,
+        repository=repository,
+        uow=service.uow,
+        credentials=await discovery_credentials(service, auth_config),
     )

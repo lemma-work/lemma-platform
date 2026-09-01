@@ -21,10 +21,35 @@ from app.modules.connectors.domain.connector import (
     OAuth2CredentialConfig,
 )
 from app.modules.connectors.domain.ports import SystemOAuthConfigPort
+from app.modules.connectors.services.auth.mcp_install_authorization import (
+    MCP_OAUTH_CONFIG_KEY,
+)
 from app.modules.connectors.domain.errors import (
     ConnectorValidationError,
     UnsupportedAuthProviderError,
 )
+
+
+def _discovered_mcp_oauth(auth_config: AuthConfigEntity) -> OAuth2Config | None:
+    """The client this install registered with its server, if it registered one."""
+    if auth_config.kind is not ConnectorKind.MCP:
+        return None
+    oauth = (auth_config.config or {}).get(MCP_OAUTH_CONFIG_KEY)
+    if not isinstance(oauth, dict) or not oauth.get("client_id"):
+        return None
+    return OAuth2Config(
+        client_id=str(oauth["client_id"]),
+        # Dynamic registration commonly yields a public client, and `None` is
+        # how authlib is told to send no client authentication at all -- which
+        # is what `token_endpoint_auth_method: "none"` promised at registration.
+        client_secret=(
+            str(oauth["client_secret"]) if oauth.get("client_secret") else None
+        ),
+        authorization_url=str(oauth["authorization_endpoint"]),
+        token_url=str(oauth["token_endpoint"]),
+        default_scopes=list(oauth.get("scopes") or []),
+        resource=oauth.get("resource"),
+    )
 
 
 def provider_value(auth_config: AuthConfigEntity) -> str:
@@ -91,6 +116,19 @@ def resolve_auth_install(
     """
     provider = provider_value(auth_config)
     provider_config = auth_config.provider_config or {}
+
+    # An MCP server that described its own authorization at install time is an
+    # OAuth install, whatever the catalog's default scheme for the kind says.
+    # The catalog cannot know: `mcp` is one entry standing for every server a
+    # tenant might point at, and they do not agree on how to authenticate.
+    discovered = _discovered_mcp_oauth(auth_config)
+    if discovered is not None:
+        return _auth_install(
+            connector,
+            auth_config,
+            auth_scheme=AuthScheme.OAUTH2,
+            oauth2=discovered,
+        )
     oauth2_config: OAuth2Config | None = None
     toolkit_slug: str | None = None
     auth_scheme = AuthScheme.OAUTH2

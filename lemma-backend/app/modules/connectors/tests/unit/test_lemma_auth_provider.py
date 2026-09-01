@@ -26,6 +26,7 @@ class FakeOAuth2Session:
 
     last_init: dict[str, object] = {}
     last_fetch_token: dict[str, object] = {}
+    last_authorization: dict[str, object] = {}
 
     def __init__(self, **kwargs):
         FakeOAuth2Session.last_init = dict(kwargs)
@@ -37,6 +38,7 @@ class FakeOAuth2Session:
         return False
 
     def create_authorization_url(self, url, state=None, **kwargs):
+        FakeOAuth2Session.last_authorization = dict(kwargs)
         return f"{url}?state={state}", state
 
     async def fetch_token(self, **kwargs):
@@ -189,3 +191,94 @@ async def test_a_relative_lifetime_is_measured_from_utc_now():
     remaining = credentials.expires_at - before
     assert timedelta(hours=7, minutes=59) <= remaining <= timedelta(hours=8, minutes=1)
     assert not credential_refresh_due({"expires_at": credentials.expires_at})
+
+
+def _mcp_install() -> ResolvedAuthInstall:
+    """An install of the shape MCP discovery produces: a dynamically registered
+    public client (no secret) guarding one resource."""
+    return ResolvedAuthInstall(
+        connector_id="mcp",
+        kind=ConnectorKind.MCP,
+        auth_scheme=AuthScheme.OAUTH2,
+        auth_config_id=uuid4(),
+        organization_id=uuid4(),
+        config_source=AuthConfigSource.ORG_CUSTOM,
+        config={},
+        oauth2=OAuth2Config(
+            client_id="px_dcr_client",
+            client_secret=None,
+            default_scopes=[],
+            authorization_url="https://phoenix.example/oauth2/authorize",
+            token_url="https://phoenix.example/oauth2/token",
+            resource="https://phoenix.example/mcp",
+        ),
+    )
+
+
+async def test_resource_indicator_is_sent_on_both_authorization_and_token():
+    """RFC 8707 wants the resource named in both requests.
+
+    Sending it only at the token endpoint is not a partial implementation, it is
+    a broken one: the authorization server binds the grant to the resources
+    named at authorization time, so asking at exchange time for one the grant
+    never carried is rejected as `invalid_target`. A real server did exactly
+    that, which is why this asserts on both halves rather than on the token
+    request alone.
+    """
+    provider = LemmaAuthProvider(oauth_session_factory=FakeOAuth2Session)
+    install = _mcp_install()
+
+    await provider.get_authorization_url(
+        install=install,
+        user_id=uuid4(),
+        state="state-value",
+        redirect_uri="https://lemma.example/callback",
+        code_verifier="verifier",
+    )
+    assert (
+        FakeOAuth2Session.last_authorization["resource"]
+        == "https://phoenix.example/mcp"
+    )
+
+    await provider.exchange_code_for_credentials(
+        install=install,
+        redirect_uri="https://lemma.example/callback?code=abc&state=state-value",
+        user_id=uuid4(),
+        code_verifier="verifier",
+    )
+    assert (
+        FakeOAuth2Session.last_fetch_token["resource"]
+        == "https://phoenix.example/mcp"
+    )
+
+
+async def test_authorization_url_carries_pkce_for_a_secretless_client():
+    """A dynamically registered client has no secret, so PKCE is the only thing
+    binding the code to the browser that asked for it."""
+    provider = LemmaAuthProvider(oauth_session_factory=FakeOAuth2Session)
+
+    await provider.get_authorization_url(
+        install=_mcp_install(),
+        user_id=uuid4(),
+        state="state-value",
+        redirect_uri="https://lemma.example/callback",
+        code_verifier="verifier",
+    )
+
+    assert FakeOAuth2Session.last_init["code_challenge_method"] == "S256"
+    assert FakeOAuth2Session.last_authorization["code_verifier"] == "verifier"
+
+
+async def test_no_resource_is_sent_when_the_install_names_none():
+    """Most OAuth connectors are not resource-scoped, and sending an empty or
+    absent indicator to one that never asked for it is a way to get refused."""
+    provider = LemmaAuthProvider(oauth_session_factory=FakeOAuth2Session)
+
+    await provider.get_authorization_url(
+        install=_install(),
+        user_id=uuid4(),
+        state="state-value",
+        redirect_uri="https://lemma.example/callback",
+    )
+
+    assert "resource" not in FakeOAuth2Session.last_authorization

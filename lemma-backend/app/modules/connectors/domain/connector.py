@@ -106,7 +106,14 @@ class OAuth2Defaults(BaseModel):
 
 class OAuth2Config(OAuth2Defaults):
     client_id: str
-    client_secret: str
+    # `None` for a public client -- one registered dynamically against an MCP
+    # server, which commonly issues no secret. PKCE, not a secret, is what binds
+    # the code to the browser that asked for it in that case.
+    client_secret: str | None = None
+    # RFC 8707 resource indicator. Set for a server discovered through the MCP
+    # authorization profile, where one authorization server may guard several
+    # resources and a token has to name the one it is for.
+    resource: str | None = None
 
 
 class OAuth2CredentialConfig(BaseModel):

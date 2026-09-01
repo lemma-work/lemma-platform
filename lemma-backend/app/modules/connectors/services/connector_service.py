@@ -61,6 +61,9 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
+from app.modules.connectors.services.auth.mcp_install_authorization import (
+    negotiate_mcp_authorization,
+)
 from app.modules.connectors.services.auth_install_resolver import (
     composio_capability,
     lemma_capability,
@@ -76,6 +79,7 @@ from app.modules.connectors.services.account_profile import (
 )
 from app.modules.connectors.services.install_provisioning import (
     discover_install_operations,
+    discover_operations_for_new_account,
     org_has_install,
     refresh_install_operations,
     resolve_install_kind,
@@ -88,6 +92,24 @@ from app.modules.connectors.services.profile_operation_execution import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+def _stored_code_verifier(connect_request: ConnectRequestEntity) -> str | None:
+    """The verifier minted when the redirect was built, if there was one."""
+    return (connect_request.attributes or {}).get("code_verifier")
+
+
+def _pkce_verifier_for(install: ResolvedAuthInstall) -> str | None:
+    """A PKCE verifier when the install's client has no secret to prove itself.
+
+    Which is what dynamic registration usually yields. Minted out here rather
+    than inside the provider because it has to outlive the request that makes
+    it: the callback is where it is needed, and the connect request is the thing
+    that lives that long.
+    """
+    if install.oauth2 is None or install.oauth2.client_secret:
+        return None
+    return secrets.token_urlsafe(64)
 
 
 class ConnectorService:
@@ -485,6 +507,12 @@ class ConnectorService:
             config_source=config_source_enum,
         )
 
+        validated_config = await negotiate_mcp_authorization(
+            kind=kind,
+            config=validated_config,
+            redirect_uri=self.redirect_uri_builder.build(),
+        )
+
         entity = AuthConfigEntity(
             organization_id=organization_id,
             connector_id=connector_id,
@@ -678,9 +706,13 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider_value = self._provider_value(auth_config)
+        auth_install = self._resolve_auth_install(connector, auth_config)
         if provider_value == AuthProvider.LEMMA.value:
-            capability = self._lemma_capability(connector)
-            if capability.auth_scheme != AuthScheme.OAUTH2:
+            # The *install's* scheme, not the catalog's. `mcp` is one catalog
+            # entry standing for every server a tenant may point at, so whether
+            # a given install signs in through a browser is a property of that
+            # server -- discovered when the install was created.
+            if auth_install.auth_scheme != AuthScheme.OAUTH2:
                 raise ConnectorValidationError(
                     "Credential-managed native accounts must be connected with the accounts API."
                 )
@@ -694,12 +726,12 @@ class ConnectorService:
         # is always permitted. The OAuth callback dedups by provider account id:
         # re-authing an existing identity updates it, a new identity is created.
 
-        auth_install = self._resolve_auth_install(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(
             self._provider_value(auth_config)
         )
         state = secrets.token_urlsafe(32)
         redirect_uri = self.redirect_uri_builder.build()
+        code_verifier = _pkce_verifier_for(auth_install)
 
         try:
             (
@@ -710,6 +742,7 @@ class ConnectorService:
                 user_id=user_id,
                 state=state,
                 redirect_uri=redirect_uri,
+                code_verifier=code_verifier,
             )
         except DomainError:
             raise
@@ -731,7 +764,11 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes={"state": state, "provider_state": provider_state},
+            attributes={
+                "state": state,
+                "provider_state": provider_state,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+            },
         )
         connect_request = await self.connect_request_repository.create(connect_request)
         await self.uow.commit()
@@ -904,6 +941,7 @@ class ConnectorService:
                 redirect_uri=redirect_uri,
                 user_id=user_id,
                 state=None,
+                code_verifier=_stored_code_verifier(pending_request),
             )
         except DomainError:
             raise
@@ -1030,6 +1068,11 @@ class ConnectorService:
         pending_request.status = ConnectRequestStatus.SUCCESS
         await self.connect_request_repository.update(pending_request)
         await self.uow.commit()
+
+        # After the commit: an install whose token lives on the account can only
+        # be discovered now, and a discovery failure must not undo the
+        # connection the person just made.
+        await discover_operations_for_new_account(self, auth_config)
 
         return account
 

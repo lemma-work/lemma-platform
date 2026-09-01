@@ -38,8 +38,13 @@ class AuthProviderInterface(ABC):
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> Tuple[str, str]:
-        """Return ``(authorization_url, state)`` to send the person to."""
+        """Return ``(authorization_url, state)`` to send the person to.
+
+        ``code_verifier`` is supplied by the caller when the install's client
+        has no secret, because it must survive until the callback.
+        """
 
     @abstractmethod
     async def exchange_code_for_credentials(
@@ -48,6 +53,7 @@ class AuthProviderInterface(ABC):
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials:
         """Turn the provider's callback into credentials worth storing.
 

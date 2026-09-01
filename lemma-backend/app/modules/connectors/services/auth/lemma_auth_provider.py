@@ -44,6 +44,7 @@ class LemmaAuthProvider(AuthProviderInterface):
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> Tuple[str, str]:
         if not install.oauth2:
             raise ConnectorValidationError(
@@ -54,15 +55,28 @@ class LemmaAuthProvider(AuthProviderInterface):
 
         # create_authorization_url is pure URL/PKCE building (no network), so it
         # stays synchronous even on the async client — no thread hop needed.
+        #
+        # `code_verifier` is supplied by the caller rather than made here: it has
+        # to survive until the callback, and the connect request is what lives
+        # that long. A client registered dynamically has no secret, so PKCE is
+        # the only thing binding the code to whoever asked for it.
         async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=redirect_uri,
             scope=oauth_config.default_scopes,
+            **({"code_challenge_method": "S256"} if code_verifier else {}),
         ) as oauth:
             authorization_url, provider_state = oauth.create_authorization_url(
                 url=oauth_config.authorization_url,
                 state=state,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+                # RFC 8707, and it has to be here as well as at the token
+                # endpoint. The authorization server binds the grant to the
+                # resource named here; asking at exchange time for a resource
+                # the grant was never associated with is refused as
+                # `invalid_target`, which is exactly what Phoenix did.
+                **({"resource": oauth_config.resource} if oauth_config.resource else {}),
                 **(oauth_config.extra_params or {}),
             )
 
@@ -74,6 +88,7 @@ class LemmaAuthProvider(AuthProviderInterface):
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials:
         if not install.oauth2:
             raise ConnectorValidationError(
@@ -93,6 +108,12 @@ class LemmaAuthProvider(AuthProviderInterface):
             token_data = await oauth.fetch_token(
                 url=oauth_config.token_url,
                 authorization_response=authorization_response,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+                # RFC 8707, matching the authorization request above. An
+                # authorization server guarding several MCP servers issues a
+                # token for one of them, and a token minted without this is
+                # refused by the resource it was meant for.
+                **({"resource": oauth_config.resource} if oauth_config.resource else {}),
             )
 
         return await self._create_oauth_credentials(token_data, install)
