@@ -61,8 +61,11 @@ it happens.
   question before building anything.
 - The system shall give the default agent exactly the access of whoever is
   talking to it, and no standing access of its own.
+- The system shall list the default agent alongside the agents a person created,
+  so anything that can name an agent -- a schedule, a surface, a picker -- can
+  name it too.
 - When a person deletes an agent they created, the system shall keep the default
-  agent available.
+  agent available. The default agent itself shall not be deletable.
 
 **Contracts:** `agent.conversation.create`, `agent.list`
 
