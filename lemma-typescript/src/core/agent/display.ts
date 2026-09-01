@@ -188,6 +188,20 @@ function messageAgentRunId(message: AssistantRenderableMessage): string | null {
   return typeof agentRunId === "string" && agentRunId.trim() ? agentRunId : null;
 }
 
+/** Who wrote a message, reading either casing the transports use. */
+export function messageSenderUserId(message: AssistantRenderableMessage): string | null {
+  const record = messageRecord(message);
+  const sender = record.sender_user_id ?? record.senderUserId;
+  return typeof sender === "string" && sender.trim() ? sender : null;
+}
+
+/** Which agent produced a message, reading either casing the transports use. */
+export function messageAgentId(message: AssistantRenderableMessage): string | null {
+  const record = messageRecord(message);
+  const agentId = record.agent_id ?? record.agentId;
+  return typeof agentId === "string" && agentId.trim() ? agentId : null;
+}
+
 function messageFlag(message: AssistantRenderableMessage, snakeKey: string, camelKey: string): boolean {
   const content = contentRecord(message);
   const metadata = metadataRecord(message);

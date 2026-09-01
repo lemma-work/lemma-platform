@@ -5,6 +5,7 @@ import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/A
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
+import type { ConversationParticipantResponse as ConversationParticipant } from "../openapi_client/models/ConversationParticipantResponse.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
 import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
@@ -266,6 +267,67 @@ export class ConversationsNamespace {
     const podId = this.requirePodId(options.pod_id);
     return this.http.request<Conversation>("GET", `/pods/${podId}/conversations/${conversationId}`)
       .then(normalizeConversation);
+  }
+
+  /** Everyone in a conversation: the people, and the agents present. */
+  listParticipants(
+    conversationId: string,
+    options: { pod_id?: string | null } = {},
+  ): Promise<ConversationParticipant[]> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<{ items?: ConversationParticipant[] }>(
+      "GET",
+      `/pods/${podId}/conversations/${conversationId}/participants`,
+    ).then((response) => response?.items ?? []);
+  }
+
+  /**
+   * Add one person, or one agent. Name exactly one of them.
+   *
+   * Adding a person is a grant: every answer in the conversation is from then
+   * on said to them. Their own working stays private to them, and so does
+   * everyone else's.
+   */
+  addParticipant(
+    conversationId: string,
+    subject: { user_id?: string | null; agent_name?: string | null },
+    options: { pod_id?: string | null } = {},
+  ): Promise<ConversationParticipant> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<ConversationParticipant>(
+      "POST",
+      `/pods/${podId}/conversations/${conversationId}/participants`,
+      { body: subject },
+    );
+  }
+
+  /** Remove one person or one agent. The person who opened it cannot be removed. */
+  removeParticipant(
+    conversationId: string,
+    subject: { user_id?: string | null; agent_id?: string | null },
+    options: { pod_id?: string | null } = {},
+  ): Promise<void> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<void>(
+      "DELETE",
+      `/pods/${podId}/conversations/${conversationId}/participants`,
+      { params: { user_id: subject.user_id, agent_id: subject.agent_id } },
+    );
+  }
+
+  /**
+   * The conversation this person is already having with an agent, opening one
+   * if there is none. Calling it twice returns the same conversation.
+   */
+  open(
+    options: { pod_id?: string | null; agent_name?: string | null } = {},
+  ): Promise<Conversation> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<Conversation>(
+      "POST",
+      `/pods/${podId}/conversations/open`,
+      { params: { agent_name: options.agent_name ?? undefined } },
+    ).then(normalizeConversation);
   }
 
   async update(

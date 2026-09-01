@@ -84,6 +84,10 @@ export interface SendAssistantControllerMessageOptions {
   metadata?: Record<string, unknown> | null;
   conversationMetadata?: Record<string, unknown> | null;
   instructions?: string | null;
+  /**
+   * Address one agent for this turn. It must already be in the conversation.
+   */
+  agentName?: string | null;
 }
 
 export type AssistantUserApprovalDecision = "APPROVE_ONCE" | "APPROVE_FOR_SESSION" | "DENY";
@@ -550,6 +554,8 @@ function mapConversationMessage(
     optimistic_id: msg.optimistic_id,
     sequence: msg.sequence,
     agent_run_id: msg.agent_run_id,
+    sender_user_id: msg.sender_user_id ?? null,
+    agent_id: msg.agent_id ?? null,
     metadata: msg.metadata ?? null,
     message_metadata: (msg.message_metadata as Record<string, unknown> | undefined) ?? null,
     kind: msg.kind,
@@ -1876,6 +1882,7 @@ export function useAssistantController({
               })),
             }
           : options.metadata ?? undefined,
+        agentName: options.agentName,
       });
       touchConversation(finalConversationId, { updated_at: new Date().toISOString() });
     } catch (err) {

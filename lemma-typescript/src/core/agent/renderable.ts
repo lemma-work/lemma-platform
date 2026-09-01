@@ -52,6 +52,19 @@ export interface AssistantRenderableMessage {
   optimistic_id?: string;
   sequence?: number;
   agent_run_id?: string | null;
+  /**
+   * Which person wrote it. Null on everything an agent produced, and on user
+   * messages that predate the column. `role` says a human spoke; this says
+   * which one, which is what a conversation with several people in it needs to
+   * put a name on a turn.
+   */
+  sender_user_id?: string | null;
+  /**
+   * Which agent produced it. Null on anything a person wrote. A conversation
+   * can be answered by more than one agent, so an answer that does not say
+   * which one is an answer nobody can attribute.
+   */
+  agent_id?: string | null;
   metadata?: Record<string, unknown> | null;
   message_metadata?: Record<string, unknown> | null;
   /** Flat message fields, passed through so consumers can inspect the raw kind. */

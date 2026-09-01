@@ -88,6 +88,16 @@ export interface SendAssistantMessageOptions {
    * created — the session's own copy is a render behind at that point.
    */
   knownConversation?: Conversation | null;
+  /**
+   * Address one agent for this turn, as an `@mention` does. It must already be
+   * in the conversation; the server refuses a name that is not.
+   */
+  agentName?: string | null;
+  /**
+   * Branch a subthread from an earlier run. The new run sees that run and
+   * everything leading to it, and no sibling branch sees this one.
+   */
+  branchFromRunId?: string | null;
 }
 
 export interface ResumeAssistantOptions {
@@ -1076,7 +1086,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
       const stream = await scopedClient.conversations.sendMessageStream(
         resolvedConversationId,
-        { content, metadata: input.metadata ?? undefined },
+        {
+          content,
+          metadata: input.metadata ?? undefined,
+          agent_name: input.agentName ?? undefined,
+          branch_from_run_id: input.branchFromRunId ?? undefined,
+        },
         {
           pod_id: scope.podId ?? undefined,
           signal: controller.signal,

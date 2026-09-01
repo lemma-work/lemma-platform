@@ -5,6 +5,7 @@ import type {
   AgentRuntimeProfileListResponse,
   AgentRuntimeProfileResponse,
   ColumnSchema,
+  ConversationParticipantResponse,
   ConversationResponse as GeneratedConversationResponse,
   CreateAgentRequest,
   DatastoreQueryResponse,
@@ -143,10 +144,15 @@ export interface ConversationMessageResponse {
   conversation_id?: string;
   sequence?: number;
   agent_run_id?: string | null;
+  /** Which person wrote it, when a person did. Null for anything an agent produced. */
+  sender_user_id?: string | null;
+  /** Which agent produced it. Null on anything a person wrote. */
+  agent_id?: string | null;
   metadata?: Record<string, unknown> | null;
 }
 
 export type ConversationMessage = ConversationMessageResponse;
+export type ConversationParticipant = ConversationParticipantResponse;
 
 export type FunctionRun = FunctionRunResponse;
 export type FunctionRunSummary = FunctionRunSummaryResponse;

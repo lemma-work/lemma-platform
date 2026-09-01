@@ -97,6 +97,8 @@ export {
   contentRecord,
   metadataRecord,
   messageAgentRunId,
+  messageSenderUserId,
+  messageAgentId,
   messageFlag,
   isFinalAnswerMessage,
   isIntermediateAssistantMessage,
