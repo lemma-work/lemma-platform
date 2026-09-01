@@ -43,7 +43,7 @@ default-members = ["."]
 [workspace.package]
 # One version for six crates. Release used to rewrite desktop/Cargo.toml alone,
 # so the moment the other five moved in here they would have drifted silently.
-version = "0.7.1"
+version = "0.7.2"
 
 [workspace.dependencies]
 # Hoisted because feature unification makes the *emergent* feature set of a
