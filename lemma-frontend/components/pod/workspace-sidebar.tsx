@@ -51,7 +51,7 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
 import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
 import { useAppPages } from '@/lib/hooks/use-app';
-import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
+import { DEFAULT_RESPONDER_NAME, formatAgentName, isPodDefaultAgentName } from '@/lib/utils/agents';
 import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
 import {
     tableQueryOptions,
@@ -315,7 +315,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     );
     const sidebarAgents = useMemo(
         () => allSidebarAgents
-            .filter((agent) => agent.takes_input !== true)
+            // Lem has its own row directly above this list; it reaches the list
+            // too now that it is a real agent row, and the rail should show one
+            // of it. `agentsById` below still reads the unfiltered list.
+            .filter((agent) => agent.takes_input !== true && !isPodDefaultAgentName(agent.name))
             .slice(0, SIDEBAR_AGENT_LIMIT - 1),
         [allSidebarAgents],
     );
