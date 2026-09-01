@@ -32,6 +32,13 @@ class AgentSettings(BaseSettings):
         extra="ignore",
     )
 
+    agent_router_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional small model that decides who answers an unaddressed "
+            "message. Falls back to the system profile's default."
+        ),
+    )
     agent_run_stop_poll_interval_seconds: float = Field(
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",

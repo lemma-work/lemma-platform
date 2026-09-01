@@ -58,7 +58,32 @@ async def start_and_stream_run(
         await close_subscription(type(exc), exc, exc.__traceback__)
         raise
 
+    if result.agent_run_id is None:
+        # Nobody is answering. The message is stored and everyone watching has
+        # already been sent it; there is no run to follow, so the stream says
+        # so once and ends rather than holding a connection open against a
+        # subscription that will never see a frame.
+        await close_subscription()
+
+        async def unanswered() -> AsyncGenerator[str, None]:
+            yield encode_stream_chunk(
+                event_type="unanswered",
+                data={"conversation_id": str(conversation_id)},
+            )
+
+        return StreamingResponse(unanswered(), media_type="text/event-stream")
+
     async def event_generator() -> AsyncGenerator[str, None]:
+        # Who is answering, before a single token. Everything the client shows
+        # while a turn is in flight -- the name on the bubble, "batman is
+        # typing" -- needs this, and the first frame that would otherwise carry
+        # it is the finished message. Without it a live turn is anonymous for
+        # its whole duration, which is the entire time anyone is looking at it.
+        yield encode_stream_chunk(
+            event_type="run_started",
+            data={"agent_id": str(result.agent_id) if result.agent_id else None},
+            agent_run_id=result.agent_run_id,
+        )
         try:
             async for chunk in iter_subscription(iterator, result.agent_run_id):
                 yield chunk

@@ -9,6 +9,7 @@ from app.modules.agent.config import AgentSettings
 pytestmark = pytest.mark.unit
 
 EXPECTED = [
+    ("agent_router_model", "AGENT_ROUTER_MODEL", None),
     (
         "agent_run_stop_poll_interval_seconds",
         "AGENT_RUN_STOP_POLL_INTERVAL_SECONDS",
