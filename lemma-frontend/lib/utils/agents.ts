@@ -18,8 +18,8 @@ import { humanizeName } from '@/lib/utils/display-name';
  * itself.
  *
  * A *lemma* is the step proved so the real result can happen, which is the job.
- * This is display copy only: `pod_default`, `POD_DEFAULT` and
- * `__pod_assistant__` are wire values and stay exactly as they are.
+ * This is display copy only: `pod_default` and `POD_DEFAULT` are wire values
+ * and stay exactly as they are.
  */
 export const DEFAULT_RESPONDER_NAME = 'Lem';
 

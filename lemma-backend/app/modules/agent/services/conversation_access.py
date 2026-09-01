@@ -24,7 +24,6 @@ from uuid import UUID
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
     effective_agent_id,
     is_pod_default_agent,
 )
@@ -36,7 +35,6 @@ from app.modules.agent.domain.errors import (
 from app.modules.agent.domain.value_objects import AgentKind
 from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 
-POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
 
 def validate_conversation_access(

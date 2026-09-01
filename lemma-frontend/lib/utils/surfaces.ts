@@ -156,9 +156,7 @@ export function surfaceReaches(
     // Nobody DMs a mailbox. "Direct messages" is Slack, Telegram and WhatsApp —
     // a person opening a chat with the bot — and an email surface wore the label
     // anyway, so the agent page's tooltip read "Live · Direct messages" over an
-    // address and the agents list called an inbox a place you send DMs. The
-    // per-person half is Slack-only (`dm_agent_by_user`), so mail never reaches
-    // it: an address answers whoever writes to it, full stop.
+    // address and the agents list called an inbox a place you send DMs.
     const isMail = MAIL_PLATFORMS.has(getSurfacePlatformKey(surface));
     if (isTheirs) {
         reaches.push({
