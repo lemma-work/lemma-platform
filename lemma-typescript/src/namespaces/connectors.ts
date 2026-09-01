@@ -187,14 +187,39 @@ export class ConnectorsNamespace {
       )),
   };
 
+  /**
+   * Enable a connector for an organization, reusing an existing install only
+   * when the caller has described nothing that would distinguish a new one.
+   *
+   * This used to return ANY active install with a matching connector id,
+   * ignoring the submitted kind, config and name. The backend deliberately
+   * permits many installs of one connector -- see the comment on the
+   * `auth_configs` model, which says there is deliberately no
+   * `(organization_id, connector_id)` uniqueness -- so this was the SDK
+   * enforcing a constraint the schema had dropped, client-side and silently.
+   *
+   * Two things it broke. Every MCP server shares the catalog id `mcp`, every
+   * database shares `sql`, every REST API shares `openapi`: a second one
+   * returned the first, and the caller was told it worked. And choosing "use
+   * my own credentials" for a connector the org already had returned the
+   * Lemma-managed install, dropping the submitted client id and secret, so
+   * OAuth then ran against Lemma's app rather than theirs.
+   */
   async enableApp(
     organizationId: string,
     connectorId: string,
     options: EnableAppOptions = {},
   ) {
-    const configs = await this.authConfigs.list(organizationId, { limit: 100 });
-    const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
-    if (existing) return existing;
+    // A name, a config, or bringing your own credentials all describe a
+    // particular install rather than "make sure this connector is on".
+    const describesAParticularInstall = Boolean(
+      options.name || options.config || options.config_source === "ORG_CUSTOM",
+    );
+    if (!describesAParticularInstall) {
+      const configs = await this.authConfigs.list(organizationId, { limit: 100 });
+      const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
+      if (existing) return existing;
+    }
 
     return this.authConfigs.create(organizationId, {
       connector_id: connectorId,
