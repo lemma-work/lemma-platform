@@ -856,10 +856,16 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         ),
         summarization_model=None,
     )
-    # Run the chain the way production does rather than reaching for one stage
-    # by position: the ceiling guard stopped being the last processor when
-    # `_ensure_leading_user_message` was added after it, and picking `[-1]`
-    # silently started asserting against a stage that does no trimming at all.
+    # Applied the way a run applies them: every processor, in order.
+    #
+    # This used to reach for `processors[-1]` and call it "the guard". That was
+    # true when it was written and stopped being true when a processor was
+    # appended after the ceiling guard to fix the leading message's role -- so
+    # the test called *that* one, which never trims, measured the history
+    # unchanged at 204,518 tokens, and reported a compaction failure that was
+    # nothing of the sort. Production was never affected; it runs the whole
+    # chain. Running the whole chain here too means the test cannot be wrong
+    # about the order again.
     compacted: list[object] = list(history)
     for processor in processors:
         compacted = await processor(compacted)
