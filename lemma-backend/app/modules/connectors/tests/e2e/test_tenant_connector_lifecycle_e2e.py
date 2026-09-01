@@ -605,6 +605,120 @@ class TestUpdatingAnInstallInPlace:
         demoted = await service.auth_config_repository.get(first.id)
         assert demoted.is_default is False
 
+    async def test_promotion_works_with_a_third_install_in_the_way(
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
+    ):
+        """Demoting has to find the DEFAULT, not whichever row comes back first.
+
+        `_clear_default_install` asked for "the active install for this
+        connector", and that query had no `is_default` predicate and no ORDER
+        BY -- so with more than two installs it could be handed a non-default
+        row, return early leaving the real default in place, and the promotion
+        then violated `uq_auth_configs_default_per_connector` as an unhandled
+        IntegrityError.
+
+        Two installs could not catch it: one of them IS the default, so an
+        arbitrary pick is right half the time and right by luck the rest. It
+        took a third row and an unlucky heap order, which is what CI found and
+        a local run did not.
+        """
+        service = _service(db_session)
+        org_id = UUID(str(fixed_test_org["id"]))
+        user_id = UUID(str(fixed_test_user["id"]))
+
+        installs = []
+        for index in range(3):
+            installs.append(
+                await service.create_auth_config(
+                    user_id=user_id,
+                    organization_id=org_id,
+                    connector_id=mcp_connector.id,
+                    config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+                    config={"server_url": live_mcp_server},
+                    name=f"mcp-t{index}-{uuid4().hex[:8]}",
+                )
+            )
+        assert installs[0].is_default, "the first connected becomes the default"
+
+        promoted, _d, _m = await service.update_auth_config(
+            user_id=user_id,
+            organization_id=org_id,
+            auth_config_name=installs[2].name,
+            is_default=True,
+        )
+
+        assert promoted.is_default is True
+        defaults = [
+            (await service.auth_config_repository.get(install.id)).is_default
+            for install in installs
+        ]
+        assert defaults == [False, False, True], (
+            f"exactly one default must survive, got {defaults}"
+        )
+
+    async def test_a_bare_connector_id_resolves_to_the_default_install(
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
+    ):
+        """The property underneath, asserted where it cannot depend on luck.
+
+        The flow test above only fails when the planner happens to return a
+        non-default row first, which is heap order -- so it passed locally and
+        failed in CI. This asks the query directly, with the default made the
+        NEWEST row rather than the oldest, so an unordered scan reliably meets
+        a different one first.
+        """
+        service = _service(db_session)
+        org_id = UUID(str(fixed_test_org["id"]))
+        user_id = UUID(str(fixed_test_user["id"]))
+
+        installs = []
+        for index in range(3):
+            installs.append(
+                await service.create_auth_config(
+                    user_id=user_id,
+                    organization_id=org_id,
+                    connector_id=mcp_connector.id,
+                    config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+                    config={"server_url": live_mcp_server},
+                    name=f"mcp-o{index}-{uuid4().hex[:8]}",
+                )
+            )
+        assert installs[0].is_default, "the first connected becomes the default"
+
+        # Promote the LAST one, so the default is no longer the oldest row.
+        # That is what makes this deterministic: an unordered scan returns the
+        # first row it meets, which is now emphatically not the default, so the
+        # assertion below cannot pass by luck the way the flow test above did.
+        await service.update_auth_config(
+            user_id=user_id,
+            organization_id=org_id,
+            auth_config_name=installs[-1].name,
+            is_default=True,
+        )
+        default_id = installs[-1].id
+
+        resolved = await service.auth_config_repository.get_active_by_org_and_app(
+            org_id, mcp_connector.id
+        )
+
+        assert resolved is not None
+        assert resolved.id == default_id, (
+            "a bare connector id must resolve to the default install, not to "
+            "whichever row the planner returned first"
+        )
+
 
 class TestDiscoveredOperationsAreVisibleThroughTheApi:
     """Listing an install's operations must return the ones it discovered.

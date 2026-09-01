@@ -88,10 +88,36 @@ class AuthConfigRepository(
     async def get_active_by_org_and_app(
         self, organization_id: UUID, connector_id: str
     ) -> AuthConfigEntity | None:
-        stmt = select(AuthConfig).where(
-            AuthConfig.organization_id == organization_id,
-            AuthConfig.connector_id == connector_id,
-            AuthConfig.status == AuthConfigStatus.ACTIVE.value,
+        """The install a bare connector id resolves to: the default one.
+
+        An organization may hold many active installs of one connector -- the
+        model says so, and says there is deliberately no
+        `(organization_id, connector_id)` uniqueness -- so "the" install for a
+        connector id needs a rule. There was none: no `is_default` predicate
+        and no ORDER BY, so this returned whatever the planner produced first,
+        which is heap order and changes after a VACUUM or an update.
+
+        Two things followed. The same call could authenticate against a
+        different install on different days. And `_clear_default_install`,
+        which demotes the current default before promoting a new one, would be
+        handed a non-default row, return early leaving the real default in
+        place, and the promotion then violated
+        `uq_auth_configs_default_per_connector` -- an unhandled IntegrityError,
+        reachable whenever an org had three active installs of one connector.
+
+        Ordering by `is_default` makes this agree with the partial unique index
+        that already names one row per (org, connector), and with every other
+        resolver on both sides of the API. `created_at` only breaks a tie among
+        rows that are all non-default, so the answer is at least stable.
+        """
+        stmt = (
+            select(AuthConfig)
+            .where(
+                AuthConfig.organization_id == organization_id,
+                AuthConfig.connector_id == connector_id,
+                AuthConfig.status == AuthConfigStatus.ACTIVE.value,
+            )
+            .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
