@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -215,15 +215,37 @@ function StringMapField({
         toEntries(value).map(([key, item]) => ({ key, value: item })),
     );
 
+    const asObject = (entries: Array<{ key: string; value: string }>) =>
+        Object.fromEntries(
+            entries
+                .map((row) => [row.key.trim(), row.value] as const)
+                .filter(([key]) => key.length > 0),
+        );
+
+    // Re-sync when the value arrives from outside, which on the edit path it
+    // does: the dialog hydrates its config in an effect that runs after this
+    // subtree has mounted, so initialising once showed NO headers for an
+    // install that has them. Untouched they survived, because the parent still
+    // held them — but adding a single header committed only the visible rows
+    // and silently dropped every existing one.
+    //
+    // Compared by content, not by reference, so our own echo does not come
+    // back as an outside change and collapse a row the user is mid-way through
+    // typing: a row with a blank key contributes nothing to the object, so
+    // what we hold and what we last emitted still agree.
+    const incoming = JSON.stringify(toEntries(value));
+    const settled = JSON.stringify(Object.entries(asObject(rows)));
+    useEffect(() => {
+        if (incoming === settled) return;
+        setRows(toEntries(value).map(([key, item]) => ({ key, value: item })));
+        // `incoming` stands in for `value`: it is its content, which is what
+        // decides whether this is genuinely new.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [incoming]);
+
     const commit = (next: Array<{ key: string; value: string }>) => {
         setRows(next);
-        onChange(
-            Object.fromEntries(
-                next
-                    .map((row) => [row.key.trim(), row.value] as const)
-                    .filter(([key]) => key.length > 0),
-            ),
-        );
+        onChange(asObject(next));
     };
 
     const updateRow = (index: number, patch: Partial<{ key: string; value: string }>) =>

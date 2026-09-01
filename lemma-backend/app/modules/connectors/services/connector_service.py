@@ -78,6 +78,9 @@ from app.modules.connectors.services.auth_install_resolver import (
     provider_value,
     resolve_auth_install,
 )
+from app.modules.connectors.services.account_credentials import (
+    validated_account_credentials,
+)
 from app.modules.connectors.services.connect_request_lifecycle import (
     assert_still_open,
     stored_code_verifier,
@@ -817,10 +820,9 @@ class ConnectorService:
                 "OAuth2 accounts must be connected with an OAuth connect request."
             )
 
-        if not isinstance(credentials, dict) or not credentials:
-            raise ConnectorValidationError(
-                "Credential-managed accounts require a non-empty credentials object."
-            )
+        credentials = validated_account_credentials(
+            connector, auth_config.kind, credentials
+        )
 
         existing_account = await self.account_repository.get_by_user_and_auth_config(
             user_id, auth_config.id

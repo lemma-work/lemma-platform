@@ -343,7 +343,18 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
      * Creating a connection is two calls that read as one action: the install
      * carries the address, the account carries the credentials. An account is
      * always created, even with an empty credential set — execution resolves
-     * one even for an MCP server that needs no auth.
+     * one even for an MCP server that needs no auth, and the backend validates
+     * credentials against the kind's schema rather than merely requiring them
+     * to be non-empty, so a server whose token field is optional connects with
+     * nothing filled in.
+     *
+     * Because it is two calls and only one action, a failure on the second
+     * must not leave the first behind. It used to: the install was committed,
+     * the account POST failed, and the person was left with a connection that
+     * can never run — every execution resolves an account — under a name now
+     * taken, so even retrying was refused. The install is removed on that
+     * path; it was created moments ago in this same action and has no other
+     * accounts, so there is nothing else to lose with it.
      */
     const handleConnectionSubmit = async (submission: ConnectionSubmission) => {
         const target = connectionTarget;
@@ -377,10 +388,22 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     config: submission.config,
                     name: submission.name,
                 });
-                await createConnectorAccount.mutateAsync({
-                    authConfigId: install.id,
-                    credentials: submission.credentials,
-                });
+                try {
+                    await createConnectorAccount.mutateAsync({
+                        authConfigId: install.id,
+                        credentials: submission.credentials,
+                    });
+                } catch (accountError) {
+                    // Best-effort: if the cleanup itself fails the original
+                    // error is still what the person needs to see, and a
+                    // stranded install is no worse than before.
+                    try {
+                        await deleteAuthConfig.mutateAsync(install.name);
+                    } catch (cleanupError) {
+                        console.error('Failed to remove the partial connection:', cleanupError);
+                    }
+                    throw accountError;
+                }
                 toast.success(`Added ${submission.name}`);
             }
             setConnectionTarget(null);

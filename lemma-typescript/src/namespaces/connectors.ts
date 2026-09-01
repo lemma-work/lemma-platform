@@ -217,7 +217,23 @@ export class ConnectorsNamespace {
     );
     if (!describesAParticularInstall) {
       const configs = await this.authConfigs.list(organizationId, { limit: 100 });
-      const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
+      // `kind` narrows the match rather than forcing a create: "enable gmail
+      // as composio" should still reuse an existing composio install. But it
+      // must narrow, because a connector can ship several kinds -- choosing
+      // "Native OAuth" in Advanced setup for an org already holding a Composio
+      // install used to return that install, and the caller then read the kind
+      // back off the returned row and ran the Composio flow, having been told
+      // it enabled the one they picked.
+      const candidates = configs.items.filter((config) =>
+        config.connector_id === connectorId
+        && config.status === "ACTIVE"
+        && (!options.kind || config.kind === options.kind),
+      );
+      // The default is the install a bare connector id resolves to everywhere
+      // else -- `findDefaultInstallName` in the frontend, and the backend's own
+      // `uq_auth_configs_default_per_connector`. Taking the first row in list
+      // order instead made this the one place that disagreed.
+      const existing = candidates.find((config) => config.is_default) ?? candidates[0];
       if (existing) return existing;
     }
 

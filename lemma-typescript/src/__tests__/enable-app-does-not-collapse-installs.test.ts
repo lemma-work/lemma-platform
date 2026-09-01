@@ -87,6 +87,44 @@ describe("enableApp", () => {
     expect((result as { id: string }).id).toBe("existing-gmail");
   });
 
+  it("does not hand back an install of a different kind", async () => {
+    // Advanced setup, "Native OAuth", for an org already on Composio. The
+    // caller then reads the kind off the returned row and runs the Composio
+    // flow -- having been told it enabled the one they chose.
+    const { connectors, created } = namespaceWith([
+      { id: "composio-one", connector_id: "gmail", status: "ACTIVE", kind: "composio" },
+    ]);
+
+    await connectors.enableApp("org", "gmail", { kind: "http" } as never);
+
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ kind: "http" });
+  });
+
+  it("reuses an install of the same kind when a kind is named", async () => {
+    const { connectors, created } = namespaceWith([
+      { id: "composio-one", connector_id: "gmail", status: "ACTIVE", kind: "composio" },
+    ]);
+
+    const result = await connectors.enableApp("org", "gmail", {
+      kind: "composio",
+    } as never);
+
+    expect(created).toHaveLength(0);
+    expect((result as { id: string }).id).toBe("composio-one");
+  });
+
+  it("prefers the default install, as every other resolver does", async () => {
+    const { connectors } = namespaceWith([
+      { id: "first-made", connector_id: "slack", status: "ACTIVE", kind: "http" },
+      { id: "the-default", connector_id: "slack", status: "ACTIVE", kind: "http", is_default: true },
+    ]);
+
+    const result = await connectors.enableApp("org", "slack");
+
+    expect((result as { id: string }).id).toBe("the-default");
+  });
+
   it("ignores an install that is not active", async () => {
     const { connectors, created } = namespaceWith([
       { id: "disabled", connector_id: "gmail", status: "DISABLED" },

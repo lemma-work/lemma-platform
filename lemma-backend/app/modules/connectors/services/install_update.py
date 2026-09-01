@@ -138,13 +138,61 @@ def apply_updates(
     if name is not None:
         auth_config.name = name
     if config is not None:
-        auth_config.config = config or None
+        auth_config.config = merged_install_config(auth_config.config, config) or None
     if status is not None:
         auth_config.status = status
     if is_default is not None:
         auth_config.is_default = is_default
     auth_config.updated_by_user_id = updated_by_user_id
     return auth_config
+
+
+# What `_redact_config` puts in place of a secret on the way out.
+_REDACTION_MASK = "********"
+
+
+def merged_install_config(
+    stored: dict[str, Any] | None, submitted: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply a submitted config without destroying what it could not carry.
+
+    A plain replace was wrong twice over, and a GET-edit-PATCH round trip --
+    which is what the UI does -- hit both.
+
+    Secrets come back from the API masked, so re-submitting the form wrote the
+    literal ``********`` over the real value. An MCP install's
+    ``extra_headers`` lost its Authorization header to a string of asterisks,
+    and nothing said so: `_target_changed` only watches the server URL, so no
+    account was marked and every later call simply failed. This is the same
+    bug `runtime_profile_repository` documents having fixed on its own path;
+    the fix had not reached here.
+
+    And keys the system wrote are not in the user's form at all. MCP OAuth
+    registration stores an ``oauth`` block -- issuer, endpoints, a dynamically
+    registered client id and secret -- after validation, and only ever at
+    create time. A replace dropped it, and nothing re-negotiates on update, so
+    an install that had been signed into reverted to a paste-a-token one that
+    could no longer refresh anybody's credential. The install schema declares
+    what the person owns; anything else on the record was put there for them
+    and survives an edit they never saw it in.
+    """
+    existing = dict(stored or {})
+    merged = dict(existing)
+    for key, value in submitted.items():
+        merged[key] = _unmasked(existing.get(key), value)
+    return merged
+
+
+def _unmasked(stored: Any, submitted: Any) -> Any:
+    """``submitted``, with any redaction mask replaced by what was stored."""
+    if submitted == _REDACTION_MASK:
+        return stored if stored is not None else submitted
+    if isinstance(submitted, dict):
+        nested = stored if isinstance(stored, dict) else {}
+        return {
+            key: _unmasked(nested.get(key), value) for key, value in submitted.items()
+        }
+    return submitted
 
 
 async def mark_accounts_for_reauth(

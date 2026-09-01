@@ -359,11 +359,24 @@ export const getAccountStatusMeta = (status: string | null | undefined): Account
  * offending field paths for a schema failure.
  */
 export const describeConnectorError = (error: unknown, fallback: string): string => {
-    const body = isRecord(error) && isRecord(error.body) ? error.body : null;
-    if (!body) return error instanceof Error && error.message ? error.message : fallback;
+    // The SDK's `ApiError` is flat -- `message`, `code`, `details`,
+    // `statusCode` -- and has never had a `body`. `GeneratedClientAdapter`
+    // converts the generated client's error (which does) into it before it
+    // escapes, so reading `.body` here meant the guard always failed and this
+    // function returned the generic message every time. The whole point of it,
+    // unwrapping `details.violations`, was unreachable: a schema rejection
+    // rendered as "Invalid install config." with no clue which field, when the
+    // backend had put the field path and reason right there.
+    //
+    // `body` is still honoured as a fallback so an error from anywhere else
+    // that does carry an envelope still reads.
+    const envelope = isRecord(error) && isRecord(error.body) ? error.body : error;
+    if (!isRecord(envelope)) {
+        return error instanceof Error && error.message ? error.message : fallback;
+    }
 
-    const message = typeof body.message === 'string' && body.message ? body.message : fallback;
-    const details = isRecord(body.details) ? body.details : null;
+    const message = typeof envelope.message === 'string' && envelope.message ? envelope.message : fallback;
+    const details = isRecord(envelope.details) ? envelope.details : null;
     const violations = Array.isArray(details?.violations) ? details.violations : [];
     const firstViolation = violations.find(isRecord);
     if (firstViolation) {
