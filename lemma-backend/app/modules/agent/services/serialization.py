@@ -12,6 +12,13 @@ def message_to_payload(message: Message) -> JsonObject:
         "conversation_id": str(message.conversation_id),
         "sequence": message.sequence,
         "agent_run_id": str(message.agent_run_id) if message.agent_run_id else None,
+        # Identity travels on the live frame, not only on the refetch. Without
+        # these a streamed message arrives anonymous and the transcript labels
+        # it with the default agent until something refetches it.
+        "sender_user_id": (
+            str(message.sender_user_id) if message.sender_user_id else None
+        ),
+        "agent_id": str(message.agent_id) if message.agent_id else None,
         "role": message.role,
         "kind": message.kind.value,
         "text": message.text,

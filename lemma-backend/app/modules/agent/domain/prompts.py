@@ -145,6 +145,36 @@ def load_toolset_fragment(toolset: AgentToolset) -> str | None:
     return _read_required_prompt(path) if path is not None else None
 
 
+def _room_section(conversation, agent) -> str | None:
+    """Who is in this conversation, and which of them this agent is.
+
+    Only rendered when somebody else is here. A one-to-one conversation needs
+    no roster, and adding one would put a section in every prompt to say that
+    the only two participants are the two already talking.
+    """
+    participants = getattr(conversation, "participants", None) or []
+    people = [p for p in participants if p.user_id is not None]
+    agents = [p for p in participants if p.agent_id is not None]
+    if len(people) + len(agents) < 2:
+        return None
+
+    lines = ["# In This Conversation"]
+    if people:
+        lines.append(
+            "People: " + ", ".join(p.display_name or "someone" for p in people)
+        )
+    if agents:
+        lines.append(
+            "Agents: " + ", ".join(p.display_name or "an agent" for p in agents)
+        )
+    lines.append(
+        f"You are {agent.name} here. Answer as yourself; the others are present "
+        "and can be addressed by name, so do not relay messages on their behalf "
+        "or answer for them."
+    )
+    return "\n".join(lines)
+
+
 def build_agent_instructions(
     *,
     agent: Agent,
@@ -235,6 +265,14 @@ def build_agent_instructions(
     context_brief = getattr(ctx, "context_brief", None)
     if isinstance(context_brief, str) and context_brief.strip():
         sections.append(context_brief.strip())
+
+    # Who else is in the room. Conversation-derived, so it cannot live in the
+    # cached brief -- and without it an agent in a shared conversation has no
+    # idea anybody else is present. One said "it's just me in here, no other
+    # agents around" while standing next to another agent and two people.
+    room = _room_section(conversation, agent)
+    if room:
+        sections.append(room)
 
     # The task list the conversation already has, if any. Without this a run
     # starts blind: the list lives in conversation metadata, and the tool return

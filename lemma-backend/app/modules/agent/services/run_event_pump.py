@@ -119,6 +119,10 @@ class RunEventPump:
                 agent_run_id=run.agent_run_id,
                 data=event.data,
             )
+            # Read back from the run rather than stored on the row: the message
+            # table has no agent column, and the frame needs one so the
+            # transcript can name whoever is speaking as it arrives.
+            saved_message.agent_id = run.agent_id
             await publish_conversation_event(
                 run.conversation_id,
                 message_payload(run.agent_run_id, message_to_payload(saved_message)),
