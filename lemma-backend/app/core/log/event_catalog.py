@@ -93,6 +93,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pydantic_ai_streaming.stop_check.failed': EventSpec('error', frozenset({'agent_run_id'})),
     'agent.queued_followup.start_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),
     'agent.realtime.publishing_agent_realtime_event.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'error_type'})),
+    'agent.router.decision.failed': EventSpec('error', frozenset({'pod_id'})),
     'agent.run.context_brief_unavailable.degraded': EventSpec('warning', frozenset({'agent_id', 'conversation_id'})),
     'agent.run.inline_reasoning_reclassified.diagnostic': EventSpec('debug', frozenset({'answer_survived', 'thought_count'})),
     'agent.run_event_pump.stream_ended_without_a_terminal_event.degraded': EventSpec('warning', frozenset({'agent_run_id'})),

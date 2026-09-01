@@ -16,6 +16,9 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.agent_runtime_config import AgentRuntimeConfig
+    from ..models.conversation_participant_response import (
+        ConversationParticipantResponse,
+    )
     from ..models.conversation_response_metadata_type_0 import (
         ConversationResponseMetadataType0,
     )
@@ -47,6 +50,7 @@ class ConversationResponse:
         organization_id (None | Unset | UUID):
         output (Any | None | Unset):
         parent_id (None | Unset | UUID):
+        participants (list[ConversationParticipantResponse] | Unset):
         status (ConversationStatus | None | Unset):
         title (None | str | Unset):
         type_ (ConversationType | Unset): User-visible conversation behavior.
@@ -70,6 +74,7 @@ class ConversationResponse:
     organization_id: None | Unset | UUID = UNSET
     output: Any | None | Unset = UNSET
     parent_id: None | Unset | UUID = UNSET
+    participants: list[ConversationParticipantResponse] | Unset = UNSET
     status: ConversationStatus | None | Unset = UNSET
     title: None | str | Unset = UNSET
     type_: ConversationType | Unset = UNSET
@@ -171,6 +176,13 @@ class ConversationResponse:
         else:
             parent_id = self.parent_id
 
+        participants: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.participants, Unset):
+            participants = []
+            for participants_item_data in self.participants:
+                participants_item = participants_item_data.to_dict()
+                participants.append(participants_item)
+
         status: None | str | Unset
         if isinstance(self.status, Unset):
             status = UNSET
@@ -225,6 +237,8 @@ class ConversationResponse:
             field_dict["output"] = output
         if parent_id is not UNSET:
             field_dict["parent_id"] = parent_id
+        if participants is not UNSET:
+            field_dict["participants"] = participants
         if status is not UNSET:
             field_dict["status"] = status
         if title is not UNSET:
@@ -237,6 +251,9 @@ class ConversationResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_runtime_config import AgentRuntimeConfig
+        from ..models.conversation_participant_response import (
+            ConversationParticipantResponse,
+        )
         from ..models.conversation_response_metadata_type_0 import (
             ConversationResponseMetadataType0,
         )
@@ -410,6 +427,17 @@ class ConversationResponse:
 
         parent_id = _parse_parent_id(d.pop("parent_id", UNSET))
 
+        _participants = d.pop("participants", UNSET)
+        participants: list[ConversationParticipantResponse] | Unset = UNSET
+        if _participants is not UNSET:
+            participants = []
+            for participants_item_data in _participants:
+                participants_item = ConversationParticipantResponse.from_dict(
+                    participants_item_data
+                )
+
+                participants.append(participants_item)
+
         def _parse_status(data: object) -> ConversationStatus | None | Unset:
             if data is None:
                 return data
@@ -462,6 +490,7 @@ class ConversationResponse:
             organization_id=organization_id,
             output=output,
             parent_id=parent_id,
+            participants=participants,
             status=status,
             title=title,
             type_=type_,

@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { AgentRunStatus } from './AgentRunStatus.js';
 import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
+import type { ConversationParticipantResponse } from './ConversationParticipantResponse.js';
 import type { ConversationStatus } from './ConversationStatus.js';
 import type { ConversationType } from './ConversationType.js';
 export type ConversationResponse = {
@@ -21,6 +22,7 @@ export type ConversationResponse = {
     organization_id?: (string | null);
     output?: null;
     parent_id?: (string | null);
+    participants?: Array<ConversationParticipantResponse>;
     /**
      * The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.
      */

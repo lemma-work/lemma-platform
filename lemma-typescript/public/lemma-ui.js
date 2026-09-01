@@ -199,6 +199,11 @@ var LemmaUI = (() => {
       conversation_id: typeof value.conversation_id === "string" ? value.conversation_id : void 0,
       sequence: typeof value.sequence === "number" ? value.sequence : void 0,
       agent_run_id: typeof value.agent_run_id === "string" ? value.agent_run_id : null,
+      // Who is speaking. Dropped here, a streamed message arrives anonymous and
+      // the transcript cannot attribute it until something refetches — which is
+      // how every live reply was labelled with the default agent's name.
+      sender_user_id: typeof value.sender_user_id === "string" ? value.sender_user_id : null,
+      agent_id: typeof value.agent_id === "string" ? value.agent_id : null,
       metadata: isRecord2(value.metadata) ? value.metadata : null
     };
     return message;

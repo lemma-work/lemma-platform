@@ -10,6 +10,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
 | DELETE | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
+| DELETE | `/pods/{pod_id}/conversations/{conversation_id}/participants` | `agent.conversation.participant.remove` | Remove Conversation Participant |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
@@ -21,6 +22,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
+| GET | `/pods/{pod_id}/conversations/{conversation_id}/participants` | `agent.conversation.participant.list` | List Conversation Participants |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
 | PATCH | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
@@ -34,9 +36,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore` | `agent.runtime.profiles.restore` | Restore Agent Runtime Profile |
 | POST | `/pods/{pod_id}/agents` | `agent.create` | Create Agent |
 | POST | `/pods/{pod_id}/conversations` | `agent.conversation.create` | Create Pod Agent Conversation |
+| POST | `/pods/{pod_id}/conversations/open` | `agent.conversation.open` | Open Pod Agent Conversation |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | `agent.conversation.approval.resolve` | Resolve User Approval |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.send` | Send Pod Conversation Message |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/append` | `agent.conversation.message.append` | Append Pod Conversation Message |
+| POST | `/pods/{pod_id}/conversations/{conversation_id}/participants` | `agent.conversation.participant.add` | Add Conversation Participant |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | `agent.conversation.retry` | Retry Failed Pod Conversation Run |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | `agent.conversation.stop` | Stop Pod Conversation |
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |

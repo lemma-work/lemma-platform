@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -22,10 +23,14 @@ class SendMessageRequest:
     """
     Attributes:
         content (str):
+        agent_name (None | str | Unset):
+        branch_from_run_id (None | Unset | UUID):
         metadata (None | SendMessageRequestMetadataType0 | Unset):
     """
 
     content: str
+    agent_name: None | str | Unset = UNSET
+    branch_from_run_id: None | Unset | UUID = UNSET
     metadata: None | SendMessageRequestMetadataType0 | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -35,6 +40,20 @@ class SendMessageRequest:
         )
 
         content = self.content
+
+        agent_name: None | str | Unset
+        if isinstance(self.agent_name, Unset):
+            agent_name = UNSET
+        else:
+            agent_name = self.agent_name
+
+        branch_from_run_id: None | str | Unset
+        if isinstance(self.branch_from_run_id, Unset):
+            branch_from_run_id = UNSET
+        elif isinstance(self.branch_from_run_id, UUID):
+            branch_from_run_id = str(self.branch_from_run_id)
+        else:
+            branch_from_run_id = self.branch_from_run_id
 
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
@@ -51,6 +70,10 @@ class SendMessageRequest:
                 "content": content,
             }
         )
+        if agent_name is not UNSET:
+            field_dict["agent_name"] = agent_name
+        if branch_from_run_id is not UNSET:
+            field_dict["branch_from_run_id"] = branch_from_run_id
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
 
@@ -64,6 +87,34 @@ class SendMessageRequest:
 
         d = dict(src_dict)
         content = d.pop("content")
+
+        def _parse_agent_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        agent_name = _parse_agent_name(d.pop("agent_name", UNSET))
+
+        def _parse_branch_from_run_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                branch_from_run_id_type_0 = UUID(data)
+
+                return branch_from_run_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        branch_from_run_id = _parse_branch_from_run_id(
+            d.pop("branch_from_run_id", UNSET)
+        )
 
         def _parse_metadata(
             data: object,
@@ -86,6 +137,8 @@ class SendMessageRequest:
 
         send_message_request = cls(
             content=content,
+            agent_name=agent_name,
+            branch_from_run_id=branch_from_run_id,
             metadata=metadata,
         )
 

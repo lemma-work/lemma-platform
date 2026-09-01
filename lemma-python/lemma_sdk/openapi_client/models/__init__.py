@@ -16,6 +16,7 @@ _NAME_TO_MODULE = {
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
     'AddColumnRequest': 'add_column_request',
+    'AddConversationParticipantRequest': 'add_conversation_participant_request',
     'AgentActionResponse': 'agent_action_response',
     'AgentActionResponseInputSchemaType0': 'agent_action_response_input_schema_type_0',
     'AgentActionResponseMetadataType0': 'agent_action_response_metadata_type_0',
@@ -144,6 +145,8 @@ _NAME_TO_MODULE = {
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationParticipantListResponse': 'conversation_participant_list_response',
+    'ConversationParticipantResponse': 'conversation_participant_response',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
@@ -534,6 +537,7 @@ if TYPE_CHECKING:
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
     from .add_column_request import AddColumnRequest
+    from .add_conversation_participant_request import AddConversationParticipantRequest
     from .agent_action_response import AgentActionResponse
     from .agent_action_response_input_schema_type_0 import AgentActionResponseInputSchemaType0
     from .agent_action_response_metadata_type_0 import AgentActionResponseMetadataType0
@@ -662,6 +666,8 @@ if TYPE_CHECKING:
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
     from .conversation_list_response import ConversationListResponse
+    from .conversation_participant_list_response import ConversationParticipantListResponse
+    from .conversation_participant_response import ConversationParticipantResponse
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
@@ -1065,6 +1071,7 @@ __all__ = [
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
     'AddColumnRequest',
+    'AddConversationParticipantRequest',
     'AgentActionResponse',
     'AgentActionResponseInputSchemaType0',
     'AgentActionResponseMetadataType0',
@@ -1193,6 +1200,8 @@ __all__ = [
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
     'ConversationListResponse',
+    'ConversationParticipantListResponse',
+    'ConversationParticipantResponse',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
     'ConversationStatus',

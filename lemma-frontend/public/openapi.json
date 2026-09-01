@@ -276,6 +276,36 @@
         "title": "AddColumnRequest",
         "type": "object"
       },
+      "AddConversationParticipantRequest": {
+        "description": "Add one person or one agent. Naming both, or neither, is rejected.",
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "title": "AddConversationParticipantRequest",
+        "type": "object"
+      },
       "AgentActionResponse": {
         "properties": {
           "agent_runtime": {
@@ -1741,10 +1771,29 @@
       },
       "AgentRunStartResponse": {
         "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
           "agent_run_id": {
-            "format": "uuid",
-            "title": "Agent Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Run Id"
           },
           "conversation_id": {
             "format": "uuid",
@@ -1758,7 +1807,6 @@
         },
         "required": [
           "conversation_id",
-          "agent_run_id",
           "started_new_run"
         ],
         "title": "AgentRunStartResponse",
@@ -4047,6 +4095,82 @@
         "title": "ConversationListResponse",
         "type": "object"
       },
+      "ConversationParticipantListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationParticipantResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ConversationParticipantListResponse",
+        "type": "object"
+      },
+      "ConversationParticipantResponse": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "role"
+        ],
+        "title": "ConversationParticipantResponse",
+        "type": "object"
+      },
       "ConversationResponse": {
         "properties": {
           "agent_id": {
@@ -4179,6 +4303,13 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationParticipantResponse"
+            },
+            "title": "Participants",
+            "type": "array"
           },
           "pod_cwd": {
             "description": "The conversation's working directory in pod files. Anything a person attaches here is what the agent finds by a bare filename, because this is the directory its pod tools resolve against.",
@@ -8635,6 +8766,18 @@
       },
       "MessageResponse": {
         "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
           "agent_run_id": {
             "anyOf": [
               {
@@ -8680,6 +8823,18 @@
           "role": {
             "title": "Role",
             "type": "string"
+          },
+          "sender_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender User Id"
           },
           "sequence": {
             "title": "Sequence",
@@ -12683,6 +12838,29 @@
       },
       "SendMessageRequest": {
         "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "branch_from_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch From Run Id"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -23814,6 +23992,76 @@
         }
       }
     },
+    "/pods/{pod_id}/conversations/open": {
+      "post": {
+        "description": "Return the caller's ongoing conversation with an agent, opening one if there is none yet. Omit agent_name for the default pod assistant. Unlike create, calling this twice returns the same conversation: it is where a person lands when they open the agent rather than a new session each time. Archived, task, project and surface-bound conversations are never returned.",
+        "operationId": "agent.conversation.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Pod Agent Conversation",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation",
+          "result": "entity",
+          "verb": "open"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations/{conversation_id}": {
       "get": {
         "description": "Get a single pod-scoped assistant or agent conversation by id.",
@@ -24370,6 +24618,228 @@
           "resource": "agent.conversation.message",
           "result": "entity",
           "verb": "append"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/participants": {
+      "delete": {
+        "description": "Remove one person, or one agent. Name exactly one of user_id or agent_id. The person who opened the conversation cannot be removed from it.",
+        "operationId": "agent.conversation.participant.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Conversation Participant",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.participant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.participant",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "get": {
+        "description": "Who is in a conversation: the people, and the agents present.",
+        "operationId": "agent.conversation.participant.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationParticipantListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Conversation Participants",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.participant",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Add one person, or one agent, to a conversation. Name exactly one of user_id or agent_name. Adding a person is a grant: every answer in the conversation is from then on said to them. Their own working stays private to them, and so does everyone else's.",
+        "operationId": "agent.conversation.participant.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddConversationParticipantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationParticipantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Conversation Participant",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.participant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.participant",
+          "result": "entity",
+          "verb": "add"
         }
       }
     },

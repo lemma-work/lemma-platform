@@ -2,9 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type AgentRunStartResponse = {
+export type ConversationParticipantResponse = {
     agent_id?: (string | null);
-    agent_run_id?: (string | null);
     conversation_id: string;
-    started_new_run: boolean;
+    display_name?: (string | null);
+    id: string;
+    role: string;
+    user_id?: (string | null);
 };

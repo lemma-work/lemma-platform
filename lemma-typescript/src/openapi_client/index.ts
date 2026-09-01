@@ -11,6 +11,7 @@ export type { AccountCreateSchema } from './models/AccountCreateSchema.js';
 export type { AccountListResponseSchema } from './models/AccountListResponseSchema.js';
 export type { AccountResponseSchema } from './models/AccountResponseSchema.js';
 export type { AddColumnRequest } from './models/AddColumnRequest.js';
+export type { AddConversationParticipantRequest } from './models/AddConversationParticipantRequest.js';
 export type { AgentActionResponse } from './models/AgentActionResponse.js';
 export type { AgentDetailResponse } from './models/AgentDetailResponse.js';
 export type { AgentHostCapacity } from './models/AgentHostCapacity.js';
@@ -100,6 +101,8 @@ export type { ConnectorStatusResponse } from './models/ConnectorStatusResponse.j
 export type { ConnectRequestInitiateSchema } from './models/ConnectRequestInitiateSchema.js';
 export type { ConnectRequestResponseSchema } from './models/ConnectRequestResponseSchema.js';
 export type { ConversationListResponse } from './models/ConversationListResponse.js';
+export type { ConversationParticipantListResponse } from './models/ConversationParticipantListResponse.js';
+export type { ConversationParticipantResponse } from './models/ConversationParticipantResponse.js';
 export type { ConversationResponse } from './models/ConversationResponse.js';
 export { ConversationStatus } from './models/ConversationStatus.js';
 export { ConversationType } from './models/ConversationType.js';

@@ -33,8 +33,10 @@ class MessageResponse:
             ``tool_result`` (return). There is no nested ``content`` object.
         role (str):
         sequence (int):
+        agent_id (None | Unset | UUID):
         agent_run_id (None | Unset | UUID):
         metadata (MessageResponseMetadataType0 | None | Unset):
+        sender_user_id (None | Unset | UUID):
         text (None | str | Unset):
         tool_args (Any | None | Unset):
         tool_call_id (None | str | Unset):
@@ -48,8 +50,10 @@ class MessageResponse:
     kind: MessageKind
     role: str
     sequence: int
+    agent_id: None | Unset | UUID = UNSET
     agent_run_id: None | Unset | UUID = UNSET
     metadata: MessageResponseMetadataType0 | None | Unset = UNSET
+    sender_user_id: None | Unset | UUID = UNSET
     text: None | str | Unset = UNSET
     tool_args: Any | None | Unset = UNSET
     tool_call_id: None | str | Unset = UNSET
@@ -74,6 +78,14 @@ class MessageResponse:
 
         sequence = self.sequence
 
+        agent_id: None | str | Unset
+        if isinstance(self.agent_id, Unset):
+            agent_id = UNSET
+        elif isinstance(self.agent_id, UUID):
+            agent_id = str(self.agent_id)
+        else:
+            agent_id = self.agent_id
+
         agent_run_id: None | str | Unset
         if isinstance(self.agent_run_id, Unset):
             agent_run_id = UNSET
@@ -89,6 +101,14 @@ class MessageResponse:
             metadata = self.metadata.to_dict()
         else:
             metadata = self.metadata
+
+        sender_user_id: None | str | Unset
+        if isinstance(self.sender_user_id, Unset):
+            sender_user_id = UNSET
+        elif isinstance(self.sender_user_id, UUID):
+            sender_user_id = str(self.sender_user_id)
+        else:
+            sender_user_id = self.sender_user_id
 
         text: None | str | Unset
         if isinstance(self.text, Unset):
@@ -132,10 +152,14 @@ class MessageResponse:
                 "sequence": sequence,
             }
         )
+        if agent_id is not UNSET:
+            field_dict["agent_id"] = agent_id
         if agent_run_id is not UNSET:
             field_dict["agent_run_id"] = agent_run_id
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
+        if sender_user_id is not UNSET:
+            field_dict["sender_user_id"] = sender_user_id
         if text is not UNSET:
             field_dict["text"] = text
         if tool_args is not UNSET:
@@ -167,6 +191,23 @@ class MessageResponse:
         role = d.pop("role")
 
         sequence = d.pop("sequence")
+
+        def _parse_agent_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                agent_id_type_0 = UUID(data)
+
+                return agent_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        agent_id = _parse_agent_id(d.pop("agent_id", UNSET))
 
         def _parse_agent_run_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -203,6 +244,23 @@ class MessageResponse:
             return cast(MessageResponseMetadataType0 | None | Unset, data)
 
         metadata = _parse_metadata(d.pop("metadata", UNSET))
+
+        def _parse_sender_user_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                sender_user_id_type_0 = UUID(data)
+
+                return sender_user_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        sender_user_id = _parse_sender_user_id(d.pop("sender_user_id", UNSET))
 
         def _parse_text(data: object) -> None | str | Unset:
             if data is None:
@@ -256,8 +314,10 @@ class MessageResponse:
             kind=kind,
             role=role,
             sequence=sequence,
+            agent_id=agent_id,
             agent_run_id=agent_run_id,
             metadata=metadata,
+            sender_user_id=sender_user_id,
             text=text,
             tool_args=tool_args,
             tool_call_id=tool_call_id,

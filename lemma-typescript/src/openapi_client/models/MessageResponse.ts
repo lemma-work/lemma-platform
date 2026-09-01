@@ -4,12 +4,14 @@
 /* eslint-disable */
 import type { MessageKind } from './MessageKind.js';
 export type MessageResponse = {
+    agent_id?: (string | null);
     conversation_id: string;
     created_at: string;
     id: string;
     kind: MessageKind;
     metadata?: (Record<string, any> | null);
     role: string;
+    sender_user_id?: (string | null);
     sequence: number;
     text?: (string | null);
     tool_args?: null;

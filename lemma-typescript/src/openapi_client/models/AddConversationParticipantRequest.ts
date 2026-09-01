@@ -2,9 +2,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type SendMessageRequest = {
+/**
+ * Add one person or one agent. Naming both, or neither, is rejected.
+ */
+export type AddConversationParticipantRequest = {
     agent_name?: (string | null);
-    branch_from_run_id?: (string | null);
-    content: string;
-    metadata?: (Record<string, any> | null);
+    user_id?: (string | null);
 };

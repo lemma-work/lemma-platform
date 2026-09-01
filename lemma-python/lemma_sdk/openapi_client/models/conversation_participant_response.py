@@ -9,29 +9,35 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="AgentRunStartResponse")
+T = TypeVar("T", bound="ConversationParticipantResponse")
 
 
 @_attrs_define
-class AgentRunStartResponse:
+class ConversationParticipantResponse:
     """
     Attributes:
         conversation_id (UUID):
-        started_new_run (bool):
+        id (UUID):
+        role (str):
         agent_id (None | Unset | UUID):
-        agent_run_id (None | Unset | UUID):
+        display_name (None | str | Unset):
+        user_id (None | Unset | UUID):
     """
 
     conversation_id: UUID
-    started_new_run: bool
+    id: UUID
+    role: str
     agent_id: None | Unset | UUID = UNSET
-    agent_run_id: None | Unset | UUID = UNSET
+    display_name: None | str | Unset = UNSET
+    user_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         conversation_id = str(self.conversation_id)
 
-        started_new_run = self.started_new_run
+        id = str(self.id)
+
+        role = self.role
 
         agent_id: None | str | Unset
         if isinstance(self.agent_id, Unset):
@@ -41,26 +47,35 @@ class AgentRunStartResponse:
         else:
             agent_id = self.agent_id
 
-        agent_run_id: None | str | Unset
-        if isinstance(self.agent_run_id, Unset):
-            agent_run_id = UNSET
-        elif isinstance(self.agent_run_id, UUID):
-            agent_run_id = str(self.agent_run_id)
+        display_name: None | str | Unset
+        if isinstance(self.display_name, Unset):
+            display_name = UNSET
         else:
-            agent_run_id = self.agent_run_id
+            display_name = self.display_name
+
+        user_id: None | str | Unset
+        if isinstance(self.user_id, Unset):
+            user_id = UNSET
+        elif isinstance(self.user_id, UUID):
+            user_id = str(self.user_id)
+        else:
+            user_id = self.user_id
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
                 "conversation_id": conversation_id,
-                "started_new_run": started_new_run,
+                "id": id,
+                "role": role,
             }
         )
         if agent_id is not UNSET:
             field_dict["agent_id"] = agent_id
-        if agent_run_id is not UNSET:
-            field_dict["agent_run_id"] = agent_run_id
+        if display_name is not UNSET:
+            field_dict["display_name"] = display_name
+        if user_id is not UNSET:
+            field_dict["user_id"] = user_id
 
         return field_dict
 
@@ -69,7 +84,9 @@ class AgentRunStartResponse:
         d = dict(src_dict)
         conversation_id = UUID(d.pop("conversation_id"))
 
-        started_new_run = d.pop("started_new_run")
+        id = UUID(d.pop("id"))
+
+        role = d.pop("role")
 
         def _parse_agent_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -88,7 +105,16 @@ class AgentRunStartResponse:
 
         agent_id = _parse_agent_id(d.pop("agent_id", UNSET))
 
-        def _parse_agent_run_id(data: object) -> None | Unset | UUID:
+        def _parse_display_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        display_name = _parse_display_name(d.pop("display_name", UNSET))
+
+        def _parse_user_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -96,24 +122,26 @@ class AgentRunStartResponse:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                agent_run_id_type_0 = UUID(data)
+                user_id_type_0 = UUID(data)
 
-                return agent_run_id_type_0
+                return user_id_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
-        agent_run_id = _parse_agent_run_id(d.pop("agent_run_id", UNSET))
+        user_id = _parse_user_id(d.pop("user_id", UNSET))
 
-        agent_run_start_response = cls(
+        conversation_participant_response = cls(
             conversation_id=conversation_id,
-            started_new_run=started_new_run,
+            id=id,
+            role=role,
             agent_id=agent_id,
-            agent_run_id=agent_run_id,
+            display_name=display_name,
+            user_id=user_id,
         )
 
-        agent_run_start_response.additional_properties = d
-        return agent_run_start_response
+        conversation_participant_response.additional_properties = d
+        return conversation_participant_response
 
     @property
     def additional_keys(self) -> list[str]:

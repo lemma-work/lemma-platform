@@ -2,9 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AddConversationParticipantRequest } from '../models/AddConversationParticipantRequest.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
+import type { ConversationParticipantListResponse } from '../models/ConversationParticipantListResponse.js';
+import type { ConversationParticipantResponse } from '../models/ConversationParticipantResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
 import type { ConversationStatus } from '../models/ConversationStatus.js';
 import type { ConversationType } from '../models/ConversationType.js';
@@ -82,6 +85,32 @@ export class AgentConversationsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Open Pod Agent Conversation
+     * Return the caller's ongoing conversation with an agent, opening one if there is none yet. Omit agent_name for the default pod assistant. Unlike create, calling this twice returns the same conversation: it is where a person lands when they open the agent rather than a new session each time. Archived, task, project and surface-bound conversations are never returned.
+     * @param podId
+     * @param agentName
+     * @returns ConversationResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationOpen(
+        podId: string,
+        agentName?: (string | null),
+    ): CancelablePromise<ConversationResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/open',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'agent_name': agentName === null ? 'POD_DEFAULT' : agentName,
+            },
             errors: {
                 422: `Validation Error`,
             },
@@ -287,6 +316,90 @@ export class AgentConversationsService {
                 404: `Conversation was not found or is not visible`,
                 422: `Validation Error`,
                 429: `The account usage limit was exceeded`,
+            },
+        });
+    }
+    /**
+     * Remove Conversation Participant
+     * Remove one person, or one agent. Name exactly one of user_id or agent_id. The person who opened the conversation cannot be removed from it.
+     * @param podId
+     * @param conversationId
+     * @param userId
+     * @param agentId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentConversationParticipantRemove(
+        podId: string,
+        conversationId: string,
+        userId?: (string | null),
+        agentId?: (string | null),
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/participants',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            query: {
+                'user_id': userId,
+                'agent_id': agentId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Conversation Participants
+     * Who is in a conversation: the people, and the agents present.
+     * @param podId
+     * @param conversationId
+     * @returns ConversationParticipantListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationParticipantList(
+        podId: string,
+        conversationId: string,
+    ): CancelablePromise<ConversationParticipantListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/participants',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Add Conversation Participant
+     * Add one person, or one agent, to a conversation. Name exactly one of user_id or agent_name. Adding a person is a grant: every answer in the conversation is from then on said to them. Their own working stays private to them, and so does everyone else's.
+     * @param podId
+     * @param conversationId
+     * @param requestBody
+     * @returns ConversationParticipantResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationParticipantAdd(
+        podId: string,
+        conversationId: string,
+        requestBody: AddConversationParticipantRequest,
+    ): CancelablePromise<ConversationParticipantResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/participants',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
             },
         });
     }

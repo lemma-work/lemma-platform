@@ -11499,6 +11499,54 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}`).then(normalizeConversation);
     }
+    /** Everyone in a conversation: the people, and the agents present. */
+    listParticipants(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "GET",
+        `/pods/${podId}/conversations/${conversationId}/participants`
+      ).then((response) => {
+        var _a;
+        return (_a = response == null ? void 0 : response.items) != null ? _a : [];
+      });
+    }
+    /**
+     * Add one person, or one agent. Name exactly one of them.
+     *
+     * Adding a person is a grant: every answer in the conversation is from then
+     * on said to them. Their own working stays private to them, and so does
+     * everyone else's.
+     */
+    addParticipant(conversationId, subject, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/participants`,
+        { body: subject }
+      );
+    }
+    /** Remove one person or one agent. The person who opened it cannot be removed. */
+    removeParticipant(conversationId, subject, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "DELETE",
+        `/pods/${podId}/conversations/${conversationId}/participants`,
+        { params: { user_id: subject.user_id, agent_id: subject.agent_id } }
+      );
+    }
+    /**
+     * The conversation this person is already having with an agent, opening one
+     * if there is none. Calling it twice returns the same conversation.
+     */
+    open(options = {}) {
+      var _a;
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/open`,
+        { params: { agent_name: (_a = options.agent_name) != null ? _a : void 0 } }
+      ).then(normalizeConversation);
+    }
     async update(conversationId, payload, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       const { harness_kind, model, model_name, profile_id, ...requestBody } = payload;
