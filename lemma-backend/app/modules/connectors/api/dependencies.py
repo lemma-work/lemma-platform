@@ -162,6 +162,7 @@ def get_account_resolution_service(uow: UoWDep) -> AccountResolutionService:
     return AccountResolutionService(
         account_repository=_account_repository(uow),
         authorization_service=create_authorization_service(uow),
+        organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
     )
 
 
