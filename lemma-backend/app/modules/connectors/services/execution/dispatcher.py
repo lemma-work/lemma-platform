@@ -29,6 +29,9 @@ from app.modules.connectors.domain.kinds import (
     ResolvedInstall,
 )
 from app.modules.connectors.infrastructure.kinds.registry import KindRegistry
+from app.modules.connectors.services.execution.failure_translation import (
+    execution_failures_translated,
+)
 
 logger = get_logger(__name__)
 
@@ -110,12 +113,6 @@ class KindDispatcher:
         whose spec was bundled at catalog-import time) has a fixed operation set
         and returns an empty list rather than erroring.
         """
-        # Imported here: `plumbing` builds a dispatcher, so importing it at
-        # module scope would close a cycle.
-        from app.modules.connectors.services.execution.plumbing import (
-            execution_failures_translated,
-        )
-
         plugin = self._registry.get(install.kind)
         if plugin.discoverer is None:
             return []
