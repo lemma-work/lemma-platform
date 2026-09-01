@@ -1,5 +1,5 @@
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import secrets
 from typing import Any, Optional
 from uuid import UUID
@@ -97,6 +97,48 @@ logger = get_logger(__name__)
 def _stored_code_verifier(connect_request: ConnectRequestEntity) -> str | None:
     """The verifier minted when the redirect was built, if there was one."""
     return (connect_request.attributes or {}).get("code_verifier")
+
+
+# How long a started connection may take to come back. Long enough for a person
+# to read a consent screen, find a password manager and pass an MFA prompt;
+# short enough that a leaked `state` is not a standing capability.
+_CONNECT_REQUEST_TTL = timedelta(minutes=30)
+
+
+def _assert_connect_request_is_still_open(
+    connect_request: ConnectRequestEntity,
+) -> None:
+    """Refuse a callback for a flow that is finished, failed, or stale.
+
+    The status was written on every path and read on none, so a `state` was a
+    permanent bearer capability meaning "attach a connector account to this
+    user in this org". It travels through the provider's redirect, so it lands
+    in browser history, proxy logs and Referer headers -- and replaying it with
+    a fresh authorization code obtained for the same client stores the
+    replayer's provider identity as an account belonging to whoever started the
+    flow. Their agents and schedules then act through the attacker's account.
+
+    Single use and time-bounded, together: expiry alone still allows a replay
+    inside the window, and single use alone leaves an abandoned request valid
+    forever.
+    """
+    if connect_request.status is not ConnectRequestStatus.PENDING:
+        raise ConnectRequestNotFoundError()
+    started = connect_request.created_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - started > _CONNECT_REQUEST_TTL:
+        raise ConnectRequestNotFoundError()
+
+
+def _stored_provider_state(connect_request: ConnectRequestEntity) -> str | None:
+    """What the provider called this authorization when we started it.
+
+    For Composio it is the connection request's id, which is the only thing
+    tying a callback to the flow that began it -- see the check in
+    `ComposioAuthProvider.exchange_code_for_credentials`.
+    """
+    return (connect_request.attributes or {}).get("provider_state")
 
 
 def _pkce_verifier_for(install: ResolvedAuthInstall) -> str | None:
@@ -923,6 +965,7 @@ class ConnectorService:
         pending_request = await self.connect_request_repository.get_by_state(state)
         if not pending_request:
             raise ConnectRequestNotFoundError()
+        _assert_connect_request_is_still_open(pending_request)
 
         user_id = pending_request.user_id
         auth_config = await self._resolve_auth_config(
@@ -940,7 +983,11 @@ class ConnectorService:
                 install=auth_install,
                 redirect_uri=redirect_uri,
                 user_id=user_id,
-                state=None,
+                # What we recorded when this flow was started, not what the
+                # caller put in the URL. A scheme that identifies the resulting
+                # connection by a query parameter has no other way to tell
+                # whether the callback belongs to the flow it is completing.
+                state=_stored_provider_state(pending_request),
                 code_verifier=_stored_code_verifier(pending_request),
             )
         except DomainError:
@@ -1066,6 +1113,14 @@ class ConnectorService:
             )
 
         pending_request.status = ConnectRequestStatus.SUCCESS
+        # The verifier has been spent. It is stored in plaintext and the row is
+        # kept, so leaving it behind keeps a used secret readable for no reason.
+        if pending_request.attributes:
+            pending_request.attributes = {
+                key: value
+                for key, value in pending_request.attributes.items()
+                if key != "code_verifier"
+            }
         await self.connect_request_repository.update(pending_request)
         await self.uow.commit()
 

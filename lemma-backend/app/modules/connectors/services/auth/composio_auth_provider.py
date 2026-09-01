@@ -305,15 +305,35 @@ class ComposioAuthProvider(AuthProviderInterface):
         # Ignored, for the same reason as `get_authorization_url`.
         self._toolkit_slug(install)
 
+        # `state` is the connection request id this flow recorded when it
+        # started -- `get_authorization_url` returns it as the provider state,
+        # and Composio's connection request and connected account share an id.
+        #
+        # It is preferred over the URL for a reason. The callback names the
+        # connection to fetch in a query parameter, and the Composio client is
+        # one deployment-wide key, so a `connectedAccountId` belonging to
+        # somebody else's completed flow resolves perfectly well. Anyone who
+        # learned another person's id -- from their browser history, a proxy
+        # log, a Referer -- could start their own connect request and hand that
+        # id to the callback, and Composio's answer, tokens and all, would be
+        # stored as an account they own. Trusting only what we recorded when we
+        # began removes the parameter from the attacker's reach entirely.
         parsed_url = urlparse(redirect_uri)
         query_params = parse_qs(parsed_url.query)
-        connected_account_id_list = query_params.get("connectedAccountId")
-        if not connected_account_id_list or not connected_account_id_list[0]:
+        callback_id = (query_params.get("connectedAccountId") or [""])[0]
+        connected_account_id = state or callback_id
+        if not connected_account_id:
             raise ConnectorValidationError(
                 "connectedAccountId not found in callback URL"
             )
-
-        connected_account_id = connected_account_id_list[0]
+        if state and callback_id and callback_id != state:
+            logger.warning(
+                "connectors.composio_auth_provider.callback_account_mismatch",
+            )
+            raise ConnectorValidationError(
+                "This callback does not belong to the connection that was "
+                "started. Begin the connection again."
+            )
 
         composio = await run_blocking(
             self._composio_client_factory, limiter="external_http"

@@ -1164,3 +1164,129 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         f"/organizations/{org_id}/connectors/auth-configs/{connector_id}"
     )
     assert still_there.status_code == 200, still_there.text
+
+
+async def _oauth_install(authenticated_client, db_session, org_id) -> str:
+    """An ORG_CUSTOM OAuth install, returning its connector id."""
+    connector_id = f"replay-app-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Replay App",
+            description="connect-request replay coverage",
+            kinds=[
+                {
+                    "kind": "package",
+                    "auth_scheme": "OAUTH2",
+                    "supports_org_custom_oauth": True,
+                    "oauth2_defaults": {
+                        "default_scopes": ["openid"],
+                        "authorization_url": "https://mock.example.com/auth",
+                        "token_url": "https://mock.example.com/token",
+                    },
+                }
+            ],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={
+            "connector_id": connector_id,
+            "kind": "package",
+            "config_source": "ORG_CUSTOM",
+            "config": {
+                "oauth2_credentials": {
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                }
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    return connector_id
+
+
+@pytest.mark.e2e
+async def test_a_state_cannot_be_replayed_after_it_has_been_used(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """A completed connect request must not accept a second callback.
+
+    The `state` travels through the provider's redirect, so it lands in browser
+    history, proxy logs and Referer headers. While the status was written and
+    never read, anyone holding one could obtain their own authorization code
+    for the same client and replay it here -- and their provider identity would
+    be stored as an account belonging to the person who started the flow, whose
+    agents and schedules would then act through it.
+    """
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    assert response.status_code == 200, response.text
+    state = response.json()["attributes"]["state"]
+
+    first = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "first", "format": "json"},
+    )
+    assert first.status_code == 200, first.text
+
+    replayed = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "attacker", "format": "json"},
+    )
+    assert replayed.status_code == 404, replayed.text
+
+    accounts = await authenticated_client.get(
+        f"/organizations/{org_id}/connectors/accounts",
+        params={"connector_id": connector_id},
+    )
+    assert len(accounts.json()["items"]) == 1, "the replay must not add an account"
+
+
+@pytest.mark.e2e
+async def test_a_spent_pkce_verifier_is_not_left_behind(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """`attributes` is plaintext JSONB and the row is kept forever, so a used
+    verifier sitting in it is a readable secret with nothing left to protect."""
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    state = response.json()["attributes"]["state"]
+    await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "code", "format": "json"},
+    )
+
+    from sqlalchemy import select
+
+    from app.modules.connectors.infrastructure.models.connect_request import (
+        ConnectRequest,
+    )
+
+    row = (
+        (
+            await db_session.execute(
+                select(ConnectRequest).where(
+                    ConnectRequest.connector_id == connector_id
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None
+    assert "code_verifier" not in (row.attributes or {})
