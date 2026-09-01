@@ -183,31 +183,199 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
     )
 
 
+def apply_branch_lineage(
+    runs: list[AgentRun], current_run: AgentRun | None
+) -> list[AgentRun]:
+    """Keep only the runs on this run's branch.
+
+    A subthread is a deliberate branch: somebody picked an earlier run and
+    carried on from there, which ``AgentRun.parent_run_id`` records. Two
+    branches off the same point are separate conversations about the same
+    starting position, and each has to be able to not know about the other --
+    otherwise branching is just a second way of writing in the same place.
+
+    A run with no parent is on the trunk and sees everything, which is every
+    run there has ever been until somebody branches. That is why this is a
+    no-op by default rather than a mode.
+
+    Kept: the run's ancestors, and the trunk up to the point it left. Excluded:
+    every sibling branch, and anything descended from one.
+    """
+    if current_run is None or current_run.parent_run_id is None:
+        return runs
+    by_id = {run.id: run for run in runs}
+    lineage: list[AgentRun] = []
+    walker: AgentRun | None = current_run
+    seen: set[UUID] = set()
+    while walker is not None and walker.id not in seen:
+        seen.add(walker.id)
+        lineage.append(walker)
+        parent_id = walker.parent_run_id
+        walker = by_id.get(parent_id) if parent_id is not None else None
+    root = lineage[-1]
+    return [
+        run
+        for run in runs
+        if run.id in seen
+        or (run.parent_run_id is None and run.started_at <= root.started_at)
+    ]
+
+
+def _belongs_to_someone_else(
+    run: AgentRun,
+    *,
+    viewer_id: UUID | None,
+    owner_id: UUID | None,
+) -> bool:
+    """Is this run somebody else's working, from this run's point of view?
+
+    A run with no recorded trigger predates the column, and the backfill
+    resolved those to the conversation's owner -- so the same rule is applied
+    here as in `ConversationRepository.list_messages`, and the model is shown
+    what the person reading over its shoulder is shown.
+
+    `viewer_id` of None means nobody asked, which is every single-person
+    conversation and every caller that predates this. Nothing is withheld then.
+    """
+    if viewer_id is None:
+        return False
+    trigger = run.triggered_by_user_id or owner_id
+    return trigger is not None and trigger != viewer_id
+
+
 def select_runtime_history(
-    runs: list[AgentRun], conversation: Conversation | None = None
+    runs: list[AgentRun],
+    conversation: Conversation | None = None,
+    *,
+    viewer_id: UUID | None = None,
+    current_run: AgentRun | None = None,
 ) -> list[Message]:
+    """The history for one run, bounded by age, by count, and by whose it is.
+
+    `viewer_id` is who the run acts for. Another person's run is collapsed to
+    its question and its answer however recent it is: the tool arguments carry
+    what they asked and the tool results carry data their grants reached, and
+    replaying either into this run would hand it both. `_collapsed_run` already
+    produces exactly that shape for old runs, so this is the same reduction on
+    a different trigger.
+    """
     # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
     # history reaches the model by age + count. Trim at run granularity first
     # so tool-call/tool-return pairs (which live within a run) stay intact.
+    # Branch first, then the windows: the branch decides which runs are even in
+    # this conversation's line, and the caps bound what is left of it.
+    runs = apply_branch_lineage(runs, current_run)
     original_count = len(runs)
     runs = apply_surface_history_window(runs, conversation)
     prefix: list[Message] = []
     if runs and len(runs) < original_count:
         prefix = [_dropped_runs_notice(runs[0], original_count - len(runs))]
-    if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
-        return prefix + [message for run in runs for message in run.ordered_messages()]
 
-    recent_run_ids = {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+    owner_id = conversation.user_id if conversation is not None else None
+    # Whose words are whose. A conversation can be answered by several agents,
+    # and each of them has to read the others as other people.
+    names = _agent_names(conversation)
+    own_agent_id = getattr(current_run, "agent_id", None) if current_run else None
+    # Every run when there are few enough of them: the count cap is what
+    # elides, and below it nothing is old enough to lose anything to age.
+    recent_run_ids = (
+        {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
+        if len(runs) > FULL_HISTORY_AGENT_RUN_COUNT
+        else {run.id for run in runs}
+    )
     selected: list[Message] = []
     for run in runs:
         messages = run.ordered_messages()
-        if not messages:
-            continue
-        if run.id in recent_run_ids or run.message_count <= 2:
-            selected.extend(messages)
-            continue
-        selected.extend(_collapsed_run(run, messages))
+        if messages:
+            selected.extend(
+                _messages_for_run(
+                    run,
+                    messages,
+                    viewer_id=viewer_id,
+                    owner_id=owner_id,
+                    own_agent_id=own_agent_id,
+                    names=names,
+                    carried_whole=run.id in recent_run_ids,
+                )
+            )
     return prefix + selected
+
+
+def _messages_for_run(
+    run: AgentRun,
+    messages: list[Message],
+    *,
+    viewer_id: UUID | None,
+    owner_id: UUID | None,
+    own_agent_id: UUID | None,
+    names: dict[UUID, str],
+    carried_whole: bool,
+) -> list[Message]:
+    """How much of one run reaches the prompt, and in whose voice.
+
+    Ordered by what each rule protects. Somebody else's working is withheld
+    before anything else, because recency would otherwise wave it through.
+    Another agent's speech is attributed next, because replaying it as this
+    agent's own is how an agent loses track of who it is. What survives both is
+    then bounded by age and size.
+    """
+    if _belongs_to_someone_else(run, viewer_id=viewer_id, owner_id=owner_id):
+        return _collapsed_run(run, messages)
+    speaker = names.get(run.agent_id) if run.agent_id != own_agent_id else None
+    if speaker:
+        return _attributed_to_another_agent(run, messages, speaker)
+    if carried_whole or run.message_count <= 2:
+        return messages
+    return _collapsed_run(run, messages)
+
+
+def _agent_names(conversation: Conversation | None) -> dict[UUID, str]:
+    """Which agent is called what, from the conversation's own roster."""
+    participants = getattr(conversation, "participants", None) or []
+    return {
+        participant.agent_id: participant.display_name
+        for participant in participants
+        if participant.agent_id is not None and participant.display_name
+    }
+
+
+def _attributed_to_another_agent(
+    run: AgentRun, messages: list[Message], name: str
+) -> list[Message]:
+    """Another agent's turn, rewritten as something that was said to this one.
+
+    Replaying it unchanged is what made a named agent lose track of who it is:
+    every assistant message in a conversation was handed to the model as its
+    own prior words, so an agent answering after another one read that agent's
+    replies as its own and answered as them. One insisted it was Robin while
+    running as Batman, in a conversation where Robin had spoken first.
+
+    So the other agent's speech becomes reported speech -- a user-role line
+    naming who said it -- and its working is dropped. Dropping the working
+    whole is the same rule elision follows: a tool call without its return is
+    worse than neither.
+    """
+    kept: list[Message] = []
+    for message in messages:
+        if message.role is MessageRole.USER:
+            kept.append(message)
+            continue
+        if message.kind is not MessageKind.TEXT or not message.text:
+            continue
+        kept.append(
+            Message(
+                id=message.id,
+                conversation_id=message.conversation_id,
+                sequence=message.sequence,
+                agent_run_id=run.id,
+                role=MessageRole.USER.value,
+                kind=MessageKind.TEXT,
+                text=f"{name} said: {message.text}",
+                created_at=message.created_at,
+                metadata={"synthetic": True, "spoken_by_agent": name},
+            )
+        )
+    return kept
 
 
 def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:

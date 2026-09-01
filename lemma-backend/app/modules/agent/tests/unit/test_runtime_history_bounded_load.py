@@ -133,7 +133,12 @@ def _fingerprint(messages: list[Message]) -> list[tuple]:
 
 def _surface_conversation():
     return SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "slack"}, is_pod_assistant=False
+        id=uuid4(),
+        # Every conversation has an owner, and the history builder reads it to
+        # decide whose working an untriggered run is.
+        user_id=uuid4(),
+        metadata={"surface_platform": "slack"},
+        is_pod_assistant=False,
     )
 
 

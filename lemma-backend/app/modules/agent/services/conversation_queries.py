@@ -173,6 +173,8 @@ class ConversationQueries:
         )
         return await self.conversation_repository.list_messages(
             conversation_id=conversation_id,
+            viewer_id=user_id,
+            owner_user_id=conversation.user_id,
             before_sequence=before_sequence,
             after_sequence=after_sequence,
             limit=limit,

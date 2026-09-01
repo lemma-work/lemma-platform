@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, literal, literal_column, select, update
+from sqlalchemy import func, literal, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +35,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
+from app.modules.agent.infrastructure.participant_models import (
+    ConversationParticipantModel,
+)
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     ConversationModel,
@@ -42,6 +45,10 @@ from app.modules.agent.infrastructure.models import (
 )
 from app.modules.agent.infrastructure.conversation_origin_store import (
     create_conversation_for_origin,
+)
+from app.modules.agent.infrastructure.conversation_participant_store import (
+    ensure_owner_participant,
+    list_participants,
 )
 from app.modules.agent.infrastructure.conversation_run_queries import (
     ConversationRunQueriesMixin,
@@ -60,6 +67,9 @@ from app.modules.agent.infrastructure.repositories.conversation_approval_queries
 from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
     ConversationOpeningTextsMixin,
 )
+from app.modules.agent.infrastructure.repositories.conversation_viewer_queries import (
+    ConversationViewerQueriesMixin,
+)
 
 _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
 
@@ -68,6 +78,7 @@ class ConversationRepository(
     ConversationApprovalQueriesMixin,
     ConversationOpeningTextsMixin,
     ConversationRunQueriesMixin,
+    ConversationViewerQueriesMixin,
 ):
     """Repository for conversations, agent runs, and messages."""
 
@@ -108,6 +119,11 @@ class ConversationRepository(
         )
         self.session.add(model)
         await self.session.flush()
+        await ensure_owner_participant(
+            self.session,
+            conversation_id=model.id,
+            user_id=model.user_id,
+        )
         self.uow.collect_events(
             [
                 ConversationStartedEvent(
@@ -242,7 +258,12 @@ class ConversationRepository(
             # Seeded into __dict__ rather than assigned, so SQLAlchemy does not
             # treat this as a mutation of the relationship and try to flush it.
             model.__dict__["agent_runs"] = [latest] if latest is not None else []
-        return model.to_entity()
+        entity = model.to_entity()
+        # Always, not behind a flag: `validate_conversation_access` reads it,
+        # and a flag would mean the answer to "may this person see it" depended
+        # on what the caller happened to ask for.
+        entity.participants = await list_participants(self.session, model.id)
+        return entity
 
     async def list_conversations(
         self,
@@ -261,8 +282,25 @@ class ConversationRepository(
         # One list or the other, never both: the archive is a place you go, not
         # a tail on the end of the history. Equality rather than "not archived"
         # so the same query serves both without a second code path.
+        # Yours, or one you were added to. Owner-only was correct while a
+        # conversation had exactly one person in it, and it is what made being
+        # added to one useless: you could open it from a link and never find it
+        # again, because it was in nobody's list but the opener's.
+        #
+        # EXISTS rather than a join: a conversation has a handful of
+        # participants, the row is looked up through
+        # `ix_conversation_participant_user`, and a join would multiply the
+        # conversation rows before the limit is applied.
+        in_conversation = (
+            select(ConversationParticipantModel.id)
+            .where(
+                ConversationParticipantModel.conversation_id == ConversationModel.id,
+                ConversationParticipantModel.user_id == user_id,
+            )
+            .exists()
+        )
         stmt = select(ConversationModel).where(
-            ConversationModel.user_id == user_id,
+            or_(ConversationModel.user_id == user_id, in_conversation),
             ConversationModel.pod_id == pod_id,
             ConversationModel.is_archived.is_(archived),
         )
@@ -367,6 +405,7 @@ class ConversationRepository(
         agent_id: UUID | None,
         agent_runtime: AgentRuntimeConfig,
         parent_run_id: UUID | None = None,
+        triggered_by_user_id: UUID | None = None,
         metadata: JsonObject | None = None,
     ) -> AgentRunEntity:
         now = datetime.now(timezone.utc)
@@ -374,6 +413,7 @@ class ConversationRepository(
             conversation_id=conversation_id,
             agent_id=agent_id,
             parent_run_id=parent_run_id,
+            triggered_by_user_id=triggered_by_user_id,
             status=AgentRunStatus.RUNNING.value,
             agent_runtime=agent_runtime.model_dump(mode="json"),
             started_at=now,
@@ -420,6 +460,7 @@ class ConversationRepository(
             conversation_id=conversation.id,
             agent_run_id=agent_run_id,
             sequence=sequence,
+            sender_user_id=draft.sender_user_id,
             role=draft.role.value,
             kind=draft.kind.value,
             text=draft.text,
@@ -438,30 +479,6 @@ class ConversationRepository(
         self.session.add(model)
         await self.session.flush()
         return model.to_entity()
-
-    async def list_messages(
-        self,
-        *,
-        conversation_id: UUID,
-        before_sequence: int | None = None,
-        after_sequence: int | None = None,
-        limit: int = 100,
-    ) -> tuple[list[MessageEntity], int | None]:
-        stmt = select(MessageModel).where(
-            MessageModel.conversation_id == conversation_id
-        )
-        if before_sequence is not None:
-            stmt = stmt.where(MessageModel.sequence < before_sequence)
-        if after_sequence is not None:
-            stmt = stmt.where(MessageModel.sequence > after_sequence)
-        stmt = stmt.order_by(MessageModel.sequence.desc()).limit(limit + 1)
-        result = await self.session.execute(stmt)
-        rows = list(result.scalars())
-        has_more = len(rows) > limit
-        if has_more:
-            rows = rows[:limit]
-        next_cursor = rows[-1].sequence if has_more and rows else None
-        return [row.to_entity() for row in reversed(rows)], next_cursor
 
     async def finish_agent_run(
         self,
