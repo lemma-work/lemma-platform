@@ -66,7 +66,7 @@ dev = [
   # this tree is clean today and reports 264 findings under 0.16. That would
   # have landed on whoever next refreshed the lockfile, in a PR about something
   # else. Lift the bound for all three components together.
-  "ruff>=0.14.8,<0.16",
+  "ruff>=0.14.8,<0.17",
   # e2e test infra: the e2e suite spins up the real backend (subprocess uvicorn
   # + docker postgres/redis/supertokens) and drives the CLI against it over TCP.
   # httpx provisions test users/orgs/pods over HTTP; psycopg truncates the
