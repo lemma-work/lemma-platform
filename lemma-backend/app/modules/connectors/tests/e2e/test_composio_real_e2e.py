@@ -111,6 +111,47 @@ def _require_composio() -> str:
     return key
 
 
+@pytest.fixture(autouse=True)
+def _the_code_under_test_sees_the_same_key(monkeypatch):
+    """Give the credential to the code, not only to the guard above.
+
+    The root conftest sets ``LEMMA_DISABLE_DOTENV=1`` so no ``Settings`` in the
+    suite reads ``.env`` -- deliberate, and why ``_env_value`` parses the file
+    itself. But only this file did that. ``_sync_composio_catalog`` reads
+    ``connector_settings`` and ``os.environ``, found neither, logged
+    ``connector_catalog.composio.disabled`` at debug level and returned
+    ``(0, 0, 0)``.
+
+    So the guard said "configured, run" while the importer said "not
+    configured, do nothing", and the test failed several steps later on a
+    connector row that was never written -- with the one line explaining why
+    logged below the level anybody sees. A test that decides to run because it
+    found a key has to make that key reach the thing it is testing.
+    """
+    key = _composio_api_key()
+    if not key:
+        return
+    monkeypatch.setenv("COMPOSIO_API_KEY", key)
+    monkeypatch.setattr(connector_settings, "composio_api_key", key)
+    webhook_secret = connector_settings.composio_webhook_secret or _env_value(
+        "COMPOSIO_WEBHOOK_SECRET"
+    )
+    if webhook_secret:
+        monkeypatch.setenv("COMPOSIO_WEBHOOK_SECRET", webhook_secret)
+        monkeypatch.setattr(
+            connector_settings, "composio_webhook_secret", webhook_secret
+        )
+    # The SDK client is cached on the key it was built with, so a client made
+    # before this point holds the empty one.
+    from app.modules.connectors.infrastructure.composio_client import (
+        reset_composio_clients,
+    )
+
+    reset_composio_clients()
+    yield
+    reset_composio_clients()
+
+
 def _composio_client() -> Composio:
     return Composio(api_key=_require_composio())
 
@@ -437,7 +478,8 @@ async def test_composio_oauth_connect_and_reconnect_human(
 # Webhook — Composio webhook signature verification
 # =============================================================================
 @pytest.mark.provider
-def test_composio_webhook_signature_verification():
+@pytest.mark.asyncio
+async def test_composio_webhook_signature_verification():
     secret = connector_settings.composio_webhook_secret or _env_value(
         "COMPOSIO_WEBHOOK_SECRET"
     )
@@ -472,7 +514,11 @@ def test_composio_webhook_signature_verification():
     }
 
     verifier = ComposioWebhookVerifier()
-    result = verifier.verify(payload, headers)
+    # `verify` is a coroutine, and deliberately so -- the SDK call it makes is
+    # blocking and has to be offloaded, which `test_the_verifier_port_is_async`
+    # pins. This test predates that and has been skipping ever since, so nothing
+    # noticed it was still calling it synchronously.
+    result = await verifier.verify(payload, headers)
     assert result["raw_payload"]["connection_id"] == "ca_test_connection"
 
     # A tampered signature is rejected.
@@ -481,4 +527,4 @@ def test_composio_webhook_signature_verification():
         "webhook-signature": "v1," + base64.b64encode(b"wrong").decode(),
     }
     with pytest.raises(Exception):
-        verifier.verify(payload, bad_headers)
+        await verifier.verify(payload, bad_headers)
