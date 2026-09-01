@@ -4,8 +4,10 @@ A schedule used to answer only "when". What it woke up had to already know why:
 an agent's standing instruction was the whole of its purpose, so scheduling one
 meant either building an agent whose entire identity was the sentence, or
 building a workflow. The pod's own assistant could not be scheduled at all —
-it has no row to point a target at, and no standing instruction to interpret a
-trigger with.
+it had no row to point a target at, and no standing instruction to interpret a
+trigger with. It has a row now, so a schedule names it through `agent_id` like
+any other agent, and the instruction supplies the purpose its blank standing
+instruction does not.
 
 Both halves are one capability, so they are proved together here.
 """
@@ -24,8 +26,9 @@ pytestmark = [
 ]
 
 # What the API takes for "the assistant that answers when nobody else does".
-# The same selector the conversation routes accept; it is not an agent's name,
-# because the assistant does not have one.
+# The same selector the conversation routes accept. The assistant's row is named
+# `pod_default` internally; this is the public selector, and it is what reads
+# back, so a client sees exactly what it wrote.
 POD_DEFAULT = "POD_DEFAULT"
 
 
@@ -109,11 +112,15 @@ async def test_the_default_assistant_is_a_schedulable_target(pod_with_agent):
     )
 
     reopened = await alice.opens_schedule(schedule, in_pod=pod)
-    assert reopened["targets_pod_default"] is True
-    # No agent row exists for the assistant, so there is no id to point at —
-    # the selector is echoed back in its place so the target still reads.
-    assert reopened["agent_id"] is None
+    # The assistant is named by id like any other agent. Its row carries the
+    # pod's own id, which is what makes it nameable by a foreign key at all —
+    # a schedule pointing at the pod is pointing at its assistant.
+    assert reopened["agent_id"] == pod["id"]
     assert reopened["agent_name"] == POD_DEFAULT
+    assert reopened["workflow_id"] is None
+    assert reopened["instruction"] == (
+        "Check the overnight queue and tell me what needs a person."
+    )
     listed = {str(s["id"]) for s in await alice.schedules_in(pod)}
     assert str(schedule["id"]) in listed
 
@@ -145,8 +152,11 @@ async def test_retargeting_to_the_assistant_replaces_the_agent(pod_with_agent):
     )
 
     reopened = await alice.opens_schedule(schedule, in_pod=pod)
-    assert reopened["targets_pod_default"] is True
-    assert reopened["agent_id"] is None, "a schedule wakes exactly one thing"
+    # Replaced, not joined: the named agent it used to point at is gone from the
+    # target, and a schedule still wakes exactly one thing.
+    assert reopened["agent_name"] == POD_DEFAULT
+    assert reopened["agent_id"] == pod["id"]
+    assert reopened["agent_id"] != agent["id"]
     assert reopened["workflow_id"] is None
 
 
@@ -189,5 +199,6 @@ async def test_a_firing_starts_a_conversation_with_the_assistant(world, run):
         timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )
     assert fired, "a schedule targeting the assistant must actually fire"
-    # Dispatched to an agent target — the assistant is one, it just has no row.
+    # Dispatched to an agent target, down the ordinary agent path: the assistant
+    # is an agent, with a row, and needs no arm of its own.
     assert fired[0]["target_kind"] == "AGENT"

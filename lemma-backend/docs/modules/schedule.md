@@ -20,10 +20,12 @@ or surfaces; target modules decide how to execute the fire.
 
 `schedules` stores target, active state, type-specific config, an optional
 instruction, optional filter instruction/schema, and external scheduler
-metadata. The target is three columns rather than two: `agent_id`,
-`workflow_id`, and `targets_pod_default` — the pod's default assistant has no
-`agents` row, so no foreign key can name it, and a check constraint keeps the
-three exclusive. `instruction` says what the target should *do* when the
+metadata. The target is two columns, `agent_id` and `workflow_id`, kept
+exclusive by `ck_schedules_single_target`. The pod's default assistant is named
+through `agent_id` like any other agent: its `agents` row carries the pod's own
+id, so a foreign key reaches it and the target needs no third arm. On the wire
+that target reads as `agent_name: "POD_DEFAULT"`, the selector the API takes
+rather than the row's internal name. `instruction` says what the target should *do* when the
 schedule fires and reaches an agent as its run's conversation instructions;
 `filter_instruction` decides whether to fire at all. A schedule targeting the
 default assistant must carry an instruction, because that assistant has no
