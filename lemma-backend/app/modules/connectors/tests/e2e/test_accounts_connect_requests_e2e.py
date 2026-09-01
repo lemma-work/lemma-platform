@@ -112,15 +112,20 @@ async def test_connect_request_and_accounts_lifecycle(
     auth_config = auth_config_response.json()
     assert auth_config["config"]["oauth2_credentials"]["client_secret"] == "********"
 
-    async def _fake_get_authorization_url(self, install, user_id, state, redirect_uri):
+    async def _fake_get_authorization_url(
+        self, install, user_id, state, redirect_uri, code_verifier=None
+    ):
         # The org brought its own client, so the secret it stored is what has
         # to reach the scheme -- not the deployment's.
         assert install.oauth2.client_secret == "client-secret"
         assert install.config_source is AuthConfigSource.ORG_CUSTOM
+        # A client with a secret does not need PKCE, and sending a challenge to
+        # a provider that never agreed to one is how a working flow breaks.
+        assert code_verifier is None
         return ("https://mock.example.com/authorize", "provider_state")
 
     async def _fake_exchange_code_for_credentials(
-        self, install, redirect_uri, user_id, state=None
+        self, install, redirect_uri, user_id, state=None, code_verifier=None
     ):
         return OAuthCredentials(
             access_token="access-token",
@@ -845,7 +850,9 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
 
-    async def _fake_get_authorization_url(self, install, user_id, state, redirect_uri):
+    async def _fake_get_authorization_url(
+        self, install, user_id, state, redirect_uri, code_verifier=None
+    ):
         return ("https://mock.example.com/authorize", "provider_state")
 
     # The callback URL's "code" query param stands in for the provider's actual
@@ -853,7 +860,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     # exchange returns, so the test can drive distinct-identity vs same-identity
     # callbacks without a real OAuth provider.
     async def _fake_exchange_code_for_credentials(
-        self, install, redirect_uri, user_id, state=None
+        self, install, redirect_uri, user_id, state=None, code_verifier=None
     ):
         from urllib.parse import parse_qs, urlparse
 

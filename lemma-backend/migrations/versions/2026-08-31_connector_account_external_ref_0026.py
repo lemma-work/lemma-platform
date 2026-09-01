@@ -31,8 +31,8 @@ from alembic import op
 
 # `alembic_version.version_num` is varchar(32); a longer id fails the
 # version bump at the very end of the upgrade and rolls the whole thing back.
-revision = "0025_account_external_ref"
-down_revision = "0024_drop_surface_schedule_id"
+revision = "0026_account_external_ref"
+down_revision = "0025_pod_default_agent_row"
 branch_labels = None
 depends_on = None
 
