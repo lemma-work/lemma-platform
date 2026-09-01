@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "artifact_source": "ci-build-check",
   "host_packs": {
     "aarch64-apple-darwin": {
