@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query
 
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.redaction import is_sensitive_key
 from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
@@ -45,19 +47,57 @@ async def get_connector_status(
     return ConnectorStatusResponse.model_validate(data)
 
 
+_REDACTED = "********"
+
+# A location is not a credential. `is_sensitive_key` matches on substrings, so
+# without this every `authorization_endpoint` and `token_endpoint` -- which an
+# operator needs to see, and which appear in the authorize URL anyway -- would
+# come back masked.
+_PUBLIC_SUFFIXES = ("_endpoint", "_url", "_uri")
+
+
+def _is_secret_field(key: object) -> bool:
+    name = str(key).strip().lower()
+    if name.endswith(_PUBLIC_SUFFIXES):
+        return False
+    return is_sensitive_key(key)
+
+
 def _redact_config(value: dict | None) -> dict | None:
+    """Mask every secret in an install config, at any depth.
+
+    This used to name the two places a secret was known to live -- the top
+    level and `oauth2_credentials`. That is a list which is only correct until
+    something adds a third, and something did: RFC 7591 registration writes a
+    `client_secret` under `oauth`, which the list did not visit, so the OAuth
+    client credential the deployment registered with a tenant's authorization
+    server was returned in full to any org member -- including a read-only one,
+    since reading an install needs no role while creating one needs owner or
+    editor.
+
+    Recursing over the sensitive-key set instead means the next nesting is
+    covered before it is written, rather than after someone notices.
+    """
     if value is None:
         return None
-    redacted = dict(value)
-    oauth2_credentials = redacted.get("oauth2_credentials")
-    if isinstance(oauth2_credentials, dict):
-        oauth2_credentials = dict(oauth2_credentials)
-        if oauth2_credentials.get("client_secret"):
-            oauth2_credentials["client_secret"] = "********"
-        redacted["oauth2_credentials"] = oauth2_credentials
-    if redacted.get("client_secret"):
-        redacted["client_secret"] = "********"
-    return redacted
+    return _redacted(value)
+
+
+def _redacted(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _redacted_entry(key, item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted(item) for item in value]
+    return value
+
+
+def _redacted_entry(key: object, value: Any) -> Any:
+    # A container under a secret-sounding key is not itself the secret --
+    # `oauth2_credentials` holds a client id worth showing next to a client
+    # secret worth hiding. Mask the leaves, keep the shape.
+    if isinstance(value, (dict, list)):
+        return _redacted(value)
+    return _REDACTED if _is_secret_field(key) and value else value
 
 
 def _response_from_entity(entity) -> AuthConfigResponseSchema:

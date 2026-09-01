@@ -252,13 +252,21 @@ async def update_install(
     if rediscover:
         from app.modules.connectors.services.install_provisioning import (
             discover_install_operations,
+            discovery_credentials,
         )
 
+        # With a credential, for the same reason `refresh_install_operations`
+        # uses one: an install whose token lives on the account cannot list its
+        # operations unauthenticated, and the 401 is swallowed into
+        # `discovered=0`. Without this, repointing an OAuth-protected MCP
+        # install reports success while leaving the OLD server's tool list in
+        # place, so every later call names a tool the new host does not have.
         discovered = await discover_install_operations(
             auth_config,
             connector,
             repository=service.auth_config_operation_repository,
             uow=service.uow,
+            credentials=await discovery_credentials(service, auth_config),
         )
     logger.info(
         "connectors.connector_service.auth_config_updated",

@@ -31,7 +31,11 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from app.core.log.log import get_logger
-from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
+from app.core.net.url_guard import (
+    UnsafeUrlError,
+    assert_safe_url,
+    request_guarded,
+)
 
 logger = get_logger(__name__)
 
@@ -60,8 +64,9 @@ class McpAuthorizationUnavailable(Exception):
 
 
 async def _get_json(client: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
-    await assert_safe_url(url)
-    response = await client.get(url, headers={"Accept": "application/json"})
+    response = await request_guarded(
+        client, "GET", url, headers={"Accept": "application/json"}
+    )
     if response.status_code != 200:
         return None
     try:
@@ -121,9 +126,11 @@ async def discover_authorization_server(
     """
     await assert_safe_url(server_url)
     owns_client = client is None
-    client = client or httpx.AsyncClient(
-        timeout=_DISCOVERY_TIMEOUT_SECONDS, follow_redirects=True
-    )
+    # Redirects off: `request_guarded` follows them itself so every hop is
+    # re-checked. Letting httpx follow hands an unchecked target the request,
+    # which is exactly the bypass the guard exists to close -- a public URL
+    # answering `307 -> 169.254.169.254` would otherwise be followed blind.
+    client = client or httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS)
     try:
         challenge = await _challenge_for(client, server_url)
         for url in _resource_metadata_urls(server_url, challenge):
@@ -153,7 +160,9 @@ async def discover_authorization_server(
 async def _challenge_for(client: httpx.AsyncClient, server_url: str) -> str | None:
     """The `WWW-Authenticate` an unauthenticated call comes back with."""
     try:
-        response = await client.post(
+        response = await request_guarded(
+            client,
+            "POST",
             server_url,
             json={
                 "jsonrpc": "2.0",
@@ -185,6 +194,20 @@ async def _authorization_server(
         token_endpoint = metadata.get("token_endpoint")
         if not authorization_endpoint or not token_endpoint:
             continue
+        # Every endpoint is checked here, at the point it is learned, because
+        # this is the last place they are all together. The token endpoint in
+        # particular is handed to authlib later -- a plain httpx client with no
+        # guard on it -- so a metadata document naming `http://10.0.0.5/admin`
+        # would have the backend POST an authorization code to an internal
+        # address. Storing an endpoint is a decision to call it, so it is
+        # validated before it is stored, not before it is used.
+        for endpoint in (
+            authorization_endpoint,
+            token_endpoint,
+            metadata.get("registration_endpoint"),
+        ):
+            if endpoint:
+                await assert_safe_url(str(endpoint))
         return McpAuthorizationServer(
             issuer=str(metadata.get("issuer") or issuer),
             authorization_endpoint=str(authorization_endpoint),
@@ -221,13 +244,16 @@ async def register_client(
             "The server's authorization server does not accept client registration, "
             "so there is no client to sign in with. Connect it with a token instead."
         )
-    await assert_safe_url(server.registration_endpoint)
     owns_client = client is None
-    client = client or httpx.AsyncClient(
-        timeout=_DISCOVERY_TIMEOUT_SECONDS, follow_redirects=True
-    )
+    # Redirects off: `request_guarded` follows them itself so every hop is
+    # re-checked. Letting httpx follow hands an unchecked target the request,
+    # which is exactly the bypass the guard exists to close -- a public URL
+    # answering `307 -> 169.254.169.254` would otherwise be followed blind.
+    client = client or httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT_SECONDS)
     try:
-        response = await client.post(
+        response = await request_guarded(
+            client,
+            "POST",
             server.registration_endpoint,
             json={
                 "client_name": client_name,
