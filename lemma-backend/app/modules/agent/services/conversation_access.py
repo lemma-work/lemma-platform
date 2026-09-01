@@ -36,7 +36,6 @@ from app.modules.agent.domain.value_objects import AgentKind
 from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 
 
-
 def validate_conversation_access(
     conversation: Conversation | None,
     *,
