@@ -76,7 +76,9 @@ class LemmaAuthProvider(AuthProviderInterface):
                 # resource named here; asking at exchange time for a resource
                 # the grant was never associated with is refused as
                 # `invalid_target`, which is exactly what Phoenix did.
-                **({"resource": oauth_config.resource} if oauth_config.resource else {}),
+                **(
+                    {"resource": oauth_config.resource} if oauth_config.resource else {}
+                ),
                 **(oauth_config.extra_params or {}),
             )
 
@@ -113,7 +115,9 @@ class LemmaAuthProvider(AuthProviderInterface):
                 # authorization server guarding several MCP servers issues a
                 # token for one of them, and a token minted without this is
                 # refused by the resource it was meant for.
-                **({"resource": oauth_config.resource} if oauth_config.resource else {}),
+                **(
+                    {"resource": oauth_config.resource} if oauth_config.resource else {}
+                ),
             )
 
         return await self._create_oauth_credentials(token_data, install)

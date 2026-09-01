@@ -247,8 +247,7 @@ async def test_resource_indicator_is_sent_on_both_authorization_and_token():
         code_verifier="verifier",
     )
     assert (
-        FakeOAuth2Session.last_fetch_token["resource"]
-        == "https://phoenix.example/mcp"
+        FakeOAuth2Session.last_fetch_token["resource"] == "https://phoenix.example/mcp"
     )
 
 

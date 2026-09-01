@@ -37,9 +37,7 @@ logger = get_logger(__name__)
 
 _DISCOVERY_TIMEOUT_SECONDS = 15.0
 # `Bearer realm="…", resource_metadata="https://…"`
-_RESOURCE_METADATA_RE = re.compile(
-    r'resource_metadata\s*=\s*"([^"]+)"', re.IGNORECASE
-)
+_RESOURCE_METADATA_RE = re.compile(r'resource_metadata\s*=\s*"([^"]+)"', re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +143,7 @@ async def discover_authorization_server(
         # A server pointing its metadata at a private address is the SSRF this
         # guard exists for, and following it is the whole attack.
         raise
-    except (httpx.HTTPError, OSError):
+    except httpx.HTTPError, OSError:
         return None
     finally:
         if owns_client:
@@ -169,7 +167,7 @@ async def _challenge_for(client: httpx.AsyncClient, server_url: str) -> str | No
             },
             headers={"Accept": "application/json, text/event-stream"},
         )
-    except (httpx.HTTPError, OSError):
+    except httpx.HTTPError, OSError:
         return None
     if response.status_code != 401:
         return None
@@ -250,9 +248,7 @@ async def register_client(
     payload = response.json()
     client_id = payload.get("client_id")
     if not client_id:
-        raise McpAuthorizationUnavailable(
-            "Client registration returned no client_id."
-        )
+        raise McpAuthorizationUnavailable("Client registration returned no client_id.")
     return str(client_id), (
         str(payload["client_secret"]) if payload.get("client_secret") else None
     )
