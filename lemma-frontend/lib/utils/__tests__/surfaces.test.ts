@@ -86,6 +86,20 @@ describe('surface reaches', () => {
         expect(new Set(keys).size).toBe(keys.length);
     });
 
+    it('finds the assistant only on a surface that is actually its own', () => {
+        // Lem's page selects the surfaces it can be reached through with this.
+        // A channel used to be able to name her on somebody else's bot, so the
+        // agent's own surface answering for her is the whole of it now.
+        expect(
+            surfaceReachesDefaultAgent(slack(null, [{ channel_id: 'C1', channel_name: 'ops' }])),
+        ).toBe(true);
+        expect(
+            surfaceReachesDefaultAgent(
+                slack('sales-agent', [{ channel_id: 'C1', channel_name: 'ops' }]),
+            ),
+        ).toBe(false);
+    });
+
     it('still describes reach as one line for the tooltip', () => {
         const surface = slack('sales-agent', [
             { channel_id: 'C1', channel_name: 'sales' },

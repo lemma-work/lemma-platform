@@ -285,9 +285,6 @@ export function SurfaceModal({
             return;
         }
         setDraft(base);
-        // `agentName` is fixed for the life of a modal target; re-reading it here
-        // would only rebuild the draft and discard edits in flight.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [existingSurface]);
 
     // The manager bot creates the surface server-side, so completion arrives by
@@ -706,7 +703,6 @@ export function SurfaceModal({
                                 onDraftChange={patchDraft}
                                 availableChannels={availableChannels}
                                 isLoadingChannels={isLoadingChannels}
-                                defaultRouteAgent={agentName}
                                 customAppHref={
                                     definition.platform === 'SLACK' && !usesOwnApp
                                         ? `/pod/${podId}/connectors`

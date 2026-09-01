@@ -34,21 +34,23 @@ export function surfaceReachesAgent(surface: AssistantSurface, agentName: string
 }
 
 /**
- * A surface falls to the pod's default assistant (the virtual "Pod Super Agent")
- * when it has no explicit DM responder. The backend exposes this as
- * `uses_default_agent`; we fall back to an empty agent_name for older payloads.
+ * Whether the pod's own assistant is the agent this surface answers as.
+ *
+ * The assistant is a real agent row now rather than a stand-in for the absence
+ * of one, so the backend decides this and sends `uses_default_agent`. The
+ * `agent_name` fallback is only for payloads minted before it did.
  */
 export function surfaceUsesDefaultAgent(surface: AssistantSurface): boolean {
     return surface.uses_default_agent ?? !surface.agent_name;
 }
 
 /**
- * A surface reaches the pod default assistant when it answers its direct
- * messages *or* routes a channel with no agent of its own.
+ * Whether the pod's assistant is reachable through this surface at all.
  *
- * The channel half matters on Slack and Teams, where a workspace whose DMs
- * belong to one agent can still route `#general` to Lem — which
- * `surfaceUsesDefaultAgent` alone would read as "not reached here".
+ * This once had to consider channels separately, because a workspace whose DMs
+ * belonged to one agent could still route `#general` to Lem. One bot is one
+ * agent now, so the surface either belongs to the assistant — DMs and every
+ * allowed channel with it — or the assistant is not here.
  */
 export function surfaceReachesDefaultAgent(surface: AssistantSurface): boolean {
     return surfaceReaches(surface, null).length > 0;

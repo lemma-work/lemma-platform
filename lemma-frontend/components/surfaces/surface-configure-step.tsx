@@ -59,7 +59,6 @@ export function SurfaceConfigureStep({
     onDraftChange,
     availableChannels,
     isLoadingChannels,
-    defaultRouteAgent = null,
     customAppHref,
     onOpenReference,
     onRebind,
@@ -75,7 +74,6 @@ export function SurfaceConfigureStep({
     onRebind: () => void;
     /** Agent a newly added route answers as — the one whose page opened this.
      * `null` is an explicit pod-assistant choice. */
-    defaultRouteAgent?: string | null;
     /** Where an org sets up its own app for this platform. Passed only when it
      * hasn't already — otherwise the offer is stale. */
     customAppHref?: string;
@@ -94,10 +92,6 @@ export function SurfaceConfigureStep({
     const firstJoinable = remainingChannels.find((channel) => channel.is_member) ?? remainingChannels[0];
     const anyJoined = availableChannels.some((channel) => channel.is_member);
 
-    // What to call this surface's responder in copy. The draft holds the
-    // sentinel for "the pod assistant", which is not a name anyone would read.
-    const responderLabel =
-        draft.agentName === DEFAULT_AGENT_VALUE ? DEFAULT_RESPONDER_NAME : draft.agentName;
 
     const updateRoute = (index: number, patch: Partial<ChannelDraft>) =>
         onDraftChange({
@@ -219,7 +213,6 @@ export function SurfaceConfigureStep({
                                         key={index}
                                         route={route}
                                         options={options}
-                                        assistants={assistants}
                                         onChange={(patch) => updateRoute(index, patch)}
                                         onRemove={() =>
                                             onDraftChange({
@@ -314,13 +307,11 @@ export function SurfaceConfigureStep({
 function ChannelRouteRow({
     route,
     options,
-    assistants,
     onChange,
     onRemove,
 }: {
     route: ChannelDraft;
     options: AvailableChannel[];
-    assistants: Array<{ id?: string | null; name: string }>;
     onChange: (patch: Partial<ChannelDraft>) => void;
     onRemove: () => void;
 }) {
