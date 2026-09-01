@@ -168,7 +168,7 @@ requires-dist = [
 
 [[package]]
 name = "lemma-sdk"
-version = "0.7.1"
+version = "0.7.2"
 source = { directory = "../../../../lemma-python" }
 dependencies = [
     { name = "attrs" },

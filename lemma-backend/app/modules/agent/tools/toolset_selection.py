@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
@@ -214,14 +215,23 @@ def resolve_toolsets(
 ) -> ResolvedToolsets:
     """The toolsets this run may have, and whether it may spawn sub-agents.
 
-    The pod default assistant -- a run with no specific agent -- gets the fixed
-    default set. A user-created agent gets what it was configured with, plus
-    everything universal, plus whatever its grants imply.
+    The pod default assistant gets the fixed default set. A user-created agent
+    gets what it was configured with, plus everything universal, plus whatever
+    its grants imply.
+
+    Keyed on the agent's *kind*, not on whether an agent was passed. It used to
+    be the latter, back when the assistant was the run with no agent at all;
+    now that it has a row, `agent is not None` is true for it too, and the row
+    stores `toolsets = []` on purpose -- so reading the column would hand the
+    assistant an empty toolset and leave it with nothing but the always-on set.
+    `resolve_agent` substitutes the same constant, and this stays correct for
+    callers that did not come through it.
 
     Order matters at the end: the sub-agent subtraction runs last, so a child
     run does not receive MESSAGING and SNOOZE back through the always-on set.
     """
-    declared = list(agent.toolsets if agent is not None else POD_DEFAULT_AGENT_TOOLSETS)
+    is_pod_default = agent is None or agent.kind is AgentKind.POD_DEFAULT
+    declared = list(POD_DEFAULT_AGENT_TOOLSETS if is_pod_default else agent.toolsets)
     implied = derived_toolsets(grants)
 
     names: list[AgentToolset] = []

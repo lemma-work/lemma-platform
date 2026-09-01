@@ -260,7 +260,10 @@ class AgentSurfaceEntity(AggregateRoot):
     # to the lowercased platform when not given; a pod may have several surfaces
     # of the same platform (different bots/agents), each with its own name.
     name: str
-    agent_id: UUID | None = None
+    # Whose surface this is. Never absent: the pod's own assistant has a row
+    # like every other agent, so "nobody's" stopped being a state a surface
+    # can be in -- which is what made one column mean two things.
+    agent_id: UUID
     surface_type: SurfacePlatform
     mode: SurfaceMode = SurfaceMode.DM
     event_mode: SurfaceEventMode = SurfaceEventMode.WEBHOOK
@@ -294,7 +297,7 @@ class AgentSurfaceEntity(AggregateRoot):
         surface_type: str | SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,
-        agent_id: UUID | None = None,
+        agent_id: UUID,
         mode: SurfaceMode | None = None,
         event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,

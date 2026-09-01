@@ -41,6 +41,7 @@ export type { AgentHostResponse } from './models/AgentHostResponse.js';
 export type { AgentHostRunCheckpoint } from './models/AgentHostRunCheckpoint.js';
 export { AgentHostRunState } from './models/AgentHostRunState.js';
 export { AgentHostStatus } from './models/AgentHostStatus.js';
+export { AgentKind } from './models/AgentKind.js';
 export type { AgentListResponse } from './models/AgentListResponse.js';
 export type { AgentMessageResponse } from './models/AgentMessageResponse.js';
 export type { AgentNode } from './models/AgentNode.js';

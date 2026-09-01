@@ -14,7 +14,7 @@ from uuid import uuid4
 from harness.run import a_name_for
 from harness.drivers.api import items_of
 from harness.tenant import STANDING_CONNECTORS, standing_auth_config_name
-from harness.waiting import eventually
+from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 JSON = dict[str, Any]
 
@@ -143,6 +143,7 @@ class BuildingSteps:
         config: JSON | None = None,
         agent: str | None = None,
         workflow: str | None = None,
+        instruction: str | None = None,
     ) -> JSON:
         body: JSON = {
             "name": named or a_name_for("schedule"),
@@ -153,6 +154,8 @@ class BuildingSteps:
             body["agent_name"] = agent
         if workflow:
             body["workflow_name"] = workflow
+        if instruction:
+            body["instruction"] = instruction
         return await self.api.post(
             f"/pods/{in_pod['id']}/schedules",
             what=f"{self.label} creating a {kind} schedule",
@@ -174,16 +177,27 @@ class BuildingSteps:
         )
 
     async def is_refused_creating_a_schedule(
-        self, *, in_pod: JSON, kind: str = "TIME", config: JSON | None = None
+        self,
+        *,
+        in_pod: JSON,
+        kind: str = "TIME",
+        config: JSON | None = None,
+        agent: str | None = None,
+        instruction: str | None = None,
     ) -> int:
+        body: JSON = {
+            "name": f"bad_{uuid4().hex[:8]}",
+            "schedule_type": kind,
+            "config": config if config is not None else {},
+        }
+        if agent:
+            body["agent_name"] = agent
+        if instruction:
+            body["instruction"] = instruction
         response = await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/schedules",
-            json={
-                "name": f"bad_{uuid4().hex[:8]}",
-                "schedule_type": kind,
-                "config": config if config is not None else {},
-            },
+            json=body,
         )
         if response.status_code < 400:
             raise AssertionError(
@@ -286,7 +300,12 @@ class BuildingSteps:
     # --- running functions ------------------------------------------------
 
     async def runs_function(
-        self, name: str, *, with_input: JSON, in_pod: JSON, timeout: float = 120.0
+        self,
+        name: str,
+        *,
+        with_input: JSON,
+        in_pod: JSON,
+        timeout: float = UNTIL_BACKGROUND_WORK_LANDS,
     ) -> JSON:
         """Run a function and wait for it to reach a terminal state.
 
@@ -378,7 +397,7 @@ class BuildingSteps:
         return response.status_code
 
     async def runs_workflow(
-        self, name: str, *, in_pod: JSON, timeout: float = 120.0
+        self, name: str, *, in_pod: JSON, timeout: float = UNTIL_BACKGROUND_WORK_LANDS
     ) -> JSON:
         started = await self.api.post(
             f"/pods/{in_pod['id']}/workflows/{name}/runs",
@@ -398,7 +417,9 @@ class BuildingSteps:
 
     # --- bundles -----------------------------------------------------------
 
-    async def exports_pod(self, pod: JSON, *, timeout: float = 120.0) -> JSON:
+    async def exports_pod(
+        self, pod: JSON, *, timeout: float = UNTIL_BACKGROUND_WORK_LANDS
+    ) -> JSON:
         started = await self.api.expect(
             "POST",
             f"/pods/{pod['id']}/bundle/exports",
@@ -442,7 +463,7 @@ class BuildingSteps:
         return staged["url"]
 
     async def plans_import(
-        self, url: str, *, into_pod: JSON, timeout: float = 120.0
+        self, url: str, *, into_pod: JSON, timeout: float = UNTIL_BACKGROUND_WORK_LANDS
     ) -> JSON:
         started = await self.api.expect(
             "POST",
@@ -468,7 +489,7 @@ class BuildingSteps:
         *,
         into_pod: JSON,
         variables: JSON | None = None,
-        timeout: float = 180.0,
+        timeout: float = UNTIL_BACKGROUND_WORK_LANDS,
     ) -> JSON:
         import_id = plan.get("import_id") or plan.get("id")
         await self.api.expect(

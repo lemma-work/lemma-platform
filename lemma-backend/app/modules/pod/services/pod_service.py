@@ -82,6 +82,21 @@ class PodService:
                 added_by_user_id=creator_user_id,
             )
 
+        # The pod's assistant gets its row here, before anything can look for
+        # it. Unlike the mailbox below, this is not best-effort: a pod whose
+        # assistant has no row cannot be talked to at all, and the symptom
+        # arrives at the first message rather than at creation.
+        if self._uow is not None:
+            from app.composition.pod_default_agent import provision_pod_default_agent
+
+            # `pod.user_id`, not `creator_user_id`: the migration that backfilled
+            # every existing pod read the owner off the pod row, and the two have
+            # to agree or a pod made before the change and one made after would
+            # attribute their assistant to different people.
+            await provision_pod_default_agent(
+                self._uow, pod_id=pod.id, user_id=pod.user_id
+            )
+
         # The pod's assistant gets its mailbox here, the way an agent gets one in
         # `create_agent`. It used to be minted on the assistant's first outbound
         # notification instead, which reads as thrift and is not: inbound routes

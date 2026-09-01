@@ -188,14 +188,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         return await self._home(credentials).open_channel_setup_modal(
             trigger_id=trigger_id,
             channel_id=channel_id,
             channel_label=channel_label,
-            agent_names=agent_names,
+            agent_name=agent_name,
             surface_id=surface_id,
         )
 
@@ -206,29 +206,13 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             user_id=user_id, prompt=prompt
         )
 
-    async def open_dm_agent_modal(
-        self,
-        *,
-        credentials: dict[str, Any],
-        trigger_id: str,
-        agent_names: list,
-        current: str | None,
-        surface_id: str | None = None,
-    ) -> bool:
-        return await self._home(credentials).open_dm_agent_modal(
-            trigger_id=trigger_id,
-            agent_names=list(agent_names),
-            current=current,
-            surface_id=surface_id,
-        )
-
     async def publish_home_view(
         self,
         *,
         credentials: dict[str, Any],
         user_id: str,
         pod_name: str | None,
-        dm_agent_name: str | None,
+        agent_name: str,
         channel_routes: list,
         agents: list | None = None,
         apps: list | None = None,
@@ -236,12 +220,11 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         logo_url: str | None = None,
         surface_choices: list[tuple[str, str]] | None = None,
         access_message: str | None = None,
-        offers_dm_agent_choice: bool = True,
     ) -> bool:
         return await self._home(credentials).publish_home_view(
             user_id=user_id,
             pod_name=pod_name,
-            dm_agent_name=dm_agent_name,
+            agent_name=agent_name,
             channel_routes=channel_routes,
             agents=agents,
             apps=apps,
@@ -249,7 +232,6 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             logo_url=logo_url,
             surface_choices=surface_choices,
             access_message=access_message,
-            offers_dm_agent_choice=offers_dm_agent_choice,
         )
 
     async def channel_name(

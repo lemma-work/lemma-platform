@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.authorization.grants import (
     delete_grantee_grants,
     delete_resource_grants,
@@ -24,6 +25,7 @@ from app.modules.agent.domain.events import (
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.infrastructure.models import (
     AgentModel,
 )
@@ -44,6 +46,7 @@ class AgentRepository:
             pod_id=agent.pod_id,
             user_id=agent.user_id,
             name=agent.name,
+            kind=agent.kind.value,
             description=agent.description,
             icon_url=agent.icon_url,
             visibility=agent.visibility,
@@ -71,6 +74,36 @@ class AgentRepository:
                 )
             ]
         )
+        return model.to_entity()
+
+    async def create_pod_default(self, *, pod_id: UUID, user_id: UUID) -> AgentEntity:
+        """Mint the pod's own assistant, at the moment the pod is made.
+
+        Deliberately not `create_agent` on the service, and not `create` above.
+        The service would provision a *second* mailbox -- the pod already gets
+        one addressed to the pod itself -- and would refuse the reserved name.
+        `create` would emit `AgentCreatedEvent`, and nobody created this: it
+        would report an agent-created metric for every pod that has ever
+        existed, which is a number about pods wearing the name of a number
+        about agents.
+
+        Identity only. `instruction`, `toolsets`, `visibility` and
+        `agent_runtime` are pinned by a check constraint and filled in at run
+        time from `POD_DEFAULT_AGENT_TOOLSETS`, so there is no column here that
+        can disagree with what the assistant is actually run with.
+        """
+        model = AgentModel(
+            id=pod_id,  # the row's id *is* its pod's; the check constraint says so
+            pod_id=pod_id,
+            user_id=user_id,
+            name=DEFAULT_POD_AGENT_NAME,
+            kind=AgentKind.POD_DEFAULT.value,
+            visibility=ResourceVisibility.POD.value,
+            instruction="",
+            toolsets=[],
+        )
+        self.session.add(model)
+        await self.session.flush()
         return model.to_entity()
 
     def _to_entity_with_allowed_actions(

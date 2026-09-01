@@ -1,3 +1,4 @@
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 import { humanizeName } from '@/lib/utils/display-name';
 
 /**
@@ -18,8 +19,8 @@ import { humanizeName } from '@/lib/utils/display-name';
  * itself.
  *
  * A *lemma* is the step proved so the real result can happen, which is the job.
- * This is display copy only: `pod_default`, `POD_DEFAULT` and
- * `__pod_assistant__` are wire values and stay exactly as they are.
+ * This is display copy only: `pod_default` and `POD_DEFAULT` are wire values
+ * and stay exactly as they are.
  */
 export const DEFAULT_RESPONDER_NAME = 'Lem';
 
@@ -40,7 +41,23 @@ export const DEFAULT_RESPONDER_DESCRIPTION =
  * home, so the rule itself lives in `humanizeName` and this stays the name
  * the agent surfaces already call.
  */
+/**
+ * The row name the pod's own assistant carries in the database. It is a
+ * selector, not a label -- `humanizeName` would render it "Pod Default", which
+ * is the job title this pod deliberately does not use.
+ */
+const POD_DEFAULT_ROW_NAME = 'pod_default';
+
+/** Whether this name refers to the pod's own assistant, by row name or selector. */
+export function isPodDefaultAgentName(name: string | null | undefined): boolean {
+    return name === POD_DEFAULT_ROW_NAME || name === POD_DEFAULT_AGENT_SELECTOR;
+}
+
 export function formatAgentName(name: string): string {
+    // The assistant became a real agent row, so it now arrives through every
+    // list, picker and header that any other agent does. It is called Lem in
+    // all of them: one place to say so rather than forty-four.
+    if (isPodDefaultAgentName(name)) return DEFAULT_RESPONDER_NAME;
     return humanizeName(name);
 }
 

@@ -25,6 +25,7 @@ SCHEDULE_APPLY_FIELDS = frozenset(
         "name",
         "schedule_type",
         "config",
+        "instruction",
         "agent_name",
         "workflow_name",
         "account_id",

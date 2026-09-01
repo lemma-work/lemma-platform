@@ -50,6 +50,7 @@ class ScheduleDetailResponse:
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
+        instruction (None | str | Unset):
         last_error (None | str | Unset):
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
@@ -78,6 +79,7 @@ class ScheduleDetailResponse:
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
+    instruction: None | str | Unset = UNSET
     last_error: None | str | Unset = UNSET
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
@@ -163,6 +165,12 @@ class ScheduleDetailResponse:
 
         consecutive_failures = self.consecutive_failures
 
+        instruction: None | str | Unset
+        if isinstance(self.instruction, Unset):
+            instruction = UNSET
+        else:
+            instruction = self.instruction
+
         last_error: None | str | Unset
         if isinstance(self.last_error, Unset):
             last_error = UNSET
@@ -227,6 +235,8 @@ class ScheduleDetailResponse:
             field_dict["allowed_actions"] = allowed_actions
         if consecutive_failures is not UNSET:
             field_dict["consecutive_failures"] = consecutive_failures
+        if instruction is not UNSET:
+            field_dict["instruction"] = instruction
         if last_error is not UNSET:
             field_dict["last_error"] = last_error
         if last_fire_status is not UNSET:
@@ -388,6 +398,15 @@ class ScheduleDetailResponse:
 
         consecutive_failures = d.pop("consecutive_failures", UNSET)
 
+        def _parse_instruction(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        instruction = _parse_instruction(d.pop("instruction", UNSET))
+
         def _parse_last_error(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -471,6 +490,7 @@ class ScheduleDetailResponse:
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
+            instruction=instruction,
             last_error=last_error,
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,

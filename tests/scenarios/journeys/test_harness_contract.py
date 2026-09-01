@@ -148,6 +148,44 @@ def test_a_scenario_waits_on_a_named_budget():
     )
 
 
+def test_a_harness_step_waits_on_a_named_budget():
+    """The other half of the rule above, and the half that hid a real bound.
+
+    The guard above reads scenarios, so a literal written as a *default* on a
+    harness step was invisible to it: `answers_every_approval` waited 90s and
+    `waits_for_the_run_to_settle` 60s, and no scenario said either number or
+    could have moved it. That is the same defect the named budgets exist to
+    stop, one level down, and the more dangerous version — a scenario at least
+    shows its number at the call site.
+
+    Only `harness/steps` is read. `stack.py` waits on a container coming up and
+    `drivers` on one HTTP request, which are bounds on the machinery rather than
+    patience for the product, and stay literals for the reason the guard above
+    gives.
+    """
+    offenders: list[str] = []
+    for path in sorted((SUITE / "harness" / "steps").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            arguments = node.args
+            defaults = list(arguments.defaults) + list(arguments.kw_defaults)
+            named = list(arguments.args) + list(arguments.kwonlyargs)
+            for argument, default in zip(named[-len(defaults) :], defaults):
+                if argument.arg != "timeout" or default is None:
+                    continue
+                if isinstance(default, ast.Constant):
+                    offenders.append(
+                        f"{path.relative_to(SUITE)}:{default.lineno} ({node.name})"
+                    )
+    assert not offenders, (
+        "a harness step's default wait must be a named budget from "
+        "`harness.waiting`, so it is visible and moves with the others:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def test_scenarios_do_not_sleep():
     """No scenario waits by sleeping.
 

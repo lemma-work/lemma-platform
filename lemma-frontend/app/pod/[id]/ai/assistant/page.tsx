@@ -4,6 +4,7 @@ import { use } from 'react';
 import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 
 import { AgentHome } from '@/components/agents/agent-home';
+import { TriggersRow } from '@/components/triggers/triggers-row';
 import {
     ResourceHeader,
     ResourceDetailShell,
@@ -25,8 +26,14 @@ import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 // It is built from the same parts as an agent's page and should keep matching
 // it: an identity card that states what it is and how it is reached, then the
 // work. What it does not have is real — no instructions to edit, no tool set of
-// its own, no trigger that can name it, and nothing to share — so it has fewer
-// rows rather than empty ones.
+// its own, and nothing to share — so it has fewer rows rather than empty ones.
+//
+// Triggers used to be on that list, on the grounds that a trigger names its
+// target and Lem has no name. It does have one: `POD_DEFAULT`, the same
+// selector the conversation API has always taken. What was actually missing was
+// somewhere to say what Lem should *do* when a trigger fires — a named agent is
+// its own instruction and Lem's is empty — and a trigger now carries that
+// sentence itself.
 export default function PodAssistantPage({
     params,
 }: {
@@ -36,11 +43,21 @@ export default function PodAssistantPage({
     const podAccess = usePodAccess(podId);
     const canUseSurfaces = podAccess.canAccessRoute('surfaces');
 
+    const canUseSchedules = podAccess.canAny(['schedule.read', 'schedule.create']);
+    const canCreateSchedule = podAccess.can('schedule.create');
+    const canUpdateSchedule = podAccess.can('schedule.update');
+    const canDeleteSchedule = podAccess.can('schedule.delete');
+
     // Pod-wide automation, grouped client-side — shares one cache entry with the
-    // schedules page and agent detail pages instead of a per-view fetch. No
-    // schedules: the default assistant isn't a named target a trigger can wake.
-    const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
+    // schedules page and agent detail pages instead of a per-view fetch.
+    const automation = usePodAutomation(podId, {
+        schedules: canUseSchedules,
+        surfaces: canUseSurfaces,
+    });
     const defaultSurfaces = automation.defaultSurfaces;
+    // The wire selector, not the display name: `agent_name` on these rows is
+    // `POD_DEFAULT`, which is what the API echoes for a target with no row.
+    const schedules = automation.schedulesForAgent(POD_DEFAULT_AGENT_SELECTOR);
     const { data: conversationsPage } = useScopedConversations(
         { podId, agentName: POD_DEFAULT_AGENT_SELECTOR },
         { limit: 10, enabled: podAccess.can('conversation.read') },
@@ -79,6 +96,34 @@ export default function PodAssistantPage({
                         conversations={recentConversations}
                         isAssistant
                     />
+
+                    {/* The one wiring row Lem has. It is here rather than on a
+                        schedules page for the same reason it is on an agent's
+                        page: the thing being woken up is the context that makes
+                        "what should start this?" answerable, and Lem's page is
+                        the only place that context exists. `POD_DEFAULT` is
+                        what the API takes; the modal shows the name.
+
+                        `AgentHome` is deliberately not given the schedules as
+                        well. It would draw its own read-only "Runs on its own"
+                        list from them, which on an agent's page is fine because
+                        the home and the editable rows are alternate modes of
+                        one screen — Configure swaps between them. Lem has no
+                        Configure mode, so both would render at once and the
+                        same triggers would be listed twice, once uneditably. */}
+                    {canUseSchedules ? (
+                        <section className="agent-wiring">
+                            <TriggersRow
+                                podId={podId}
+                                target={{ kind: 'agent', name: POD_DEFAULT_AGENT_SELECTOR }}
+                                schedules={schedules}
+                                canCreate={canCreateSchedule}
+                                canUpdate={canUpdateSchedule}
+                                canDelete={canDeleteSchedule}
+                                emptyText="You ask it to."
+                            />
+                        </section>
+                    ) : null}
                 </div>
             </ResourceDetailViewport>
         </ResourceDetailShell>

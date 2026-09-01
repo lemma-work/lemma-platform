@@ -165,6 +165,7 @@ def test_schedule_create_agent_cron_dispatches_schedule_api(monkeypatch):
             "agent_name": "triage",
             "workflow_name": None,
             "config": {"cron": "*/5 * * * *"},
+            "instruction": None,
             "account_id": None,
             "connector_trigger_id": None,
             "filter_instruction": None,
@@ -707,6 +708,7 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
         "agent_name": None,
         "workflow_name": "gmail-email-ingest",
         "config": {"source": "composio", "labelIds": "INBOX"},
+        "instruction": None,
         "account_id": "account-1",
         "connector_trigger_id": "gmail:gmail_new_gmail_message",
         "filter_instruction": None,
@@ -1098,6 +1100,7 @@ def test_schedule_create_agent_webhook_forwards_connector_trigger_option(monkeyp
         "agent_name": "triage",
         "workflow_name": None,
         "config": {"source": "slack"},
+        "instruction": None,
         "account_id": "account-1",
         "connector_trigger_id": "slack:message_created",
         "filter_instruction": None,
@@ -2277,7 +2280,7 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
     }
 
 
-def test_surfaces_channels_builds_route_payload(monkeypatch):
+def test_surfaces_channels_builds_the_allow_list(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeSurfaces:
@@ -2312,8 +2315,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
             "C123",
             "--channel-name",
             "general",
-            "--agent",
-            "triage",
         ],
     )
 
@@ -2327,7 +2328,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
                     {
                         "channel_id": "C123",
                         "channel_name": "general",
-                        "agent_name": "triage",
                     }
                 ]
             }

@@ -1,11 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import (
@@ -112,17 +115,35 @@ def test_toolset_resolver_returns_exactly_the_selected_toolsets():
 
 @pytest.mark.asyncio
 async def test_default_pod_agent_gets_fixed_default_toolsets():
+    """The assistant is run with the constant, not with what its row stores.
+
+    The row stores `toolsets = []` on purpose -- a stored list would freeze
+    per-pod on the day the pod was made, and adding a toolset later would need a
+    data migration to reach pods that already exist. `resolve_agent` is the one
+    seam that substitutes the constant, so this asserts against what comes back
+    from it rather than against the row.
+    """
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+    pod_id = uuid4()
     conversation = Conversation(
-        pod_id=uuid4(),
+        pod_id=pod_id,
         user_id=uuid4(),
         agent_id=None,
+    )
+    stored = Agent(
+        id=pod_id,
+        pod_id=pod_id,
+        user_id=conversation.user_id,
+        name=DEFAULT_POD_AGENT_NAME,
+        kind=AgentKind.POD_DEFAULT,
+        instruction="",
+        toolsets=[],
     )
 
     agent = await resolve_agent(
         conversation,
         user_id=conversation.user_id,
-        agent_repository=object(),
+        agent_repository=SimpleNamespace(get=AsyncMock(return_value=stored)),
     )
     toolsets = await runner.tool_assembler.assemble(
         agent=agent,

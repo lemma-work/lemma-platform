@@ -343,6 +343,10 @@
             "title": "Instruction",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -477,6 +481,10 @@
           "instruction": {
             "title": "Instruction",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -1449,6 +1457,15 @@
         "title": "AgentHostStatus",
         "type": "string"
       },
+      "AgentKind": {
+        "description": "Whether somebody made this agent, or the pod came with it.\n\nThe pod's default assistant used to be the absence of an agent: a\nconversation naming nobody, synthesised at runtime against one sentinel id\nshared by every pod. That absence could not be pointed at by a foreign key,\nso anything wanting to name it grew its own way of saying so \u2014 a boolean on\nthe schedule, a second boolean on a channel route, a magic string in a map\nof who answers whose DMs.\n\nA kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is\npinned by check constraints to exactly one row per pod, whose id is the\npod's own \u2014 so \"is this the default assistant?\" stays a comparison rather\nthan a query, which matters on paths that answer it per request.",
+        "enum": [
+          "USER",
+          "POD_DEFAULT"
+        ],
+        "title": "AgentKind",
+        "type": "string"
+      },
       "AgentListResponse": {
         "properties": {
           "items": {
@@ -2162,6 +2179,10 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentKind",
+            "default": "USER"
           },
           "metadata": {
             "anyOf": [
@@ -4976,6 +4997,7 @@
                 "type": "null"
               }
             ],
+            "description": "Pod agent to wake, by name. Pass 'POD_DEFAULT' (or 'pod_default') to wake the pod's default assistant, which has no name of its own.",
             "title": "Agent Name"
           },
           "config": {
@@ -5019,6 +5041,19 @@
             ],
             "description": "Optional schema for the schedule-level filter output. Filters belong to the schedule, not the workflow start.",
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the target should do when this fires, in your own words. Reaches an agent as the run's conversation instructions, layered after the agent's own. Required when targeting the default assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides whether to fire.",
+            "title": "Instruction"
           },
           "name": {
             "anyOf": [
@@ -12073,6 +12108,17 @@
             "title": "Id",
             "type": "string"
           },
+          "instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
+          },
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
@@ -12868,19 +12914,8 @@
       },
       "SurfaceChannelRouteInput": {
         "additionalProperties": false,
-        "description": "One channel's routing, in the same three states the domain models.\n\n``use_pod_assistant`` is not a synonym for an absent ``agent_name`` \u2014 see\n:class:`SurfaceChannelRoute`. Omitting it here is what silently turned an\nexplicit \"the pod assistant answers here\", picked from inside Slack, back\ninto \"unconfigured\" on the next save from the web UI.",
+        "description": "One channel this surface's agent may be spoken to in.\n\nAn allow-list entry. A surface belongs to exactly one agent, so a channel\nsays *where*, never *who* \u2014 it used to name an agent, back when one bot\ncould serve several.",
         "properties": {
-          "agent_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Name"
-          },
           "channel_id": {
             "anyOf": [
               {
@@ -12902,11 +12937,6 @@
               }
             ],
             "title": "Channel Name"
-          },
-          "use_pod_assistant": {
-            "default": false,
-            "title": "Use Pod Assistant",
-            "type": "boolean"
           }
         },
         "title": "SurfaceChannelRouteInput",
@@ -12914,17 +12944,6 @@
       },
       "SurfaceChannelRouteResponse": {
         "properties": {
-          "agent_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Name"
-          },
           "channel_id": {
             "anyOf": [
               {
@@ -12946,11 +12965,6 @@
               }
             ],
             "title": "Channel Name"
-          },
-          "use_pod_assistant": {
-            "default": false,
-            "title": "Use Pod Assistant",
-            "type": "boolean"
           }
         },
         "title": "SurfaceChannelRouteResponse",
@@ -13198,7 +13212,7 @@
       },
       "SurfaceCreateRequest": {
         "additionalProperties": false,
-        "description": "Body for `POST /pods/{pod_id}/surfaces` \u2014 creates one surface.\n\nA pod may have several surfaces of the same ``platform`` (different\nbots/accounts, each routed to its own agent); ``name`` is the stable,\npod-unique identifier used to address it afterward. When omitted, it\ndefaults to the lowercased platform (so the common single-surface-per-\nplatform case needs no name at all) \u2014 pick an explicit name to create a\nsecond surface of the same platform.",
+        "description": "Body for `POST /pods/{pod_id}/surfaces` \u2014 creates one surface.\n\nA pod may have several surfaces of the same ``platform`` \u2014 one bot per\nagent is the model, not the exception; ``name`` is the stable,\npod-unique identifier used to address it afterward. When omitted, it\ndefaults to the lowercased platform (so the common single-surface-per-\nplatform case needs no name at all) \u2014 pick an explicit name to create a\nsecond surface of the same platform.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -13675,7 +13689,7 @@
       },
       "SurfaceSlackConfigInput": {
         "additionalProperties": false,
-        "description": "The Slack settings a *caller* owns.\n\nNot the per-person DM agent map: that is written from inside Slack \u2014 each\nperson picks their own in the App Home \u2014 so it is readable here and never\nwritable, which keeps one editor from reassigning everybody.\n\n``dedicated_to_agent`` is the caller's, though, and has to be: it says this\napp was made as one agent's own bot, which is a fact about why the app\nexists and cannot be read off the surface. Setting it is what withdraws the\nper-person choice, so it is the one Slack setting that decides whether the\nother is offered at all.",
+        "description": "The Slack settings a caller owns.",
         "properties": {
           "app_name": {
             "anyOf": [
@@ -13687,18 +13701,13 @@
               }
             ],
             "title": "App Name"
-          },
-          "dedicated_to_agent": {
-            "default": false,
-            "title": "Dedicated To Agent",
-            "type": "boolean"
           }
         },
         "title": "SurfaceSlackConfigInput",
         "type": "object"
       },
       "SurfaceSlackConfigResponse": {
-        "description": "Slack settings as read back. ``dm_agent_by_user`` maps a Slack user id to\nthe agent that person chose, or ``__pod_assistant__`` when they explicitly\nchose the pod assistant. A user absent from the map has never chosen and\nfalls to the surface default.",
+        "description": "Slack settings as read back.",
         "properties": {
           "app_name": {
             "anyOf": [
@@ -13710,18 +13719,6 @@
               }
             ],
             "title": "App Name"
-          },
-          "dedicated_to_agent": {
-            "default": false,
-            "title": "Dedicated To Agent",
-            "type": "boolean"
-          },
-          "dm_agent_by_user": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Dm Agent By User",
-            "type": "object"
           }
         },
         "title": "SurfaceSlackConfigResponse",
@@ -14819,6 +14816,18 @@
               }
             ],
             "title": "Filter Output Schema"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
           },
           "is_active": {
             "anyOf": [
@@ -17631,7 +17640,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.1"
+    "version": "0.7.2"
   },
   "openapi": "3.1.0",
   "paths": {

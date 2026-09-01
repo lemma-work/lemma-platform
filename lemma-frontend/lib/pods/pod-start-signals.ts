@@ -1,3 +1,4 @@
+import { isPodDefaultAgentName } from '@/lib/utils/agents';
 import {
     resolvePodHomeStarterMode,
     type PodHomeResourceSignals,
@@ -77,7 +78,10 @@ const MAX_WORKFLOW_ACTIONS = 4;
 function toHomeSignals(signals: PodStartSignals): PodHomeResourceSignals {
     return {
         appCount: signals.appCount,
-        agentCount: signals.agents.length,
+        // The pod's own assistant is in every pod from the moment it exists, so
+        // counting it makes this signal a constant: a brand-new pod would report
+        // an agent and never read as fresh again.
+        agentCount: signals.agents.filter((agent) => !isPodDefaultAgentName(agent.name)).length,
         workflowCount: signals.workflows.length,
         surfaceCount: signals.surfaceCount,
         activeSurfaceCount: signals.activeSurfaceCount,

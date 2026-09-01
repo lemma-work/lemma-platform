@@ -856,9 +856,19 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         ),
         summarization_model=None,
     )
-    guard = processors[-1]
-
-    compacted = await guard(history)
+    # Applied the way a run applies them: every processor, in order.
+    #
+    # This used to reach for `processors[-1]` and call it "the guard". That was
+    # true when it was written and stopped being true when a processor was
+    # appended after the ceiling guard to fix the leading message's role -- so
+    # the test called *that* one, which never trims, measured the history
+    # unchanged at 204,518 tokens, and reported a compaction failure that was
+    # nothing of the sort. Production was never affected; it runs the whole
+    # chain. Running the whole chain here too means the test cannot be wrong
+    # about the order again.
+    compacted: list[object] = list(history)
+    for processor in processors:
+        compacted = await processor(compacted)
 
     assert count_model_message_tokens(compacted) <= ceiling
     assert compacted[-1] is history[-1], "the most recent turn must survive"

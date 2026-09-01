@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.toolset_selection import (
     ALWAYS_ON_TOOLSETS,
@@ -23,9 +24,16 @@ from app.modules.agent.tools.toolset_selection import (
 pytestmark = pytest.mark.unit
 
 
-def _agent(*toolsets: AgentToolset):
+# `kind` is read to decide whose toolsets these are, so the stand-in carries
+# it. A double without it asserts against a shape no real agent has.
+def _agent(*toolsets: AgentToolset, kind: AgentKind = AgentKind.USER):
     return SimpleNamespace(
-        id=uuid4(), pod_id=uuid4(), user_id=uuid4(), name="a", toolsets=list(toolsets)
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="a",
+        kind=kind,
+        toolsets=list(toolsets),
     )
 
 

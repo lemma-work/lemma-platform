@@ -18,7 +18,6 @@ from app.modules.schedule.domain.interfaces import (
     DatastoreSchedulePolicy,
     ExternalScheduleWriter,
     ScheduleRepository,
-    ScheduleTarget,
     ScheduleTargetResolver,
 )
 from app.modules.schedule.domain.schedule import (
@@ -36,6 +35,17 @@ from app.modules.schedule.services.time_schedule_policy import (
     validate_time_schedule_config,
 )
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
+from app.modules.schedule.services.schedule_target_policy import (
+    agent_execute_ref,
+    normalize_agent_selector,
+    target_agent_after_update,
+    derive_webhook_target_from_workflow_start,
+    named_agent_target_fields,
+    validate_instruction_survives_update,
+    validate_target_instruction,
+    validate_single_target,
+    workflow_target_fields,
+)
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
@@ -182,11 +192,10 @@ class ScheduleService:
                 pod_id=schedule_create.pod_id,
                 workflow_name=schedule_create.workflow_name,
             )
-            update_data["workflow_id"] = workflow.id
-            update_data["agent_id"] = None
+            update_data.update(workflow_target_fields(workflow.id))
             if schedule_create.schedule_type == ScheduleType.WEBHOOK:
                 update_data.update(
-                    self._derive_webhook_schedule_from_workflow_start(
+                    derive_webhook_target_from_workflow_start(
                         workflow,
                         config=schedule_create.config,
                         requested_connector_trigger_id=(
@@ -197,50 +206,33 @@ class ScheduleService:
         if schedule_create.agent_name:
             if schedule_create.pod_id is None:
                 raise ScheduleValidationError("pod_id is required for agent schedules")
-            agent = await self._get_agent_by_name(
-                pod_id=schedule_create.pod_id,
-                agent_name=schedule_create.agent_name,
+            update_data.update(
+                await self._agent_target_fields(
+                    pod_id=schedule_create.pod_id,
+                    agent_name=schedule_create.agent_name,
+                    instruction=schedule_create.instruction,
+                )
             )
-            update_data["agent_id"] = agent.id
-            update_data["workflow_id"] = None
         return schedule_create.model_copy(update=update_data)
 
-    def _derive_webhook_schedule_from_workflow_start(
-        self,
-        workflow: ScheduleTarget,
-        *,
-        config: dict,
-        requested_connector_trigger_id: str | None,
-    ) -> dict:
-        if workflow.event_trigger_id is None:
-            raise ScheduleValidationError(
-                "Webhook workflow schedules require an EVENT workflow start"
-            )
-        if requested_connector_trigger_id:
-            raise ScheduleValidationError(
-                "connector_trigger_id is only valid for agent webhook schedules; "
-                "workflow webhook schedules derive it from the workflow event start"
-            )
+    async def _agent_target_fields(
+        self, *, pod_id: UUID, agent_name: str, instruction: str | None
+    ) -> dict[str, object]:
+        """The target columns for whichever agent this name means.
 
-        config = dict(config or {})
-        trigger_config = dict(workflow.event_trigger_config or {})
-        conflicting_keys = sorted(
-            key
-            for key, value in trigger_config.items()
-            if key in config and config[key] != value
+        `POD_DEFAULT` is a wire selector rather than a name, so it is normalised
+        to the row's own before the lookup -- after which the pod's assistant is
+        found by exactly the query every other agent is found by.
+
+        The instruction rule is checked here because this is where the resolved
+        agent is in hand: the question is whether *it* has a standing
+        instruction, which a name alone cannot answer.
+        """
+        agent = await self._get_agent_by_name(
+            pod_id=pod_id, agent_name=normalize_agent_selector(agent_name)
         )
-        if conflicting_keys:
-            raise ScheduleValidationError(
-                "Schedule config conflicts with workflow event start trigger_config "
-                f"for: {', '.join(conflicting_keys)}"
-            )
-        config.update(trigger_config)
-
-        update_data: dict = {
-            "connector_trigger_id": workflow.event_trigger_id,
-            "config": config,
-        }
-        return update_data
+        validate_target_instruction(agent, instruction)
+        return named_agent_target_fields(agent.id)
 
     async def _resolve_update_target(
         self,
@@ -270,11 +262,10 @@ class ScheduleService:
                 pod_id=existing.pod_id,
                 workflow_name=schedule_update.workflow_name,
             )
-            update_data["workflow_id"] = workflow.id
-            update_data["agent_id"] = None
+            update_data.update(workflow_target_fields(workflow.id))
             if existing.schedule_type == ScheduleType.WEBHOOK:
                 update_data.update(
-                    self._derive_webhook_schedule_from_workflow_start(
+                    derive_webhook_target_from_workflow_start(
                         workflow,
                         config=update_data.get("config", existing.config),
                         requested_connector_trigger_id=None,
@@ -283,12 +274,23 @@ class ScheduleService:
         if schedule_update.agent_name:
             if existing.pod_id is None:
                 raise ScheduleValidationError("pod_id is required for agent schedules")
-            agent = await self._get_agent_by_name(
-                pod_id=existing.pod_id,
-                agent_name=schedule_update.agent_name,
+            update_data.update(
+                await self._agent_target_fields(
+                    pod_id=existing.pod_id,
+                    agent_name=schedule_update.agent_name,
+                    instruction=(
+                        schedule_update.instruction
+                        if schedule_update.instruction is not None
+                        else existing.instruction
+                    ),
+                )
             )
-            update_data["agent_id"] = agent.id
-            update_data["workflow_id"] = None
+        # Whatever the schedule points at once this lands -- the retargeted
+        # agent if it is being retargeted, otherwise the one it already had.
+        target_agent = await target_agent_after_update(
+            self.target_resolver, existing, update_data
+        )
+        validate_instruction_survives_update(target_agent, schedule_update)
         update_data.pop("workflow_name", None)
         update_data.pop("agent_name", None)
         return update_data
@@ -347,15 +349,8 @@ class ScheduleService:
         return agent
 
     async def _validate_target(self, schedule_create: ScheduleCreateEntity) -> None:
-        if schedule_create.agent_id is None and schedule_create.workflow_id is None:
+        if not validate_single_target(schedule_create):
             return
-        if (
-            schedule_create.agent_id is not None
-            and schedule_create.workflow_id is not None
-        ):
-            raise ScheduleValidationError(
-                "Schedule can target either an agent or workflow, not both"
-            )
 
         if schedule_create.pod_id is None:
             raise ScheduleValidationError("pod_id is required for target schedules")
@@ -562,7 +557,9 @@ class ScheduleService:
             if pod_id is None:
                 raise ScheduleValidationError("pod_id is required for agent schedules")
             agent_id = (
-                await self._get_agent_by_name(pod_id=pod_id, agent_name=agent_name)
+                await self._get_agent_by_name(
+                    pod_id=pod_id, agent_name=normalize_agent_selector(agent_name)
+                )
             ).id
         if workflow_name:
             if pod_id is None:
@@ -610,13 +607,14 @@ class ScheduleService:
         if ctx is None:
             raise RuntimeError("Context is required for schedule target authorization")
         if schedule.agent_id is not None:
+            # The assistant is asked about pod-scoped, the same as everywhere
+            # else it is asked about. Its row's id *is* the pod's, so both arms
+            # would name the same thing -- but the resource type is not
+            # cosmetic, and an AGENT-typed check would newly hit the
+            # resource-owner shortcut for whoever created the pod.
             await ctx.require(
                 Permissions.AGENT_EXECUTE,
-                ResourceRef(
-                    resource_type=ResourceType.AGENT,
-                    resource_id=schedule.agent_id,
-                    pod_id=schedule.pod_id,
-                ),
+                agent_execute_ref(schedule.agent_id, pod_id=schedule.pod_id),
             )
         if schedule.workflow_id is not None:
             await ctx.require(

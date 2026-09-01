@@ -51,6 +51,7 @@ def test_a_local_runtime_without_polling_is_refused_and_says_which_setting(
     service = module.AgentSurfaceService.__new__(module.AgentSurfaceService)
     surface = AgentSurfaceEntity(
         pod_id=__import__("uuid").uuid4(),
+        agent_id=__import__("uuid").uuid4(),
         name="email",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
@@ -70,6 +71,7 @@ def test_polling_mode_makes_a_local_email_surface_supported(monkeypatch) -> None
     service = module.AgentSurfaceService.__new__(module.AgentSurfaceService)
     surface = AgentSurfaceEntity(
         pod_id=__import__("uuid").uuid4(),
+        agent_id=__import__("uuid").uuid4(),
         name="email",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),

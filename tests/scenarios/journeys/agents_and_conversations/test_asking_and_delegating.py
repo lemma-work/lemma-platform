@@ -61,7 +61,7 @@ async def test_an_agent_asks_and_resumes_with_the_answer(world):
     )
 
     conversation = await alice.starts_a_conversation(
-        in_pod=pod, with_agent=agent["name"], saying="Prepare a report."
+        watching=False, in_pod=pod, with_agent=agent["name"], saying="Prepare a report."
     )
 
     [question] = await alice.waits_for_an_approval_in(conversation, in_pod=pod)
@@ -100,7 +100,7 @@ async def test_an_unanswered_question_keeps_waiting(world):
     )
 
     conversation = await alice.starts_a_conversation(
-        in_pod=pod, with_agent=agent["name"], saying="Get started."
+        watching=False, in_pod=pod, with_agent=agent["name"], saying="Get started."
     )
 
     await alice.waits_for_an_approval_in(conversation, in_pod=pod)
@@ -168,6 +168,7 @@ async def test_decisions_are_a_durable_record(world):
     table = await alice.creates_a_table(in_pod=pod, columns=[column("title")])
 
     conversation = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=f"Have a look at the {table['name']} table.",
@@ -210,6 +211,7 @@ async def test_an_agent_delegates_to_a_subagent(world):
     )
 
     conversation = await alice.starts_a_conversation(
+        watching=False,
         in_pod=pod,
         with_agent=agent["name"],
         saying=(

@@ -241,9 +241,12 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     for channel in config.get("channels") or []:
         if not isinstance(channel, dict) or channel.get("enabled") is False:
             continue
+        # A channel is a place the surface's one agent may be spoken to, so
+        # only the place travels. It used to carry `agent_name` as well, back
+        # when one bot could serve several agents.
         entry = {
             key: channel[key]
-            for key in ("channel_id", "channel_name", "agent_name")
+            for key in ("channel_id", "channel_name")
             if channel.get(key)
         }
         if entry:

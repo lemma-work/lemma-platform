@@ -14,7 +14,7 @@ import type { AssistantSurface, Schedule } from '@/lib/types';
 // agent/workflow then happens client-side — no per-agent N+1 fetches.
 const POD_SCHEDULES_FILTER = { limit: 100 } as const;
 
-export { surfaceChannelAgents, surfaceReachesAgent, surfaceUsesDefaultAgent } from '@/lib/utils/surfaces';
+export { surfaceReachesAgent, surfaceUsesDefaultAgent } from '@/lib/utils/surfaces';
 
 export interface PodAutomation {
     schedules: Schedule[];

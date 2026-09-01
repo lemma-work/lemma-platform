@@ -8,11 +8,31 @@ development/production. The local stack supplies ``APP_BASE_DOMAIN``.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.core.config import Settings
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_environment(monkeypatch):
+    """Construct Settings from this file's arguments and nothing else.
+
+    ``_env_file=None`` stops pydantic reading ``lemma-backend/.env``; it does
+    not stop it reading the process environment, and a developer who has that
+    file exported has ``DEBUG=true`` in theirs. Settings then fails on the debug
+    validator rather than the one under test, so three of these assert the wrong
+    error and the suite is red on a laptop and green in CI.
+
+    Cleared wholesale rather than variable by variable: the next setting to
+    acquire a validator would reintroduce this quietly, and Settings reads
+    nothing else out of the environment that these cases want.
+    """
+    for name in list(os.environ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_missing_app_base_domain_rejected_outside_local():

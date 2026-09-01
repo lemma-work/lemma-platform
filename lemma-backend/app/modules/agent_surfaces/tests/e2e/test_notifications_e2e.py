@@ -478,9 +478,9 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
     unit tests around this stub the provisioner, so they can prove routing
     *asks* for a mailbox but not that a usable one comes back.
 
-    This asserts the surface that actually lands: owned by the pod rather than
-    any named agent — which is what the pod assistant reaches for — and carrying
-    an address a person could be asked to type.
+    This asserts the surface that actually lands: owned by the pod's own
+    assistant rather than any named agent, and carrying an address a person
+    could be asked to type.
     """
     from sqlalchemy import select
 
@@ -525,7 +525,9 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
     surface = surfaces[0]
     assert surface.surface_type == "RESEND"
     # The pod's own, not an agent's — this is the surface the assistant uses.
-    assert surface.agent_id is None
+    # The assistant's, whose row id is its pod's. It used to be *nobody's*,
+    # which is what made one column mean two things.
+    assert surface.agent_id == UUID(pod_id)
     assert surface.surface_identity_email.endswith("@ops.example.com")
     # Readable, not pod-<32 hex chars>: people are asked to write to this.
     local_part = surface.surface_identity_email.split("@")[0]

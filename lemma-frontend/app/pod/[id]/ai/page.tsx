@@ -37,7 +37,7 @@ import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import type { Agent, UpdateAgentData, Workflow } from '@/lib/types';
 import { NodeType } from '@/lib/types';
-import { formatAgentName } from '@/lib/utils/agents';
+import { formatAgentName, isPodDefaultAgentName } from '@/lib/utils/agents';
 import { getAgentNodeName } from '@/lib/utils/flow-node-config';
 import { agentEmailAddress, surfaceReaches } from '@/lib/utils/surfaces';
 import { AgentEmail } from '@/components/surfaces/agent-email';
@@ -112,7 +112,13 @@ export default function AgentsPage({
     const [agentFilter, setAgentFilter] = useState<AgentFilter>('all');
     const [agentPendingDelete, setAgentPendingDelete] = useState<Agent | null>(null);
 
-    const agents = useMemo(() => agentsData?.items ?? [], [agentsData?.items]);
+    // Lem has its own card above the grid, with its own copy and its own route.
+    // It reaches this list too now that it is a real agent row, and a page that
+    // shows it in both places is showing two of it.
+    const agents = useMemo(
+        () => (agentsData?.items ?? []).filter((agent) => !isPodDefaultAgentName(agent.name)),
+        [agentsData?.items],
+    );
     const flows = useMemo(() => flowsData || [], [flowsData]);
     const schedules = useMemo(() => schedulesData?.items || [], [schedulesData?.items]);
     const activeAgentScheduleCount = schedules.filter((schedule) => schedule.agent_name && schedule.is_active !== false).length;

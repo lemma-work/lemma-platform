@@ -10,6 +10,7 @@ import pytest
 from fastapi import status
 from streaq.task import TaskStatus
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -1953,7 +1954,12 @@ class TestPodAgentLifecycle:
 
         listed = await authenticated_client.get(f"/pods/{pod_id}/agents")
         assert listed.status_code == 200, listed.text
-        assert [item["name"] for item in listed.json()["items"]] == ["lifecycle_agent"]
+        # The pod's own assistant is listed beside it, and sorts last: ids are
+        # time-ordered and its row is created with the pod.
+        assert [item["name"] for item in listed.json()["items"]] == [
+            "lifecycle_agent",
+            DEFAULT_POD_AGENT_NAME,
+        ]
 
         fetched = await authenticated_client.get(
             f"/pods/{pod_id}/agents/lifecycle_agent"
@@ -2194,14 +2200,23 @@ class TestAgentRoleVisibility:
             headers=ctx["viewer_headers"],
         )
         assert viewer_list.status_code == status.HTTP_200_OK, viewer_list.text
-        assert item_names(viewer_list.json()) == {default_name}
+        # The pod's own assistant is always among them: it is pod-scoped, so
+        # there is no per-agent grant to withhold, and every member can use it.
+        assert item_names(viewer_list.json()) == {
+            default_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
 
         editor_list = await async_client.get(
             f"/pods/{pod_id}/agents",
             headers=ctx["editor_headers"],
         )
         assert editor_list.status_code == status.HTTP_200_OK, editor_list.text
-        assert item_names(editor_list.json()) == {default_name, editor_name}
+        assert item_names(editor_list.json()) == {
+            default_name,
+            editor_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
         editor_items = {item["name"]: item for item in editor_list.json()["items"]}
         assert set(editor_items[default_name]["allowed_actions"]) == {
             "agent.read",
@@ -2241,7 +2256,11 @@ class TestAgentRoleVisibility:
             headers=ctx["custom_headers"],
         )
         assert custom_list.status_code == status.HTTP_200_OK, custom_list.text
-        assert item_names(custom_list.json()) == {default_name, custom_name}
+        assert item_names(custom_list.json()) == {
+            default_name,
+            custom_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
         custom_items = {item["name"]: item for item in custom_list.json()["items"]}
         assert set(custom_items[default_name]["allowed_actions"]) == {"agent.read"}
         assert set(custom_items[custom_name]["allowed_actions"]) == {"agent.read"}

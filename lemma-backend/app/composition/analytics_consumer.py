@@ -28,6 +28,7 @@ from uuid import UUID
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.context import ActorType
 from app.core.infrastructure.db.session import async_session_maker
@@ -540,7 +541,9 @@ async def on_agent_run_completed(
                     "pod_id": started.pod_id,
                     "conversation_id": started.conversation_id,
                     "agent_id": started.agent_id,
-                    "is_assistant": started.agent_id is None,
+                    "is_assistant": is_pod_default_agent(
+                        started.agent_id, pod_id=started.pod_id
+                    ),
                 },
             )
             return

@@ -53,6 +53,50 @@ async def test_a_surface_can_be_repointed(connected):
     assert reopened["agent_name"] == other["name"], reopened
 
 
+@scenario("A re-pointed surface is answered by the agent it now belongs to")
+@proves("PS-SURF-003", "PS-SURF-001")
+@covers(
+    "agent.surface.update",
+    "surface.webhook.handle_platform",
+    "agent.conversation.list",
+)
+async def test_a_repointed_surface_answers_as_its_new_agent(reachable):
+    """Re-pointing changes who answers, not just what the surface reads back.
+
+    `test_a_surface_can_be_repointed` stops at the field. One surface answers as
+    exactly one agent, so the field is a claim about the next message -- and the
+    bug it guards against is silent: a thread that keeps being answered by the
+    agent that used to own the bot looks fine until somebody reads the replies.
+    """
+    # Forged only: the live lane works in a pod that stands between runs, and
+    # re-pointing its surface would leave every later scenario there answered by
+    # the wrong agent.
+    reachable.only_forged("re-pointing a surface other scenarios share")
+    alice, pod = reachable.alice, reachable.pod
+    other = await alice.creates_an_agent(
+        in_pod=pod, named="second_agent", toolsets=["POD", "USER_INTERACTION"]
+    )
+    telegram = next(
+        surface
+        for surface in await alice.surfaces_in(pod)
+        if str(surface.get("platform", "")).upper() == "TELEGRAM"
+    )
+
+    await alice.changes_surface(
+        telegram["name"], in_pod=pod, default_agent_name=other["name"]
+    )
+
+    await reachable.says("Reply with a short greeting so I know who is here.")
+    answer = await reachable.waits_for_a_reply()
+
+    assert answer.text.strip(), "the re-pointed surface must still answer at all"
+    answering = {str(thread["agent_id"]) for thread in await reachable.conversations()}
+    assert answering == {str(other["id"])}, (
+        "the message must be answered by the agent the surface now belongs to, "
+        f"not the one it used to: {answering}"
+    )
+
+
 @scenario("A person lists the channels a surface can reach")
 @proves("PS-SURF-023")
 @covers("agent.surface.channels")

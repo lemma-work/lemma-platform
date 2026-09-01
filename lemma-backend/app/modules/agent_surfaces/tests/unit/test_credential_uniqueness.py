@@ -31,13 +31,17 @@ pytestmark = pytest.mark.asyncio
 
 
 def _surface(platform: SurfacePlatform, *, agent_id=None) -> AgentSurfaceEntity:
+    # A surface has exactly one owner. `agent_id=None` here means the caller
+    # does not care which -- the pod's own assistant is the honest default, and
+    # its row id is the pod's.
+    pod_id = uuid4()
     return AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id,
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
-        agent_id=agent_id,
+        agent_id=agent_id or pod_id,
         credential_mode=SurfaceCredentialMode.SYSTEM,
     )
 

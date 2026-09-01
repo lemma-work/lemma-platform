@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.function.domain.entities import FunctionRunStatus
 from app.modules.function.infrastructure.models import FunctionRunModel
 from app.modules.workflow.domain.run import WorkflowRunStatus
@@ -160,7 +161,12 @@ async def test_pod_resource_lists_are_latest_first_and_page_to_older_items(
         f"/pods/{pod_id}/agents",
         params={"limit": 2, "page_token": agent_page.json()["next_page_token"]},
     )
-    assert _item_names(agent_next.json()) == [agent_names[0]]
+    # The pod's own assistant is listed alongside the agents somebody made, and
+    # sorts last: ids are time-ordered and its row is created with the pod.
+    assert _item_names(agent_next.json()) == [
+        agent_names[0],
+        DEFAULT_POD_AGENT_NAME,
+    ]
 
     conversation_page = await authenticated_client.get(
         f"/pods/{pod_id}/conversations",

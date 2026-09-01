@@ -27,6 +27,7 @@ def _surface(address: str | None = "pod-1@ops.asur.work") -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="resend",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),

@@ -593,8 +593,8 @@ new hues, no new gradients.
   the way someone's own agent is `triage` — and it is the only form that works
   where the copy is first-person: the front door renders `Hey, I'm {label}`
   because the artwork has eyes, and "Hey, I'm Pod Assistant" was a job title
-  introducing itself. Display copy only; `pod_default`, `POD_DEFAULT` and
-  `__pod_assistant__` stay on the wire untouched.
+  introducing itself. Display copy only; `pod_default` and `POD_DEFAULT` stay on
+  the wire untouched.
 - **A being of the cast, not the trademark over it.** Lem wore the `LemmaMark`
   on soft action fill, which was wrong three ways. It put the *company's* stamp
   on one actor inside your pod, so the row that should read as yours read as the

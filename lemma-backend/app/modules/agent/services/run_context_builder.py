@@ -26,7 +26,7 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services.conversation_access import POD_ASSISTANT_AGENT_ID
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
@@ -118,7 +118,7 @@ async def build_run_context(
         # tools over MCP and own their own session, so they can't be paused
         # mid tool-call and use the WAITING output contract instead.
         supports_pause_signal=(resolved_runtime.harness_kind == HarnessKind.LEMMA),
-        is_pod_default_agent=(agent.id == POD_ASSISTANT_AGENT_ID),
+        is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
         memory_enabled=memory_is_active(run_toolsets),
         grant_summary=grant_summary,
         **surface_context,

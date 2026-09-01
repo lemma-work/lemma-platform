@@ -20,6 +20,7 @@ import pytest
 from lemma_pod_bundle import extract_bundle
 
 import app.modules.pod_bundle.infrastructure.exporter as exporter_mod
+from app.modules.agent.contracts import AgentKind
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 
 
@@ -31,6 +32,9 @@ class _Named:
     name: str
     id: Any = field(default_factory=uuid4)
     data: dict[str, Any] | None = None
+    # Export filters the pod's own assistant out by kind, so the stand-in
+    # carries one. Defaulting to USER keeps every existing case exporting.
+    kind: AgentKind = AgentKind.USER
 
 
 class _FakeTableService:
@@ -812,3 +816,31 @@ async def test_a_folder_that_lists_itself_does_not_sink_the_file_export():
     assert paths == ["/home", "/reports", "/reports/notes.md"]
     # Each directory is listed once; the self-reference is not followed twice.
     assert service.calls.count("/home") == 1
+
+
+async def test_the_pods_own_assistant_is_never_exported(
+    patched_exporter, tmp_path, monkeypatch
+):
+    """A bundle carries the agents somebody made, and not the one nobody did.
+
+    Every pod mints its own assistant, so exporting one would either collide
+    with the target pod's on import or silently overwrite it -- and what the
+    assistant *is* comes from constants rather than from a row worth copying.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: _FakeAgentService(
+            [
+                _Named("assistant"),
+                _Named("pod_default", kind=AgentKind.POD_DEFAULT),
+            ]
+        ),
+    )
+
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, include=["agents"]
+    )
+    root = extract_bundle(zip_bytes, tmp_path / "out")
+
+    assert (root / "agents" / "assistant" / "assistant.json").is_file()
+    assert not (root / "agents" / "pod_default").exists()

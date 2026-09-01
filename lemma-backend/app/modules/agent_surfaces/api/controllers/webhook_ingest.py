@@ -44,7 +44,6 @@ from app.modules.agent_surfaces.api.controllers.slack_webhook_verification impor
 
 _MODAL_OPENING_ACTION_IDS = {
     "lemma_channel_setup",
-    "lemma_dm_agent_setup",
 }
 # App Home taps that must feel instant. Starter prompts carry no trigger_id but
 # a visible lag on a "try this" button reads as a dead button.

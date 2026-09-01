@@ -1,4 +1,8 @@
-"""SQLAlchemy models for the unified agent module."""
+"""Conversations, the runs that answer them, and the messages in both.
+
+These three are mutually referential -- a run names its conversation as a class,
+and a conversation orders its messages and runs through lambdas closing over
+theirs -- so they share a module rather than importing each other in a cycle."""
 
 from __future__ import annotations
 
@@ -9,11 +13,9 @@ from uuid import UUID
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -24,7 +26,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
 from app.modules.agent.domain.entities import (
-    Agent as AgentEntity,
     AgentRun as AgentRunEntity,
     Conversation as ConversationEntity,
     Message as MessageEntity,
@@ -38,69 +39,10 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.model_converters import (
     agent_runtime_from_json,
-    coerce_toolsets,
     default_agent_runtime,
 )
 
-
-class AgentModel(UUIDAuditBase):
-    """Pod-owned agent definition."""
-
-    __tablename__ = "agents"
-    __table_args__ = (
-        CheckConstraint(
-            "name NOT IN ('POD_DEFAULT', 'pod_default')",
-            name="ck_agents_name_not_pod_default_selector",
-        ),
-        UniqueConstraint("pod_id", "name", name="uq_agent_pod_name"),
-        Index("ix_agent_pod_name", "pod_id", "name"),
-    )
-
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    icon_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
-    instruction: Mapped[str] = mapped_column(Text, nullable=False)
-    agent_runtime: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    toolsets: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    input_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    agent_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-
-    pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
-    owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-
-    def __str__(self) -> str:
-        return self.name or str(self.id)
-
-    def to_entity(self) -> AgentEntity:
-        return AgentEntity(
-            id=self.id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            pod_id=self.pod_id,
-            user_id=self.user_id,
-            name=self.name,
-            description=self.description,
-            icon_url=self.icon_url,
-            visibility=self.visibility,
-            instruction=self.instruction,
-            agent_runtime=agent_runtime_from_json(self.agent_runtime),
-            toolsets=coerce_toolsets(self.toolsets),
-            input_schema=self.input_schema,
-            output_schema=self.output_schema,
-            metadata=self.agent_metadata,
-        )
+from app.modules.agent.infrastructure.models.agent import AgentModel
 
 
 class ConversationModel(UUIDAuditBase):
@@ -189,11 +131,11 @@ class ConversationModel(UUIDAuditBase):
         foreign_keys=[organization_id],
     )
     agent: Mapped["AgentModel | None"] = relationship(
-        "app.modules.agent.infrastructure.models.AgentModel",
+        "AgentModel",
         foreign_keys=[agent_id],
     )
     messages: Mapped[list["MessageModel"]] = relationship(
-        "app.modules.agent.infrastructure.models.MessageModel",
+        "MessageModel",
         back_populates="conversation",
         cascade="all, delete-orphan",
         # The FK already declares ON DELETE CASCADE, so the database removes
@@ -206,7 +148,7 @@ class ConversationModel(UUIDAuditBase):
         foreign_keys=lambda: [MessageModel.conversation_id],
     )
     agent_runs: Mapped[list["AgentRunModel"]] = relationship(
-        "app.modules.agent.infrastructure.models.AgentRunModel",
+        "AgentRunModel",
         back_populates="conversation",
         cascade="all, delete-orphan",
         # The FK already declares ON DELETE CASCADE, so the database removes
@@ -323,12 +265,12 @@ class AgentRunModel(UUIDAuditBase):
         foreign_keys=[agent_id],
     )
     parent_run: Mapped["AgentRunModel | None"] = relationship(
-        "app.modules.agent.infrastructure.models.AgentRunModel",
-        remote_side="app.modules.agent.infrastructure.models.AgentRunModel.id",
+        "AgentRunModel",
+        remote_side="AgentRunModel.id",
         foreign_keys=[parent_run_id],
     )
     messages: Mapped[list["MessageModel"]] = relationship(
-        "app.modules.agent.infrastructure.models.MessageModel",
+        "MessageModel",
         back_populates="agent_run",
         order_by=lambda: MessageModel.sequence,
         foreign_keys=lambda: [MessageModel.agent_run_id],
@@ -423,178 +365,3 @@ class MessageModel(UUIDCreatedBase):
             tool_result=self.tool_result,
             metadata=self.message_metadata,
         )
-
-
-class AgentApprovalDecisionModel(UUIDCreatedBase):
-    """Durable record of a user's decision on a ``request_approval`` tool call.
-
-    The approval card (the pending ``request_approval`` tool call) lives in the
-    message log; this row captures the user's resolution so the paused tool can
-    read it after waking, independent of pub/sub timing or worker restarts.
-    """
-
-    __tablename__ = "agent_approval_decisions"
-    __table_args__ = (
-        UniqueConstraint(
-            "conversation_id", "approval_id", name="uq_agent_approval_decision"
-        ),
-        Index(
-            "ix_agent_approval_decision_conversation",
-            "conversation_id",
-            "approval_id",
-        ),
-    )
-
-    conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    agent_run_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    approval_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    tool_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    decision: Mapped[str] = mapped_column(String(32), nullable=False)
-    response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    resolved_by_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    # Claimed before the approved tool runs, so a retried reconcile job cannot
-    # run it twice. See `claim_approval_execution` for why a read was not enough.
-    execution_claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-
-class AgentFeedbackModel(UUIDAuditBase):
-    """Feedback reports submitted through Agent tools."""
-
-    __tablename__ = "agent_feedback"
-    __table_args__ = (
-        Index("ix_agent_feedback_user_created", "user_id", "created_at"),
-        Index("ix_agent_feedback_agent_created", "agent_id", "created_at"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"),
-        index=True,
-        nullable=True,
-    )
-    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    subject: Mapped[str] = mapped_column(String(255), nullable=False)
-    issue_encountered: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_behavior: Mapped[str] = mapped_column(Text, nullable=False)
-    actual_behavior: Mapped[str] = mapped_column(Text, nullable=False)
-    suggested_next_steps: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    reporter: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    agent: Mapped["AgentModel | None"] = relationship(
-        AgentModel,
-        foreign_keys=[agent_id],
-    )
-
-
-AgentFeedback = AgentFeedbackModel
-
-
-class AgentConversationWaitModel(UUIDAuditBase):
-    """What a snoozed conversation is waiting on — the single source of truth.
-
-    Mirrors ``workflow_run_waits``. The partial unique index enforces at most one
-    ACTIVE wait per conversation: a turn that paused on a snooze cannot also be
-    snoozed again until it wakes, and a duplicate wake cannot create a second row.
-    """
-
-    __tablename__ = "agent_conversation_waits"
-    __table_args__ = (
-        Index(
-            "ix_agent_conversation_waits_conversation_status",
-            "conversation_id",
-            "status",
-        ),
-        Index("ix_agent_conversation_waits_external_ref", "external_ref"),
-        Index(
-            "ix_agent_conversation_waits_type_ref_status",
-            "wait_type",
-            "external_ref",
-            "status",
-        ),
-        Index(
-            "uq_agent_conversation_waits_one_active",
-            "conversation_id",
-            unique=True,
-            postgresql_where=text("status = 'ACTIVE'"),
-        ),
-    )
-
-    conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    agent_run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    tool_call_id: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    wait_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
-
-    external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    wake_attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    # See the workflow wait model: a timer fires once, so a row lock is not a
-    # claim -- it is released at commit and the next tick reclaims the row.
-    fire_lease_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    # Nullable to match the migration: `create` always writes a dict, but a row
-    # inserted by hand or by a future backfill must not need one.
-    spec: Mapped[dict | None] = mapped_column(JSONB, default=dict)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    def to_entity(self):
-        from app.modules.agent.domain.wait import (
-            AgentConversationWaitEntity,
-            AgentWaitStatus,
-            AgentWaitType,
-        )
-
-        return AgentConversationWaitEntity(
-            id=self.id,
-            conversation_id=self.conversation_id,
-            agent_run_id=self.agent_run_id,
-            pod_id=self.pod_id,
-            tool_call_id=self.tool_call_id,
-            wait_type=AgentWaitType(self.wait_type),
-            status=AgentWaitStatus(self.status),
-            external_ref=self.external_ref,
-            scheduled_at=self.scheduled_at,
-            wake_attempts=self.wake_attempts,
-            spec=dict(self.spec or {}),
-            completed_at=self.completed_at,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-        )
-
-
-AgentConversationWait = AgentConversationWaitModel
