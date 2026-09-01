@@ -645,6 +645,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.webhook_handler.quarantined_webhook_without_stable_provider.degraded': EventSpec('warning', frozenset()),
     'schedule.webhook_handler.s_has_filter_instruction_offloading.observed': EventSpec('debug', frozenset()),
     'schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic': EventSpec('debug', frozenset()),
+    'schedule.webhook_schedule_matcher.skipped_without_account': EventSpec('warning', frozenset({'skipped'})),
     'schedule.workflow_outcome.recorded': EventSpec('debug', frozenset({'run_id'})),
     'security.security.auth_dependency.observed': EventSpec('debug', frozenset()),
     'service.started': EventSpec('info', frozenset()),

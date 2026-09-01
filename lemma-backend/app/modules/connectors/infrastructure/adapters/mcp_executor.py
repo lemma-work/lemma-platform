@@ -22,12 +22,17 @@ from lemma_connectors.core.results import BinaryContentResult
 
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
+from app.core.redaction import redact_text
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
     OperationExecutionValidationError,
 )
 
 logger = get_logger(__name__)
+
+# Matches `plumbing._UPSTREAM_MESSAGE_LIMIT`: enough of the provider's own words
+# to debug with, not enough to be a payload dump.
+_UPSTREAM_MESSAGE_LIMIT = 2000
 
 # What a call to a remote MCP server can realistically fail with: the server
 # rejecting it (fastmcp/mcp), the connection failing (httpx/OSError), or our own
@@ -172,9 +177,23 @@ class McpExecutor:
     def _map_result(self, tool_name: str, result: Any) -> Any:
         if getattr(result, "is_error", False):
             text = _collect_text(getattr(result, "content", None) or [])
-            raise OperationExecutionInfrastructureError(
-                f"MCP tool '{tool_name}' returned an error: {text}",
-                details={"provider": "mcp"},
+            # A tool that answers `is_error` is the server rejecting this call
+            # -- a bad argument, a missing project, a refusal it chose. Not an
+            # outage, and two things followed from calling it one. The breaker
+            # counts infrastructure errors, so five bad-argument calls inside
+            # the window disabled a healthy MCP server for the whole
+            # organization. And `OperationExecutionInfrastructureError`
+            # hardcodes its own message, so the tool's explanation was
+            # discarded and the caller got "Connector provider is temporarily
+            # unavailable" with no way to correct itself and every reason to
+            # retry. Transport failures are still classified above, where they
+            # belong.
+            raise OperationExecutionValidationError(
+                "",
+                details={
+                    "provider": "mcp",
+                    "upstream_message": redact_text(text)[:_UPSTREAM_MESSAGE_LIMIT],
+                },
             )
         structured = _structured_output(result)
         if structured is not None:

@@ -152,7 +152,9 @@ def _status_classified(exc: Exception):
     """
     from app.modules.connectors.domain.errors import (
         OperationExecutionAccessDeniedError,
+        OperationExecutionInfrastructureError,
         OperationExecutionNotFoundError,
+        OperationExecutionRateLimitedError,
         OperationExecutionUnauthorizedError,
         OperationExecutionValidationError,
     )
@@ -166,7 +168,21 @@ def _status_classified(exc: Exception):
         403: OperationExecutionAccessDeniedError,
         404: OperationExecutionNotFoundError,
         422: OperationExecutionValidationError,
+        # The provider is healthy and answering; the caller is asking too
+        # often. Deliberately not an infrastructure error -- see the class,
+        # which exists for this and was reachable only from Composio, so an
+        # http/sql/mcp 429 became a 500 with no `retry_after` and an agent
+        # retried straight back into the limit.
+        429: OperationExecutionRateLimitedError,
     }.get(status_code)
+    if error_cls is None and 500 <= status_code < 600:
+        # A provider outage, and the only classification the breaker counts.
+        # Without this every 5xx fell through to the catch-all as
+        # `OperationExecutionError` -- our own 500 -- so the breaker could open
+        # on a refused connection but never on a provider returning 503 to
+        # everything, which is the case its docstring describes. It also filed
+        # every third-party outage under Lemma's own error budget.
+        error_cls = OperationExecutionInfrastructureError
     if error_cls is None:
         return None
     # The message is fixed by the error class; the exception's own text may
