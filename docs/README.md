@@ -32,6 +32,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |
 | [Product analytics](design/product-analytics.md) | The product-analytics plane, its event contract, origins, and the privacy boundary |
+| [Agent conversations](design/agent-conversations.md) | Proposed: one persistent conversation per agent, who a run acts as, who sees the working, and how a message finds its agent |
 
 The sandbox set breaks down further:
 [protocol](architecture/sandbox/sandbox-protocol.md) ·
