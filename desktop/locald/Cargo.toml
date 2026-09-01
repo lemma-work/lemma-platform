@@ -6,10 +6,10 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
-base64 = "0.22"
-getrandom = "0.3"
+base64 = "0.23"
+getrandom = "0.4"
 hyper = { version = "0.14", features = ["client", "http1", "server", "stream", "tcp"] }
-if-addrs = "0.13"
+if-addrs = "0.15"
 interprocess = "2.4"
 keyring = "4.1.5"
 lemma-runtime-manager = { path = "../local-runtime/manager" }
