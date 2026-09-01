@@ -11,7 +11,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.domain.runtime import AgentRuntimeConfig
-from app.modules.agent.domain.agent_kind import AgentKind as AgentKind
 from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
 
 JsonPrimitive = str | int | float | bool | None

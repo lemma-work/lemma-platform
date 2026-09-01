@@ -22,8 +22,8 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     AgentValidationError,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
-    AgentKind,
     AgentRuntimeConfig,
     AgentToolset,
     JsonObject,

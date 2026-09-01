@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentKind
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.composition import agent_email_surface
 from app.modules.agent.services import agent_service as agent_service_module
 from app.modules.agent.services.agent_service import AgentService

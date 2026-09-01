@@ -42,7 +42,8 @@ from dataclasses import dataclass, field
 
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.value_objects import AgentKind, AgentToolset
+from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
 # What the agent editor offers and ``Agent.toolsets`` is expected to hold. Each

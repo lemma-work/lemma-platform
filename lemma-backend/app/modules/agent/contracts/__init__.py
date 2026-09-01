@@ -6,6 +6,7 @@ from app.modules.agent.contracts.pod_summaries import (
     PodAgentSummary,
     list_agent_summaries_by_pod,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -13,7 +14,6 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
     MessageRole,
-    AgentKind,
     AgentToolset,
 )
 from app.modules.agent.api.schemas import AgentResponse

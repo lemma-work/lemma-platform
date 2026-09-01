@@ -17,11 +17,11 @@ from pydantic import (
 
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
     AgentRunStatus,
-    AgentKind,
     AgentToolset,
     ConversationStatus,
     ConversationType,

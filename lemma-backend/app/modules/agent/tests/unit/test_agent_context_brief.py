@@ -11,7 +11,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentKind, AgentToolset
+from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod

@@ -21,7 +21,7 @@ from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
 )
-from app.modules.agent.domain.value_objects import AgentKind
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.infrastructure.model_converters import (
     agent_runtime_from_json,
     coerce_toolsets,

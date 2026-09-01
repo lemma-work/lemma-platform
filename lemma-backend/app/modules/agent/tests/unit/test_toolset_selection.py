@@ -11,7 +11,8 @@ from uuid import uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
-from app.modules.agent.domain.value_objects import AgentKind, AgentToolset
+from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.toolset_selection import (
     ALWAYS_ON_TOOLSETS,
     DECLARABLE_TOOLSETS,

@@ -11,8 +11,8 @@ from pydantic import Field
 from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
-    AgentKind,
     AgentRuntimeConfig,
     AgentRunStatus,
     AgentToolset,

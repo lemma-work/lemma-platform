@@ -25,7 +25,7 @@ from app.modules.agent.domain.events import (
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
 )
-from app.modules.agent.domain.value_objects import AgentKind
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.infrastructure.models import (
     AgentModel,
 )

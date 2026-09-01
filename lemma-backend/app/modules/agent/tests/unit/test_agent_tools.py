@@ -8,7 +8,7 @@ import pytest
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.value_objects import AgentKind
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import (

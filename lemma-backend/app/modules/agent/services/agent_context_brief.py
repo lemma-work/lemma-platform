@@ -28,7 +28,7 @@ from uuid import UUID
 
 from app.core.authorization.context import ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.modules.agent.domain.value_objects import AgentKind
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
