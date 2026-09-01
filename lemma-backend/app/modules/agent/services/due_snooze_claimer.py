@@ -13,7 +13,9 @@ from app.core.domain.timers import (
     lease_expiry,
     lease_is_free,
 )
-from app.modules.agent.infrastructure.models import AgentConversationWaitModel
+from app.modules.agent.infrastructure.wait_models import (
+    AgentConversationWaitModel,
+)
 
 SNOOZE_WAKE_SOURCE = "agent_snooze"
 

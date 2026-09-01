@@ -10,6 +10,7 @@ from pydantic import Field
 
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import CreatedEntity, Entity
+from app.modules.agent.domain.participants import ConversationParticipant
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -60,6 +61,13 @@ class Message(CreatedEntity):
     conversation_id: UUID
     sequence: int
     agent_run_id: UUID | None = None
+    #: The person who wrote it, when a person did. See the column comment.
+    sender_user_id: UUID | None = None
+    #: The agent that produced it, read from its run rather than stored. A
+    #: conversation can be answered by more than one agent now, so "which agent
+    #: said this" is a question the transcript has to be able to answer, and
+    #: the run is where it is recorded. None on anything a person wrote.
+    agent_id: UUID | None = None
     # An enum, like `kind`. It used to be a bare `str` while `kind` next to it
     # was an enum, so every reader had to know which of the two it was holding
     # and normalize accordingly -- and one that forgot compared `str(kind)`
@@ -82,6 +90,7 @@ class Message(CreatedEntity):
         sequence: int,
         agent_run_id: UUID | None,
         role: MessageRole | str,
+        sender_user_id: UUID | None = None,
         kind: MessageKind = MessageKind.TEXT,
         text: str | None = None,
         tool_name: str | None = None,
@@ -94,6 +103,7 @@ class Message(CreatedEntity):
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
+            sender_user_id=sender_user_id,
             role=MessageRole(role),
             kind=kind,
             text=text,
@@ -117,6 +127,7 @@ class Message(CreatedEntity):
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
+            sender_user_id=draft.sender_user_id,
             role=draft.role,
             kind=draft.kind,
             text=draft.text,
@@ -154,6 +165,18 @@ class Conversation(Entity):
     last_run_retryable: bool = False
     messages: list[Message] = Field(default_factory=list)
     agent_runs: list["AgentRun"] = Field(default_factory=list)
+    #: Loaded by `ConversationRepository.get_conversation`. Empty on an entity
+    #: nobody asked for membership on, which is why `validate_conversation_access`
+    #: still accepts the owner directly rather than relying on this alone.
+    participants: list[ConversationParticipant] = Field(default_factory=list)
+
+    def has_participant(self, user_id: UUID) -> bool:
+        return any(participant.user_id == user_id for participant in self.participants)
+
+    def has_agent_participant(self, agent_id: UUID) -> bool:
+        return any(
+            participant.agent_id == agent_id for participant in self.participants
+        )
 
     @property
     def is_pod_assistant(self) -> bool:
@@ -174,6 +197,9 @@ class AgentRun(Entity):
     conversation_id: UUID
     agent_id: UUID | None = None
     parent_run_id: UUID | None = None
+    #: Whose message started this run. See the column comment; it is what makes
+    #: a run's working attributable in a conversation with several people in it.
+    triggered_by_user_id: UUID | None = None
     status: AgentRunStatus = AgentRunStatus.RUNNING
     agent_runtime: AgentRuntimeConfig = Field(
         default_factory=lambda: AgentRuntimeConfig(profile_id="system:lemma")

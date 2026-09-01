@@ -17,7 +17,9 @@ from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
 )
-from app.modules.agent.infrastructure.models import AgentConversationWaitModel
+from app.modules.agent.infrastructure.wait_models import (
+    AgentConversationWaitModel,
+)
 
 
 class AgentConversationWaitRepository:

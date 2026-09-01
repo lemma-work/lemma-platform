@@ -31,6 +31,12 @@ from app.modules.agent.infrastructure import models as agent_models  # noqa: F40
 from app.modules.agent.infrastructure import (  # noqa: F401
     runtime_models as agent_runtime_models,
 )
+from app.modules.agent.infrastructure import (  # noqa: F401
+    participant_models as agent_participant_models,
+)
+from app.modules.agent.infrastructure import (  # noqa: F401
+    wait_models as agent_wait_models,
+)
 
 # Trigger
 from app.modules.schedule.infrastructure import models as trigger_models  # noqa: F401

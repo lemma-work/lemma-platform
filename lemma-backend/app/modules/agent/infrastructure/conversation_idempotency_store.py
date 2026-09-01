@@ -4,6 +4,9 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import Conversation as ConversationEntity
+from app.modules.agent.infrastructure.conversation_participant_store import (
+    ensure_owner_participant,
+)
 from app.modules.agent.infrastructure.models import ConversationModel
 
 
@@ -48,6 +51,11 @@ async def create_conversation_for_id(
         created = await session.get(ConversationModel, created_id)
         if created is None:
             raise RuntimeError("Created conversation could not be reloaded")
+        # The row's own owner, not the caller's id: this path can return a
+        # conversation somebody else reserved.
+        await ensure_owner_participant(
+            session, conversation_id=created.id, user_id=created.user_id
+        )
         return created.to_entity(), True
 
     existing = await session.get(ConversationModel, conversation.id)

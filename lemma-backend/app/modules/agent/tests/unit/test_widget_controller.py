@@ -13,6 +13,7 @@ from fastapi import HTTPException
 import app.modules.agent.api.controllers.widget_controller as ctrl
 from app.core.domain.errors import DomainError
 from app.core.ports.widget_content import WidgetArtifact
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.services.widget_token import verify_widget_token
 
 
@@ -46,11 +47,16 @@ def _fake_conv_service(owner_id, pod_id):
     method that no longer existed — the double answered for the thing under
     test. The controller calls the real `validate_conversation_access` now, so
     the check this exercises is the shipped one.
+
+    The real entity rather than a stand-in with the three fields the check
+    happened to read, for the same reason: a stand-in goes stale the moment the
+    check consults something new, and it fails as an AttributeError rather than
+    as the refusal the test is asserting.
     """
 
     class _Repo:
         async def get_conversation(self, conversation_id, **_kw):
-            return SimpleNamespace(user_id=owner_id, pod_id=pod_id, agent_id=None)
+            return Conversation(user_id=owner_id, pod_id=pod_id, agent_id=None)
 
     class _Svc:
         conversation_repository = _Repo()

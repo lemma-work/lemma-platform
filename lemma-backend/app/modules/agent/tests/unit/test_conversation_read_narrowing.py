@@ -36,6 +36,11 @@ class _Result:
     def scalars(self):
         return iter(self._rows)
 
+    def __iter__(self):
+        # A real Result iterates its rows, and a caller selecting several
+        # columns reads it that way rather than through `scalars`.
+        return iter(self._rows)
+
     def one(self):
         return self._rows[0]
 

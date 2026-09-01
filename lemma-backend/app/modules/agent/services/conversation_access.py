@@ -48,14 +48,32 @@ def validate_conversation_access(
 
     Not-found rather than forbidden on purpose: a conversation in someone else's
     pod should not be distinguishable from one that does not exist.
+
+    Reachable by the person who opened it, or by anyone since added to it. The
+    two clauses are not redundant. Membership is only populated on an entity
+    somebody asked for it on, so an owner check that depended on the list would
+    lock people out of their own conversations wherever it was not loaded; and
+    the owner is not removable, so "opened it" is a standing claim rather than a
+    transitional allowance. What changes in a later step is which of the two is
+    load-bearing: once a run acts as its sender rather than as the conversation,
+    `user_id` is provenance and the membership row backfilled for it is the
+    access record.
     """
     if conversation is None:
         raise ConversationNotFoundError()
-    if conversation.user_id != user_id:
+    if conversation.user_id != user_id and not conversation.has_participant(user_id):
         raise ConversationNotFoundError()
     if conversation.pod_id != pod_id:
         raise ConversationNotFoundError()
-    if agent_id is not None and conversation.agent_id != agent_id:
+    if (
+        agent_id is not None
+        and conversation.agent_id != agent_id
+        and not conversation.has_agent_participant(agent_id)
+    ):
+        # A conversation's own `agent_id` is the one that answers by default.
+        # An agent added to the conversation may also be addressed in it, which
+        # is what an `@mention` does -- so being present is as good a claim as
+        # being the default, and nothing else is.
         raise ConversationNotFoundError()
 
 
@@ -93,6 +111,36 @@ async def resolve_agent(
     if agent_name is not None and agent.name != agent_name:
         raise AgentNotFoundError(agent_name)
     return agent
+
+
+async def resolve_run_agent(
+    agent_run: object,
+    conversation: Conversation,
+    *,
+    user_id: UUID,
+    agent_repository: object,
+) -> Agent:
+    """The agent that answers one run.
+
+    The conversation names a default. A run may name a different one, because
+    an `@mention` addresses an agent for a single turn -- and the run is where
+    that decision was recorded, so the run is what has to be read back.
+
+    `resolve_agent` cannot answer this: given a name it *asserts* the
+    conversation's own agent matches, which is the right check for "am I
+    talking to who I think" and the wrong one for "who is answering this turn".
+    """
+    run_agent_id = getattr(agent_run, "agent_id", None)
+    if run_agent_id is not None and run_agent_id != conversation.agent_id:
+        agent = await agent_repository.get(run_agent_id)  # type: ignore[attr-defined]
+        if agent is None:
+            raise AgentNotFoundError(str(run_agent_id))
+        return agent
+    return await resolve_agent(
+        conversation,
+        user_id=user_id,
+        agent_repository=agent_repository,
+    )
 
 
 async def resolve_agent_for_path(
