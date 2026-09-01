@@ -110,14 +110,34 @@ class KindDispatcher:
         whose spec was bundled at catalog-import time) has a fixed operation set
         and returns an empty list rather than erroring.
         """
+        # Imported here: `plumbing` builds a dispatcher, so importing it at
+        # module scope would close a cycle.
+        from app.modules.connectors.services.execution.plumbing import (
+            execution_failures_translated,
+        )
+
         plugin = self._registry.get(install.kind)
         if plugin.discoverer is None:
             return []
         timeout = connector_settings.connector_discovery_timeout_seconds
+
+        async def _discover() -> list[DiscoveredOperation]:
+            # The same translation execute gets, and for the same reason.
+            # Discovery reaches the tenant's own server over the network, so it
+            # fails the same ways -- but only the timeout was handled, and an
+            # HTTP status escaped as a raw `httpx.HTTPStatusError`. Installing an
+            # MCP server that wants a token answered 500 with a Python traceback
+            # in the body, which is both unusable and against the rule that an
+            # API response carries no traceback.
+            #
+            # Inside `wait_for`, not around it: the translator reads a
+            # `TimeoutError` as an outage, so wrapping the deadline too would
+            # swallow the specific timeout below before it could be raised.
+            with execution_failures_translated():
+                return await plugin.discoverer.discover(install, credentials)
+
         try:
-            return await asyncio.wait_for(
-                plugin.discoverer.discover(install, credentials), timeout=timeout
-            )
+            return await asyncio.wait_for(_discover(), timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError) as exc:
             raise OperationExecutionTimeoutError(
                 f"Discovery for '{install.connector_id}' timed out after "
