@@ -9,7 +9,12 @@ from typing import Any
 
 from harness.run import a_name_for
 from harness.drivers.api import every_item, items_of
-from harness.waiting import eventually, UNTIL_A_MODEL_ACTS
+from harness.waiting import (
+    eventually,
+    UNTIL_A_MODEL_ACTS,
+    UNTIL_A_RUN_SETTLES,
+    UNTIL_A_STEERED_RUN_FINISHES,
+)
 
 JSON = dict[str, Any]
 
@@ -165,6 +170,7 @@ class AgentSteps:
         with_agent: str | None = None,
         saying: str | None = None,
         under: JSON | None = None,
+        watching: bool = True,
     ) -> JSON:
         """Open a thread, and optionally say the first thing.
 
@@ -176,6 +182,19 @@ class AgentSteps:
         ``under`` makes this thread a
         child of another, which is how a subagent's work stays attached to the
         conversation that delegated it.
+
+        ``watching`` is the default because most scenarios do want to send a
+        message the way a browser does, over the stream. Pass ``watching=False``
+        when the scenario intends to *answer* the agent. Sending over the stream
+        holds one HTTP request open for as long as the run takes, so the
+        scenario is blocked reading exactly when it is supposed to be replying:
+        it works today only because a run that pauses for approval ends, and
+        ends the stream with it. That makes a test's own request timeout a
+        ceiling on the model, which is a race nobody chose and one the product
+        cannot promise to win — a single model call has been measured at 194s at
+        the 99.9th percentile against dev, and at nineteen minutes at worst.
+        Appending instead starts the same run without tying the scenario to how
+        long it takes.
         """
         body: JSON = {}
         if with_agent:
@@ -189,7 +208,12 @@ class AgentSteps:
         )
         self.conversation = conversation
         if saying:
-            await self.says(saying, in_conversation=conversation, in_pod=in_pod)
+            if watching:
+                await self.says(saying, in_conversation=conversation, in_pod=in_pod)
+            else:
+                await self.adds_while_it_works(
+                    saying, in_conversation=conversation, in_pod=in_pod
+                )
         return conversation
 
     async def conversations_in(self, pod: JSON, *, pages: int = 20) -> list[JSON]:
@@ -269,7 +293,7 @@ class AgentSteps:
         in_conversation: JSON,
         in_pod: JSON,
         after: int = 0,
-        timeout: float = 60.0,
+        timeout: float = UNTIL_A_MODEL_ACTS,
     ) -> list[JSON]:
         """Wait until the agent has added at least one message beyond ``after``.
 
@@ -288,7 +312,7 @@ class AgentSteps:
         )
 
     async def waits_for_the_run_to_settle(
-        self, *, conversation: JSON, in_pod: JSON, timeout: float = 60.0
+        self, *, conversation: JSON, in_pod: JSON, timeout: float = UNTIL_A_RUN_SETTLES
     ) -> JSON:
         return await eventually(
             lambda: self.opens_conversation(conversation, in_pod=in_pod),
@@ -427,7 +451,7 @@ class AgentSteps:
         allow: bool,
         in_pod: JSON,
         for_the_session: bool = False,
-        timeout: float = 90.0,
+        timeout: float = UNTIL_A_STEERED_RUN_FINISHES,
     ) -> int:
         """Stay with a run, answering each thing it asks, until it finishes.
 

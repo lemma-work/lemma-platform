@@ -40,6 +40,30 @@ def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
     return stream_fn
 
 
+def _budget_expiry_then_succeed(final: str, attempts: list[int]):
+    """A stream abandoned by the progress budget once, then answering normally.
+
+    Raises what `model_stream_budget` raises, message and all, rather than a
+    bare `ReadTimeout`: the budget is only a fix if its error routes into this
+    retry, and a test that invented its own exception would pass while the real
+    one fell through to the catch-all and failed the run.
+    """
+
+    async def stream_fn(messages, info: AgentInfo) -> AsyncIterator[str]:
+        del messages, info
+        attempts.append(1)
+        if len(attempts) == 1:
+            yield "a trickle "
+            raise httpx.ReadTimeout(
+                "Model stream abandoned after 300.0s: "
+                "the provider stopped making progress.",
+                request=httpx.Request("POST", "https://provider.example/v1/chat"),
+            )
+        yield final
+
+    return stream_fn
+
+
 def _stream_text(text: str):
     """A stream that answers normally."""
 
@@ -171,6 +195,29 @@ async def test_mid_stream_drop_is_retried_and_the_run_completes(monkeypatch) -> 
     events = await _run_harness(model, monkeypatch=monkeypatch)
 
     assert len(attempts) == 2, "the dropped request should be re-issued exactly once"
+    assert not [e for e in events if e.type is AgentEventType.ERROR]
+    assert _messages(events) == ["the real answer"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_abandoned_by_the_progress_budget_is_retried(
+    monkeypatch,
+) -> None:
+    """The end of the chain the stream budget depends on.
+
+    A provider trickling a token a second used to hold the run open until
+    somebody gave up; it is now abandoned with a `ReadTimeout`. This is what
+    makes that an improvement rather than a new way to fail: the run re-asks the
+    request and answers, and the person never learns any of it happened.
+    """
+    attempts: list[int] = []
+    model = FunctionModel(
+        stream_function=_budget_expiry_then_succeed("the real answer", attempts)
+    )
+
+    events = await _run_harness(model, monkeypatch=monkeypatch)
+
+    assert len(attempts) == 2, "the abandoned request should be re-issued once"
     assert not [e for e in events if e.type is AgentEventType.ERROR]
     assert _messages(events) == ["the real answer"]
 

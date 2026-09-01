@@ -129,6 +129,26 @@ class AgentSettings(BaseSettings):
             "httpx resets it on every chunk of a streamed response."
         ),
     )
+    agent_model_stream_first_chunk_timeout_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a provider may take to send the first chunk of a response "
+            "body before the request is abandoned and retried. Unlike the "
+            "per-chunk read timeout above, a provider cannot reset this one, so "
+            "it is what catches a request that was accepted and never started. "
+            "0 disables it."
+        ),
+    )
+    agent_model_stream_total_timeout_seconds: float = Field(
+        default=300.0,
+        description=(
+            "Ceiling on one whole model exchange, first byte to last. The only "
+            "bound that catches a provider trickling a token a second: the "
+            "per-chunk timeout never fires while chunks keep arriving. Generous "
+            "on purpose, because a long answer streaming steadily has to be "
+            "allowed to finish. 0 disables it."
+        ),
+    )
     agent_model_http_max_connections: int = Field(
         default=100,
         description="Connection-pool ceiling per provider endpoint.",
