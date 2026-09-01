@@ -23,7 +23,7 @@ from app.core.observability.telemetry import (
 from app.modules.agent.config import agent_settings
 from app.modules.agent.services.context_budget import context_budget_for
 from app.modules.agent.services.conversation_access import (
-    resolve_agent,
+    resolve_run_agent,
     validate_conversation_access,
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -32,9 +32,7 @@ from app.modules.agent.domain.errors import (
 )
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
-    AgentRuntimeConfig,
     AgentRunStatus,
-    ConversationType,
     HarnessKind,
     HarnessOptions,
     JsonObject,
@@ -47,15 +45,11 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeProfileRepository,
     AgentRepository,
     ConversationRepository,
 )
-from app.modules.agent.services.runtime_profile_service import (
-    AgentRuntimeProfileService,
-    ResolvedAgentRuntime,
-)
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_resolution import RunResolutionMixin
 from app.modules.agent.services.run_phase_spans import (
     observe_first_output,
     record_history_size,
@@ -87,10 +81,7 @@ from app.composition.agent_usage import (
     usage_execution_context,
 )
 from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
-from app.modules.agent.tools.final_answer import get_final_answer_tool
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.core.crypto import get_secret_cipher
 
 logger = get_logger(__name__)
 
@@ -162,7 +153,7 @@ class AgentRunObserver(Protocol):
         raise NotImplementedError
 
 
-class AgentRunnerService:
+class AgentRunnerService(RunResolutionMixin):
     """Executes one persisted agent run and persists harness messages."""
 
     def __init__(
@@ -196,15 +187,23 @@ class AgentRunnerService:
             agent_run_id=agent_run_id,
             user_id=user_id,
             pod_id=pod_id,
-            agent_name=agent_name,
         )
+        # Whose grants this run holds, read off the run rather than the job
+        # payload: the row was written when the person spoke, and a reclaimed
+        # or replayed job can carry a different one. Not
+        # `conversation.user_id`, which says who opened the conversation and
+        # stops being who is speaking as soon as anybody else is in it.
+        acting_user_id = agent_run.triggered_by_user_id or user_id
         run = RunIdentity(
             conversation_id=conversation.id,
             agent_run_id=agent_run_id,
             organization_id=conversation.organization_id,
             pod_id=conversation.pod_id,
-            user_id=user_id,
-            agent_id=conversation.agent_id,
+            user_id=acting_user_id,
+            # The run's own agent. `conversation.agent_id` names the default,
+            # which is null on a conversation an addressed agent answered -- so
+            # reading it here labelled every routed answer as the pod assistant.
+            agent_id=agent_run.agent_id,
             started_at=agent_run.started_at,
         )
         if agent_run.status != AgentRunStatus.RUNNING:
@@ -223,7 +222,7 @@ class AgentRunnerService:
         try:
             resolved_runtime = await self._resolve_agent_runtime(
                 agent_run.agent_runtime,
-                user_id=user_id,
+                user_id=acting_user_id,
                 organization_id=conversation.organization_id,
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
@@ -235,7 +234,9 @@ class AgentRunnerService:
                 conversation=conversation,
                 agent=agent,
                 agent_run_id=agent_run_id,
-                user_id=user_id,
+                # The authority the tools execute with: what the person who
+                # spoke can reach, and nothing further.
+                user_id=acting_user_id,
                 resolved_runtime=resolved_runtime,
                 runtime_profile_snapshot=runtime_profile_snapshot,
                 runtime_credentials=runtime_credentials,
@@ -280,7 +281,7 @@ class AgentRunnerService:
                 harness_toolsets = []
             usage_reservation = await self.usage_recorder.reserve(
                 organization_id=conversation.organization_id,
-                user_id=user_id,
+                user_id=acting_user_id,  # spent against whoever asked
                 runtime_profile=runtime_profile_snapshot,
             )
             run_with_usage = run.with_runtime_profile(
@@ -321,7 +322,7 @@ class AgentRunnerService:
                 agent_id=conversation.agent_id,
                 pod_id=conversation.pod_id,
                 organization_id=conversation.organization_id,
-                user_id=user_id,
+                user_id=acting_user_id,
                 agent_name=agent.name,
                 harness_kind=resolved_runtime.harness_kind.value,
                 model_name=resolved_runtime.model_name_for_harness,
@@ -450,36 +451,6 @@ class AgentRunnerService:
             if not isinstance(exc, Exception):
                 raise
 
-    async def _resolve_agent_runtime(
-        self,
-        agent_runtime: AgentRuntimeConfig,
-        *,
-        user_id: UUID,
-        organization_id: UUID | None,
-    ) -> ResolvedAgentRuntime:
-        with run_phase("resolve_runtime"):
-            async with self.uow_factory() as uow:
-                service = AgentRuntimeProfileService(
-                    AgentRuntimeProfileRepository(
-                        uow,
-                        encryption=get_secret_cipher(),
-                    )
-                )
-                return await service.resolve(
-                    runtime=agent_runtime,
-                    organization_id=organization_id,
-                    user_id=user_id,
-                )
-
-    def _agent_with_resolved_runtime_metadata(
-        self,
-        agent: Agent,
-        *,
-        resolved_runtime: ResolvedAgentRuntime,
-    ) -> Agent:
-        del resolved_runtime
-        return agent
-
     async def _should_stop_run(self, agent_run_id: UUID) -> bool:
         async with self.uow_factory() as uow:
             agent_run = await ConversationRepository(uow).get_agent_run(agent_run_id)
@@ -525,7 +496,6 @@ class AgentRunnerService:
         agent_run_id: UUID,
         user_id: UUID,
         pod_id: UUID,
-        agent_name: str | None,
     ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
         with run_phase("load_context") as span:
             async with self.uow_factory() as uow:
@@ -538,11 +508,15 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=pod_id,
                 )
-                agent = await resolve_agent(
+                # Off the run, not the conversation: an addressed agent
+                # answers one turn, and the run is where that decision was
+                # recorded. The job's `agent_name` is not consulted -- it says
+                # what was asked for, and the row says what was agreed.
+                agent = await resolve_run_agent(
+                    agent_run,
                     conversation,
                     user_id=user_id,
                     agent_repository=AgentRepository(uow),
-                    agent_name=agent_name,
                 )
                 # Which runs survive the trim decides which need every message,
                 # and the trim can keep an old-but-active run while dropping
@@ -552,7 +526,12 @@ class AgentRunnerService:
                     runs, full_run_ids=runtime_full_run_ids(runs, conversation)
                 )
                 agent_run = self._find_agent_run(runs, agent_run_id)
-                messages = self._select_runtime_history(runs, conversation)
+                messages = self._select_runtime_history(
+                    runs,
+                    conversation,
+                    viewer_id=agent_run.triggered_by_user_id,
+                    current_run=agent_run,
+                )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
 
@@ -568,29 +547,13 @@ class AgentRunnerService:
         return apply_surface_history_window(runs, conversation)
 
     def _select_runtime_history(
-        self, runs: list[AgentRun], conversation: Conversation | None = None
-    ) -> list[Message]:
-        return select_runtime_history(runs, conversation)
-
-    def _resolve_output_type(
-        self, agent: Agent, conversation: Conversation
-    ) -> object | None:
-        # TASK conversations always get the final_answer tool: it drives the task
-        # lifecycle (status WAITING/COMPLETED/FAILED), not just structured output.
-        # The output *schema* is only applied when the agent configures one — see
-        # get_final_answer_tool, which uses `output: str` otherwise (no schema is
-        # pushed to the model when output_schema is absent).
-        if conversation.type == ConversationType.TASK:
-            return get_final_answer_tool(agent)
-        return None
-
-    async def _resolve_configured_accounts(
         self,
+        runs: list[AgentRun],
+        conversation: Conversation | None = None,
         *,
-        agent: Agent,
-        user_id: UUID,
-    ) -> dict[str, UUID]:
-        with run_phase("configured_accounts"):
-            return await AgentCallableToolFactory(
-                self.uow_factory
-            ).resolve_configured_accounts(agent=agent, user_id=user_id)
+        viewer_id: UUID | None = None,
+        current_run: AgentRun | None = None,
+    ) -> list[Message]:
+        return select_runtime_history(
+            runs, conversation, viewer_id=viewer_id, current_run=current_run
+        )

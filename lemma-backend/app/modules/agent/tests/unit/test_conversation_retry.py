@@ -130,6 +130,9 @@ async def test_retry_failed_run_reuses_runtime_without_appending_message(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
         agent_runtime=failed_run.agent_runtime,
+        # The person retrying, which is who the run acts as -- not the owner
+        # of the conversation, though here they are the same person.
+        triggered_by_user_id=conversation.user_id,
         metadata={
             "source": "manual_retry",
             "retried_agent_run_id": str(failed_run.id),

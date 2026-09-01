@@ -73,6 +73,7 @@ class ConversationRetryService(ConversationService):
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=failed_run.agent_runtime,
+            triggered_by_user_id=user_id,
             metadata={
                 "source": "manual_retry",
                 "retried_agent_run_id": str(failed_run.id),

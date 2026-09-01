@@ -81,6 +81,14 @@ class AgentRepository(Protocol):
 class ConversationRepository(Protocol):
     async def create_conversation(self, conversation: Conversation) -> Conversation: ...
 
+    async def find_persistent_conversation(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_id: UUID | None,
+    ) -> Conversation | None: ...
+
     async def create_conversation_once(
         self,
         conversation: Conversation,
@@ -112,6 +120,7 @@ class ConversationRepository(Protocol):
         agent_id: UUID | None,
         agent_runtime: AgentRuntimeConfig,
         parent_run_id: UUID | None = None,
+        triggered_by_user_id: UUID | None = None,
         metadata: JsonObject | None = None,
     ) -> AgentRun: ...
 
@@ -149,6 +158,8 @@ class ConversationRepository(Protocol):
         self,
         *,
         conversation_id: UUID,
+        viewer_id: UUID | None = None,
+        owner_user_id: UUID | None = None,
         before_sequence: int | None = None,
         after_sequence: int | None = None,
         limit: int = 100,

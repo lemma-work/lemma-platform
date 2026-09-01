@@ -100,6 +100,10 @@ class AgentControlAdapter(AgentPort):
             conversation_id=conversation.id,
             agent_id=agent.id,
             agent_runtime=runtime,
+            # A workflow has no sender. It acts as the conversation's owner,
+            # which is the authority it already ran with before this column
+            # made that explicit.
+            triggered_by_user_id=conversation.user_id,
             metadata=metadata,
         )
         await self.conversation_repo.append_message(

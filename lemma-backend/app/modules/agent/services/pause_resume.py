@@ -174,6 +174,8 @@ class PauseResume:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
+            # Whoever answered the pause, not whoever opened the conversation.
+            triggered_by_user_id=user_id,
             metadata={"source": source, "resumed_tool_call_id": resumed_tool_call_id},
         )
         self.uow.collect_events(

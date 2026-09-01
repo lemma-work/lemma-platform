@@ -66,7 +66,19 @@ class SnoozeWakeService:
         claimed.complete(reason)
         await self.waits.update(claimed)
 
-        ctx = await self._context_for(conversation.user_id, claimed.pod_id)
+        # A wake has no sender, so it acts as whoever set the snooze -- which
+        # is the trigger of the run that called the tool, recorded at that
+        # moment. Resolving it from the conversation instead would mean the
+        # authority a sleeping run wakes with could change when somebody joins
+        # or leaves. The owner remains the answer for runs predating the column.
+        paused_run = await self.conversations.get_agent_run(claimed.agent_run_id)
+        acting_user_id = (
+            paused_run.triggered_by_user_id
+            if paused_run is not None and paused_run.triggered_by_user_id is not None
+            else conversation.user_id
+        )
+
+        ctx = await self._context_for(acting_user_id, claimed.pod_id)
         token = set_current_context(ctx)
         try:
             service = self._conversation_service()
@@ -81,7 +93,7 @@ class SnoozeWakeService:
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 resumed_tool_call_id=claimed.tool_call_id,
-                user_id=conversation.user_id,
+                user_id=acting_user_id,
                 pod_id=claimed.pod_id,
                 agent_name=None,
                 source="snooze_resume",

@@ -195,6 +195,11 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
     agent_run = SimpleNamespace(
         started_at=None,
         status=AgentRunStatus.RUNNING,
+        # Whose grants the run holds, and which agent answers. The runner reads
+        # both off the run rather than off the job payload or the conversation,
+        # so a double without them is not a run.
+        triggered_by_user_id=None,
+        agent_id=None,
         agent_runtime=None,
         error=None,
     )
