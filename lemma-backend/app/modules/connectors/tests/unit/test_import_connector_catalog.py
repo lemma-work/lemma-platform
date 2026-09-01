@@ -1865,3 +1865,38 @@ async def test_a_connector_without_its_own_quirks_gets_the_plain_oauth_schema():
         connector_repository.entity, AuthProvider.LEMMA
     ).auth_config_schema
     assert sorted(schema["required"]) == ["client_id", "client_secret"]
+
+
+def _toolkit_with_modes(*modes: str):
+    return SimpleNamespace(
+        no_auth=False,
+        auth_schemes=[],
+        composio_managed_auth_schemes=[],
+    ), SimpleNamespace(
+        auth_config_details=[SimpleNamespace(mode=mode) for mode in modes]
+    )
+
+
+def test_a_dynamically_registered_oauth_client_is_still_oauth():
+    """Composio registers the client for `DCR_OAUTH` rather than it being
+    configured ahead of time, but the person still consents through a redirect.
+    Falling through to API_KEY offered them a form asking for a key that does
+    not exist -- which is what Granola would have shipped as."""
+    item, detail = _toolkit_with_modes("DCR_OAUTH")
+    assert importer._infer_composio_auth_method(item, detail) is AuthMethod.OAUTH2
+
+
+def test_an_api_key_toolkit_is_unchanged():
+    item, detail = _toolkit_with_modes("API_KEY")
+    assert importer._infer_composio_auth_method(item, detail) is AuthMethod.API_KEY
+
+
+def test_no_auth_still_wins_over_everything():
+    item, detail = _toolkit_with_modes("NO_AUTH", "DCR_OAUTH")
+    assert importer._infer_composio_auth_method(item, detail) is AuthMethod.NOAUTH
+
+
+def test_the_meeting_and_warehouse_apps_are_in_the_default_catalog():
+    """By Composio's slugs, which are not the names people use for them."""
+    ids = set(importer.DEFAULT_COMPOSIO_CONNECTOR_IDS)
+    assert {"granola_mcp", "fireflies", "googlebigquery"} <= ids

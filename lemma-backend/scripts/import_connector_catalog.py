@@ -189,6 +189,12 @@ CONNECTOR_ID_RENAMES: dict[str, str] = {
 }
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "gmail",
+    # Meeting notes and warehouse queries, by their Composio slugs rather than
+    # the names people use: Granola is `granola_mcp`, and BigQuery is
+    # `googlebigquery` with no underscore.
+    "granola_mcp",
+    "fireflies",
+    "googlebigquery",
     "googlecalendar",
     "googledrive",
     "googledocs",
@@ -436,7 +442,12 @@ def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
 
     if "NO_AUTH" in schemes:
         return AuthMethod.NOAUTH
-    if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK"}:
+    # DCR_OAUTH is an OAuth flow whose client is registered dynamically rather
+    # than configured ahead of time. Composio handles the registration, so from
+    # here it is an authorization-code redirect like any other -- and falling
+    # through to API_KEY, as it did, offers a form asking for a key that does
+    # not exist instead of a consent screen.
+    if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH"}:
         return AuthMethod.OAUTH2
     return AuthMethod.API_KEY
 
