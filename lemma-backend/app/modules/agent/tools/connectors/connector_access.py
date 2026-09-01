@@ -69,23 +69,53 @@ class ConnectorServices:
     uow: SqlAlchemyUnitOfWork
 
 
+def _connector_dependencies():
+    """The connectors module's DI factory, imported in one place.
+
+    Deferred rather than module-level for the same reason it always was, and
+    kept to a single site so the architecture ratchet counts one crossing
+    rather than one per caller.
+    """
+    from app.modules.connectors.api import dependencies
+
+    return dependencies
+
+
+@asynccontextmanager
+async def connector_execution_only() -> AsyncIterator[object]:
+    """A connector operation service with no authorization context built.
+
+    The second phase of an execution, mirroring what the REST use case does
+    between resolving and calling out. `execute_resolved` issues no DB I/O --
+    the gateway's connector-validation read is skipped because the resolve
+    phase already supplied `provider`, and the concrete gateways are DB-free --
+    so nothing here ever checks a connection out of the pool, and the external
+    call is made holding none.
+
+    That is the whole point. Running the call inside `connector_services`
+    instead meant one pooled connection was held for the full duration of a
+    provider call, up to sixty seconds for MCP: ten agents against an
+    unresponsive server wedged the entire pool, including for requests that had
+    nothing to do with connectors.
+    """
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        yield _connector_dependencies().build_connector_operation_service(uow)
+
+
 @asynccontextmanager
 async def connector_services(
     deps: BaseAgentContext,
 ) -> AsyncIterator[ConnectorServices]:
     """Yield connector services bound to the agent's authorization context."""
-    from app.modules.connectors.api.dependencies import (
-        build_connector_operation_service,
-        get_connector_service,
-    )
+    dependencies = _connector_dependencies()
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         auth_ctx = await build_delegated_context(uow, deps)
         token = set_current_context(auth_ctx)
         try:
             yield ConnectorServices(
-                connector=get_connector_service(uow),
-                operations=build_connector_operation_service(uow),
+                connector=dependencies.get_connector_service(uow),
+                operations=dependencies.build_connector_operation_service(uow),
                 ctx=auth_ctx,
                 uow=uow,
             )
