@@ -24,11 +24,19 @@ class AuthProviderInterface(ABC):
         install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
-    ) -> CredentialTypes:
+    ) -> CredentialTypes | dict:
         """Connect an account directly from user-supplied credentials (non-OAuth).
 
         Used for credential-managed schemes (API key, etc.) where there is no
-        redirect/callback flow. Returns the credentials to persist.
+        redirect/callback flow.
+
+        Returns the credentials to persist. Either an already-typed credential
+        or the raw submitted mapping: ``AccountEntity.credentials`` validates a
+        mapping into the union, and the two implementations differ -- Composio
+        builds a ``ComposioCredentials``, while the native scheme stores what
+        was submitted verbatim, because an API-key payload's shape belongs to
+        the connector. Narrowing this to a concrete type would change which
+        union member pydantic selects for existing installs.
         """
 
     @abstractmethod

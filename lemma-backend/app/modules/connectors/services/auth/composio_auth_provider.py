@@ -265,7 +265,13 @@ class ComposioAuthProvider(AuthProviderInterface):
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> Tuple[str, str]:
+        # Accepted and ignored. Composio runs the OAuth dance itself and hands
+        # back a connection, so there is no authorization request of ours to
+        # attach a challenge to -- but the port declares the parameter and the
+        # service passes it for every scheme, so refusing it here is a
+        # TypeError on a path with no other way to fail.
         composio = await run_blocking(
             self._composio_client_factory, limiter="external_http"
         )
@@ -294,7 +300,9 @@ class ComposioAuthProvider(AuthProviderInterface):
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials:
+        # Ignored, for the same reason as `get_authorization_url`.
         self._toolkit_slug(install)
 
         parsed_url = urlparse(redirect_uri)

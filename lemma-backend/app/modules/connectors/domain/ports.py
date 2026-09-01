@@ -189,7 +189,7 @@ class AuthProviderPort(Protocol):
         install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
-    ) -> CredentialTypes: ...
+    ) -> CredentialTypes | dict: ...
 
     async def get_authorization_url(
         self,

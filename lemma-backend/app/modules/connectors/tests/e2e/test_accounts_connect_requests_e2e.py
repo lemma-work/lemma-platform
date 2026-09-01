@@ -17,6 +17,9 @@ from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
+from app.modules.connectors.tests.support.fake_auth_provider import (
+    FakeAuthProvider,
+)
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
@@ -61,6 +64,33 @@ async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, 
     )
     token = await get_user_token(UUID(user_id), delegation_claims=claims)
     return {"Authorization": f"Bearer {token}"}
+
+
+def _install_fake_auth_provider(
+    monkeypatch, fake: FakeAuthProvider
+) -> FakeAuthProvider:
+    """Route the real provider's methods to a typed double.
+
+    Each wrapper forwards ``*args, **kwargs`` instead of restating the
+    signature, so there is exactly one place -- ``FakeAuthProvider`` -- where
+    the shape of these calls is written down, and
+    ``test_auth_provider_conformance`` checks that place against the port. The
+    previous arrangement restated the signature four times in this file, and
+    when the port grew ``code_verifier`` all four silently stopped matching it.
+    """
+    for name in (
+        "connect_with_credentials",
+        "get_authorization_url",
+        "exchange_code_for_credentials",
+        "refresh_credentials",
+        "revoke_connection",
+    ):
+
+        async def _delegate(self, *args, _bound=getattr(fake, name), **kwargs):
+            return await _bound(*args, **kwargs)
+
+        monkeypatch.setattr(LemmaAuthProvider, name, _delegate)
+    return fake
 
 
 @pytest.mark.asyncio
@@ -112,9 +142,7 @@ async def test_connect_request_and_accounts_lifecycle(
     auth_config = auth_config_response.json()
     assert auth_config["config"]["oauth2_credentials"]["client_secret"] == "********"
 
-    async def _fake_get_authorization_url(
-        self, install, user_id, state, redirect_uri, code_verifier=None
-    ):
+    def _assert_the_orgs_own_client_reaches_the_scheme(install, code_verifier):
         # The org brought its own client, so the secret it stored is what has
         # to reach the scheme -- not the deployment's.
         assert install.oauth2.client_secret == "client-secret"
@@ -122,26 +150,17 @@ async def test_connect_request_and_accounts_lifecycle(
         # A client with a secret does not need PKCE, and sending a challenge to
         # a provider that never agreed to one is how a working flow breaks.
         assert code_verifier is None
-        return ("https://mock.example.com/authorize", "provider_state")
 
-    async def _fake_exchange_code_for_credentials(
-        self, install, redirect_uri, user_id, state=None, code_verifier=None
-    ):
-        return OAuthCredentials(
-            access_token="access-token",
-            refresh_token="refresh-token",
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-        )
-
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "get_authorization_url",
-        _fake_get_authorization_url,
-    )
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "exchange_code_for_credentials",
-        _fake_exchange_code_for_credentials,
+    _install_fake_auth_provider(
+        monkeypatch,
+        FakeAuthProvider(
+            credentials=OAuthCredentials(
+                access_token="access-token",
+                refresh_token="refresh-token",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            ),
+            on_authorize=_assert_the_orgs_own_client_reaches_the_scheme,
+        ),
     )
 
     response = await authenticated_client.post(
@@ -850,18 +869,11 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
 
-    async def _fake_get_authorization_url(
-        self, install, user_id, state, redirect_uri, code_verifier=None
-    ):
-        return ("https://mock.example.com/authorize", "provider_state")
-
     # The callback URL's "code" query param stands in for the provider's actual
     # authorization code; here it doubles as a way to pick which identity the
     # exchange returns, so the test can drive distinct-identity vs same-identity
     # callbacks without a real OAuth provider.
-    async def _fake_exchange_code_for_credentials(
-        self, install, redirect_uri, user_id, state=None, code_verifier=None
-    ):
+    def _identity_from_the_callback_code(install, redirect_uri, code_verifier):
         from urllib.parse import parse_qs, urlparse
 
         code = (parse_qs(urlparse(redirect_uri).query).get("code") or [""])[0]
@@ -872,13 +884,8 @@ async def test_oauth_new_account_addition_and_reauth_flows(
             raw_response={"provider_account_id": code},
         )
 
-    monkeypatch.setattr(
-        LemmaAuthProvider, "get_authorization_url", _fake_get_authorization_url
-    )
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "exchange_code_for_credentials",
-        _fake_exchange_code_for_credentials,
+    _install_fake_auth_provider(
+        monkeypatch, FakeAuthProvider(on_exchange=_identity_from_the_callback_code)
     )
 
     async def _connect(identity_code: str) -> dict:
