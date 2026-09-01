@@ -1290,3 +1290,83 @@ async def test_a_spent_pkce_verifier_is_not_left_behind(
     )
     assert row is not None
     assert "code_verifier" not in (row.attributes or {})
+
+
+@pytest.mark.e2e
+async def test_a_credential_is_rotated_without_replacing_the_account(
+    authenticated_client, fixed_test_org, db_session
+):
+    """Rotating in place keeps the id, and a rejected credential keeps the account.
+
+    There was no way to do this, so the UI deleted the account and created a
+    replacement. A failed create left nothing behind -- the old account was
+    already gone, revoked upstream on the way out -- and a successful one
+    issued a NEW id, stranding every schedule, surface and grant pinned to the
+    old one. `install_update` avoids exactly this on the install side ("the
+    row, its id, and every reference to it survive"); the account side had no
+    equivalent.
+    """
+    connector_id = f"rotate-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Rotatable",
+            description="credential rotation coverage",
+            kinds=[
+                {
+                    "kind": "package",
+                    "auth_scheme": "API_KEY",
+                    "credential_schema": {
+                        "type": "object",
+                        "required": ["api_key"],
+                        "properties": {"api_key": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    org_id = fixed_test_org["id"]
+    assert (
+        await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/auth-configs",
+            json={
+                "connector_id": connector_id,
+                "kind": "package",
+                "config_source": "ORG_CUSTOM",
+                "name": connector_id,
+            },
+        )
+    ).status_code == 200
+
+    created = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/accounts",
+        json={"auth_config_name": connector_id, "credentials": {"api_key": "first"}},
+    )
+    assert created.status_code == 200, created.text
+    account_id = created.json()["id"]
+
+    rotated = await authenticated_client.patch(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}",
+        json={"credentials": {"api_key": "second"}},
+    )
+    assert rotated.status_code == 200, rotated.text
+    assert rotated.json()["id"] == account_id, (
+        "a new id strands every reference to the old one"
+    )
+
+    # A credential the schema rejects must leave the account exactly as it was,
+    # which is the half that delete-then-create could never offer.
+    refused = await authenticated_client.patch(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}",
+        json={"credentials": {"api_kye": "typo"}},
+    )
+    assert refused.status_code == 400, refused.text
+
+    still_there = await authenticated_client.get(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}"
+    )
+    assert still_there.status_code == 200, "the account survived a rejected rotation"

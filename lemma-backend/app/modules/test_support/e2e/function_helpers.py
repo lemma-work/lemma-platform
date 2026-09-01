@@ -20,12 +20,16 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import status
+from sqlalchemy import select
 
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
+)
+from app.modules.identity.infrastructure.models.organization_models import (
+    OrganizationMember,
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.test_support.e2e.waiters import wait_for_status
@@ -252,6 +256,28 @@ async def seed_connector_operation(
 
     account = None
     if user_id is not None:
+        # The owner is a member of the organization, because in production they
+        # must have been: `create_account` requires membership, so an account
+        # can only exist for someone who was a member when it was made.
+        # Resolution now refuses an account whose owner has left, and an owner
+        # with no membership row is exactly what that looks like.
+        already_a_member = (
+            await db_session.execute(
+                select(OrganizationMember).where(
+                    OrganizationMember.user_id == user_id,
+                    OrganizationMember.organization_id == organization_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if already_a_member is None:
+            db_session.add(
+                OrganizationMember(
+                    id=uuid4(),
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    role="ORG_MEMBER",
+                )
+            )
         account = Account(
             id=uuid4(),
             connector_id=connector_id,

@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AccountCreateSchema } from '../models/AccountCreateSchema.js';
+import type { AccountCredentialsUpdateSchema } from '../models/AccountCredentialsUpdateSchema.js';
 import type { AccountListResponseSchema } from '../models/AccountListResponseSchema.js';
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
@@ -253,6 +254,34 @@ export class ConnectorsService {
                 'organization_id': organizationId,
                 'account_id': accountId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Account
+     * Replace a credential-managed account's credential, keeping the account and its id. Rotating by deleting and reconnecting issues a new id and strands every schedule, surface and grant that referenced the old one.
+     * @param organizationId
+     * @param accountId
+     * @param requestBody
+     * @returns AccountResponseSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorAccountUpdate(
+        organizationId: string,
+        accountId: string,
+        requestBody: AccountCredentialsUpdateSchema,
+    ): CancelablePromise<AccountResponseSchema> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/organizations/{organization_id}/connectors/accounts/{account_id}',
+            path: {
+                'organization_id': organizationId,
+                'account_id': accountId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

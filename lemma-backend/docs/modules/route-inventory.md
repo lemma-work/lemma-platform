@@ -114,6 +114,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}` | `connector.operation.detail` | Get Connector Operation Details |
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers` | `connector.trigger.list` | List Connector Triggers |
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers/{trigger_name}` | `connector.trigger.get` | Get Connector Trigger |
+| PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.update` | Update Account |
 | PATCH | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.update` | Update Auth Config |
 | POST | `/organizations/{organization_id}/connectors/accounts` | `connector.account.create` | Create Account |
 | POST | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.create` | Create Auth Config |

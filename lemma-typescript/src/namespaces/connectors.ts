@@ -246,6 +246,25 @@ export class ConnectorsNamespace {
     });
   }
 
+  /**
+   * Replace a credential-managed account's credential, keeping its id.
+   *
+   * Deleting and reconnecting also rotates a credential, and issues a new
+   * account id doing it — stranding every schedule, surface and grant pinned
+   * to the old one, and leaving nothing behind at all if the reconnect fails.
+   */
+  rotateAccountCredentials(
+    organizationId: string,
+    accountId: string,
+    credentials: Record<string, unknown>,
+  ) {
+    return this.client.request(() => ConnectorsService.connectorAccountUpdate(
+      organizationId,
+      accountId,
+      { credentials } as never,
+    ));
+  }
+
   createConnectRequest(organizationId: string, input: ConnectRequestInput) {
     const payload: ConnectRequestInitiateSchema =
       typeof input === "string" ? { connector_id: input } : input;

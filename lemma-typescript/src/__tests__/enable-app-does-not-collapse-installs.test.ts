@@ -17,11 +17,14 @@ function namespaceWith(existing: Array<Record<string, unknown>>) {
   const created: Array<Record<string, unknown>> = [];
   const listed = { items: existing, next_page_token: null };
 
-  const connectors = new ConnectorsNamespace({
+  const connectors = new ConnectorsNamespace(
     // The namespace calls through `client.request(fn)`; the generated service
     // is what actually issues the call, so both are stubbed at that seam.
-    request: (fn: () => unknown) => fn(),
-  } as never);
+    { request: (fn: () => unknown) => fn() } as never,
+    // `http` is unused by the paths under test, but the constructor takes it
+    // and `tsconfig.test.json` type-checks this file.
+    {} as never,
+  );
 
   vi.spyOn(connectors.authConfigs, "list").mockResolvedValue(listed as never);
   vi.spyOn(connectors.authConfigs, "create").mockImplementation((async (

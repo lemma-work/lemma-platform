@@ -165,6 +165,14 @@ class AccountCreateSchema(BaseModel):
     allowed_scopes: Optional[List[str]] = None
 
 
+class AccountCredentialsUpdateSchema(BaseModel):
+    """A replacement credential for an account that already exists."""
+
+    credentials: Dict[str, Any] = Field(
+        ..., description="The new credential, validated against the kind's schema"
+    )
+
+
 class AuthConfigCreateSchema(BaseModel):
     connector_id: str
     kind: Optional[str] = Field(

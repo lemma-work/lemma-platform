@@ -3,7 +3,7 @@
 import type { ComponentType } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Database, Globe2, Pencil, Plus, RefreshCw, Wrench } from '@/components/ui/icons';
+import { CheckCircle, Database, Globe2, Pencil, Plus, RefreshCw, Wrench } from '@/components/ui/icons';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { StepLoader } from '@/components/brand/loader';
@@ -124,6 +124,7 @@ export function ConnectionRow({
     isBusy,
     onEdit,
     onRefresh,
+    onMakeDefault,
     onDelete,
 }: {
     install: AuthConfig;
@@ -132,6 +133,7 @@ export function ConnectionRow({
     isBusy: boolean;
     onEdit: (install: AuthConfig) => void;
     onRefresh: (install: AuthConfig) => void;
+    onMakeDefault: (install: AuthConfig) => void;
     onDelete: (install: AuthConfig) => void;
 }) {
     const target = describeInstallTarget(install.kind, install.config);
@@ -204,6 +206,18 @@ export function ConnectionRow({
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Refresh operations
                 </DropdownMenuItem>
+                {install.is_default ? null : (
+                    <DropdownMenuItem
+                        disabled={isBusy}
+                        onSelect={(event) => {
+                            event.preventDefault();
+                            onMakeDefault(install);
+                        }}
+                    >
+                        <CheckCircle className="mr-2 h-4 w-4" />
+                        Make default
+                    </DropdownMenuItem>
+                )}
                 <DestructiveResourceActionItem disabled={isBusy} onSelect={() => onDelete(install)}>
                     Delete connection
                 </DestructiveResourceActionItem>
