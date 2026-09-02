@@ -287,6 +287,34 @@ def reject_delegated_workload(action_label: str):
     return Depends(_dependency)
 
 
+def reject_delegated_workload_anywhere(action_label: str):
+    """Deny a delegated workload on a route that has no organization in its path.
+
+    :func:`reject_delegated_workload` resolves ``OrgContextDep``, which needs an
+    ``org_id`` path or query parameter -- so the organization routes addressed
+    only by an invitation id (accept, revoke) could not use it, and those are
+    exactly the ones that mint or withdraw membership.
+
+    Reading the claims straight off the request is not a shortcut around the
+    context: ``verify_auth`` parses a delegated token on *every* path, which is
+    why a workload token reaches these routes at all. The same fact that lets it
+    in is the one that turns it away.
+    """
+
+    async def _dependency(request: Request) -> None:
+        if getattr(request.state, "delegation_claims", None) is None:
+            return
+        from app.core.domain.errors import DomainError
+
+        raise DomainError(
+            f"Delegated workloads may not {action_label}.",
+            code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+            status_code=403,
+        )
+
+    return Depends(_dependency)
+
+
 def reject_delegated_workload_pod(action_label: str):
     """Pod-scoped counterpart of :func:`reject_delegated_workload`.
 

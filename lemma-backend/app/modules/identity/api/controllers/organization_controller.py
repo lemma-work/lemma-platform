@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
+from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.authorization.service import AuthorizationDataService
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import slugify
@@ -176,6 +177,9 @@ async def check_slug_availability(
     "/{org_id}/join",
     status_code=status.HTTP_200_OK,
     operation_id="org.join_auto_join",
+    dependencies=[
+        reject_delegated_workload_anywhere("join an organization on your behalf")
+    ],
     summary="Join Auto-Join Organization",
     description="Join an organization when the current user's email domain is allowed to auto-join",
     response_model=OrganizationResponse,
@@ -265,6 +269,7 @@ async def get_organization(
     "/{org_id}",
     status_code=status.HTTP_200_OK,
     operation_id="org.update",
+    dependencies=[reject_delegated_workload_anywhere("change organization settings")],
     summary="Update Organization",
     description="Update an organization's name or join policy (owner only)",
     response_model=OrganizationResponse,
@@ -324,6 +329,9 @@ async def list_members(
     "/{org_id}/invitations",
     status_code=status.HTTP_201_CREATED,
     operation_id="org.invitation.invite",
+    dependencies=[
+        reject_delegated_workload_anywhere("invite people to an organization")
+    ],
     summary="Invite Member",
     description="Invite a user to join the organization",
     response_model=OrganizationInvitationResponse,
@@ -394,6 +402,9 @@ async def list_invitations(
     "/invitations/{invitation_id}/accept",
     status_code=status.HTTP_200_OK,
     operation_id="org.invitation.accept",
+    dependencies=[
+        reject_delegated_workload_anywhere("accept an organization invitation")
+    ],
     summary="Accept Invitation",
     description="Accept an organization invitation",
     response_model=OrganizationMessageResponse,
@@ -414,11 +425,16 @@ async def accept_invitation(
         invitation_id=invitation_id,
         requester_user_id=user.id,
     )
+    # The role the membership row was written with, not ORG_MEMBER. This was
+    # hardcoded, so an invited owner or editor got a member row saying
+    # ORG_OWNER and role assignments saying ORG_MEMBER -- passing every check
+    # that reads the row and failing every check that reads the Context,
+    # including the org-owner shortcut onto the organization's pods.
     await _sync_org_role_assignment(
         uow,
         organization_id=invitation.organization_id,
         user_id=user.id,
-        role=OrganizationRole.ORG_MEMBER,
+        role=invitation.role,
         assigned_by_user_id=user.id,
     )
 
@@ -455,6 +471,9 @@ async def get_invitation(
     "/invitations/{invitation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="org.invitation.revoke",
+    dependencies=[
+        reject_delegated_workload_anywhere("revoke an organization invitation")
+    ],
     summary="Revoke Invitation",
     description="Revoke an organization invitation",
 )
@@ -475,6 +494,9 @@ async def revoke_invitation(
     "/{org_id}/members/{member_id}/role",
     status_code=status.HTTP_200_OK,
     operation_id="org.member.update_role",
+    dependencies=[
+        reject_delegated_workload_anywhere("change organization member roles")
+    ],
     summary="Update Member Role",
     description="Update a member's role in the organization",
     response_model=OrganizationMemberResponse,
@@ -538,6 +560,7 @@ async def _sync_org_role_assignment(
     "/{org_id}/members/{member_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="org.member.remove",
+    dependencies=[reject_delegated_workload_anywhere("remove organization members")],
     summary="Remove Member",
     description="Remove a member from the organization",
 )

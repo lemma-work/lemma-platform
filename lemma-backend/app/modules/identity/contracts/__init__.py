@@ -6,6 +6,7 @@ from uuid import UUID
 from app.modules.identity.api.schemas.user_schemas import UserResponse
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
+    OrganizationJoinPolicy,
     OrganizationMemberEntity,
     OrganizationRole,
     can_grant_org_role,
@@ -30,6 +31,7 @@ __all__ = [
     "AuthenticatedUser",
     "IdentityEmailPort",
     "OrganizationEntity",
+    "OrganizationJoinPolicy",
     "OrganizationMemberEntity",
     "OrganizationRole",
     "UserEntity",

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.context import ResourceType
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.grants import (
@@ -114,6 +115,14 @@ async def replace_resource_access_grant(
                 permission_ids=data.permission_ids,
             )
         ]
+    )
+    # `pod.role.manage` says who may share, not what they may share: the
+    # conferral bound is what stops it from being a way to mint access the
+    # sharer does not have (PS-ACCESS-010).
+    assert_can_confer(
+        ctx,
+        data.permission_ids,
+        action="grant permissions you do not hold",
     )
     await _require_grantee(
         uow,

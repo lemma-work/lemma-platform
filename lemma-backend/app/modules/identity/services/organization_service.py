@@ -8,6 +8,7 @@ from app.core.helpers.slug import slugify
 from app.modules.identity.domain.email_domains import work_domain_from_email
 from app.modules.identity.services.membership_rules import (
     refuse_if_last_owner,
+    refuse_unconferrable_org_role,
     resolve_pod_grant,
 )
 from app.modules.identity.domain.errors import (
@@ -99,12 +100,10 @@ class OrganizationService:
         denied_message: str,
     ) -> OrganizationMemberEntity:
         member = await self.organization_repository.get_member(user_id, organization_id)
-        if not member:
+        # One refusal for both halves: "you are not in this organization" and
+        # "you are in it but not as one of these roles" must not read apart.
+        if member is None or (allowed_roles and member.role not in allowed_roles):
             raise IdentityAccessDeniedError(denied_message)
-
-        if allowed_roles and member.role not in allowed_roles:
-            raise IdentityAccessDeniedError(denied_message)
-
         return member
 
     async def create_organization(
@@ -340,6 +339,7 @@ class OrganizationService:
             allowed_roles=[OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR],
             denied_message="Only owners and editors can invite members",
         )
+        refuse_unconferrable_org_role(inviter, entity.role)
 
         existing_member = await self.organization_repository.get_member_by_email(
             entity.organization_id,

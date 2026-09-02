@@ -7,7 +7,7 @@ from typing import Optional
 from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
-from app.modules.identity.contracts import OrganizationRole
+from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
@@ -17,6 +17,7 @@ from app.modules.pod.domain.errors import (
 from app.modules.pod.domain.pod_names import normalize_pod_name
 from app.modules.pod.domain.pod_entities import (
     PodEntity,
+    PodJoinPolicy,
     PodMemberEntity,
     PodRole,
     PodUpdateEntity,
@@ -182,6 +183,11 @@ class PodService:
             if isinstance(default_runtime, dict) and default_runtime.get("profile_id"):
                 merged_config["default_profile_id"] = default_runtime["profile_id"]
             update_data["config"] = merged_config
+            await self._require_join_policy_authority(
+                ctx=ctx,
+                pod=pod_entity,
+                requested=merged_config.get("join_policy"),
+            )
         merged_dict.update(update_data)
 
         updated_entity = PodEntity(**merged_dict)
@@ -195,6 +201,53 @@ class PodService:
             await self.icon_service.delete_by_url(pod_entity.icon_url)
 
         return updated
+
+    async def _require_join_policy_authority(
+        self,
+        *,
+        ctx: Context,
+        pod: PodEntity,
+        requested: object,
+    ) -> None:
+        """Who may change a pod's join policy, and how far they may open it.
+
+        Two separate rules, because the join policy is the one pod setting whose
+        effect leaves the pod.
+
+        Changing it at all needs ``pod.member.manage``, not ``pod.update``.
+        Deciding who may join is membership management wearing a config field's
+        clothes, and ``PUT /pods/{id}`` merges the config field-wise -- so an
+        editor could set it in the same request that renamed the pod.
+
+        Opening it to PUBLIC additionally needs the *organization* to be public.
+        A PUBLIC pod mints an ORG_MEMBER row for any signed-in account that
+        joins it (``_ensure_org_membership_for_join``), so a pod that could
+        widen itself past its organization would be a pod-level decision that
+        hands out organization membership -- and PS-POD-010 makes the
+        organization the outer boundary, owned by the org owner.
+        """
+        if requested is None:
+            return
+        try:
+            new_policy = PodJoinPolicy(requested)
+        except ValueError as exc:
+            raise PodValidationError(f"Unknown pod join policy: {requested}") from exc
+        if new_policy == pod.config.join_policy:
+            return
+        await ctx.require(
+            Permissions.POD_MEMBER_MANAGE,
+            ResourceRef.pod(pod.id, pod.organization_id),
+        )
+        if new_policy != PodJoinPolicy.PUBLIC:
+            return
+        organization = await self.organization_repository.get(pod.organization_id)
+        org_policy = organization.join_policy if organization else None
+        if org_policy != OrganizationJoinPolicy.PUBLIC:
+            raise PodAccessDeniedError(
+                "This pod cannot be opened to everyone while its organization is "
+                "not public. Ask an organization owner to open the organization "
+                "first, or use ORG_MEMBERS to open the pod to the organization."
+            )
 
     def _normalize_name(self, name: str) -> str:
         try:

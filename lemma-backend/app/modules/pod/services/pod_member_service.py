@@ -81,6 +81,9 @@ class PodMemberService:
                 requester_user_id=requester_user_id,
                 target_roles=target_roles,
                 target_user_id=None,
+                requester_is_org_owner=(
+                    requester_org_member.role == OrganizationRole.ORG_OWNER
+                ),
             )
         elif not self._member_has_role(requester_pod_member, PodRole.EDITOR):
             raise PodAccessDeniedError("Only pod editors or admins can assign members")
@@ -275,12 +278,21 @@ class PodMemberService:
         pod_member: PodMemberEntity,
         *,
         verb: str,
+        remaining_roles: list[str] | None = None,
     ) -> None:
         """Refuse to leave the pod with nobody in it who can administer it.
 
-        Counted by *permission* rather than by the ``POD_ADMIN`` name, so a pod
-        that hands ``pod.member.manage`` to a custom role is not told it has one
-        administrator when it has four (see ``count_members_who_can``).
+        Both the trigger and the count go by *permission* rather than by the
+        ``POD_ADMIN`` name. The count always did (see ``count_members_who_can``);
+        the trigger did not, and half a rule is the wrong half. A pod whose only
+        administrator holds a custom role carrying ``pod.member.manage`` could
+        have that person removed, because they were not literally POD_ADMIN --
+        and demoting a POD_ADMIN to a custom role that *does* carry it was
+        refused, because the destination was not literally POD_ADMIN either.
+
+        ``remaining_roles`` is what the member will hold once the change lands;
+        pass it for a re-role. If those roles still administer the pod there is
+        nothing to refuse, whatever they are called.
 
         **Nobody is exempt, including an organization owner.** The rule is about
         the pod, so an owner who is also its only administrator is refused like
@@ -297,7 +309,16 @@ class PodMemberService:
         somewhere else, which is exactly the shape that produces a pod nobody
         can administer the moment that other role changes.
         """
-        if not self._member_has_role(pod_member, PodRole.ADMIN):
+        administers = await self.pod_member_repository.roles_grant_permission(
+            pod_id, normalize_role_list(pod_member.roles), Permissions.POD_MEMBER_MANAGE
+        )
+        if not administers:
+            return
+        if remaining_roles is not None and (
+            await self.pod_member_repository.roles_grant_permission(
+                pod_id, remaining_roles, Permissions.POD_MEMBER_MANAGE
+            )
+        ):
             return
         administrators = await self.pod_member_repository.count_members_who_can(
             pod_id, Permissions.POD_MEMBER_MANAGE
@@ -426,6 +447,9 @@ class PodMemberService:
                 requester_user_id=requester_user_id,
                 target_roles=normalized_roles,
                 target_user_id=target_user_id,
+                requester_is_org_owner=(
+                    requester_org_member.role == OrganizationRole.ORG_OWNER
+                ),
             )
         else:
             requester_pod_member = (
@@ -442,8 +466,12 @@ class PodMemberService:
         # would leave the pod unadministrable", and answering 409 first would tell
         # somebody with no say over the pod that it has exactly one admin left.
         # See PS-POD-041 and DEV-POD-002.
-        if PodRole.ADMIN.value not in normalized_roles:
-            await self._refuse_if_last_administrator(pod_id, pod_member, verb="demote")
+        await self._refuse_if_last_administrator(
+            pod_id,
+            pod_member,
+            verb="demote",
+            remaining_roles=normalized_roles,
+        )
 
         updated = await self.pod_member_repository.update(pod_member)
         if updated.user_id is None:
