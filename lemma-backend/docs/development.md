@@ -91,6 +91,60 @@ global, background task).
 - **Never log a secret or a user's message text.** See Secrets below; error
   strings reach both the log and, for agent tools, the user-visible transcript,
   so route free text through `app/core/redaction.py`.
+- **Classify at the boundary; do not re-raise the framework from a service.**
+  A service raising `HTTPException` has decided a status code from a place that
+  cannot know whether it is serving HTTP, a worker job, or an agent tool — and
+  its response skips the `{message, code, details}` envelope, so the `code` a
+  client parses becomes `HTTP_400`. Raise a domain error; let the boundary map
+  it. Today 149 `HTTPException` sites bypass the envelope, 18 of them raised
+  from services.
+- **An error code is an enum, not a string literal.** A free-string code is a
+  typo that type-checks, and clients match on it. 135 free-string codes exist
+  today; new ones belong in the shared enum.
+- **Never put `str(exc)` in a user-visible field.** Provider exceptions carry
+  URLs, payload fragments and occasionally credentials. Map to a message the
+  reader can act on, and log the original with `exc_info=True`.
+- **Re-wrapping keeps the cause.** `raise Wrapped(...) from exc`. A wrap that
+  drops `__cause__` throws away the only traceback that pointed at the fault.
+
+## Concurrency and external I/O
+
+The worker is one event loop per process, and everything below is a way it stops
+serving.
+
+- **Never block the loop.** Sync HTTP, `open()`, `time.sleep`, `subprocess`, or
+  CPU-heavy work goes through `run_blocking`
+  (`app/core/concurrency/offload.py`). The ASYNC ruff gate covers the known
+  shapes; it cannot see a blocking call inside a third-party library, so check
+  what an SDK does before calling it from a coroutine.
+- **A background task holds a reference and reports its own death.**
+  `asyncio.create_task(...)` with nothing holding the result is a task whose
+  exception is discarded and whose lifetime is undefined. Use
+  `create_inherited_task` (`app/core/request_context.py`), which attaches the
+  unhandled-exception callback and carries request context, and cancel on
+  shutdown.
+- **`asyncio.gather` needs `return_exceptions=True` unless you want siblings
+  cancelled.** One failure cancelling nine in-flight operations is rarely the
+  intent, and never the intent for fan-out over tenants. 12 sites currently omit
+  it.
+- **A retry has a cap, a backoff and jitter.** A tight retry against a
+  struggling dependency is how a degradation becomes an outage. There is no
+  shared helper yet and thirteen hand-rolled loops have none of the three —
+  writing that helper is the fix, not a fourteenth loop.
+- **Cancellation is not an error.** Never swallow `CancelledError` in a broad
+  handler — re-raise it. A cancellation-blind `except Exception` turns a clean
+  shutdown into a hung one, and the swallowed-errors gate ratchets exactly this.
+- **Clients are process-lifetime, not per-call.** Constructing an
+  `httpx.AsyncClient` per request leaks connections and defeats pooling; use
+  `get_shared_http_client()` (`app/core/net/http_client.py`), which exists
+  because connector execution used to build a fresh client on every call. Around
+  30 per-call constructions remain in shapes the I/O gate cannot see.
+- **An in-process lock is not a lock.** `asyncio.Lock` coordinates one process.
+  Anything that must hold across replicas needs Redis or a database constraint.
+- **At-least-once means idempotent.** Redis Streams and streaq both redeliver.
+  Every consumer goes through the inbox, and every side effect is keyed so the
+  second delivery is a no-op. See
+  [design.md DES-15](../../docs/engineering/design.md#des-15--every-cross-module-consumer-is-inbox-backed-and-idempotent).
 
 ## Authorization model (summary)
 

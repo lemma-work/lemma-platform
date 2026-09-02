@@ -67,6 +67,10 @@ issue.
 |---|---|
 | [Contributing](../CONTRIBUTING.md) | Setup, architecture rules, and what a pull request needs |
 | [Working in this repository](../AGENTS.md) | A map of the components and the rules broken most often |
+| [Engineering standards](engineering/README.md) | The rules the code is held to, each with its enforcing check |
+| [Design and abstraction](engineering/design.md) | Module boundaries, ports and adapters, services, shapes, events |
+| [Types and data shapes](engineering/types.md) | Typed interfaces, `Any`, named shapes, the type-checker path |
+| [Test design](engineering/tests.md) | What a good test looks like in any of the three suites |
 | [Agent context](../CLAUDE.md) | Loaded automatically by coding agents; carries the one rule that is wrong by default and points here |
 | [Testing strategy](testing.md) | The three suites, which one a change needs, and what gates what |
 | [Product scenario suite](../tests/scenarios/README.md) | The black-box suite that proves the product specification, and how to add to it |
