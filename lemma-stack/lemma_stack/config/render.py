@@ -73,6 +73,36 @@ def app_base_domain(doc: TOMLDocument) -> str:
     return f"{LOCAL_APPS_DOMAIN}:{store.port(doc, 'backend')}"
 
 
+def _secret_encryption_key(doc: TOMLDocument) -> str:
+    """Derive this installation's key for secrets at rest.
+
+    Without this the backend has nothing configured, sees ``ENVIRONMENT=local``
+    and falls back to ``local_fallback_secret()`` -- the base64 of
+    ``sha256(b"lemma-local-connector-secret-key")``, a literal in the public
+    source. Every connector credential, auth-config payload and runtime-profile
+    credential on a self-host was then encrypted with a key any reader of the
+    repository can compute, which is not encryption at rest, it is encoding.
+
+    Derived rather than stored, off the same installation secret as the runtime
+    credential below and with its own domain string, so the two are independent
+    and neither is written down a second time. Stable for the life of the
+    installation, and gone when the data directory is.
+
+    Rows written *before* this key existed stay readable: they are tagged with
+    the fallback's key id, and the backend keeps that key as a decrypt-only
+    candidate while ``ENVIRONMENT`` is local (``crypto/keys.py::
+    legacy_candidate_secrets``). New writes take this key; to move the old rows
+    forward, run ``scripts/reencrypt_secrets.py`` in the backend.
+    """
+
+    digest = hmac.digest(
+        store.installation_secret(doc).encode("utf-8"),
+        b"lemma-secret-encryption-v1",
+        "sha256",
+    )
+    return base64.urlsafe_b64encode(digest).decode("ascii")
+
+
 def _runtime_credential_key(doc: TOMLDocument) -> str:
     """Derive a stable local-only runtime credential key.
 
@@ -103,7 +133,13 @@ def backend_env(
     adapter_provider = "lemma_local" if provider == "lemma_local" else "docker"
     env = {
         "ENVIRONMENT": "local",
-        "DEBUG": "true",
+        # DEBUG is deliberately not set. Starlette's ServerErrorMiddleware
+        # checks it *before* the application's Exception handler, so a true
+        # value answers every unhandled error with a source-annotated HTML
+        # traceback instead of the {message, code, request_id} envelope the UI
+        # and both SDKs parse -- which reads to a local user as a client-side
+        # parse failure with no request id to quote. Local diagnostics are
+        # served by LOCAL_HTTP_ACCESS_LOGS_ENABLED below.
         "LOG_LEVEL": "INFO",
         "JSON_LOGS_ENABLED": "true",
         "LOCAL_HTTP_ACCESS_LOGS_ENABLED": "true",
@@ -117,6 +153,9 @@ def backend_env(
         "LOCAL_KREUZBERG_ENABLED": "false",
         "KREUZBERG_URL": "",
         "DOCUMENT_PROCESSOR": "xberg",
+        # Secrets at rest are encrypted with this installation's own key, not
+        # the backend's published local fallback. See _secret_encryption_key.
+        "SECRET_ENCRYPTION_KEY": _secret_encryption_key(doc),
         # Sandboxes are provisioned by the backend itself.
         "WORKSPACE_PROVIDER": adapter_provider,
         "WORKSPACE_RUNTIME_CREDENTIAL_KEY": _runtime_credential_key(doc),

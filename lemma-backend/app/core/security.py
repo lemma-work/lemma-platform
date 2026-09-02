@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
+from supertokens_python.exceptions import SuperTokensError
 from supertokens_python.recipe.session.exceptions import (
     InvalidClaimsError,
     TryRefreshTokenError,
@@ -280,13 +281,13 @@ async def verify_auth(connection: HTTPConnection):
     ):
         return
 
-    if connection.scope["type"] != "http" and (
-        connection.url.path.startswith("/workspace/browser")
-        or _is_datastore_changes_ws_path(connection.url.path)
-    ):
-        return
-
     if connection.scope["type"] != "http":
+        # WebSockets: two of them carry their own authentication, and nothing
+        # else on a non-HTTP scope is authenticated here at all.
+        if connection.url.path.startswith(
+            "/workspace/browser"
+        ) or _is_datastore_changes_ws_path(connection.url.path):
+            return
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
@@ -388,22 +389,32 @@ async def verify_auth(connection: HTTPConnection):
             status_code=401,
             detail="Access token has expired. Please refresh your session.",
         )
+    except HTTPException:
+        # Already classified above (403 for an inactive account, an unverified
+        # email, revoked delegation) or by SuperTokens' own machinery.
+        raise
+    except SuperTokensError as e:
+        # The ordinary answer to a request without a valid session: no token, a
+        # malformed one, a revoked one. Same 401 as before and deliberately no
+        # record -- one per unauthenticated request is the volume that would
+        # bury the arm below, which is the one worth reading.
+        raise HTTPException(status_code=401, detail="Unauthorized") from e
     except Exception as e:
-        # Catch-all for other auth errors (e.g. malformed token) provided by SuperTokens or logic
-        # If get_session raises a 401-like exception (Unauthorised), FastAPI handles it.
-        # But if it's a generic error, we log and deny.
-        # Note: get_session(session_required=True) raises supertokens_python.exceptions.SuperTokensError mostly
-        # creating a proper 401 response.
-
-        # We check if it's already an HTTPException (like 401 from SuperTokens machinery if any)
-        if isinstance(e, HTTPException):
-            raise e
-
-        logger.debug("security.security.auth_dependency.observed")
-        # If we reached here, and authentication failed but didn't raise, we force 401.
-        # However, get_session(session_required=True) *should* send a response or raise.
-        # SuperTokens often sends a response directly which stops execution?
-        # In FastAPI integration, it usually raises an exception that is handled by exception handlers.
-
-        # Re-raising generic exception as 401 for safety if not handled
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        # Everything else is this deployment failing, not the caller: the
+        # SuperTokens core unreachable, a JWKS fetch that did not come back, a
+        # key that does not match. It still answers 401, because a request
+        # whose identity could not be established must not proceed -- but the
+        # client's reaction to a 401 is to discard a working session and ask
+        # for a new one, so the server has to be the one that knows better.
+        #
+        # This was `logger.debug` with no exception, on the hottest path in the
+        # service. At LOG_LEVEL=INFO the record was dropped before formatting,
+        # so a core outage looked exactly like a wave of bad tokens and there
+        # was nothing server-side to say otherwise.
+        logger.warning(
+            "security.auth_dependency.unexpected_failure.degraded",
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        # `from e` so the traceback keeps the frame that actually failed.
+        raise HTTPException(status_code=401, detail="Unauthorized") from e

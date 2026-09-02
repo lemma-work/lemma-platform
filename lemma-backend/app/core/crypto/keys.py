@@ -58,6 +58,19 @@ def _single_primary_secret() -> bytes | None:
     if configured:
         return configured.encode("utf-8")
     if settings.is_local_mode():
+        if settings.environment != "testing":
+            # `testing` is what the constant is for -- a suite has no secrets
+            # worth protecting and would only get one warning per run out of
+            # this. Every other local deployment is somebody's install, and
+            # LOCAL_KEY_SEED is a literal in a public repository: anyone who
+            # can read a row can decrypt it. Said once per process, at a level
+            # the default LOG_LEVEL=INFO keeps, because until now nothing said
+            # it at all. `lemma-stack` renders a per-installation key, so this
+            # is aimed at a backend run straight from a checkout.
+            logger.warning(
+                "crypto.keys.published_local_encryption_key.degraded",
+                environment=settings.environment,
+            )
         return local_fallback_secret()
     return None
 
@@ -141,8 +154,14 @@ def legacy_candidate_secrets() -> list[bytes]:
             for material in parse_keyset(raw_keyset).keys.values():
                 add(material.secret)
         except RuntimeError:
-            logger.debug(
-                "crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic"
+            # An unparsable keyset means every retired key in it stops
+            # decrypting, so rows written under one read as corrupt. Reported
+            # loudly: the operator who just edited SECRET_ENCRYPTION_KEYSET is
+            # the only person who can fix it, and they have minutes before the
+            # first failed decrypt is mistaken for data loss.
+            logger.error(
+                "crypto.keys.unparsable_secret_encryption_keyset.failed",
+                exc_info=True,
             )
 
     if settings.secret_encryption_key:
