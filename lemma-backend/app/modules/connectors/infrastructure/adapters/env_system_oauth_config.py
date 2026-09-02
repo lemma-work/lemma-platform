@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 
 from dotenv import dotenv_values
@@ -90,6 +91,27 @@ NATIVE_LEMMA_SYSTEM_OAUTH: dict[str, SystemOAuthCredentialRef] = {
 }
 
 
+# A catalog URL may name an environment variable it needs filling in, written
+# `{LIKE_THIS}`. GitHub is why: an App's connect URL is
+# `https://github.com/apps/{slug}/installations/new`, and the slug belongs to a
+# particular App -- one per environment -- so it is deployment configuration,
+# not catalog data. A placeholder that cannot be filled makes the connector
+# report itself unconfigured, which is the truth: sending someone to
+# `github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new` is a 404 with
+# no explanation.
+_ENV_PLACEHOLDER = re.compile(r"\{([A-Z][A-Z0-9_]*)\}")
+
+# The fields a placeholder may appear in. Scopes and extra params are excluded
+# deliberately: substituting into them would let catalog data read arbitrary
+# environment variables into an outbound request.
+_FILLABLE_FIELDS = (
+    "authorization_url",
+    "token_url",
+    "userinfo_url",
+    "revoke_url",
+)
+
+
 @lru_cache(maxsize=1)
 def _dotenv_values() -> dict[str, str]:
     """The deployment's `.env`, consulted only when a variable is not exported.
@@ -145,6 +167,33 @@ class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
                 return value
         return None
 
+    def _filled(self, text: str) -> str | None:
+        """`text` with its `{ENV_VAR}` placeholders filled, or None if any is unset."""
+        missing = False
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal missing
+            value = self._first_env_value([match.group(1)])
+            if value is None:
+                missing = True
+                return ""
+            return value
+
+        filled = _ENV_PLACEHOLDER.sub(replace, text)
+        return None if missing else filled
+
+    def _fill_placeholders(self, defaults: OAuth2Defaults) -> OAuth2Defaults | None:
+        updates: dict[str, str] = {}
+        for field in _FILLABLE_FIELDS:
+            current = getattr(defaults, field, None)
+            if not isinstance(current, str) or "{" not in current:
+                continue
+            filled = self._filled(current)
+            if filled is None:
+                return None
+            updates[field] = filled
+        return defaults.model_copy(update=updates) if updates else defaults
+
     def resolve_oauth2_defaults(
         self,
         connector: ConnectorEntity,
@@ -152,8 +201,9 @@ class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
         """OAuth endpoints/scopes for the app: stored capability, else registry."""
         capability = self._lemma_capability(connector)
         if capability is not None and capability.oauth2_defaults is not None:
-            return capability.oauth2_defaults
-        return NATIVE_LEMMA_OAUTH2_DEFAULTS.get(connector.id)
+            return self._fill_placeholders(capability.oauth2_defaults)
+        registered = NATIVE_LEMMA_OAUTH2_DEFAULTS.get(connector.id)
+        return None if registered is None else self._fill_placeholders(registered)
 
     def _resolve_system_oauth(
         self,
@@ -167,6 +217,9 @@ class EnvSystemOAuthConfigAdapter(SystemOAuthConfigPort):
     def has_default_oauth_config(self, connector: ConnectorEntity) -> bool:
         system_oauth = self._resolve_system_oauth(connector)
         if system_oauth is None:
+            return False
+        # An endpoint we cannot finish building is not a usable default.
+        if self.resolve_oauth2_defaults(connector) is None:
             return False
         return bool(
             self._first_env_value(system_oauth.client_id_env_names())

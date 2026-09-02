@@ -65,6 +65,51 @@ Which one an operation gets is not a setting. Every operation carries
 `github_token_kind`, derived from GitHub's own `x-github.enabledForGitHubApps`,
 so the answer comes from GitHub rather than from a list maintained here.
 
+## Connecting an account
+
+The catalog sends people to the App's **installation** page rather than to
+`login/oauth/authorize`:
+
+    https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new
+
+The slug is filled from the environment at request time — it identifies one
+particular App, and there is a different one per environment, so it is
+deployment configuration rather than catalog data. If the variable is unset the
+connector reports itself unconfigured, which is the truth: an unfilled URL is a
+404 with no explanation.
+
+Authorizing without installing is the failure this avoids. A user token from a
+GitHub App can only reach repositories the App is installed on, so
+`login/oauth/authorize` yields a token that works, belongs to the right person,
+and can see nothing.
+
+Because the manifest sets `request_oauth_on_install`, the install redirects back
+carrying `code`, `installation_id` and `setup_action`. The installation id is
+recorded on the **account**, in `external_ref` — not on the install config,
+which every account under it shares. One Lemma install of the App serves every
+organization that authorized it, and each of those has its own installation; a
+shared field would hand one organization's token to another's account.
+
+## Reconnecting after the cutover
+
+Migration `0028_github_app_reauth` marks every native GitHub account
+`REAUTH_REQUIRED`. Tokens minted under the old OAuth App belong to an
+application the deployment no longer holds the secret for — they cannot be
+refreshed and cannot be revoked from here — and they carry no installation, so
+nothing could mint an installation token for them.
+
+The rows are marked, not deleted. Four things reference an account without a
+foreign key to it: tool grants, a conversation's `metadata.repo.account_id`, pod
+bundle bindings, and pod publish's required `account_id`. Deleting the rows
+would silently break sandbox `git` and pod publishing for work that exists
+today; reconnecting repairs them in place. Composio-brokered GitHub accounts are
+untouched.
+
+One consequence worth expecting: after the cutover the project picker lists only
+repositories the App is installed on, which is usually fewer than a classic
+OAuth App showed. Installing on more repositories is the fix, not a broader
+scope.
+
 ## Settings
 
 | Env | Needed for |

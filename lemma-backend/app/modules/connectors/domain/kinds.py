@@ -58,6 +58,13 @@ class ExecutionRequest:
     credentials: dict[str, Any]
     config: dict[str, Any]
     deadline_seconds: float
+    #: The upstream tenant this *account* is bound to, when it has one --
+    #: `accounts.external_ref`. Separate from `config`, which is the install's
+    #: and therefore shared by every account on it: a GitHub App installed on
+    #: two organizations gives their accounts different installations, so
+    #: reading this from the install config would hand one org's token to the
+    #: other. Generic here; what it means is the presenter's business.
+    account_external_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

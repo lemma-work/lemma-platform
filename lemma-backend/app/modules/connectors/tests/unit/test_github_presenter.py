@@ -34,8 +34,11 @@ def _request(token_kind: str | None, *, installation: str | None = "158040062"):
         ),
         payload={},
         credentials=dict(USER_TOKEN),
-        config={"installation_id": installation} if installation else {},
+        config={},
         deadline_seconds=45.0,
+        # The account's binding, not the install's -- an App installed on two
+        # organizations gives their accounts different installations.
+        account_external_ref=installation,
     )
 
 
@@ -159,3 +162,28 @@ async def test_the_dispatcher_presents_before_it_executes(monkeypatch):
     assert seen["access_token"] == "ghs_presented", (
         "the executor ran with the stored credential, so the presenter is not wired"
     )
+
+
+async def test_the_installation_comes_from_the_account_not_the_install(monkeypatch):
+    """One Lemma install of the App serves every organization that authorized
+    it, and each has its own installation. Reading the id from the install
+    config -- which they share -- would mint against one organization and hand
+    the token to another's account.
+    """
+    minted_for: list[str] = []
+
+    async def _token(installation_id, **kwargs):
+        minted_for.append(installation_id)
+        return f"ghs_for_{installation_id}"
+
+    monkeypatch.setattr(github_presenter, "installation_token", _token)
+
+    first = _request("installation_ok", installation="111")
+    second = _request("installation_ok", installation="222")
+    # Both accounts sit on the same install, which knows nothing about either.
+    assert first.config == second.config == {}
+
+    presenter = GitHubCredentialPresenter()
+    assert (await presenter.present(first))["access_token"] == "ghs_for_111"
+    assert (await presenter.present(second))["access_token"] == "ghs_for_222"
+    assert minted_for == ["111", "222"]

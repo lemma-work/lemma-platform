@@ -31,9 +31,6 @@ from app.modules.connectors.services.auth.github_app import (
 
 logger = get_logger(__name__)
 
-#: The install config key holding which installation this account authorized.
-INSTALLATION_CONFIG_KEY = "installation_id"
-
 _USER_ONLY = "user_only"
 
 
@@ -43,7 +40,11 @@ class GitHubCredentialPresenter:
         if token_kind == _USER_ONLY:
             return request.credentials
 
-        installation_id = (request.config or {}).get(INSTALLATION_CONFIG_KEY)
+        # The *account's* binding, not the install's. A GitHub App installed on
+        # two organizations gives their accounts different installations, and
+        # the install config is shared by both -- reading it from there would
+        # hand one organization's token to the other.
+        installation_id = request.account_external_ref
         if not installation_id:
             # An install that has not been reconnected yet. It has a user token
             # and that token still works; going quiet here instead would break

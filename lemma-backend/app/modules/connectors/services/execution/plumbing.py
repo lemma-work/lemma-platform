@@ -46,6 +46,7 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
         payload=resolved.payload or {},
         credentials=resolved.third_party_credentials,
         config=resolved.connection_config or {},
+        account_external_ref=resolved.account_external_ref,
     )
 
 
