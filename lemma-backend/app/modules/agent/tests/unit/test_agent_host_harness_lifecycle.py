@@ -74,7 +74,7 @@ def _sleeping_since(*, tool_call_id: str):
 def _awake():
     async def _lookup(uow, *, agent_run_id):
         del uow, agent_run_id
-        return None
+        return
 
     return _lookup
 
@@ -262,7 +262,7 @@ class TestARunRefusedBeforeItStarted:
 
             async def reconcile_expired_run(self, *, run_id):
                 del run_id
-                return None
+                return
 
             async def get_run_lease(self, *, run_id):
                 del run_id

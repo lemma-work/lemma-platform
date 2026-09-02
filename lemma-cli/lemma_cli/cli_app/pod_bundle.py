@@ -2119,29 +2119,28 @@ def _import_pod_files(
             sync_existing_folder(path_key, folder_dir, existing)
             created_folder_paths.add(path_key)
             return path_key
-        else:
-            parent_parts = parts[:-1]
-            if parent_parts:
-                ensure_folder(parent_parts, files_root.joinpath(*parent_parts))
-            folder_meta = desired_folder_metadata(folder_dir)
-            _progress_start("file", path_key, "creating folder")
-            try:
-                created = to_plain(
-                    pod_sdk.files.create_folder(
-                        path="/" + path_key,
-                        description=folder_meta.get("description"),
-                        visibility=folder_meta.get("visibility"),
-                    )
+        parent_parts = parts[:-1]
+        if parent_parts:
+            ensure_folder(parent_parts, files_root.joinpath(*parent_parts))
+        folder_meta = desired_folder_metadata(folder_dir)
+        _progress_start("file", path_key, "creating folder")
+        try:
+            created = to_plain(
+                pod_sdk.files.create_folder(
+                    path="/" + path_key,
+                    description=folder_meta.get("description"),
+                    visibility=folder_meta.get("visibility"),
                 )
-                folders_by_path[path_key] = created
-                folder_summaries.append(f"created-folder:{path_key}")
-                _progress_done("file", path_key, "created folder")
-            except LemmaAPIError as exc:
-                if exc.code != "DATASTORE_CONFLICT":
-                    raise
-                existing = to_plain(pod_sdk.files.get("/" + path_key))
-                folders_by_path[path_key] = existing
-                sync_existing_folder(path_key, folder_dir, existing)
+            )
+            folders_by_path[path_key] = created
+            folder_summaries.append(f"created-folder:{path_key}")
+            _progress_done("file", path_key, "created folder")
+        except LemmaAPIError as exc:
+            if exc.code != "DATASTORE_CONFLICT":
+                raise
+            existing = to_plain(pod_sdk.files.get("/" + path_key))
+            folders_by_path[path_key] = existing
+            sync_existing_folder(path_key, folder_dir, existing)
         created_folder_paths.add(path_key)
         return path_key
 

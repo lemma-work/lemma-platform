@@ -153,9 +153,27 @@ every push buys little.
 
 ### What gates a merge
 
-Two checks: **`lemma-backend unit`** and **`Backend E2E passed`**. Everything
-else reports — a red nightly, a red scenario lane or a red coverage gate is a
-thing to go and read, not a thing that stops you.
+Three checks, all of them aggregators: **`CI passed`**, **`Backend E2E passed`**
+and **`Security passed`**. Everything else reports — a red nightly, a red
+scenario lane or a red coverage gate is a thing to go and read, not a thing that
+stops you.
+
+The required list lives in the `protect-main` ruleset, which is repository
+settings and not a file here, so nothing in the tree can check it. Read it back
+before trusting any claim about it, including this paragraph:
+
+```bash
+gh api repos/lemma-work/lemma-platform/rulesets \
+  --jq '.[] | select(.name=="protect-main").id' \
+| xargs -I{} gh api repos/lemma-work/lemma-platform/rulesets/{} \
+  --jq '[.rules[] | select(.type=="required_status_checks")
+         .parameters.required_status_checks[].context]'
+```
+
+It has been wrong twice. Until recently it required `lemma-backend unit` rather
+than `CI passed`, which left every other job in `ci.yml` outside the gate — and
+because that job is path-filtered, a pull request that missed `lemma-backend/`
+reported `skipped`, **which GitHub counts as satisfying a required check**.
 
 `Backend E2E passed` is an aggregator: it watches the whole shard matrix rather
 than naming individual shards. That indirection is the point. The ruleset used

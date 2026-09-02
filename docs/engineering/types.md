@@ -65,21 +65,25 @@ has a type: a `Protocol` with the methods you call.
 
 Parameterise the container, or name the shape.
 
-*Check:* `check_architecture.py` (`untyped_escapes`); ruff `ANN401` for explicit
-`Any`
-*Today:* 2,949 escapes counted by the ratchet, **527** `ANN401` sites — ratchet
+*Check:* `check_architecture.py` (`untyped_escapes`)
+*Today:* **3,353** escapes counted by the ratchet across all of `app/`; `ANN401`
+alone would report **527** sites, which is why `ANN` is not in ruff's `select`
+yet — ratchet
 
 ### TYP-02 — the ratchet counts what is missing, not only what is written
 
-Today the escape counter reads *written* annotations under `app/modules/`. Two
-consequences, both perverse: deleting `: Any` improves the score, and `app/core`
-and `app/composition` are outside the rule entirely.
+Half of this is now true. The escape counter scans all of `app/`, so `app/core`
+and `app/composition` are inside the rule — that alone moved the baseline from
+2,949 escapes to 3,353.
 
-*Fix:* scan `app/`, and count an unannotated parameter and a missing return as
-escapes alongside written `Any`.
-*Today:* **804** unannotated parameters, **421** missing returns, plus ~200
-escapes in `core` + `composition` that nothing counts — becomes the new ratchet
-floor
+What it still does not do is count an *absent* annotation. It reads written
+`Any` and bare containers, so deleting `: Any` from a parameter improves the
+score while leaving the parameter unchecked.
+
+*Fix:* add an `arg` visitor with a `None`-annotation branch, so an unannotated
+parameter and a missing return count alongside written `Any`.
+*Today:* **804** unannotated parameters and **421** missing returns are
+uncounted — ratchet, once counted
 
 ### TYP-03 — no `dict[str, Any]` crossing a boundary
 
@@ -205,8 +209,8 @@ line, including the error that arrives next year.
 
 `lemma-python` ships `py.typed` today and runs no type checker; its typed return
 annotations sit over a transport that returns `Any`, so a user's checker learns
-nothing true. Neither `lemma-cli` nor `lemma-python` has any `[tool.ruff]` rule
-selection or `[tool.basedpyright]` section.
+nothing true. Both packages now carry a `[tool.ruff.lint] select`; neither has a
+`[tool.basedpyright]` section, which is the half that still matters here.
 
 *Fix:* add `basedpyright` to each package's own checks. Start with
 `reportMissingReturnType` over `lemma_sdk/resources/` — 12 sites, one pull

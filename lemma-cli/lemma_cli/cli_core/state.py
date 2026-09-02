@@ -4,7 +4,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn
 
 import typer
 from rich.console import Console
@@ -115,7 +115,7 @@ def state_from_ctx(ctx: typer.Context) -> CliState:
     return state
 
 
-def fail(message: str, *, code: int = 1) -> None:
+def fail(message: str, *, code: int = 1) -> NoReturn:
     console.print(f"[red]{message}[/red]")
     raise typer.Exit(code=code)
 

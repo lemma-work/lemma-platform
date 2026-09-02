@@ -73,15 +73,15 @@ class _NoopEncryption:
 
 
 def _account_entity(**overrides) -> AccountEntity:
-    defaults = dict(
-        user_id=uuid4(),
-        organization_id=uuid4(),
-        auth_config_id=uuid4(),
-        connector_id="asana",
-        status=AccountStatus.CONNECTED,
-        provider_account_id="acc-1",
-        credentials={"access_token": "tok"},
-    )
+    defaults = {
+        "user_id": uuid4(),
+        "organization_id": uuid4(),
+        "auth_config_id": uuid4(),
+        "connector_id": "asana",
+        "status": AccountStatus.CONNECTED,
+        "provider_account_id": "acc-1",
+        "credentials": {"access_token": "tok"},
+    }
     defaults.update(overrides)
     return AccountEntity(**defaults)
 

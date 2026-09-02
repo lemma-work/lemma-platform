@@ -85,7 +85,7 @@ def test_schedules_delete_with_yes(monkeypatch):
     class FakeSchedules:
         def delete(self, schedule):
             captured["deleted"] = schedule
-            return None
+            return
 
     fake_run = _make_fake_client_and_run(FakeSchedules(), captured)
     monkeypatch.setattr(schedules, "run_with_client", fake_run)
@@ -109,7 +109,7 @@ def test_schedules_delete_requires_yes(monkeypatch):
     class FakeSchedules:
         def delete(self, schedule):
             captured["deleted"] = schedule
-            return None
+            return
 
     fake_run = _make_fake_client_and_run(FakeSchedules(), captured)
     monkeypatch.setattr(schedules, "run_with_client", fake_run)

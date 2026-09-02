@@ -72,8 +72,7 @@ an `__all__` is coupling with a nicer address —
 `app/composition/surface_agent.py:8` and `agent_context_models.py:3` are the
 current counter-examples.
 
-*Check:* `app/composition/` may import other modules only through `contracts`.
-Extend `check_architecture.py` to scan `app/composition`.
+*Check:* `check_architecture.py` (`composition_deep_imports`)
 *Today:* **203** of 223 composition→module imports reach past `contracts` — ratchet
 
 ### DES-03 — a module must not import the composition root
@@ -93,16 +92,12 @@ Core is what modules are built on. The one exception is
 `app/core/registry/installed.py`, whose job is naming them.
 
 Today the central authorization service imports eight modules' ORM classes. The
-architecture gate scans only `app/modules/`, so this is invisible to CI and free
-to grow — which is how it got to 42.
+gate could not see any of it until recently: it scanned `app/modules/` only,
+which is how the count reached 42 without anyone deciding on it.
 
-*Check:*
-```bash
-grep -rn "app\.modules\." app/core --include='*.py' | grep -v "/tests/" \
-  | grep -v "registry/installed.py" | grep -cE "^[^:]+:[0-9]+:\s*(from|import)"
-```
-*Today:* **42** — ratchet. Widening `check_architecture.py` to scan `app/` is one
-function change and closes DES-02 and DES-09 at the same time.
+*Check:* `check_architecture.py` (`core_module_imports`), which exempts
+`app/core/registry/installed.py`
+*Today:* **42** — ratchet
 
 ### DES-05 — layers point one way
 
@@ -193,8 +188,10 @@ also acquired a state bug that a reviewer had to reconstruct the whole file to
 find. The current gate applies the rule to `app/modules/` only, which is how
 `app/composition/analytics_consumer.py` reached 975 lines unnoticed.
 
-*Check:* `check_architecture.py` (`oversized_files`), widened to `app/`
-*Today:* **14** in modules plus **1** in composition — ratchet
+*Check:* `check_architecture.py` (`oversized_files`)
+*Today:* **23** — 14 under `app/modules/` and 9 that only became visible when the
+gate was widened past it, including `app/composition/analytics_consumer.py` at
+975 lines — ratchet
 
 ### DES-10 — split a service by use case, not by layer
 
@@ -223,7 +220,7 @@ copying.
 grep -rnE "^_[a-zA-Z_]+(: [^=]+)? = (None|\{\}|\[\])$" app --include='*.py' | grep -v "/tests/" | wc -l
 ```
 *Today:* **76** module-level mutable globals, **101** `global` statements, **15**
-`lru_cache` singletons — ratchet. `lru_cache` on an immutable object singleton
+`lru_cache` singletons — review; no gate reads these yet. `lru_cache` on an immutable object singleton
 stays allowed; see the caching rule in
 [development.md](../../lemma-backend/docs/development.md#caching).
 

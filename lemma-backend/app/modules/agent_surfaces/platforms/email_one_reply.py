@@ -113,7 +113,7 @@ class EmailOneReplyMixin:
                 parts=dict.fromkeys(_named_parts(envelope), PartDelivery.UNDELIVERED)
             )
 
-        parts = {name: PartDelivery.NATIVE for name in _named_parts(envelope)}
+        parts = dict.fromkeys(_named_parts(envelope), PartDelivery.NATIVE)
         # What email renders as text rather than as the thing itself. Recording
         # it as DEGRADED is what lets a caller tell "asked, as a written
         # question" apart from "asked, with buttons" -- and ``resources``

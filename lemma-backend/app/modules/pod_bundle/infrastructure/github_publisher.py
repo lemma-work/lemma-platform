@@ -458,12 +458,11 @@ class NativeGithubOps:
                 )
             return path, sha
 
-        blobs = dict(
+        return dict(
             await asyncio.gather(
                 *(create_blob(path, content) for path, content in upserts.items())
             )
         )
-        return blobs
 
 
 def _rejected_as_conflict(exc: DomainError) -> bool:

@@ -31,7 +31,7 @@ class StubTransport:
                 "kwargs": kwargs,
             }
         )
-        return None
+        return
 
     def close(self) -> None:
         pass

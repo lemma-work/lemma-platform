@@ -143,7 +143,7 @@ async def test_parked_interaction_returns_pending_and_completed_responses(monkey
             "parked_tool_return",
             parked,
         )
-        messages = await _capture_response(
+        return await _capture_response(
             lambda send: mcp_server._serve_parked_interaction(
                 match,
                 _scope(
@@ -154,7 +154,6 @@ async def test_parked_interaction_returns_pending_and_completed_responses(monkey
                 send,
             )
         )
-        return messages
 
     pending_messages = await _run(pending)
     assert pending_messages[0]["status"] == 204

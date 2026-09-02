@@ -42,6 +42,20 @@ suggestion: adding to the count fails the build exactly as a hard rule does.
 is where it is enforced. A review-only rule should carry a note about what would
 make it checkable.
 
+### Which linter rules are on
+
+`lemma-backend/pyproject.toml` selects ruff families explicitly, and a family is
+added to that list **only once it is at zero** — so ruff never carries a
+baseline, and a finding from it is always a real failure rather than a number to
+compare. The families deliberately left out are listed there with today's count
+and the reason, so choosing the next one to adopt does not need a re-measurement.
+`lemma-cli` and `lemma-python` carry the same list, minus what does not apply.
+
+The rules with large existing counts — `Any`, broad excepts, complexity, file
+size — are ratcheted by the scripts in `lemma-backend/scripts/check_*.py`
+instead, which do carry baselines and can therefore tolerate the debt while
+forbidding more of it.
+
 The counts are measurements, not targets, and they go stale. Each rule ships the
 command that produces its number — run it rather than trusting the text.
 
@@ -51,10 +65,14 @@ command that produces its number — run it rather than trusting the text.
 make quality
 ```
 
-Runs in about 40 seconds and covers every Python gate: formatting, ruff, async
-safety, DB connection scope, I/O hygiene, swallowed errors, import budget,
-critical typecheck, the architecture ratchet, the logging event catalog, OpenAPI
-freshness, module contracts, the test census and scenario traceability.
+Runs in about 35 seconds and is the whole Python gate: formatting and ruff across
+the backend, the CLI, both SDKs, the stack, the bundle and the scenario suite;
+async safety; DB connection scope; I/O hygiene; swallowed errors; import budget;
+the critical typecheck; the architecture ratchet; the logging event catalog;
+OpenAPI freshness; module contracts; the test census; and scenario traceability.
+
+CI runs this exact command — one job, one list. It is deliberately not
+path-filtered, because a skipped required check counts as a satisfied one.
 
 Touched the frontend or the TypeScript SDK? Add `make quality-frontend`.
 `make check` is both plus CodeQL. Then run the component's own checks from the

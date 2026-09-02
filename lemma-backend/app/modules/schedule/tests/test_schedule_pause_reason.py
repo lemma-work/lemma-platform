@@ -27,26 +27,26 @@ _THRESHOLD = schedule_settings.schedule_max_consecutive_failures
 
 
 def _schedule(**overrides) -> ScheduleResponse:
-    base = dict(
-        id=uuid4(),
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        name="nightly",
-        schedule_type=ScheduleType.TIME,
-        agent_id=None,
-        workflow_id=None,
-        config={},
-        account_id=None,
-        connector_trigger_id=None,
-        filter_instruction=None,
-        filter_output_schema=None,
-        visibility="POD",
-        is_active=False,
-        is_internal=False,
-        consecutive_failures=0,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
+    base = {
+        "id": uuid4(),
+        "user_id": uuid4(),
+        "pod_id": uuid4(),
+        "name": "nightly",
+        "schedule_type": ScheduleType.TIME,
+        "agent_id": None,
+        "workflow_id": None,
+        "config": {},
+        "account_id": None,
+        "connector_trigger_id": None,
+        "filter_instruction": None,
+        "filter_output_schema": None,
+        "visibility": "POD",
+        "is_active": False,
+        "is_internal": False,
+        "consecutive_failures": 0,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
     base.update(overrides)
     return ScheduleResponse(**base)
 

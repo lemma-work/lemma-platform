@@ -275,8 +275,12 @@ jobs:
   backend-lint:
     name: lemma-backend quality gates
     timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    # Deliberately not path-filtered. `make quality` now covers the CLI, both
+    # SDKs, the stack, the bundle and the scenario suite as well as the backend,
+    # and it also checks repo-wide things -- the scenario/spec traceability, the
+    # CI aggregator lists, the test census. A filter would skip it for exactly
+    # the change that breaks one of those, and a skipped required check counts
+    # as satisfied. It is ~40s of work.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -288,74 +292,25 @@ jobs:
           enable-cache: true
       - name: Sync deps
         run: uv sync --extra local
-      # `make quality` has run format-check first for a while; CI never did,
-      # because this job runs the individual targets rather than `quality`. So
-      # `ruff check` was mandatory and `ruff format` was advisory, and the tree
-      # drifted between reformats with nothing to catch it. Runs from the repo
-      # root because formatting covers the CLI and both SDKs too, not only the
-      # backend this job is named for.
-      - name: Formatting
+      # One command, and it is the one the contributing guide tells a person to
+      # run before opening a pull request. This job used to enumerate the gates
+      # itself, which is drift waiting to happen: `make quality` gained
+      # format-check and the CI list did not, so formatting was advisory here
+      # for months. Anything added to `quality` is now run by CI for free, and
+      # a green local run means the same thing as a green job.
+      - name: Quality gates (`make quality`)
         working-directory: .
-        run: make format-check
-      - name: Ruff handwritten backend
-        run: make lint
-      - name: Async-safety lint
-        run: make lint-async
-      # lemma-connectors is vendored under lemma-backend but sat outside every
-      # gate: not in `lint`'s paths, excluded from basedpyright, and its tests
-      # are outside pytest.ini's testpaths. A lookup miss raised NameError in
-      # shipped code for exactly that reason. Six seconds, in a job that
-      # already has the dependencies.
-      - name: Connector package lint
-        run: make lint-connectors
+        run: make quality
+      # Not part of `quality`: these two run code rather than reading it.
       - name: Connector package tests
         run: make test-connectors
-      # The pool is sized on the promise that a connection is never held across
-      # non-database work, and worker concurrency is sized on the promise that
-      # blocking work is bounded. These two gates are what keep both true.
-      - name: DB connection scope
-        run: make lint-session-scope
-      - name: I/O hygiene (bounded offloads, timed HTTP sessions)
-        run: make lint-io-hygiene
-      # Production runs at INFO, so a broad `except` that logs at debug without
-      # exc_info reports nothing anywhere — and if it also stops the exception
-      # propagating, the job reports success. That pair is why 2,146 title jobs
-      # all said `succeeded` while the LLM path was failing.
-      - name: Swallowed errors (broad catches that leave no trace)
-        run: make lint-swallowed-errors
-      # Also only ever ran in `make quality`. Main had drifted 35 modules above
-      # its baseline before anybody looked, which is precisely what this gate
-      # exists to prevent -- growth nobody decided on.
-      - name: Import budget
-        run: make lint-import-budget
-      # Counts what collection actually found, against a committed floor. Two
-      # suites had already gone quiet without anything saying so: a directory
-      # missing from `testpaths`, and twenty environment-gated tests collected
-      # into a lane that reports "passed" and skipping every one of them.
-      - name: Test census (no suite has quietly stopped running)
-        run: python3 ../scripts/check_pytest_census.py
-      # Keeps the e2e suite's one canonical wait helper (waiters.eventually())
-      # from eroding back into ~50 duplicated hand-rolled poll loops.
-      - name: e2e wait patterns (no new hand-rolled poll loops)
-        run: make lint-e2e-waits
-      # The static gates above check the shapes they can see. This one runs the
-      # flows and measures: a connection checked out with no statement running
-      # is a hold, whatever the code looks like. Deliberately a small marked
-      # subset rather than the whole e2e suite — this gates merges, so it has to
-      # stay hermetic and fast. The full suite stays advisory in e2e.yml.
+      # The static gates check the shapes they can see. This one runs the flows
+      # and measures: a connection checked out with no statement running is a
+      # hold, whatever the code looks like. Deliberately a small marked subset
+      # rather than the whole e2e suite -- this gates merges, so it has to stay
+      # hermetic and fast. The full suite stays advisory in e2e.yml.
       - name: DB connection scope (runtime)
         run: make test-connection-scope
-      - name: Critical domain type safety
-        run: make typecheck-critical
-      - name: Architecture, complexity, and broad-catch ratchet
-        run: make architecture
-      # The codegen-drift gate only proves the SDKs match the committed spec.
-      # Nothing proved the committed spec matches the routes this app defines,
-      # so a new endpoint could ship with both SDKs silently lacking it. This
-      # compares the two, and belongs here rather than in codegen-drift because
-      # it needs the backend's dependencies to import the app.
-      - name: OpenAPI spec matches the routes the app defines
-        run: uv run python scripts/dump_openapi_spec.py --check
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade

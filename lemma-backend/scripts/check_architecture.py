@@ -18,7 +18,15 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES_ROOT = ROOT / "app" / "modules"
+# The metrics below cover the whole application package, not only app/modules/.
+# They used to stop at the module tree, which is how app/core/ grew a 975-line
+# file and several hundred untyped escapes without any of it being counted: the
+# gate that exists to stop growth could not see the two places the growth was.
+APP_ROOT = ROOT / "app"
 ALLOWED_PUBLIC_SURFACES = {"contracts"}
+# app/core is what modules are built on, so it must not depend on them. The one
+# legitimate importer is the registry, whose job is naming every module.
+CORE_MODULE_IMPORT_EXEMPT = {"app/core/registry/installed.py"}
 MAX_FILE_LINES = 600
 MAX_COMPLEXITY = 15
 
@@ -26,7 +34,7 @@ MAX_COMPLEXITY = 15
 def _python_files() -> list[Path]:
     return sorted(
         path
-        for path in MODULES_ROOT.rglob("*.py")
+        for path in APP_ROOT.rglob("*.py")
         if "tests" not in path.parts
         and "test_support" not in path.parts
         and "__pycache__" not in path.parts
@@ -34,7 +42,19 @@ def _python_files() -> list[Path]:
 
 
 def _source_module(path: Path) -> str:
-    return path.relative_to(MODULES_ROOT).parts[0]
+    """Name the bucket a file's metrics are counted under.
+
+    `app/modules/agent/...` is `agent`; `app/core/...` is `core`;
+    `app/composition/...` is `composition`; a file directly under `app/` is
+    `app`. Keyed by package rather than by path depth so that a file moving
+    between directories inside its own package does not churn the baseline.
+    """
+    parts = path.relative_to(APP_ROOT).parts
+    if len(parts) < 2:
+        return "app"
+    if parts[0] == "modules":
+        return parts[1] if len(parts) > 2 else "modules"
+    return parts[0]
 
 
 def _allowed_cross_module_import(parts: list[str]) -> bool:
@@ -189,6 +209,8 @@ def snapshot() -> dict[str, Any]:
     complex_functions: dict[str, int] = {}
     broad_catches: dict[str, int] = {}
     untyped_escapes: dict[str, int] = {}
+    composition_deep_imports: dict[str, int] = defaultdict(int)
+    core_module_imports: dict[str, int] = defaultdict(int)
 
     for path in _python_files():
         relative = path.relative_to(ROOT).as_posix()
@@ -209,13 +231,22 @@ def snapshot() -> dict[str, Any]:
         if escapes.count:
             untyped_escapes[relative] = escapes.count
 
+        in_modules = MODULES_ROOT in path.parents
         for node in ast.walk(tree):
             for imported in _imported_modules(node):
                 parts = imported.split(".")
                 if len(parts) < 3 or parts[:2] != ["app", "modules"]:
                     continue
                 target = parts[2]
-                if target == source:
+                # The composition root is allowed to know every module -- that is
+                # its job -- but only through each module's published surface.
+                # Reaching into services, repositories or ORM models makes it a
+                # shared middle layer instead of a root.
+                if source == "composition" and not _allowed_cross_module_import(parts):
+                    composition_deep_imports[f"composition->{target}"] += 1
+                if source == "core" and relative not in CORE_MODULE_IMPORT_EXEMPT:
+                    core_module_imports[f"core->{target}"] += 1
+                if not in_modules or target == source:
                     continue
                 dependency_graph[source].add(target)
                 if not _allowed_cross_module_import(parts):
@@ -223,6 +254,8 @@ def snapshot() -> dict[str, Any]:
 
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
+        "composition_deep_imports": dict(sorted(composition_deep_imports.items())),
+        "core_module_imports": dict(sorted(core_module_imports.items())),
         "module_cycles": [list(cycle) for cycle in _cycles(dependency_graph)],
         "oversized_files": dict(sorted(oversized.items())),
         "complex_functions": _aggregate_by_module(complex_functions),
@@ -236,9 +269,7 @@ def _aggregate_by_module(values: dict[str, int]) -> dict[str, int]:
     grouped: dict[str, list[int]] = defaultdict(list)
     for key, value in values.items():
         path = key.split(":", 1)[0]
-        parts = Path(path).parts
-        module = parts[2] if len(parts) >= 3 else "core"
-        grouped[module].append(value)
+        grouped[_source_module(ROOT / path)].append(value)
     result: dict[str, int] = {}
     for module, module_values in sorted(grouped.items()):
         result[f"{module}:count"] = len(module_values)
@@ -310,6 +341,14 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["forbidden_imports"], baseline.get("forbidden_imports", {})
     ).items():
         failures.append(f"forbidden import count grew: {name} ({before} -> {after})")
+    for label, key in (
+        ("composition reaching past contracts", "composition_deep_imports"),
+        ("app/core importing a module", "core_module_imports"),
+    ):
+        for name, (before, after) in _growth(
+            current[key], baseline.get(key, {})
+        ).items():
+            failures.append(f"{label} grew: {name} ({before} -> {after})")
     for cycle in _new_pairs(
         current["module_cycles"], baseline.get("module_cycles", [])
     ):

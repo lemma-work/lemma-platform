@@ -54,7 +54,7 @@ def _clear_dotenv_cache():
 
 
 def test_an_exported_variable_is_used(monkeypatch):
-    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", dict)
     monkeypatch.setenv("CONNECTOR_GITHUB_CLIENT_ID", "from-environ")
     monkeypatch.setenv("CONNECTOR_GITHUB_CLIENT_SECRET", "s")
 
@@ -99,7 +99,7 @@ def test_the_exported_variable_wins_over_the_file(monkeypatch):
 def test_no_client_anywhere_is_reported_as_unconfigured(monkeypatch):
     monkeypatch.delenv("CONNECTOR_GITHUB_CLIENT_ID", raising=False)
     monkeypatch.delenv("CONNECTOR_GITHUB_CLIENT_SECRET", raising=False)
-    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", dict)
 
     assert not EnvSystemOAuthConfigAdapter().has_default_oauth_config(_github())
 
