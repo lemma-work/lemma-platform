@@ -70,7 +70,29 @@ def _opens_a_slack_modal(payload: dict) -> bool:
     )
 
 
-def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> str:
+#: The receiver a delivery to the shared ``/surfaces/webhooks/{platform}``
+#: endpoint arrived on. That URL has one receiver per deployment -- it is
+#: verified against the deployment's own credential for the platform -- so the
+#: constant names it honestly. (Slack also serves an org's own app there, and
+#: needs no help: its ``event_id`` is unique across workspaces.)
+SHARED_PLATFORM_RECEIVER = "shared"
+
+
+def _surface_source_event_id(
+    platform: str, payload: dict, raw_body: bytes, *, receiver: str
+) -> str:
+    """The durable identity of one inbound delivery.
+
+    A provider's own event id is only unique *within one receiver*. Telegram's
+    ``update_id`` is a per-bot counter that starts low, so two pods with their
+    own bots both produce update 1, update 2, ... -- and keyed on the platform
+    alone the second bot's update is claimed by the inbox as a duplicate of the
+    first's, dropped without a reply, an error, or a log line.
+
+    ``receiver`` names the bot the delivery arrived on: the surface id on a
+    surface-level webhook, ``SHARED_PLATFORM_RECEIVER`` on the platform-level
+    one. The pair is unique across the deployment; neither half is on its own.
+    """
     candidates: list[object] = [
         payload.get("event_id"),
         payload.get("update_id"),
@@ -82,8 +104,9 @@ def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> s
     ]
     for candidate in candidates:
         if candidate is not None and str(candidate):
-            return f"{platform}:{candidate}"
-    return f"{platform}:content-sha256:{hashlib.sha256(raw_body).hexdigest()}"
+            return f"{platform}:{receiver}:{candidate}"
+    digest = hashlib.sha256(raw_body).hexdigest()
+    return f"{platform}:{receiver}:content-sha256:{digest}"
 
 
 def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -207,7 +230,9 @@ async def _handle_resend_webhook(
     if surface is None:
         return {"message": "Ignored: no surface for address"}
 
-    source_event_id = _surface_source_event_id("resend", normalized, raw_body)
+    source_event_id = _surface_source_event_id(
+        "resend", normalized, raw_body, receiver=str(surface.id)
+    )
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
         source="resend",

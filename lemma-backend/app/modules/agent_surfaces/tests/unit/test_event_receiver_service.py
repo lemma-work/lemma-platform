@@ -215,6 +215,30 @@ async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeyp
     assert event.headers == {"x-lemma-surface-event-mode": "native_receiver"}
 
 
+@pytest.mark.asyncio
+async def test_two_polled_bots_sharing_an_update_id_are_two_events(monkeypatch):
+    """``update_id`` counts per bot, so the receiver key has to be in the id.
+
+    Both bots are polled by the same worker and both are on their first update.
+    One identity for the pair means the durable inbox claims a single row: the
+    first person is answered, the second is dropped as a duplicate.
+    """
+    published = []
+
+    async def publish(stream, event):
+        published.append(event)
+
+    monkeypatch.setattr(native_receiver_base.EventPublisher, "publish", publish)
+
+    for key in ("telegram:one:aaa", "telegram:two:bbb"):
+        await _publish_native_receiver_event(
+            source="telegram", payload={"update_id": 1}, receiver_key=key
+        )
+
+    assert published[0].source_event_id != published[1].source_event_id
+    assert published[0].event_id != published[1].event_id
+
+
 def _resend_candidate() -> NativeReceiverCandidate:
     return NativeReceiverCandidate(
         key="resend:system:abc",

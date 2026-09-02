@@ -273,3 +273,66 @@ def test_the_verifier_rejects_that_vector_under_a_different_secret(monkeypatch):
                 raw_body=b'{"test": 2432232314}',
             )
         )
+
+
+# ── the one flag that turns every signature check off ─────────────────────────
+
+
+async def test_disabling_verification_has_no_effect_off_a_developer_machine(
+    monkeypatch,
+):
+    """``SURFACE_WEBHOOK_SECURITY_ENABLED=false`` is a local switch, and only that.
+
+    With it honoured on a deployed environment, an unsigned POST to the shared
+    Telegram endpoint is accepted, and a forged ``from.username`` resolves
+    straight to that person's Lemma identity -- the agent then runs with their
+    authority in their pod. It is a plain boolean in the same ``.env`` as
+    everything else, so one copied line is all it takes.
+    """
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+    monkeypatch.setattr(core_settings, "environment", "production")
+    service = SurfaceWebhookSecurityService()
+
+    assert service.verification_enabled() is True
+    with pytest.raises(SurfaceWebhookAuthenticationError):
+        await service.verify_platform_request(
+            platform="telegram", headers={}, raw_body=b"{}"
+        )
+
+
+async def test_disabling_verification_still_works_for_local_development(monkeypatch):
+    """The affordance the flag is documented for is untouched."""
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+    monkeypatch.setattr(core_settings, "environment", "local")
+    service = SurfaceWebhookSecurityService()
+
+    assert service.verification_enabled() is False
+    await service.verify_platform_request(
+        platform="telegram", headers={}, raw_body=b"{}"
+    )
+
+
+async def test_the_whatsapp_handshake_reads_the_same_answer(monkeypatch):
+    """The GET handshake compares the verify token, not the raw flag.
+
+    It had its own copy of the check, so it was the one place that would still
+    have skipped the comparison on a deployed environment.
+    """
+    from app.modules.agent_surfaces.api.controllers.webhook_controller import (
+        _webhook_verification_response,
+    )
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
+    monkeypatch.setattr(core_settings, "environment", "production")
+
+    with pytest.raises(HTTPException):
+        _webhook_verification_response(
+            "whatsapp",
+            {
+                "hub.mode": "subscribe",
+                "hub.challenge": "1234",
+                "hub.verify_token": "not-the-token",
+            },
+            whatsapp_verify_token="the-token",
+        )

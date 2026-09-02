@@ -400,6 +400,24 @@ class SurfaceEventDedupStorePort(Protocol):
         external_message_id: str | None,
     ) -> bool: ...
 
+    async def release_message(
+        self,
+        *,
+        surface_installation_id: UUID | None,
+        platform: str,
+        external_channel_id: str | None,
+        external_thread_id: str | None,
+        external_message_id: str | None,
+    ) -> None:
+        """Hand a claim back, so a redelivery of the same message is not a duplicate.
+
+        The claim is taken while the message is being prepared, but the work it
+        guards -- the queued run -- is dispatched after that. Losing the dispatch
+        with the claim still held would make the delivery unrecoverable: every
+        retry would see a duplicate and drop it.
+        """
+        ...
+
 
 class SurfacePodMembershipPort(Protocol):
     """Port for resolving pod membership for surface routing checks."""

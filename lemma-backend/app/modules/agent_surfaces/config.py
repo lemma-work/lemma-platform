@@ -194,7 +194,9 @@ class SurfaceSettings(BaseSettings):
         description=(
             "Enable signature, token, and JWT verification for agent-surface "
             "webhook ingress. Disable only for local development when testing with "
-            "temporary public URLs."
+            "temporary public URLs: setting it false is honoured when ENVIRONMENT "
+            "is local or testing, and ignored everywhere else (the checks stay on "
+            "and a warning is logged at startup)."
         ),
     )
     surface_event_dedupe_ttl_seconds: int = Field(
@@ -273,3 +275,50 @@ def resolve_resend_api_key() -> str | None:
     from app.core.config import reveal_secret, settings
 
     return (reveal_secret(settings.resend_api_key) or "").strip() or None
+
+
+def surface_webhook_verification_enabled() -> bool:
+    """Whether an inbound surface webhook has its authenticity checked.
+
+    ``SURFACE_WEBHOOK_SECURITY_ENABLED=false`` turns off *every* signature,
+    token and JWT check on *every* platform at once, and it is documented for
+    local development against a temporary public URL. It is also a plain
+    boolean in the same ``.env`` as everything else, so one copied line carries
+    it into a deployment -- where an unsigned POST to the shared Telegram
+    endpoint is accepted, and a forged ``from.username`` resolves straight to
+    that person's Lemma identity for the agent to then run as.
+
+    So it is honoured only where it was meant to be used. Everywhere else the
+    checks stay on and the flag is a no-op; ``log_surface_webhook_security()``
+    says so once at startup rather than leaving the deployment to guess.
+    """
+    from app.core.config import settings
+
+    if surface_settings.surface_webhook_security_enabled:
+        return True
+    return not settings.is_local_mode()
+
+
+def log_surface_webhook_security() -> None:
+    """Say at startup when webhook verification is off, or asked to be.
+
+    Nothing said so before -- not the logs, not ``/surfaces/{name}/setup``, not
+    the surfaces list -- so a deployment running unverified looked exactly like
+    one that was not.
+    """
+    from app.core.config import settings
+    from app.core.log.log import get_logger
+
+    if surface_settings.surface_webhook_security_enabled:
+        return
+    logger = get_logger(__name__)
+    if settings.is_local_mode():
+        logger.warning(
+            "agent_surfaces.config.surface_webhook_verification_disabled.degraded",
+            environment=settings.environment,
+        )
+        return
+    logger.warning(
+        "agent_surfaces.config.surface_webhook_verification_flag_ignored.degraded",
+        environment=settings.environment,
+    )

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -38,10 +39,13 @@ from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _question_blocks,
     slack_acknowledgement_body,
 )
+from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
+    classify_slack_error,
     slack_access_token,
     slack_customized_message_kwargs,
+    slack_retry_after,
     slack_scopes,
 )
 from app.core.log.log import get_logger
@@ -51,6 +55,12 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 )
 
 logger = get_logger(__name__)
+
+#: One ``chat.postMessage`` body. Slack takes a different set of keys per call
+#: (blocks, thread_ts, the ``chat:write.customize`` identity pair), and the
+#: values are whatever that key's shape is, so the value type stays open --
+#: naming the mapping is what the retry helper needs.
+type SlackMessagePayload = dict[str, object]
 
 
 class SlackPlatformService(SlackChannelReadsMixin):
@@ -63,6 +73,27 @@ class SlackPlatformService(SlackChannelReadsMixin):
             parser = SlackMessageParser()
         self.credentials = credentials
         self.parser = parser
+        self._retry_policy = RetryPolicy()
+
+    async def _post_message(
+        self, client: AsyncWebClient, payload: SlackMessagePayload
+    ) -> None:
+        """Post one message, retrying the failures Slack expects us to retry.
+
+        Slack limits ``chat.postMessage`` per channel and answers a throttled
+        call with 429 and a ``Retry-After`` header. Without this the throttle
+        was caught upstream as a transport error, recorded as UNDELIVERED, and
+        the answer was never sent again -- and a chunked answer left the person
+        reading the first part of something the system had written off. Uses
+        the same ``with_retry`` seam Telegram does, so there is one retry
+        policy across the platforms rather than two.
+        """
+        await with_retry(
+            lambda: client.chat_postMessage(**payload),
+            policy=self._retry_policy,
+            classify=classify_slack_error,
+            retry_after=slack_retry_after,
+        )
 
     async def fetch_sender_profile(
         self,
@@ -162,7 +193,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 if thread_ts:
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
-                await client.chat_postMessage(**payload)
+                await self._post_message(client, payload)
         except Exception:
             logger.debug(
                 "agent_surfaces.service.slack_send_message_channel_s.propagated",
@@ -244,7 +275,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                     (metadata or {}).get("agent_display_name"),
                 )
             )
-            await client.chat_postMessage(**payload)
+            await self._post_message(client, payload)
         except Exception:
             logger.debug(
                 "agent_surfaces.service.slack_send_display_resource_channel.propagated",
@@ -278,7 +309,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 self.credentials, (metadata or {}).get("agent_display_name")
             )
         )
-        await client.chat_postMessage(**payload)
+        await self._post_message(client, payload)
         return True
 
     async def _render_decision(
@@ -307,7 +338,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 self.credentials, (metadata or {}).get("agent_display_name")
             )
         )
-        await client.chat_postMessage(**payload)
+        await self._post_message(client, payload)
         return True
 
     async def add_processing_indicator(
