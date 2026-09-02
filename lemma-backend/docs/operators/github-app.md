@@ -110,6 +110,49 @@ repositories the App is installed on, which is usually fewer than a classic
 OAuth App showed. Installing on more repositories is the fix, not a broader
 scope.
 
+## Triggers
+
+The App has one webhook URL and its installation decides which repositories it
+covers, so every event for every organization arrives at the same endpoint:
+
+    POST <api>/webhooks/github
+
+There is nothing to subscribe to per schedule — which is why provisioning a
+GitHub trigger creates no remote subscription and says so explicitly rather than
+doing nothing quietly.
+
+What separates one schedule's events from another's is the routing key,
+`{source, installation_id, event}`, bound onto the schedule when it is created
+from the account and the trigger. `installation_id` is what makes it
+tenant-scoped: without it a `pull_request` schedule in one organization would
+fire on another organization's pull requests. A schedule may narrow further by
+`repository_id` (numeric, so a rename does not break it) and by `actions`.
+
+Deliveries are verified against `CONNECTOR_GITHUB_APP_WEBHOOK_SECRET`, with
+`..._PREVIOUS` accepted alongside it so a rotation is not an outage — a stream
+of 403s is indistinguishable from an attack, and GitHub answers it by disabling
+the hook.
+
+Redeliveries do not fire a schedule twice. `X-GitHub-Delivery` is per-delivery
+and GitHub issues a new one when it retries, so the idempotency key is derived
+from the event's own content instead.
+
+A pull request that fires an agent binds the conversation to the repository and
+its head branch, and the clone runs as the schedule's connected account — the
+person, not the App — so what the agent pushes is attributed to them.
+
+## Uninstalling
+
+An `installation` delivery with `deleted` or `suspend` retires what the
+installation leaves behind: its accounts go to `REAUTH_REQUIRED` and its
+schedules are deactivated with `deactivated_reason` recorded in their config.
+Neither is deleted — reconnecting and reactivating is enough, and the routing
+key survives so nothing has to be rebuilt.
+
+Both are treated the same. A suspended installation issues no tokens and sends
+no deliveries; the only difference is that it can be undone, and reconnecting is
+how you undo it either way.
+
 ## Settings
 
 | Env | Needed for |
@@ -118,6 +161,7 @@ scope.
 | `CONNECTOR_GITHUB_APP_SLUG` | Sending someone to install the App |
 | `CONNECTOR_GITHUB_APP_PRIVATE_KEY` or `_PATH` | Minting installation tokens |
 | `CONNECTOR_GITHUB_APP_WEBHOOK_SECRET` | Verifying inbound deliveries |
+| `CONNECTOR_GITHUB_APP_WEBHOOK_SECRET_PREVIOUS` | Accepted alongside it, so a rotation is not an outage |
 
 Without the private key everything still works as the user; only the
 installation half goes quiet. Without the webhook secret, deliveries are

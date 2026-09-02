@@ -36,6 +36,14 @@ saga so a pooled database connection is not held during provider I/O.
 | `/.../{auth_config}/operations` | Search/details and execute an operation |
 | `/.../{auth_config}/triggers` | Discover provider triggers |
 
+A trigger's `config_schema` is returned by the single-trigger endpoint, not by
+the list — the list is deliberately lean. It declares the parameters a schedule
+may narrow the trigger by, and those go at the top level of the schedule's
+config, which is what the routing key is matched against. Keys a person cannot
+sensibly supply are bound when the schedule is created: GitHub's
+`installation_id` comes from the connected account's `external_ref`, which is
+where the App install redirect recorded it.
+
 ## OAuth and execution flows
 
 ```mermaid

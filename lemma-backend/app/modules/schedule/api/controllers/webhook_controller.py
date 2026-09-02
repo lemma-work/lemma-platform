@@ -1,109 +1,56 @@
 """Webhook API controller for handling external webhooks."""
 
 from __future__ import annotations
-from typing import Dict, Any
 
-from fastapi import APIRouter, Request, HTTPException, status, Response
+from typing import Any, Dict
+
+from fastapi import APIRouter, HTTPException, Request, Response, status
+
 from app.core.log.log import get_logger
-
 from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
-    ComposioWebhookVerifierDep,
+    WebhookSourceRegistryDep,
+)
+from app.modules.schedule.domain.webhook_source import (
+    WebhookDelivery,
+    WebhookNotVerified,
 )
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-
-def _normalize_composio_payload(verification_result: Dict[str, Any]) -> Dict[str, Any]:
-    verified_payload = verification_result.get("payload", {})
-    raw_payload = verification_result.get("raw_payload", {})
-    if not isinstance(verified_payload, dict):
-        return {}
-
-    metadata = verified_payload.get("metadata", {})
-    connected_account = metadata.get("connected_account", {})
-    event_payload = verified_payload.get("payload")
-    if not isinstance(event_payload, dict):
-        event_payload = raw_payload.get("data", {})
-
-    return {
-        "id": raw_payload.get("id", verified_payload.get("id")),
-        "timestamp": raw_payload.get("timestamp"),
-        "type": verified_payload.get("trigger_slug"),
-        "webhook_type": raw_payload.get("type"),
-        "metadata": {
-            "log_id": raw_payload.get("metadata", {}).get("log_id"),
-            "trigger_slug": verified_payload.get("trigger_slug"),
-            "trigger_id": verified_payload.get("id"),
-            "connected_account_id": connected_account.get("id"),
-            "auth_config_id": connected_account.get("auth_config_id"),
-            "user_id": verified_payload.get("user_id"),
-            "toolkit_slug": verified_payload.get("toolkit_slug"),
-            "version": verification_result.get("version"),
-        },
-        "data": event_payload,
-    }
+# A delivery larger than this is refused before it is read. Nothing legitimate
+# comes close -- GitHub caps its own payloads at 25 MB and the largest real one
+# is a `push` with a long `commits[]` -- and without a cap the body flows into
+# schedule matching, `schedule_runs`, the outbox and Redis on a path whose rate
+# an unauthenticated sender chooses.
+MAX_WEBHOOK_BODY_BYTES = 1_048_576
 
 
 @router.post(
     "/{source}",
     operation_id="webhook.handle",
     summary="Handle Webhook",
-    description="Receive webhooks from various sources (slack, composio, jira, email, etc.)",
+    description="Receive a webhook from a verified source.",
     status_code=status.HTTP_200_OK,
 )
 async def handle_webhook(
     source: str,
     request: Request,
     webhook_handler: WebhookHandlerDep,
-    composio_webhook_verifier: ComposioWebhookVerifierDep,
+    sources: WebhookSourceRegistryDep,
 ) -> Dict[str, Any]:
-    """Handle webhook from a source.
+    """Verify an inbound delivery, normalize it, and let it match schedules.
 
-    Supports:
-    - slack: Slack Events API webhooks
-    - composio: Composio webhooks (requires signature verification)
-    - jira: Jira webhooks
-    - email: Email webhooks
-    - Other sources: Generic webhook handling
+    `source` comes from the URL, so the sender chooses it. The registry is the
+    allow-list: a source with no plugin is refused here and never reaches
+    matching, a run, or an agent's first message.
     """
-    headers = dict(request.headers)
-
-    # Handle Composio webhook signature verification
-    if source == "composio":
-        payload_text = (await request.body()).decode("utf-8", errors="replace")
-
-        # Verify webhook signature
-        try:
-            verification_result = await composio_webhook_verifier.verify(
-                payload_text, headers
-            )
-            normalized_payload = _normalize_composio_payload(verification_result)
-            payload = (
-                normalized_payload
-                if isinstance(normalized_payload, dict)
-                else {"data": verification_result.get("raw_payload")}
-            )
-        except Exception as exc:
-            logger.debug(
-                "schedule.webhook_controller.verify_composio_webhook.diagnostic",
-                error_type=type(exc).__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid webhook signature",
-            )
-    else:
-        # SECURITY (interim): every source other than `composio` is unauthenticated
-        # here — the request body is attacker-controllable and flows straight into
-        # schedule matching + the started run's trigger context. Composio is the
-        # only source with real signature verification, so reject everything else
-        # until per-account verified webhook routing lands (see plan Part D). This
-        # deliberately disables the legacy shared Slack/generic ingress path.
+    plugin = sources.for_source(source)
+    if plugin is None:
         logger.warning(
-            "schedule.webhook_controller.rejecting_unauthenticated_webhook_source_s.degraded",
+            "schedule.webhook_controller.rejecting_unknown_webhook_source_s.degraded",
             source=source,
         )
         raise HTTPException(
@@ -111,9 +58,47 @@ async def handle_webhook(
             detail="Unsupported or unverified webhook source",
         )
 
-    # Handle Slack URL verification challenge
-    if source == "slack" and payload.get("type") == "url_verification":
-        return {"challenge": payload.get("challenge")}
+    raw_body = await request.body()
+    if len(raw_body) > MAX_WEBHOOK_BODY_BYTES:
+        logger.warning(
+            "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
+            source=source,
+            size=len(raw_body),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Webhook payload is too large",
+        )
+
+    delivery = WebhookDelivery(
+        source=source, raw_body=raw_body, headers=dict(request.headers)
+    )
+    try:
+        verified = await plugin.verify(delivery)
+    except WebhookNotVerified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid webhook signature",
+        )
+
+    # State the delivery changes about the source itself -- an App uninstalled,
+    # repositories removed from one. Never allowed to fail the delivery: it has
+    # already happened, and a non-2xx only makes the provider send it again.
+    try:
+        await plugin.observe(verified)
+    except Exception:
+        logger.warning(
+            "schedule.webhook_controller.source_observation_failed.degraded",
+            source=source,
+            exc_info=True,
+        )
+
+    normalized = plugin.normalize(verified)
+    if normalized is None:
+        # An event nothing is subscribed to. Answered 2xx on purpose: a provider
+        # that collects non-2xx responses retries them and then disables the
+        # hook, so a shrug has to look like success.
+        return {"message": "Webhook received"}
 
     # No fan-out here. This used to publish a `RawWebhookReceivedEvent` on
     # `webhook_events` "for other modules to listen to" and nothing ever did --
@@ -121,7 +106,10 @@ async def handle_webhook(
     # paid an outbox insert, a Redis XADD and a header redaction for a message
     # nobody read. Surfaces have their own verified ingress.
     await webhook_handler.handle_webhook(
-        source=source, payload=payload, headers=headers
+        source=source,
+        payload=normalized.payload,
+        headers=dict(request.headers),
+        normalized=normalized,
     )
     return {
         "message": "Webhook received",

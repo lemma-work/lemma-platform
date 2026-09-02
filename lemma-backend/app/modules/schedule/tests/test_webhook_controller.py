@@ -3,10 +3,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.composition import schedule_connectors as schedule_connectors_module
-from app.modules.schedule.api.controllers.webhook_controller import (
-    _normalize_composio_payload,
-    router,
+from app.composition.webhook_sources.composio import (
+    _reshape as _normalize_composio_payload,
 )
+from app.modules.schedule.api.controllers.webhook_controller import router
 
 
 def test_direct_schedule_webhook_route_is_removed():

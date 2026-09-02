@@ -1,7 +1,7 @@
 """Interfaces for schedule module."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, Protocol
 from uuid import UUID
 
@@ -166,12 +166,59 @@ class ScheduleRepository(ABC):
         pass
 
 
+#: A schedule's `config`: a free-form JSON object whose keys are the routing
+#: key its source matches on, so its shape belongs to the source rather than to
+#: this module.
+ScheduleConfig = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionedTrigger:
+    """What provisioning a schedule's external subscription produced.
+
+    Both fields empty means *nothing needed provisioning*, and saying so is the
+    point of this type. A GitHub App has one webhook URL and its installation
+    decides which repositories it covers, so there is no remote subscription to
+    create -- which used to be indistinguishable from finding no manager at all.
+    In that case the row was written, nothing was provisioned, no error was
+    raised, and the schedule could never fire. Slack's three triggers have been
+    inert for exactly that reason since they were added.
+
+    `bound_config` is merged into the schedule's config. It is where a source
+    puts the routing key it can derive but the author cannot type -- GitHub's
+    installation id comes from the account, not from the person filling in a
+    form.
+    """
+
+    provider_trigger_id: str | None = None
+    bound_config: ScheduleConfig = field(default_factory=dict)
+
+    def apply_to(self, config: ScheduleConfig) -> bool:
+        """Write what provisioning learned into the schedule's config.
+
+        Returns whether anything changed, so the caller knows whether the row
+        needs writing back. Here rather than at the call site because this type
+        is the only thing that knows what its two fields mean.
+        """
+        if self.provider_trigger_id:
+            config["provider_trigger_id"] = self.provider_trigger_id
+        config.update(self.bound_config)
+        return bool(self.provider_trigger_id or self.bound_config)
+
+
 class ExternalScheduleWriter(ABC):
     """Port for provisioning/deprovisioning external webhook providers."""
 
     @abstractmethod
-    async def create_provider_trigger(self, schedule: ScheduleEntity) -> str | None:
-        """Create an external provider subscription and return its provider ID."""
+    async def create_provider_trigger(
+        self, schedule: ScheduleEntity
+    ) -> ProvisionedTrigger:
+        """Provision this schedule's external subscription, if it needs one.
+
+        Raises rather than returning quietly when the schedule names a connector
+        trigger nothing knows how to provision *or* bind: a schedule that can
+        never fire should not be created successfully.
+        """
         pass
 
     @abstractmethod

@@ -886,7 +886,253 @@
     },
     "agent_instruction": "Use GitHub to manage repositories, issues, pull requests, reviews, releases, and GitHub Actions. Read and write repo content, triage issues with labels, assignees and milestones, review pull requests, and read code scanning, Dependabot and secret scanning alerts.\nFor Actions: list and inspect workflow runs and their jobs, download run or job logs and artifacts, dispatch a workflow, and cancel or re-run one. Secrets and variables can be listed but not changed.\nTo write several files as one commit, use the git data operations (git_create_blob, git_create_tree, git_create_commit, git_update_ref) rather than one repos_create_or_update_file_contents per file; git_get_ref, git_update_ref, git_delete_ref and git_list_matching_refs take a whole ref path such as heads/main.\nProjects v2 exists only in GitHub's GraphQL API -- use github_graphql_request for it. For any other REST endpoint the curated operations do not cover, use github_http_request.",
     "is_active": true,
-    "triggers": [],
+    "triggers": [
+      {
+        "name": "github_push",
+        "event_type": "push",
+        "description": "Triggered when commits are pushed to a repository",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_pull_request",
+        "event_type": "pull_request",
+        "description": "Triggered when a pull request is opened, updated, closed or merged",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which pull request actions to fire on. Empty means all of them.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "opened",
+                  "reopened",
+                  "closed",
+                  "synchronize",
+                  "edited",
+                  "ready_for_review",
+                  "review_requested",
+                  "labeled",
+                  "assigned"
+                ]
+              }
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_issues",
+        "event_type": "issues",
+        "description": "Triggered when an issue is opened, closed, labelled or assigned",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which issue actions to fire on. Empty means all of them.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "opened",
+                  "reopened",
+                  "closed",
+                  "edited",
+                  "labeled",
+                  "unlabeled",
+                  "assigned",
+                  "unassigned"
+                ]
+              }
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_issue_comment",
+        "event_type": "issue_comment",
+        "description": "Triggered when someone comments on an issue or a pull request. GitHub sends pull request comments as issue comments.",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which comment actions to fire on. Empty means all of them.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "edited",
+                  "deleted"
+                ]
+              }
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_workflow_run",
+        "event_type": "workflow_run",
+        "description": "Triggered when a GitHub Actions workflow run changes state",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which run actions to fire on. A busy repository emits one delivery per run per state change, so this defaults to completed runs only.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "requested",
+                  "in_progress"
+                ]
+              },
+              "default": [
+                "completed"
+              ]
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_check_suite",
+        "event_type": "check_suite",
+        "description": "Triggered when a check suite is requested, rerequested or completed",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which check suite actions to fire on. Defaults to completed suites, which is the one worth reacting to.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "requested",
+                  "rerequested"
+                ]
+              },
+              "default": [
+                "completed"
+              ]
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_release",
+        "event_type": "release",
+        "description": "Triggered when a release is published, edited or deleted",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which release actions to fire on. Empty means all of them.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "published",
+                  "released",
+                  "created",
+                  "edited",
+                  "deleted",
+                  "prereleased"
+                ]
+              }
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      }
+    ],
     "static_operations": [
       {
         "name": "gists_list",

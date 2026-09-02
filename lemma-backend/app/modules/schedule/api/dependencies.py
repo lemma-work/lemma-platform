@@ -1,5 +1,6 @@
 """Schedule module dependencies."""
 
+from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
 from fastapi import Depends, Request
@@ -13,6 +14,7 @@ from app.modules.schedule.services.webhook_schedule_matcher import (
 )
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.domain.interfaces import WebhookVerifier
+from app.modules.schedule.domain.webhook_source import WebhookSourceRegistry
 
 
 def get_schedule_service(uow: UoWDep) -> ScheduleService:
@@ -44,6 +46,19 @@ def get_composio_webhook_verifier() -> WebhookVerifier:
     return ComposioWebhookVerifier()
 
 
+@lru_cache(maxsize=1)
+def get_webhook_source_registry() -> WebhookSourceRegistry:
+    """The sources this deployment accepts on `POST /webhooks/{source}`.
+
+    Cached: the registry is a lookup table of stateless plugins, and rebuilding
+    it per delivery would import the composition root on a path whose rate an
+    external sender chooses.
+    """
+    from app.composition.webhook_sources import default_webhook_sources
+
+    return default_webhook_sources()
+
+
 def get_current_user_id(request: Request) -> UUID:
     """Get current user ID from request state."""
     # Assuming verify_auth middleware/dependency has run
@@ -54,4 +69,7 @@ ScheduleServiceDep = Annotated[ScheduleService, Depends(get_schedule_service)]
 WebhookHandlerDep = Annotated[WebhookHandler, Depends(get_webhook_handler)]
 ComposioWebhookVerifierDep = Annotated[
     WebhookVerifier, Depends(get_composio_webhook_verifier)
+]
+WebhookSourceRegistryDep = Annotated[
+    WebhookSourceRegistry, Depends(get_webhook_source_registry)
 ]

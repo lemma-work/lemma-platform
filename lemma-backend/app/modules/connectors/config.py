@@ -186,6 +186,16 @@ class ConnectorSettings(BaseSettings):
             "deliveries. Env: CONNECTOR_GITHUB_APP_WEBHOOK_SECRET."
         ),
     )
+    connector_github_app_webhook_secret_previous: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "The previous webhook secret, still accepted while a rotation is in "
+            "flight. Both are live for as long as it takes to update GitHub, "
+            "and with only one the window is a stream of 403s that GitHub "
+            "answers by disabling the hook. "
+            "Env: CONNECTOR_GITHUB_APP_WEBHOOK_SECRET_PREVIOUS."
+        ),
+    )
     connector_encryption_key: Optional[str] = Field(
         default=None,
         description=(

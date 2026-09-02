@@ -156,11 +156,12 @@ class ScheduleService:
             and created.account_id
         ):
             try:
-                provider_id = (
+                provisioned = (
                     await self.external_schedule_writer.create_provider_trigger(created)
                 )
-                if provider_id:
-                    created.config["provider_trigger_id"] = provider_id
+                # A source that needs no remote subscription still supplies
+                # the routing key it can derive and the author cannot.
+                if provisioned.apply_to(created.config):
                     updated = await self.schedule_repository.update(
                         created.id,
                         config=created.config,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
@@ -54,6 +55,7 @@ from app.modules.schedule.domain.errors import (
 )
 from app.modules.schedule.domain.interfaces import (
     ExternalScheduleWriter,
+    ProvisionedTrigger,
     WebhookVerifier,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
@@ -150,6 +152,36 @@ class ManagersFactory:
         return None
 
 
+def _github_binding(
+    trigger: ConnectorTriggerEntity, account: AccountEntity
+) -> dict[str, Any]:
+    """The routing key for a GitHub trigger, taken from what is already known.
+
+    Nothing here is something a person could sensibly type into a form. The
+    installation id lives on the account -- it is what the App install
+    redirected back with -- and the event is the trigger they picked. Asking for
+    either would be asking someone to copy a number out of a URL, and getting it
+    wrong routes another organization's events at their pod.
+    """
+    if not account.external_ref:
+        raise ScheduleValidationError(
+            "This GitHub account is not bound to an App installation. "
+            "Reconnect it so events can be routed to this schedule."
+        )
+    return {
+        "source": "github",
+        "installation_id": str(account.external_ref),
+        "event": trigger.event_type,
+    }
+
+
+# Connectors whose triggers need no remote subscription, only a routing key.
+# Absence from both this table and `ManagersFactory` is an error, not a shrug.
+_LOCAL_BINDERS: dict[str, Callable[[ConnectorTriggerEntity, AccountEntity], dict]] = {
+    "github": _github_binding,
+}
+
+
 class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
     """Provision provider triggers behind the schedule-owned writer port."""
 
@@ -233,17 +265,36 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
             trigger,
         )
 
-    async def create_provider_trigger(self, schedule: ScheduleEntity) -> str | None:
+    async def create_provider_trigger(
+        self, schedule: ScheduleEntity
+    ) -> ProvisionedTrigger:
         if schedule.schedule_type is not ScheduleType.WEBHOOK:
-            return None
+            return ProvisionedTrigger()
         manager, account, trigger = await self._resolve_manager(schedule)
-        if manager is None or account is None or trigger is None:
-            return None
-        return await manager.create_schedule(
+        if account is None or trigger is None:
+            # The schedule names no connector trigger, so it is routed by
+            # whatever its author put in `config` and there is nothing to
+            # provision on anyone's behalf.
+            return ProvisionedTrigger()
+        if manager is None:
+            binder = _LOCAL_BINDERS.get(trigger.connector_id)
+            if binder is None:
+                # This is the case that used to return None and look like
+                # success. The schedule row would exist, nothing would be
+                # subscribed, and it could never fire.
+                raise ScheduleValidationError(
+                    f"'{trigger.connector_id}' triggers cannot be provisioned: "
+                    "no provider subscription can be created for them and no "
+                    "local routing key is defined, so the schedule would never "
+                    "fire."
+                )
+            return ProvisionedTrigger(bound_config=binder(trigger, account))
+        provider_id = await manager.create_schedule(
             account=account,
             app_trigger=trigger,
             config=schedule.config,
         )
+        return ProvisionedTrigger(provider_trigger_id=provider_id)
 
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         if schedule.schedule_type is not ScheduleType.WEBHOOK:

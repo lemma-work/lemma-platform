@@ -10,6 +10,7 @@ from app.modules.schedule.domain.interfaces import (
     ScheduleFilterTaskQueue,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity
+from app.modules.schedule.domain.webhook_source import NormalizedWebhook
 from app.modules.schedule.infrastructure.adapters.filter_task_queue import (
     StreaqScheduleFilterTaskQueue,
 )
@@ -61,16 +62,29 @@ class WebhookHandler:
         source: str,
         payload: Dict[str, Any],
         headers: Optional[Dict[str, str]] = None,
+        normalized: NormalizedWebhook | None = None,
     ) -> list[UUID]:
-        """Handle incoming webhook and find matching schedules."""
+        """Handle incoming webhook and find matching schedules.
 
-        normalized_payload = self.event_mapper.normalize_payload(
-            source=source,
-            payload=payload,
-        )
-        metadata = self.event_mapper.extract_metadata(
-            source, normalized_payload, headers
-        )
+        A source plugin that states its own routing key passes `normalized` and
+        the mapper is not consulted. The mapper remains the path for the sources
+        that predate the plugins -- Composio's branch in particular, whose exact
+        output is pinned by tests, and which was moved onto a plugin on the
+        explicit condition that its behaviour did not change with it.
+        """
+
+        if normalized is not None and normalized.match is not None:
+            metadata: Dict[str, Any] = {**normalized.match, **normalized.context}
+            metadata.setdefault("source_event_id", normalized.source_event_id)
+            normalized_payload = normalized.payload
+        else:
+            normalized_payload = self.event_mapper.normalize_payload(
+                source=source,
+                payload=payload,
+            )
+            metadata = self.event_mapper.extract_metadata(
+                source, normalized_payload, headers
+            )
         source_event_id = metadata.get("source_event_id")
         if not isinstance(source_event_id, str) or not source_event_id:
             logger.warning(
@@ -80,13 +94,24 @@ class WebhookHandler:
         # Phase one: the only database work there is. One indexed lookup, in a
         # scope that ends before anything slow starts.
         async with uow_scope(self.uow_factory) as uow:
-            schedules = await self.matcher_factory(uow).match(source, metadata)
+            matcher = self.matcher_factory(uow)
+            if normalized is not None and normalized.match is not None:
+                schedules = await matcher.match_criteria(normalized.match)
+            else:
+                schedules = await matcher.match(source, metadata)
+
+        if normalized is not None and normalized.refine is not None:
+            # The routing key is deliberately coarse -- see `match_criteria`.
+            # Schedules that scoped themselves further are filtered here.
+            schedules = [s for s in schedules if normalized.refine(s.config or {})]
 
         if not schedules:
             return []
 
-        publish_payload = self.event_mapper.event_payload_for_source(
-            source, normalized_payload
+        publish_payload = (
+            normalized.payload
+            if normalized is not None and normalized.match is not None
+            else self.event_mapper.event_payload_for_source(source, normalized_payload)
         )
         schedule_ids: list[UUID] = []
         for schedule in schedules:

@@ -29,6 +29,10 @@ export default defineConfig({
             // Which kinds need an address typed in, and how an install reads
             // back as a line of text. Pure predicates over the catalog.
             'components/connectors/connector-utils.{test,spec}.ts',
+            // Where a trigger's own parameters go in a schedule's config, and
+            // which of them are worth sending. Nesting them one key too deep
+            // makes them invisible to matching, silently.
+            'components/triggers/trigger-config.{test,spec}.ts',
             // Which file types write themselves back, and the one line of
             // status that says so. Decisions, not DOM.
             'components/documents/document-save-state.{test,spec}.ts',
