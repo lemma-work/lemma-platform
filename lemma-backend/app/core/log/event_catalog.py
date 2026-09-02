@@ -404,6 +404,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.connector_service.get_connector_authorization_url.propagated': EventSpec('debug', frozenset({'error_type'})),
     'connectors.connector_service.profile_operation_s_s_s.diagnostic': EventSpec('debug', frozenset({'connector_id', 'operation_name'})),
     'connectors.connector_service.revoke.failed': EventSpec('error', frozenset()),
+    'connectors.github_app.installation_token_refused': EventSpec('warning', frozenset({'upstream_status'})),
     'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.lemma_operation_gateway.calling_s_native_operation_s.observed': EventSpec('debug', frozenset({'connector_id', 'operation_name'})),
