@@ -1,10 +1,6 @@
 {
   "_comment": "Pre-existing broad excepts that leave no trace of what they caught: no log at all, or a debug record with no exc_info that production never emits. This file may shrink freely; growing it means a new failure has been made invisible. See scripts/check_swallowed_errors.py.",
   "violations": {
-    "app/app.py::create_app.health_ready._db_ok::silent-broad-catch::Exception -> return": 1,
-    "app/app.py::create_app.health_ready._redis_ok::silent-broad-catch::Exception -> return": 1,
-    "app/app.py::create_app.health_ready._with_timeout::silent-broad-catch::Exception -> return": 1,
-    "app/app.py::create_app.health_ready::silent-broad-catch::Exception -> assign": 1,
     "app/composition/agent_notifications.py::open_notifications_for_conversation::silent-broad-catch::Exception -> return": 1,
     "app/composition/app_session.py::_record_app_session::debug-only-broad-catch::analytics.app_session.cache_unavailable": 1,
     "app/composition/app_session.py::maybe_record_app_session::debug-only-broad-catch::analytics.app_session.record_failed": 1,
@@ -12,11 +8,7 @@
     "app/core/authorization/service.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
     "app/core/infrastructure/events/message_bus.py::FastStreamRedisMessageBus._safe_publish_maxlen::silent-broad-catch::Exception -> return": 1,
     "app/core/infrastructure/events/outbox_wake.py::OutboxWakeListener.run::silent-broad-catch::Exception -> pass": 1,
-    "app/core/infrastructure/jobs/streaq_runtime.py::_consumer_group_reconcile_loop::debug-only-broad-catch::infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic": 1,
-    "app/core/infrastructure/jobs/streaq_runtime.py::_ensure_consumer_groups_once::debug-only-broad-catch::infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic": 1,
-    "app/core/infrastructure/jobs/streaq_runtime.py::_safe_shutdown_step::debug-only-broad-catch::infrastructure.streaq_runtime.worker_shutdown_step.diagnostic": 1,
     "app/core/infrastructure/jobs/streaq_runtime.py::load_job_observability_context::silent-broad-catch::Exception -> return": 1,
-    "app/core/infrastructure/redis/client.py::close_redis_clients::silent-broad-catch::Exception -> pass": 1,
     "app/core/pubsub/subscriber.py::RedisStreamReader.current_last_id::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent/services/run_observer_delivery.py::_deliver::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent/tools/skills/pydantic_adapter.py::load_skill::silent-broad-catch::Exception -> assign": 1,
