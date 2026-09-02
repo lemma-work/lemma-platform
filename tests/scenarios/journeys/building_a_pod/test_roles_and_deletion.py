@@ -46,18 +46,33 @@ async def test_a_custom_role_is_created_and_assignable(world, pod):
 @proves("PS-POD-013")
 @covers("pod.roles.create")
 async def test_a_role_cannot_exceed_its_creator(world, pod):
+    """The actor has to reach the bound for this to prove anything.
+
+    This scenario used to give the role to a POD_VIEWER, who is refused by the
+    `pod.role.manage` gate long before any conferral bound is evaluated — and
+    then accepted any status at or above 400. It passed for years while the
+    bound it names did not exist. So the author here holds role management
+    through a custom role, and deliberately does not hold what he tries to put
+    into the new one.
+    """
     alice, the_pod = pod
     bob = await world.person("sofia")
-    await alice.adds(bob, to_pod=the_pod, as_role="POD_VIEWER")
 
-    response = await bob.api.call(
-        "POST",
-        f"/pods/{the_pod['id']}/roles",
-        json={"name": "SNEAKY_ADMIN", "permission_ids": ["datastore.table.delete"]},
+    await alice.creates_a_role(
+        in_pod=the_pod, named="ROLE_WRANGLER", permissions=["pod.role.manage"]
+    )
+    await alice.adds(bob, to_pod=the_pod, as_role="POD_VIEWER")
+    await alice.gives(bob, roles=["POD_VIEWER", "ROLE_WRANGLER"], in_pod=the_pod)
+
+    refusal = await bob.is_refused_creating_a_role(
+        in_pod=the_pod,
+        named="SNEAKY_ADMIN",
+        permissions=["datastore.table.delete"],
     )
 
-    assert response.status_code >= 400, (
-        f"a viewer minted a role granting table deletion ({response.status_code})"
+    assert refusal == "CONFERRAL_EXCEEDS_HOLDER", (
+        f"a role author who may manage roles, but may not delete tables, was "
+        f"refused for the wrong reason ({refusal})"
     )
 
 
