@@ -7,7 +7,7 @@
  */
 export type BulkUpdateRecordsRequest = {
     /**
-     * List of record updates. Each item must include the table primary key field.
+     * List of record updates. Each item must include the table primary key field. At most 1000 per request.
      */
     records: Array<Record<string, any>>;
 };

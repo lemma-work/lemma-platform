@@ -7,7 +7,7 @@
  */
 export type BulkDeleteRecordsRequest = {
     /**
-     * Primary key values to delete.
+     * Primary key values to delete. At most 1000 per request.
      */
     record_ids: Array<(string | number)>;
 };

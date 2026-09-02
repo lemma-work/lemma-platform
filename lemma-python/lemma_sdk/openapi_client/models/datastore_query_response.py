@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.datastore_query_response_items_item import (
         DatastoreQueryResponseItemsItem,
@@ -21,11 +23,16 @@ class DatastoreQueryResponse:
 
     Attributes:
         items (list[DatastoreQueryResponseItemsItem]):
-        total (int):
+        total (int): Number of rows in `items`. This is what came back, not how many rows the query matched: when
+            `truncated` is true the result was cut at the deployment's row cap and more rows exist.
+        truncated (bool | Unset): True when the row cap cut the result short, so `items` is a prefix of the query's real
+            answer. Narrow the query (add a WHERE, aggregate, or LIMIT) to see the rest. Reported because a capped result is
+            otherwise indistinguishable from a complete one. Default: False.
     """
 
     items: list[DatastoreQueryResponseItemsItem]
     total: int
+    truncated: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -36,6 +43,8 @@ class DatastoreQueryResponse:
 
         total = self.total
 
+        truncated = self.truncated
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -44,6 +53,8 @@ class DatastoreQueryResponse:
                 "total": total,
             }
         )
+        if truncated is not UNSET:
+            field_dict["truncated"] = truncated
 
         return field_dict
 
@@ -63,9 +74,12 @@ class DatastoreQueryResponse:
 
         total = d.pop("total")
 
+        truncated = d.pop("truncated", UNSET)
+
         datastore_query_response = cls(
             items=items,
             total=total,
+            truncated=truncated,
         )
 
         datastore_query_response.additional_properties = d
