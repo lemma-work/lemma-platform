@@ -51,6 +51,26 @@ Add `--json` to any command for machine-readable output, and `--full` to expand 
 See [SETUP.md](SETUP.md) for cloud/local server configuration, environment variables, project
 `.lemma.<server>.env` files, and the Textual TUI (`lemma tui`).
 
+## Staying up to date
+
+```bash
+lemma update                 # upgrade to the newest release
+lemma update --version 0.7.3 # or pin one
+lemma doctor                 # what's installed, and whether it matches the server
+```
+
+After a command that talked to a server, the CLI checks — in the background,
+after the command has already printed — whether that server is running a newer
+release, and prints a one-line notice on stderr once per version. It asks the
+server, not PyPI: one release publishes `lemma-terminal`, `lemma-sdk` and the API
+together, so the server's API version *is* the released version, and the check
+adds no host the command was not already talking to. Set `LEMMA_UPDATE_CHECK=0`
+to turn it off.
+
+`lemma update` reinstalls via `uv tool install --force`. Where that cannot work —
+a source checkout, or an image that overlays its Python environment — it says so
+and prints the command to run instead.
+
 ## Install Lemma skills into your coding agent
 
 Lemma ships agent **skills** (`SKILL.md` format) that teach a coding agent how to design, build, and

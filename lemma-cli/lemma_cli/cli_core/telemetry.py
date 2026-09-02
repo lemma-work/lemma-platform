@@ -12,7 +12,7 @@ list of known groups and dropped if it is not one of them, so an unrecognised
 first token cannot become a dimension.
 
 Off by every switch that should turn it off: ``LEMMA_TELEMETRY=0``,
-``lemma system telemetry off``, and — the default — no ingestion key compiled
+``lemma telemetry off``, and — the default — no ingestion key compiled
 in, which is the case for every self-hosted and locally built CLI.
 """
 
@@ -56,14 +56,26 @@ def _read_config() -> dict[str, Any]:
 
 
 def _write_telemetry_block(block: dict[str, Any]) -> None:
-    import json
+    """Merge ``block`` into the ``telemetry`` key of ``~/.lemma/config.json``.
+
+    Through the SDK's ``config_lock`` + ``save_config``, like every other writer
+    of this file. The previous unlocked ``write_text`` of a whole re-read config
+    raced the token-refresh path in ``state.py``: a refresh landing between this
+    read and this write was silently lost, and a crash mid-write truncated the
+    file, after which every command failed with "Invalid JSON". Losing that file
+    means losing the login session — far more than telemetry is worth.
+    """
+    from lemma_sdk.config import config_lock, load_config, save_config
 
     path = _config_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        config = _read_config()
-        config[_CONFIG_KEY] = {**config.get(_CONFIG_KEY, {}), **block}
-        path.write_text(json.dumps(config, indent=2))
+        with config_lock(path):
+            # load_config, not the raw read: it raises on a corrupt file, so a
+            # file we cannot parse is left alone rather than replaced by a stub
+            # holding nothing but this block.
+            config = load_config(path)
+            config[_CONFIG_KEY] = {**(config.get(_CONFIG_KEY) or {}), **block}
+            save_config(path, config)
     except Exception:
         # Telemetry must never be the reason a CLI invocation fails, including
         # on a read-only home directory.
@@ -112,15 +124,13 @@ def status() -> dict[str, Any]:
 
 
 def _cli_version() -> str:
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    # versions.cli_version(), not importlib.metadata: the import package is
+    # `lemma_cli` but the published *distribution* is `lemma-terminal`, so
+    # version("lemma-cli") raised PackageNotFoundError on every install and the
+    # one dimension this telemetry exists to record was always "unknown".
+    from .versions import cli_version
 
-        try:
-            return version("lemma-cli")
-        except PackageNotFoundError:
-            return "unknown"
-    except Exception:
-        return "unknown"
+    return cli_version()
 
 
 def _post(event: dict[str, Any]) -> None:

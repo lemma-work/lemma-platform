@@ -24,9 +24,26 @@ Resource groups are registered with both singular and plural aliases (`pod`/`pod
 
 Domain verbs allowed in addition: `run` (execute something — functions, workflows,
 agents, tools, queries), `chat`, `send`, `deploy`, `scaffold`, `enable`, `disable`,
-`export`, `import`, `upload`, `download`, `search`. Do **not** introduce synonyms for
-existing verbs (`execute`, `rm`, `add`, `remove` are banned — use `run`, `delete`,
-`create`).
+`export`, `import`, `upload`, `download`, `search`, `upsert`, `pull`, `pause`,
+`resume`, `stop`, `approve`, `grant`, `validate`, `doctor`. Do **not** introduce
+synonyms for existing verbs (`execute` and `rm` outside the `files` group are banned
+— use `run` and `delete`).
+
+Two carve-outs, both deliberate:
+
+- **`lemma files` is POSIX-shaped on purpose.** `ls`, `cat`, `mv`, `rm`, `mkdir`,
+  `stat`, `tree` read as a filesystem because that is what a pod's files are. The
+  table above does not apply inside that group.
+- **Permission sub-groups use `add`/`remove`**, because a permission is granted and
+  revoked rather than created and deleted (`lemma agent permissions add`).
+
+A handful of **top-level** commands take no resource: `init`, `chat`, `get`,
+`describe`, `schema`, `doctor`, `feedback`, `version`, `update`. `lemma update`
+upgrades the CLI itself; the `update NAME` row above is the resource verb
+(`lemma agent update triage`), and the two never collide because the top-level form
+takes no NAME. Every top-level command must also be listed in `_TOP_LEVEL_COMMANDS`
+in `cli_core/app.py` or telemetry reports it as `None`
+(`tests/test_update_check.py` pins this).
 
 ## Interactive selection
 
@@ -53,12 +70,18 @@ is for.
 
 ## Destructive operations
 
-Every `delete` (and any other irreversible command) must call
-`cli_core/confirm.py:confirm_destructive(message, yes)`:
+Every command that is **irreversible or externally visible** must call
+`cli_core/confirm.py:confirm_destructive(message, yes)` — not only `delete`. That
+includes writing into another tool's config (`skills uninstall`) and authorising
+queued agent actions in bulk (`conversation approve` with no id), both of which
+have a wider blast radius than most deletes.
 
 - Prompts `Delete <resource> <name>?` unless `--yes` was passed.
 - In a non-interactive session (stdin is not a TTY) without `--yes`, it fails with
   exit code 1 instead of hanging or proceeding.
+- A bulk form must print what it is about to act on **to stderr** first, so the
+  prompt is a decision rather than a guess.
+- Where `install`/`uninstall` are paired, both take `--yes` and `--dry-run`.
 
 ## Errors and exit codes
 
@@ -66,11 +89,21 @@ Every `delete` (and any other irreversible command) must call
   through `cli_core/state.py:fail(message)` → red message on stderr, exit code 1.
 - `typer.BadParameter` is reserved for argument-parse-time validation only (exit 2).
 - Exit codes: `0` success, `1` runtime error, `2` usage error.
+- **Diagnostics on stderr, results on stdout.** `state.py` defines `console`
+  (stdout, for results) and `err_console` (stderr, for warnings, progress, previews
+  and every failure). `--output json` promises a parseable stdout *including on
+  failure*: one advisory in the wrong stream breaks every `| jq` and every agent
+  driving the CLI. A bare `print()` needs a `# noqa: T201` naming why.
 
 ## Output
 
 - All command output goes through `cli_core/io.py:emit(state, payload)` so the global
   `--json`/`--output` flags work uniformly. Never `print()` results directly.
+- Every hint must name a command the user can actually run. A hint that cannot be
+  acted on is a bug, not a nicety.
+- Anything a loader computes for the user's safety has to be rendered somewhere.
+  `project_env.load_project_env` detects a token committed to a project file; if
+  nothing showed it, the detection would not exist.
 
 ## State
 

@@ -839,9 +839,12 @@ def _title_from_item(data: dict[str, Any]) -> str:
 
 
 def _emit_page_hint(data: dict[str, Any]) -> None:
-    token = data.get("next_page_token") or data.get("nextPageToken")
-    if token:
-        console.print(f"[dim]More results available. page_token={token}[/dim]")
+    # Name the lever the user actually has. No command in the app declares a
+    # --page-token, so printing the token handed them a value with nowhere to
+    # put it; --limit is the whole of pagination today. The token still reaches
+    # scripts through --json, where the payload is passed straight through.
+    if data.get("next_page_token") or data.get("nextPageToken"):
+        console.print("[dim]More results available — raise --limit.[/dim]")
 
 
 def _humanize(value: str) -> str:

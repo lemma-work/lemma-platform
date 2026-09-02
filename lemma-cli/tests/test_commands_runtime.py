@@ -84,7 +84,7 @@ def test_runtime_profiles_get_not_found_fails(monkeypatch):
     result = runner.invoke(app, ["runtime", "profiles", "get", "nope"])
 
     assert result.exit_code != 0
-    assert "not found" in result.stdout.lower() or "nope" in result.stdout
+    assert "not found" in result.stderr.lower() or "nope" in result.stderr
 
 
 def test_runtime_profiles_create_dispatches_api(monkeypatch):

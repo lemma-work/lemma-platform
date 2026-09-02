@@ -177,7 +177,7 @@ def test_agents_delete_without_yes_refuses_noninteractive(monkeypatch):
     result = runner.invoke(app, ["agents", "delete", "my-agent", "--pod", "pod-1"])
 
     assert result.exit_code != 0
-    assert "--yes" in result.stdout or "non-interactive" in result.stdout
+    assert "--yes" in result.stderr or "non-interactive" in result.stderr
 
 
 def test_agents_permissions_get_dispatches_api(monkeypatch):
