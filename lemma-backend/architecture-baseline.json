@@ -132,7 +132,6 @@
     "app/core/authorization/service.py": 2087,
     "app/core/config.py": 1756,
     "app/core/infrastructure/jobs/streaq_runtime.py": 1047,
-    "app/core/log/event_catalog.py": 728,
     "app/core/log/log.py": 932,
     "app/core/observability/telemetry.py": 1138,
     "app/core/test_utils.py": 962,
