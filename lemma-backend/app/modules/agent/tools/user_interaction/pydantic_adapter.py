@@ -7,7 +7,11 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
 from app.modules.agent.services.widget_token import widget_serve_path
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.tools.tool_errors import (
+    AgentInputRequired,
+    safe_described_error,
+    safe_error_text,
+)
 from app.modules.agent.tools.user_interaction.models import (
     AskUserRequest,
     AskUserResponse,
@@ -64,9 +68,14 @@ async def display_resource(
                 ttl_seconds=1800,
             )
         except Exception as exc:
+            # Redacted: this becomes the tool return the model reads and the
+            # transcript keeps, and the sandbox round-trip that fails here
+            # stringifies with the URL it dialled.
             return DisplayResourceResponse(
                 success=False,
-                error=f"Failed to create browser display URL: {type(exc).__name__}: {exc}",
+                error=(
+                    f"Failed to create browser display URL: {safe_described_error(exc)}"
+                ),
             )
         finally:
             await workspace_service.close()
@@ -365,9 +374,15 @@ async def _run_if_exact_match_already_approved(
             deps=deps, tool_name=tool_name, args=args
         )
     except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
+        # Redacted for the same reason the ordinary approval path is: this text
+        # is written into the conversation and replayed into the model, and the
+        # tool that just failed was running with the user's authority.
         return RequestApprovalResponse(
             success=False,
-            error=f"Auto-approved (session), but running {tool_name} failed: {exc}",
+            error=(
+                f"Auto-approved (session), but running {tool_name} failed: "
+                f"{safe_error_text(exc)}"
+            ),
             decision=AgentRunApprovalDecision.APPROVE_FOR_SESSION,
             executed=False,
         )

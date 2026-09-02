@@ -147,7 +147,23 @@ class AgentRuntimeProfileService:
         return getattr(getattr(self.repository, "uow", None), "session", None)
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
-        profile = system_lemma_profile()
+        """The deployment's own profile, or nothing when it is misconfigured.
+
+        A listing degrades; it does not raise. This feeds
+        ``agent.runtime.profiles.list`` -- the Models page an operator opens to
+        work out why nothing runs -- and a credentials-without-models
+        deployment used to 500 it, hiding the very answer the error text
+        carries. `resolve()` still raises that error, so the run a person sends
+        tells them which setting to fill in.
+        """
+        try:
+            profile = system_lemma_profile()
+        except DomainError:
+            logger.error(
+                "agent.runtime_profile_service.system_profile_unconfigured.degraded",
+                exc_info=True,
+            )
+            return []
         return [profile] if profile is not None else []
 
     async def list_profiles(
@@ -491,14 +507,31 @@ def _selected_model(
     # model was later deprecated, or a swapped BYO key). Degrade gracefully to
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
-    if requested_model_name:
-        if profile.default_model_name:
-            for model in profile.model_catalog:
-                if profile.default_model_name == model.name:
-                    return model
-    if profile.model_catalog:
-        return profile.model_catalog[0]
-    return None
+    substitute: RuntimeModelCatalogEntry | None = None
+    if requested_model_name and profile.default_model_name:
+        substitute = next(
+            (
+                model
+                for model in profile.model_catalog
+                if model.name == profile.default_model_name
+            ),
+            None,
+        )
+    if substitute is None and profile.model_catalog:
+        substitute = profile.model_catalog[0]
+    if substitute is not None:
+        # Said out loud, because the substitution is otherwise undetectable: an
+        # agent pinned to one model runs -- and is billed -- on another, with
+        # different cost and different behaviour, indefinitely. The neighbouring
+        # archived-profile path went to real trouble to say what happened; this
+        # one used to say nothing at all.
+        logger.warning(
+            "agent.runtime_profile.model_substituted.degraded",
+            profile_id=profile.id,
+            requested_model_name=model_name,
+            selected_model_name=substitute.name,
+        )
+    return substitute
 
 
 def _config_dict(config: object | None) -> dict[str, object]:

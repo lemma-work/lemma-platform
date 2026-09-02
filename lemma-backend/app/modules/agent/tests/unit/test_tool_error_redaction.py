@@ -72,3 +72,83 @@ class TestSecretsDoNotReachTheTranscript:
 
     def test_an_empty_error_still_names_its_type(self) -> None:
         assert safe_error_text(ValueError()) == "ValueError"
+
+
+class TestTheApprovalPathsRedactToo:
+    """The three sites that still interpolated a raw exception.
+
+    An approved tool is the class of call most likely to be an authenticated
+    HTTP request, and a leak here is durable: it is written into the
+    conversation, replayed into the model on every later turn, and readable by
+    anyone with the conversation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_approved_tool_that_fails_does_not_leak_its_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.agent.services import approval_reconciliation
+        from app.modules.agent.tools.approval import executor as approval_executor
+
+        class _Uow:
+            async def commit(self) -> None:
+                return None
+
+        async def _explode(self, *, deps, tool_name, args):
+            del self, deps, tool_name, args
+            raise RuntimeError(
+                "Server error '500' for url "
+                "'https://api.example.com/deploy?api_key=sk-secret-value'"
+            )
+
+        monkeypatch.setattr(
+            approval_executor.ApprovalExecutor, "execute_as_user", _explode
+        )
+
+        result = await approval_reconciliation.execute_approved_tool_as_user(
+            uow=_Uow(),
+            deps=None,
+            tool_name="http_request",
+            args={},
+        )
+
+        assert result["ok"] is False
+        assert "sk-secret-value" not in str(result["error"])
+
+    @pytest.mark.asyncio
+    async def test_a_session_auto_approval_that_fails_does_not_leak_its_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from uuid import uuid4
+
+        from app.modules.agent.tools.approval import executor as approval_executor
+        from app.modules.agent.tools.context import BaseAgentContext
+        from app.modules.agent.tools.user_interaction import pydantic_adapter
+
+        async def _granted(**_kwargs) -> bool:
+            return True
+
+        async def _explode(self, *, deps, tool_name, args):
+            del self, deps, tool_name, args
+            raise RuntimeError(
+                "connect failed: https://hooks.example.com/x?token=sk-secret-value"
+            )
+
+        monkeypatch.setattr(
+            "app.core.authorization.session_approvals.has_session_approval", _granted
+        )
+        monkeypatch.setattr(
+            approval_executor.ApprovalExecutor, "execute_as_user", _explode
+        )
+
+        response = await pydantic_adapter._run_if_exact_match_already_approved(
+            deps=BaseAgentContext(
+                user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
+            ),
+            tool_name="http_request",
+            args={},
+        )
+
+        assert response is not None
+        assert response.success is False
+        assert "sk-secret-value" not in str(response.error)

@@ -16,6 +16,11 @@ from __future__ import annotations
 
 SNOOZE_TOOL_NAME = "snooze"
 
-PAUSING_TOOL_NAMES = ("ask_user", "request_approval", SNOOZE_TOOL_NAME)
+#: The pauses a *person* resolves. A snooze is excluded on purpose: it resolves
+#: on a timer with nobody involved, so it must never appear on an approvals list
+#: or be routed a typed reply.
+USER_PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
 
-__all__ = ["PAUSING_TOOL_NAMES", "SNOOZE_TOOL_NAME"]
+PAUSING_TOOL_NAMES = (*USER_PAUSING_TOOL_NAMES, SNOOZE_TOOL_NAME)
+
+__all__ = ["PAUSING_TOOL_NAMES", "SNOOZE_TOOL_NAME", "USER_PAUSING_TOOL_NAMES"]

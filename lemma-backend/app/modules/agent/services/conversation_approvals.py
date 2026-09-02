@@ -44,7 +44,6 @@ from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
     MessageDraft,
-    MessageKind,
 )
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
@@ -56,6 +55,19 @@ from app.modules.agent.services.approval_reconciliation import (
 from app.modules.agent.services.pause_resume import PauseResume
 
 logger = get_logger(__name__)
+
+#: How long an execution claim can be held before its holder is presumed dead.
+#: The reconcile job's own ceiling (``JOB_TIMEOUT_SECONDS``) plus a margin: past
+#: it streaq has killed the job, so nothing can still be running the approved
+#: tool under that claim. Anything shorter risks declaring a live command
+#: abandoned and writing a "could not confirm" return that then blocks the real
+#: result.
+#:
+#: Written out rather than imported: ``streaq_runtime`` builds a broker and a
+#: worker at module scope, and this module is on the API's import path --
+#: ``streaq_job_queue`` defers its own import of it for exactly that reason.
+#: ``test_settle_stuck_stops`` holds the two numbers together instead.
+_ABANDONED_EXECUTION_SECONDS = 2100
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,29 +298,46 @@ class ApprovalCoordinator:
             conversation_id=conversation.id,
             tool_call_id=approval_id,
         )
-        if existing_return is None and await self._claim_execution(
-            conversation_id=conversation.id, approval_id=approval_id
-        ):
-            # Build the return the resumed run will replay. This runs the wrapped
-            # tool as the user, so it must happen at most once — hence a claim
-            # above rather than only the read below it. The append re-checks
-            # cheaply and closes the remaining window.
-            return_tool_name, tool_result = await self.resume_returns.build(
+        if existing_return is None:
+            if await self._claim_execution(
+                conversation_id=conversation.id, approval_id=approval_id
+            ):
+                # Build the return the resumed run will replay. This runs the
+                # wrapped tool as the user, so it must happen at most once —
+                # hence a claim above rather than only the read below it. The
+                # append re-checks cheaply and closes the remaining window.
+                return_tool_name, tool_result = await self.resume_returns.build(
+                    conversation=conversation,
+                    user_id=user_id,
+                    kind=kind,
+                    tool_args=tool_args,
+                    decision=decision,
+                    response=response,
+                    paused_agent_run_id=paused_run_id,
+                )
+                await self.pauses.append_pause_tool_return(
+                    conversation=conversation,
+                    paused_run_id=paused_run_id,
+                    tool_call_id=approval_id,
+                    tool_name=return_tool_name,
+                    tool_result=tool_result,
+                )
+            elif not await self._close_an_abandoned_execution(
                 conversation=conversation,
-                user_id=user_id,
+                approval_id=approval_id,
+                paused_run_id=paused_run_id,
                 kind=kind,
-                tool_args=tool_args,
                 decision=decision,
                 response=response,
-                paused_agent_run_id=paused_run_id,
-            )
-            await self.pauses.append_pause_tool_return(
-                conversation=conversation,
-                paused_run_id=paused_run_id,
-                tool_call_id=approval_id,
-                tool_name=return_tool_name,
-                tool_result=tool_result,
-            )
+            ):
+                # Somebody holds the claim and may still be running the approved
+                # tool. Falling through would start the resume run against a
+                # history with this call unanswered, and the rebuild drops such a
+                # call — so the agent would carry on as though it had never
+                # asked, while the person believes their approval was carried
+                # out. Stop instead: the approval card keys on the missing
+                # return, so it stays up and a retry finishes this.
+                return
 
         if agent_host_permission_request(tool_args) is not None:
             # An Agent Host pauses *inside* a live run: the decision was just
@@ -329,6 +358,67 @@ class ApprovalCoordinator:
             agent_name=agent_name,
             source="approval_resume",
         )
+
+    async def _close_an_abandoned_execution(
+        self,
+        *,
+        conversation: Conversation,
+        approval_id: str,
+        paused_run_id: UUID,
+        kind: str,
+        decision: AgentRunApprovalDecision,
+        response: JsonObject,
+    ) -> bool:
+        """Write the honest record for a claim whose executor never came back.
+
+        The execution claim is one-shot by design: an approved ``request_approval``
+        runs the wrapped tool with the user's authority, so it must never be
+        retried. The cost is that a worker killed between taking the claim and
+        writing the return leaves an approval nothing can finish, and the tool
+        return is the only record the resumed run replays.
+
+        Past the reconcile job's own timeout nothing can still be executing under
+        that claim, so what happened is written down rather than lost. Before
+        then the holder may genuinely be mid-command — an approved command can
+        legitimately run for minutes — and this reports False so the caller
+        leaves the pause alone.
+        """
+        expired = await self.conversation_repository.approval_execution_claim_expired(
+            conversation_id=conversation.id,
+            approval_id=approval_id,
+            stale_after_seconds=_ABANDONED_EXECUTION_SECONDS,
+        )
+        if not expired:
+            return False
+        logger.error(
+            "agent.conversation_approvals.approved_tool_never_confirmed.failed",
+            conversation_id=str(conversation.id),
+            approval_id=approval_id,
+        )
+        # Lazy: the tool models import the tool registry, which imports back
+        # through this module's reconciliation helpers.
+        from app.modules.agent.tools.user_interaction.models import (
+            RequestApprovalResponse,
+        )
+
+        await self.pauses.append_pause_tool_return(
+            conversation=conversation,
+            paused_run_id=paused_run_id,
+            tool_call_id=approval_id,
+            tool_name=kind,
+            tool_result=RequestApprovalResponse(
+                success=False,
+                error=(
+                    "This was approved, but the worker running it stopped before "
+                    "it reported a result, and Lemma cannot re-run an approved "
+                    "action. Check whether it took effect before asking again."
+                ),
+                decision=decision,
+                executed=False,
+                response=response,
+            ).model_dump(mode="json"),
+        )
+        return True
 
     async def supersede_stale_pending_interactions(
         self,
@@ -351,21 +441,10 @@ class ApprovalCoordinator:
         could not take back on a rollback, which is why an Agent Host permission
         is not delivered from here.
         """
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation.id
-        )
-        messages, _ = await self.conversation_repository.list_messages(
+        stale = await self.conversation_repository.pausing_calls_awaiting_a_decision(
             conversation_id=conversation.id,
-            limit=500,
+            pausing_tool_names=PAUSING_TOOL_NAMES,
         )
-        stale = [
-            message
-            for message in messages
-            if message.kind == MessageKind.TOOL_CALL
-            and message.tool_name in PAUSING_TOOL_NAMES
-            and message.tool_call_id is not None
-            and message.tool_call_id not in resolved_ids
-        ]
         synthesized_returns: list[Message] = []
         for message in stale:
             saved_return = await self._deny_stale_pending_interaction(
@@ -486,26 +565,25 @@ class ApprovalCoordinator:
         conversation_id: UUID,
         tool_names: Sequence[str],
     ) -> dict[str, object] | None:
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation_id
-        )
-        messages, _ = await self.conversation_repository.list_messages(
+        """The pause a typed reply routes to, or the card renders.
+
+        Asked in SQL rather than by scanning the newest 500 messages: past that
+        window the conversation reported itself as waiting on nothing, so the
+        approval card vanished and a reply had nowhere to go.
+        """
+        pending = await self.conversation_repository.pausing_calls_awaiting_a_decision(
             conversation_id=conversation_id,
-            limit=500,
+            pausing_tool_names=tool_names,
+            limit=1,
         )
-        for message in messages:
-            if (
-                message.kind == MessageKind.TOOL_CALL
-                and message.tool_name in tool_names
-                and message.tool_call_id is not None
-                and message.tool_call_id not in resolved_ids
-            ):
-                return {
-                    "tool_call_id": message.tool_call_id,
-                    "kind": message.tool_name,
-                    "tool_args": (
-                        message.tool_args if isinstance(message.tool_args, dict) else {}
-                    ),
-                    "agent_run_id": message.agent_run_id,
-                }
-        return None
+        if not pending:
+            return None
+        message = pending[0]
+        return {
+            "tool_call_id": message.tool_call_id,
+            "kind": message.tool_name,
+            "tool_args": (
+                message.tool_args if isinstance(message.tool_args, dict) else {}
+            ),
+            "agent_run_id": message.agent_run_id,
+        }
