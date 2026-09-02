@@ -441,7 +441,7 @@ class E2BOpsMixin:
         than one process -- remembering it in this one would work until the next
         call landed on another worker.
         """
-        return None
+        return
 
     async def execute_python(
         self,

@@ -259,7 +259,7 @@ class FakeE2B:
 
             async def send_stdin(self, pid, data, **_kwargs):
                 world.commands.append(data.decode().strip())
-                return None
+                return
 
             async def resize(self, pid, size, **_kwargs):
                 return None

@@ -142,11 +142,7 @@ class SharedStreaqJobQueue(JobQueuePort):
         ttl_seconds = _JOB_CONTEXT_MIN_TTL_SECONDS
         if defer_until is not None:
             task.start(schedule=defer_until)
-            now = (
-                datetime.now(defer_until.tzinfo)
-                if defer_until.tzinfo
-                else datetime.now()
-            )
+            now = datetime.now(defer_until.tzinfo)
             ttl_seconds = max(
                 ttl_seconds,
                 int((defer_until - now).total_seconds()) + _JOB_CONTEXT_MIN_TTL_SECONDS,

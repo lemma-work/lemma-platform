@@ -92,14 +92,14 @@ def api_error(
     cls = _STATUS_ERRORS.get(status_code)
     if cls is None:
         cls = LemmaServerError if status_code >= 500 else LemmaAPIError
-    fields: dict[str, Any] = dict(
-        status_code=status_code,
-        message=message,
-        code=code,
-        details=details,
-        raw_response=raw_response,
-        request_id=request_id,
-    )
+    fields: dict[str, Any] = {
+        "status_code": status_code,
+        "message": message,
+        "code": code,
+        "details": details,
+        "raw_response": raw_response,
+        "request_id": request_id,
+    }
     # Only LemmaRateLimitError carries the extra dataclass field; the other
     # subclasses inherit the base __init__ and don't accept retry_after.
     if cls is LemmaRateLimitError:

@@ -163,7 +163,7 @@ class _FakeSession:
             raise self._write_error
         self.files[path] = data
         self._api = getattr(self, "_api", set()) | {path}
-        return None
+        return
 
     def _capture_with_browser(self, cmd: str) -> None:
         """Emulate `save-webpage`: write the files it was asked to emit."""

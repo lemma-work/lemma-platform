@@ -193,9 +193,7 @@ def prefers_binary_response(
     media_types = {str(item).split(";", 1)[0].strip().lower() for item in content}
     has_binary_media = any(
         media_type in {"*/*", "application/octet-stream"}
-        or media_type.startswith("image/")
-        or media_type.startswith("audio/")
-        or media_type.startswith("video/")
+        or media_type.startswith(("image/", "audio/", "video/"))
         for media_type in media_types
     )
     return keyword_match and has_binary_media

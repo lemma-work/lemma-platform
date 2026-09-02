@@ -28,12 +28,12 @@ from app.modules.agent.tools.tool_errors import AgentInputRequired
 
 
 def _wait(**overrides) -> AgentConversationWaitEntity:
-    defaults = dict(
-        conversation_id=uuid4(),
-        agent_run_id=uuid4(),
-        pod_id=uuid4(),
-        tool_call_id="tc-1",
-    )
+    defaults = {
+        "conversation_id": uuid4(),
+        "agent_run_id": uuid4(),
+        "pod_id": uuid4(),
+        "tool_call_id": "tc-1",
+    }
     return AgentConversationWaitEntity(**{**defaults, **overrides})
 
 

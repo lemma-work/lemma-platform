@@ -34,7 +34,7 @@ def _event(*, is_dm: bool = True) -> ParsedInboundSurfaceEvent:
 
 
 def _api_error(code: str) -> SlackApiError:
-    return SlackApiError(message=code, response=dict({"error": code}))
+    return SlackApiError(message=code, response={"error": code})
 
 
 async def test_thread_title_is_set_for_a_dm(monkeypatch):

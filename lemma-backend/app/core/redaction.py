@@ -135,8 +135,7 @@ def redact_text(value: str) -> str:
     )
     for pattern in _KNOWN_TOKEN_PATTERNS:
         redacted = pattern.sub(REDACTED, redacted)
-    redacted = _URL_RE.sub(lambda match: _redact_url(match.group(0)), redacted)
-    return redacted
+    return _URL_RE.sub(lambda match: _redact_url(match.group(0)), redacted)
 
 
 def redact_value(value: Any, *, key: object | None = None) -> Any:

@@ -85,9 +85,9 @@ NATIVE_LEMMA_OAUTH2_DEFAULTS: dict[str, OAuth2Defaults] = {
 }
 
 # System OAuth client env refs for native Lemma-provider apps, keyed by app id.
-NATIVE_LEMMA_SYSTEM_OAUTH: dict[str, SystemOAuthCredentialRef] = {
-    connector_id: _GOOGLE_SYSTEM_OAUTH for connector_id in NATIVE_LEMMA_OAUTH2_DEFAULTS
-}
+NATIVE_LEMMA_SYSTEM_OAUTH: dict[str, SystemOAuthCredentialRef] = dict.fromkeys(
+    NATIVE_LEMMA_OAUTH2_DEFAULTS, _GOOGLE_SYSTEM_OAUTH
+)
 
 
 @lru_cache(maxsize=1)

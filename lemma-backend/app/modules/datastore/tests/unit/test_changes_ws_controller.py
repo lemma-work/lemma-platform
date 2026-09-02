@@ -36,8 +36,7 @@ def _mock_uow_factory(uow):
     factory_instance = MagicMock()
     factory_instance.return_value = cm
 
-    factory_class = MagicMock(return_value=factory_instance)
-    return factory_class
+    return MagicMock(return_value=factory_instance)
 
 
 def _make_ws(**accept_kwargs):

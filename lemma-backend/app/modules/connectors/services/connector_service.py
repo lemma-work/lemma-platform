@@ -1151,11 +1151,7 @@ class ConnectorService:
             else None
         )
         if expires_at is not None:
-            now = (
-                datetime.now(tz=expires_at.tzinfo)
-                if expires_at.tzinfo is not None
-                else datetime.now()
-            )
+            now = datetime.now(tz=expires_at.tzinfo)
             is_expired = expires_at < now
         else:
             is_expired = False

@@ -71,11 +71,7 @@ def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
         if line.startswith("data:"):
             data_lines.append(line[len("data:") :].lstrip())
             continue
-        if (
-            line.startswith("event:")
-            or line.startswith("id:")
-            or line.startswith("retry:")
-        ):
+        if line.startswith(("event:", "id:", "retry:")):
             continue
         data_lines.append(line)
 

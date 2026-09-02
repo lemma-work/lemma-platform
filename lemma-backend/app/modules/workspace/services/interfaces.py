@@ -19,17 +19,14 @@ class ISandbox(ABC):
     @abstractmethod
     async def ensure_sandbox(self, user_id: UUID) -> SandboxInfo:
         """Create or resume a sandbox for a user."""
-        pass
 
     @abstractmethod
     async def get_sandbox(self, user_id: UUID) -> Optional[SandboxInfo]:
         """Get sandbox information by user ID."""
-        pass
 
     @abstractmethod
     async def delete_sandbox(self, user_id: UUID) -> None:
         """Delete a user's sandbox."""
-        pass
 
     async def suspend_sandbox(self, user_id: UUID) -> None:
         """Release compute while retaining the user's logical sandbox identity.
@@ -43,7 +40,6 @@ class ISandbox(ABC):
     @abstractmethod
     async def is_sandbox_running(self, user_id: UUID) -> bool:
         """Check if the user's sandbox is running."""
-        pass
 
 
 class IWorkspaceSession(ABC):
@@ -63,7 +59,6 @@ class IWorkspaceSession(ABC):
         """
         Execute Python code in the session.
         """
-        pass
 
     @abstractmethod
     async def execute_terminal_command(
@@ -72,7 +67,6 @@ class IWorkspaceSession(ABC):
         timeout: int = 30,
     ) -> ShellCommandResult:
         """Execute a terminal command in the session."""
-        pass
 
     @abstractmethod
     async def exec_command(
@@ -86,7 +80,6 @@ class IWorkspaceSession(ABC):
         timeout: Optional[int] = 300,
     ) -> dict[str, Any]:
         """Execute a shell command, optionally as a long-running process."""
-        pass
 
     @abstractmethod
     async def write_stdin(
@@ -98,27 +91,22 @@ class IWorkspaceSession(ABC):
         yield_time_ms: Optional[int] = None,
     ) -> dict[str, Any]:
         """Write to, or poll, a long-running process."""
-        pass
 
     @abstractmethod
     async def terminate_process(self, process_id: str) -> dict[str, Any]:
         """Terminate a long-running process."""
-        pass
 
     @abstractmethod
     async def list_processes(self) -> list[dict[str, Any]]:
         """List tracked shell processes in the session."""
-        pass
 
     @abstractmethod
     async def close(self) -> None:
         """Close the session and cleanup resources."""
-        pass
 
     @abstractmethod
     async def __aenter__(self) -> "IWorkspaceSession":
         """Enter the async context manager."""
-        pass
 
     @abstractmethod
     async def __aexit__(
@@ -128,4 +116,3 @@ class IWorkspaceSession(ABC):
         exc_tb: Optional[Any],
     ) -> Optional[bool]:
         """Exit the async context manager."""
-        pass

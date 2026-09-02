@@ -234,4 +234,4 @@ class ConversationApprovalQueriesMixin:
                 AgentApprovalDecisionModel.conversation_id == conversation_id
             )
         )
-        return {row for row in result.scalars()}
+        return set(result.scalars())

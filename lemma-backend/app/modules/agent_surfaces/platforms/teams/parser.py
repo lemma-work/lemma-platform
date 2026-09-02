@@ -537,8 +537,7 @@ class TeamsMessageParser:
         match = _IMG_ITEMTYPE_RE.search(html or "")
         if not match:
             return ""
-        raw = match.group(1).strip().lower()
-        return raw
+        return match.group(1).strip().lower()
 
     def _file_type_from_name(self, name: str | None) -> str:
         if name and "." in name:

@@ -141,3 +141,24 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # from PyPI (see [project.dependencies]).
 lemma-sdk = { path = "../lemma-python" }
 lemma-pod-bundle = { path = "../lemma-pod-bundle" }
+
+# Ruff config. `select` is explicit because ruff's default is four families
+# (E4, E7, E9, F): "lint passes" meant unused imports and syntax errors, and
+# nothing else. The list matches lemma-backend's so that one habit works in both
+# trees; see lemma-backend/pyproject.toml for what is deliberately left out and
+# what it would cost to add.
+#
+# TID is absent on purpose: this package uses relative imports within itself
+# (327 sites), which is a house style rather than a defect.
+[tool.ruff.lint]
+select = [
+    "F", "E4", "E7", "E9", "W",
+    "C4", "DTZ", "G", "ISC", "LOG", "PIE", "PLE", "RET", "T20",
+]
+ignore = ["G201"]
+
+[tool.ruff.lint.per-file-ignores]
+# `print` is how a command-line program talks. CONVENTIONS.md still requires
+# command *results* to go through `cli_core/io.py:emit`; the exceptions in
+# cli_core carry a `# noqa: T201` naming why, rather than being ignored here.
+"tests/**" = ["T20"]

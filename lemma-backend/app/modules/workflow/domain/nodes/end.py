@@ -10,8 +10,6 @@ from app.modules.workflow.domain.nodes.base import BaseNode, NodeType
 class EndNodeConfig(BaseModel):
     """Configuration for End node."""
 
-    pass
-
 
 class EndNode(BaseNode):
     """End node. Completes the run."""
