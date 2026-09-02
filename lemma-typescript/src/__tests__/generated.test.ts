@@ -15,9 +15,13 @@ function fakeAuth(): { auth: AuthManager; markUnauthenticated: ReturnType<typeof
   return { auth, markUnauthenticated };
 }
 
-function genError(status: number, body?: unknown): GeneratedApiError {
+function genError(
+  status: number,
+  body?: unknown,
+  method: string = "GET",
+): GeneratedApiError {
   return new GeneratedApiError(
-    {} as never,
+    { method, url: "" } as never,
     { url: "", ok: false, status, statusText: "", body } as never,
     "generated error",
   );
@@ -72,6 +76,39 @@ describe("GeneratedClientAdapter retry + error mapping", () => {
     const operation = vi
       .fn()
       .mockRejectedValueOnce(genError(503))
+      .mockResolvedValueOnce({ ok: true });
+
+    const promise = adapter.request(operation as () => Promise<unknown>);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not replay a write on a gateway error", async () => {
+    // A 504 usually means the handler is still running; replaying the POST is
+    // how one create becomes two rows.
+    const { auth } = fakeAuth();
+    const adapter = new GeneratedClientAdapter("https://api.test", auth, { maxRetries: 2 });
+
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(genError(504, undefined, "POST"))
+      .mockResolvedValueOnce({ ok: true });
+
+    await expect(
+      adapter.request(operation as () => Promise<unknown>),
+    ).rejects.toMatchObject({ statusCode: 504 });
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries a write on 429, which never reached the handler", async () => {
+    vi.useFakeTimers();
+    const { auth } = fakeAuth();
+    const adapter = new GeneratedClientAdapter("https://api.test", auth, { maxRetries: 2 });
+
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(genError(429, undefined, "POST"))
       .mockResolvedValueOnce({ ok: true });
 
     const promise = adapter.request(operation as () => Promise<unknown>);

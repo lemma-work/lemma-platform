@@ -19,7 +19,7 @@ def _pod_files(captured: dict) -> PodFiles:
 
     transport = SimpleNamespace(
         generated=SimpleNamespace(get_httpx_client=lambda: FakeHttpx()),
-        _error_from_response=lambda *a, **k: AssertionError("unexpected error path"),
+        error_from_response=lambda *a, **k: AssertionError("unexpected error path"),
     )
     return PodFiles(transport, pod_id=POD)
 
@@ -147,3 +147,58 @@ def test_attach_markdown_builds_real_multipart_files(monkeypatch, tmp_path):
     assert captured["body"].path == "/docs/report.pdf"
     assert captured["markdown"] == b"# Replacement"
     assert captured["image"] == b"png-bytes"
+
+
+def test_update_acts_on_the_path_argument_not_the_one_in_the_body():
+    # The argument used to be discarded entirely, so this call updated /b.md
+    # while reading as if it updated /a.md.
+    sent: list = []
+    transport = SimpleNamespace(
+        call=lambda endpoint, *args, body=None, body_model=None, **kw: sent.append(
+            body
+        ),
+    )
+    pf = PodFiles(transport, pod_id=POD)
+    request = files_mod.Update(path="/b.md", new_path="/c.md")
+    request["extra"] = "kept"
+
+    pf.update("/a.md", request)
+
+    assert sent[0].to_dict()["path"] == "/a.md"
+    assert sent[0].to_dict()["new_path"] == "/c.md"
+    assert sent[0].to_dict()["extra"] == "kept"
+    # The caller's own request object is left alone.
+    assert request.path == "/b.md"
+
+
+def test_download_to_writes_chunks_without_holding_the_file(tmp_path):
+    chunks = [b"one", b"two", b"three"]
+    read_timeouts: list = []
+
+    class FakeResponse:
+        def __init__(self):
+            self.closed = False
+
+        def iter_bytes(self, chunk_size):
+            assert chunk_size > 0
+            yield from chunks
+
+        def close(self):
+            self.closed = True
+
+    response = FakeResponse()
+
+    def stream(endpoint, *args, read_timeout=None, **kwargs):
+        read_timeouts.append(read_timeout)
+        return response
+
+    transport = SimpleNamespace(stream=stream, timeout=30.0)
+    pf = PodFiles(transport, pod_id=POD)
+
+    target = pf.download_to("/big.pdf", tmp_path / "big.pdf")
+
+    assert target.read_bytes() == b"".join(chunks)
+    assert response.closed
+    # A download's bytes arrive continuously, so an idle connection is dead --
+    # unlike an event stream, which is deliberately quiet while an agent thinks.
+    assert read_timeouts == [30.0]

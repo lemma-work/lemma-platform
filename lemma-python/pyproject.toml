@@ -27,6 +27,12 @@ dependencies = [
 [dependency-groups]
 dev = [
   "ruff>=0.14.8,<0.16",
+  "pytest>=8.3.0",
+  # tests/test_function_runtime_context.py is an async test, and the property it
+  # proves -- that per-invocation credentials do not leak between concurrent
+  # function invocations -- was never actually exercised while this was missing:
+  # pytest reported "async def functions are not natively supported" and failed.
+  "pytest-asyncio>=1.0.0",
 ]
 
 [build-system]
@@ -45,6 +51,7 @@ exclude = ["build*", "dist*", "*.egg-info*", "docs*"]
 lemma_sdk = ["openapi_spec.json", "py.typed"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "strict"
 markers = [
   "integration: real Lemma API scenarios; requires LEMMA_TOKEN and a running API",
   "connector: real Lemma connector scenarios; requires LEMMA_RUN_CONNECTOR=1 and a running API",

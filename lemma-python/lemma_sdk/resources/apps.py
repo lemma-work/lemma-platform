@@ -64,7 +64,7 @@ class PodApps(BoundResource):
             for handle in handles:
                 handle.close()
         if response.status_code >= 400:
-            raise self._transport._error_from_response(
+            raise self._transport.error_from_response(
                 response.status_code, None, response.content
             )
         return AppBundleUploadResponse.from_dict(response.json())

@@ -76,11 +76,52 @@ export function nextBackoffDelay(attempt: number, options: BackoffOptions = {}):
 
 /**
  * Statuses worth retrying with backoff. Deliberately conservative: 429 is an
- * explicit "back off", and 502/503/504 are gateway errors where the request
- * usually never reached the handler — so retrying is safe even for writes.
- * 500 is excluded (it may indicate a partial side effect).
+ * explicit "back off", and 502/503/504 are gateway errors where the request may
+ * never have reached the handler. 500 is excluded (it may indicate a partial
+ * side effect).
  */
 export const RETRYABLE_STATUS: ReadonlySet<number> = new Set([429, 502, 503, 504]);
+
+/**
+ * Statuses safe to retry whatever the request was. The rate limiter refuses a
+ * 429 before the handler runs, so a replay cannot repeat a side effect. A
+ * gateway error carries no such promise — a 504 usually means the handler is
+ * still running — so those are retried only for a method that can be replayed.
+ */
+export const ALWAYS_RETRYABLE_STATUS: ReadonlySet<number> = new Set([429]);
+
+/**
+ * Methods a gateway error may be replayed for. GET/HEAD/OPTIONS only: PUT and
+ * DELETE are idempotent by HTTP semantics, but replaying one that in fact
+ * succeeded turns a success into a 404 or a lost update, which reads as a worse
+ * failure than the gateway error it replaced.
+ */
+export const REPLAYABLE_METHODS: ReadonlySet<string> = new Set([
+  "GET",
+  "HEAD",
+  "OPTIONS",
+]);
+
+/**
+ * Whether a failed request may be sent again.
+ *
+ * Retrying a write the server is still processing is how one `records.create`
+ * becomes two rows and one `conversations.send` becomes two agent runs, so a
+ * gateway error is replayed only for a method that carries no side effect. An
+ * unknown method is assumed to write.
+ */
+export function isRetryableRequest(
+  status: number,
+  method: string | undefined,
+): boolean {
+  if (!RETRYABLE_STATUS.has(status)) {
+    return false;
+  }
+  if (ALWAYS_RETRYABLE_STATUS.has(status)) {
+    return true;
+  }
+  return method !== undefined && REPLAYABLE_METHODS.has(method.toUpperCase());
+}
 
 /** Parse a server `Retry-After` header (delta-seconds or HTTP-date) into ms,
  *  capped at 30s. Returns null when the header is absent or unparseable. */
@@ -118,18 +159,19 @@ export function applyJitter(delayMs: number, random: () => number = Math.random)
 /**
  * Single source of truth for the retry decision shared by the hand-written
  * `HttpClient` and the generated-client adapter. Returns the number of ms to
- * wait before retrying, or `null` when the status is non-retryable or retries
- * are exhausted. A server-advised `Retry-After` is honored verbatim (no jitter);
- * the computed exponential backoff gets equal jitter.
+ * wait before retrying, or `null` when the request must not be replayed or
+ * retries are exhausted. A server-advised `Retry-After` is honored verbatim (no
+ * jitter); the computed exponential backoff gets equal jitter.
  */
 export function retryDelayForStatus(
   status: number,
+  method: string | undefined,
   attempt: number,
   maxRetries: number,
   retryAfterHeader: string | null | undefined,
   random: () => number = Math.random,
 ): number | null {
-  if (!RETRYABLE_STATUS.has(status) || attempt >= maxRetries) {
+  if (!isRetryableRequest(status, method) || attempt >= maxRetries) {
     return null;
   }
   const serverMs = serverRetryAfterMs(retryAfterHeader);

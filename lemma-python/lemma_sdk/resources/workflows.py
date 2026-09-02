@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from ..openapi_client.api.workflows import (
     workflow_create,
     workflow_delete,
@@ -105,24 +107,15 @@ class PodWorkflows(BoundResource):
             page_token=page_token if page_token is not None else UNSET,
         )
 
-    def stream_run(self, run_id: str):
+    def stream_run(self, run_id: str) -> httpx.Response:
         """Server-sent events carrying a run's state as it advances.
 
         Returns the raw streaming ``httpx.Response`` — the caller iterates the
-        SSE frames — matching ``conversations.stream``. The first frame is the
-        whole run, and each later frame is the whole run again, so reconnecting
-        is a matter of replacing state rather than replaying a diff.
+        SSE frames and closes it — matching ``conversations.stream``. The first
+        frame is the whole run, and each later frame is the whole run again, so
+        reconnecting is a matter of replacing state rather than replaying a diff.
         """
-        kwargs = workflow_run_stream._get_kwargs(self._pod_uuid(), as_uuid(run_id))
-        httpx_client = self.generated.get_httpx_client()
-        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
-        if response.status_code >= 400:
-            content_bytes = response.read()
-            response.close()
-            raise self._transport._error_from_response(
-                response.status_code, None, content_bytes
-            )
-        return response
+        return self._stream(workflow_run_stream, self._pod_uuid(), as_uuid(run_id))
 
     def submit_form(
         self,
