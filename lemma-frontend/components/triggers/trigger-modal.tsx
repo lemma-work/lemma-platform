@@ -360,7 +360,13 @@ export function TriggerModal({
 
     const buildConfig = (): Record<string, unknown> | null => {
         if (kind === ScheduleType.TIME) {
-            return { schedule_type: 'CRON', cron_expression: cron.trim(), timezone: timezone.trim() || 'UTC' };
+            // `cron` is the key the API validates on — `validate_time_schedule_config`
+            // reads exactly `cron` or `scheduled_at` and refuses the request when it
+            // finds neither. This said `cron_expression`, so every TIME trigger built
+            // here came back 422. It was invisible from the read side because
+            // `getScheduleTimeConfig` accepts either spelling, so schedules created
+            // through the CLI still displayed correctly.
+            return { schedule_type: 'CRON', cron: cron.trim(), timezone: timezone.trim() || 'UTC' };
         }
         if (kind === ScheduleType.DATASTORE) {
             const when = buildMatchConditions(conditions, selectedTableColumnTypes);
