@@ -322,7 +322,7 @@ async def _role_names_by_id(
         RoleModel.pod_id == pod_id,
         RoleModel.id.in_(role_ids),
     )
-    return {role_id: name for role_id, name in (await uow.session.execute(stmt)).all()}
+    return dict((await uow.session.execute(stmt)).all())
 
 
 async def _pod_members_by_id(

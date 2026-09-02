@@ -36,7 +36,10 @@ def get_profile(
     an app's model picker) without hitting the API directly."""
     state = state_from_ctx(ctx)
 
-    def _run(client, _s):  # type: ignore[no-untyped-def]
+    # noqa: RET503 — the last statement is `fail()`, which is NoReturn; ruff
+    # resolves that annotation only within a file, so it reads the end as
+    # reachable. An explicit `return None` here would be dead code.
+    def _run(client, _s):  # type: ignore[no-untyped-def] # noqa: RET503
         profiles = list_items(client.org_runtime.profiles())
         needle = selector.casefold()
         for profile in profiles:

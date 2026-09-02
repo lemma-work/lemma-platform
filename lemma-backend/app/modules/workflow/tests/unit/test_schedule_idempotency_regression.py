@@ -50,13 +50,12 @@ def _engine_with_mocks() -> WorkflowEngine:
     uow = Mock()
     uow.commit = AsyncMock()
     uow.session = Mock()
-    engine = WorkflowEngine(
+    return WorkflowEngine(
         uow,
         agent_adapter=Mock(),
         function_adapter=Mock(),
         schedule_adapter=Mock(),
     )
-    return engine
 
 
 @pytest.mark.anyio

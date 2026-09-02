@@ -95,7 +95,7 @@ def _workspace_tool_failure(
     logger.debug(
         "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
-        exc_info=True,
+        exc_info=exc,
     )
     return ExecCommandResult(
         success=False,
@@ -117,7 +117,7 @@ def _python_workspace_tool_failure(
     logger.debug(
         "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
-        exc_info=True,
+        exc_info=exc,
     )
     return PythonExecutionResult(
         success=False,

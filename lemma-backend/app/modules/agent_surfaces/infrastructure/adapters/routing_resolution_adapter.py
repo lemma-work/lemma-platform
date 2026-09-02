@@ -24,7 +24,7 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
             .where(OrganizationMember.user_id == user_id)
         )
         result = await self.session.execute(stmt)
-        return [pod_id for pod_id in result.scalars().all()]
+        return list(result.scalars().all())
 
     async def get_user_email(self, user_id: UUID) -> str | None:
         stmt = select(User.email).where(User.id == user_id)

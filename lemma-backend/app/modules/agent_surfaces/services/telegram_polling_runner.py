@@ -187,7 +187,7 @@ class TelegramPollingReceiverRunner:
 
         logger.debug(
             "agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic",
-            exc_info=True,
+            exc_info=exc,
         )
         await asyncio.sleep(5)
         return conflict_deadline, True

@@ -163,7 +163,7 @@ async def test_add_processing_indicator_noop_without_message_id(monkeypatch):
 
     async def _capture(*, phone_number_id, payload):
         calls.append(payload)
-        return None
+        return
 
     monkeypatch.setattr(service._client, "send_message_payload", _capture)
 

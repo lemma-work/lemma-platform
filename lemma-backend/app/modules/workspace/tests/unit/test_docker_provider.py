@@ -45,16 +45,16 @@ def _provider(engine: FakeDockerEngine, **overrides) -> DockerSandboxProvider:
 
 
 def _spec(sandbox_id, *, epoch: int = 1, **overrides) -> ProviderCreateSpec:
-    defaults = dict(
-        sandbox_id=sandbox_id,
-        kind=SandboxKind.WORKSPACE,
-        epoch=epoch,
-        name=naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
-        image=PINNED_IMAGE,
-        profile_name="workspace-python-v1",
-        profile_digest="sha256:" + "a" * 64,
-        deadline_at=_deadline(),
-    )
+    defaults = {
+        "sandbox_id": sandbox_id,
+        "kind": SandboxKind.WORKSPACE,
+        "epoch": epoch,
+        "name": naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
+        "image": PINNED_IMAGE,
+        "profile_name": "workspace-python-v1",
+        "profile_digest": "sha256:" + "a" * 64,
+        "deadline_at": _deadline(),
+    }
     defaults.update(overrides)
     return ProviderCreateSpec(**defaults)  # type: ignore[arg-type]
 
@@ -318,7 +318,7 @@ async def test_release_stops_the_container_but_keeps_the_volume() -> None:
     assert instance.name in engine.containers
     # Suspending compute must never take the user's files with it.
     assert engine.destroyed == []
-    assert "ab-ws-keep" not in [v for v in engine.volumes]
+    assert "ab-ws-keep" not in list(engine.volumes)
 
 
 async def test_an_unreachable_runtime_still_gets_stopped() -> None:

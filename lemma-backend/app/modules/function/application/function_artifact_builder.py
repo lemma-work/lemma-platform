@@ -173,12 +173,11 @@ class FunctionArtifactBuilder:
             "--no-build",
             "--no-cache",
         )
-        lines = tuple(
+        return tuple(
             line.strip()
             for line in (await run_blocking(lock.read_text, "utf-8")).splitlines()
             if line.strip() and not line.startswith("#")
         )
-        return lines
 
     async def _run_builder(self, *arguments: str) -> None:
         try:

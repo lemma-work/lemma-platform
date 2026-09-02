@@ -92,7 +92,7 @@ def log_model_http_error(
         agent_run_id=str(agent_run_id),
         provider_error_kind=kind,
         provider_error_code=code,
-        exc_info=True,
+        exc_info=exc,
     )
 
 

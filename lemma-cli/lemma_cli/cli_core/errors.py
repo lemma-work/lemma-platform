@@ -70,5 +70,5 @@ def report_cli_error(exc: BaseException, *, base_url: str | None = None) -> bool
     else:
         message = str(exc) or type(exc).__name__
 
-    print(f"error  {message}", file=sys.stderr)
+    print(f"error  {message}", file=sys.stderr)  # noqa: T201 — stderr, pre-state
     return True

@@ -55,7 +55,7 @@ class _Session:
 
     async def scalar(self, statement):
         self.statements.append(statement)
-        return None
+        return
 
 
 class _Uow:

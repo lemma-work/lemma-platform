@@ -141,7 +141,7 @@ def render_session_selection(
     ]
     if export_only:
         for line in exports:
-            print(line)  # plain stdout — must be eval-safe (no rich markup)
+            print(line)  # noqa: T201 — eval-safe stdout, no rich markup
         return
     if state.output == "json":
         from .io import emit

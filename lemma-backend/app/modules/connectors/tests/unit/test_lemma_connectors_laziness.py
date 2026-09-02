@@ -152,19 +152,19 @@ def test_get_operation_loads_only_target_resource():
         credentials=OAuth2Credentials(access_token="t", token_type="Bearer"),
     )
 
-    before = set(
+    before = {
         name
         for name in sys.modules
         if name.startswith("lemma_connectors.gmail.resources.")
         and not name.endswith("__init__")
-    )
+    }
     client.get_operation("messages_send")
-    after = set(
+    after = {
         name
         for name in sys.modules
         if name.startswith("lemma_connectors.gmail.resources.")
         and not name.endswith("__init__")
-    )
+    }
     newly_loaded = after - before
     assert newly_loaded == {"lemma_connectors.gmail.resources.messages"}, (
         f"Expected only messages resource, got: {newly_loaded}"

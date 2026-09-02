@@ -68,6 +68,7 @@ async def _body_messages(response) -> list[bytes]:
             delivered = True
             return {"type": "http.request", "body": b"", "more_body": False}
         await anyio.sleep_forever()
+        return None
 
     async def send(message):
         sent.append(message)

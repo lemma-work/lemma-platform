@@ -11,8 +11,6 @@ from app.modules.identity.domain.user_preferences import UserPreferences
 class AuthUserEntity(Entity):
     """Authentication user entity from auth middleware."""
 
-    pass
-
 
 class UserEntity(AggregateRoot):
     """Identity user aggregate root."""

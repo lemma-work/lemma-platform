@@ -326,11 +326,11 @@ async def update_runtime_profile(
     # stored API key.
     supplied = data.model_fields_set - {"source", "refresh_models"}
     changes = {field: getattr(data, field) for field in supplied}
-    common = dict(
-        profile_id=profile_id,
-        organization_id=org_id,
-        user_id=user.id,
-    )
+    common = {
+        "profile_id": profile_id,
+        "organization_id": org_id,
+        "user_id": user.id,
+    }
     try:
         if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
             updated = await editor.update_agent_host_profile(**common, **changes)
@@ -389,7 +389,7 @@ async def archive_runtime_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    return None
+    return
 
 
 @router.post(

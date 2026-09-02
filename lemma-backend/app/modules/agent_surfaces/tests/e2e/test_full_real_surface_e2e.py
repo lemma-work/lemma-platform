@@ -87,7 +87,7 @@ class _FakeScheduleManager:
 
     async def get_schedule(self, account, provider_id: str):
         del account, provider_id
-        return None
+        return
 
 
 async def _wait_for_composio_execution(

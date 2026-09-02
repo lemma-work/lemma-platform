@@ -52,7 +52,7 @@ class _SurfaceService:
 
     async def clear_progress_for_conversation(self, **kwargs):
         self.cleared.append(kwargs)
-        return None
+        return
 
     async def append_stream_text_for_conversation(self, **kwargs):
         self.streamed.append(kwargs)

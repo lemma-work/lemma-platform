@@ -226,7 +226,7 @@ async def test_sync_static_operations_stores_the_declared_kind():
     class _FakeOperationRepository:
         async def get_by_connector_kind_and_name(self, connector_id, kind, name):
             del connector_id, kind, name
-            return None
+            return
 
         async def create(self, entity):
             created.append(entity)

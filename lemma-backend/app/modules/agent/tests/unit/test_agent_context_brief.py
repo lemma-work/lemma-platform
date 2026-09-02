@@ -383,13 +383,13 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
 
     monkeypatch.setattr(brief_mod, "AgentMemoryBriefBuilder", _StubMemoryBuilder)
     builder = AgentContextBriefBuilder(RecordingUoWFactory())
-    kwargs = dict(
-        agent=_named_agent(),
-        conversation=_conversation(False),
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        toolsets=[AgentToolset.MEMORY, AgentToolset.POD],
-    )
+    kwargs = {
+        "agent": _named_agent(),
+        "conversation": _conversation(False),
+        "user_id": uuid4(),
+        "pod_id": uuid4(),
+        "toolsets": [AgentToolset.MEMORY, AgentToolset.POD],
+    }
     first = await builder.build(**kwargs)
     assert "first" in first
 

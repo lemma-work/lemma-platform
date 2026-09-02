@@ -33,7 +33,7 @@ async def _indexes_on(session_factory, schema_name: str, table_name: str) -> dic
             ),
             {"schema": schema_name, "table": table_name},
         )
-        return {name: definition for name, definition in rows.all()}
+        return dict(rows.all())
 
 
 @pytest.fixture

@@ -86,6 +86,12 @@ must never use personal or production credentials.
 
 ### Backend architecture rules
 
+The short form is below. The full standard — every rule with an id, the check
+that enforces it, and whether it is a hard failure or a ratchet — is in
+[docs/engineering/](docs/engineering/README.md):
+[design](docs/engineering/design.md), [types](docs/engineering/types.md),
+[test design](docs/engineering/tests.md).
+
 - The canonical module documentation lives in `lemma-backend/docs/modules`.
 - Cross-module collaboration belongs in an explicit `contracts` package or a
   versioned domain event. Do not import another module's API, service,
@@ -102,13 +108,10 @@ must never use personal or production credentials.
   name the shape: a `TypedDict`, a dataclass, a pydantic model, a `Protocol`
   for an object you only call methods on.
 
-`Any` is legitimate for data that genuinely has no shape until it is
-validated — a provider's JSON response, an arbitrary payload a tenant supplies
-— and for a third-party library that is untyped. Say which, in a comment, and
-narrow it as soon as the data has been checked. What is not legitimate is
-reaching for it because writing the type is work: a helper taking
-`service: Any` and calling six methods on it has a type, it just isn't written
-down, and nothing then notices when one of those methods is renamed.
+`Any` is legitimate in two cases only — data with no shape until it is
+validated, and an untyped third-party library — and both are narrower than they
+look. [types.md](docs/engineering/types.md#when-any-is-legitimate) states them,
+and says what to do instead in the cases people reach for them in.
 
 `make architecture` enforces most of this as a no-growth ratchet against
 `architecture-baseline.json`: existing violations are tolerated, new ones are

@@ -19,12 +19,12 @@ from app.modules.pod_bundle.domain.state import (
 
 
 def _import_state(**overrides) -> ImportState:
-    defaults = dict(
-        import_id=uuid4(),
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        source=BundleSource(kind="URL", bundle_filename="crm.zip"),
-    )
+    defaults = {
+        "import_id": uuid4(),
+        "pod_id": uuid4(),
+        "user_id": uuid4(),
+        "source": BundleSource(kind="URL", bundle_filename="crm.zip"),
+    }
     defaults.update(overrides)
     return ImportState(**defaults)
 

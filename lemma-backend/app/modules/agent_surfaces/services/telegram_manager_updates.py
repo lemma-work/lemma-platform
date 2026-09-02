@@ -480,7 +480,7 @@ async def _finish_failed(
 ) -> None:
     logger.error(
         "agent_surfaces.telegram_manager.managed_bot_provisioning_failed",
-        exc_info=True,
+        exc_info=exc,
     )
     setup.status = TelegramManagedBotSetupStatus.FAILED
     setup.error = _safe_setup_error(exc)

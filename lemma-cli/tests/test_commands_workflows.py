@@ -34,7 +34,7 @@ class FakeWorkflows:
 
     def delete(self, workflow):
         self._calls["delete"] = {"workflow": workflow}
-        return None
+        return
 
     def runs(self, workflow, *, limit=100):
         self._calls["runs_list"] = {"workflow": workflow, "limit": limit}

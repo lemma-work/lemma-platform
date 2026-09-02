@@ -68,7 +68,6 @@ class ScheduleRepository(ABC):
     @abstractmethod
     async def create(self, entity: ScheduleEntity) -> ScheduleEntity:
         """Create a new schedule."""
-        pass
 
     @abstractmethod
     async def get(
@@ -77,7 +76,6 @@ class ScheduleRepository(ABC):
         ctx: Context | None = None,
     ) -> Optional[ScheduleEntity]:
         """Get a schedule by ID."""
-        pass
 
     @abstractmethod
     async def get_by_name(
@@ -88,17 +86,14 @@ class ScheduleRepository(ABC):
         ctx: Context | None = None,
     ) -> Optional[ScheduleEntity]:
         """Get a schedule by pod-scoped name."""
-        pass
 
     @abstractmethod
     async def update(self, schedule_id: UUID, **kwargs) -> Optional[ScheduleEntity]:
         """Update a schedule."""
-        pass
 
     @abstractmethod
     async def delete(self, schedule_id: UUID) -> bool:
         """Delete a schedule."""
-        pass
 
     @abstractmethod
     async def list(
@@ -115,7 +110,6 @@ class ScheduleRepository(ABC):
         cursor: UUID | None = None,
     ) -> tuple[List[ScheduleEntity], UUID | None]:
         """List schedules with filters."""
-        pass
 
     @abstractmethod
     async def find_by_config(
@@ -127,7 +121,6 @@ class ScheduleRepository(ABC):
            schedule_type: The type of schedule (WEBHOOK, etc.)
            criteria: Dictionary of key-value pairs to match in the config
         """
-        pass
 
     @abstractmethod
     async def find_active_by_workflow(
@@ -138,7 +131,6 @@ class ScheduleRepository(ABC):
         user_id: UUID | None = None,
     ) -> List[ScheduleEntity]:
         """Find active schedules for a pod workflow, optionally scoped to an owner."""
-        pass
 
     @abstractmethod
     async def find_by_pod_table_event(
@@ -154,7 +146,6 @@ class ScheduleRepository(ABC):
         - schedule.config.table_name == event.table_name OR schedule.config.table_name is None
         - schedule.config.operations contains event.operation OR schedule.config.operations is None
         """
-        pass
 
     @abstractmethod
     async def list_all_by_pod(self, pod_id: UUID) -> List[ScheduleEntity]:
@@ -163,7 +154,6 @@ class ScheduleRepository(ABC):
         System-level query used for pod-deletion cleanup; includes internal
         schedules (unlike ``list``, which excludes ``is_internal`` rows).
         """
-        pass
 
 
 class ExternalScheduleWriter(ABC):
@@ -172,12 +162,10 @@ class ExternalScheduleWriter(ABC):
     @abstractmethod
     async def create_provider_trigger(self, schedule: ScheduleEntity) -> str | None:
         """Create an external provider subscription and return its provider ID."""
-        pass
 
     @abstractmethod
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         """Delete the external provider subscription associated with the schedule."""
-        pass
 
 
 class ScheduleEventPublisher(ABC):
@@ -194,7 +182,6 @@ class ScheduleEventPublisher(ABC):
         llm_output: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Publish a ScheduleFired event."""
-        pass
 
 
 class ScheduleFilterTaskQueue(ABC):
@@ -209,7 +196,6 @@ class ScheduleFilterTaskQueue(ABC):
         source_event_id: str,
     ) -> None:
         """Enqueue background LLM filter work for a schedule."""
-        pass
 
 
 class WebhookVerifier(ABC):
@@ -224,4 +210,3 @@ class WebhookVerifier(ABC):
     @abstractmethod
     async def verify(self, payload: str, headers: Dict[str, Any]) -> Dict[str, Any]:
         """Verify a webhook and return the provider verification result."""
-        pass

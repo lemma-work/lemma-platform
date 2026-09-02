@@ -460,7 +460,7 @@ class E2BSandboxProvider(E2BOpsMixin):
 
     async def destroy_volume(self, name: str, *, deadline_at: datetime) -> None:
         """Nothing to destroy separately: killing the sandbox takes the disk."""
-        return None
+        return
 
     # ------------------------------------------------------------------
     # Reclamation

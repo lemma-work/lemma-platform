@@ -577,14 +577,14 @@ async def test_reconcile_expired_leases_sweeps_expire_and_reconcile_per_run(
     async def fake_expire(session_arg, *, run_id, now=None):
         assert session_arg is session
         expire_calls.append((run_id, now))
-        return None
+        return
 
     async def fake_reconcile(
         session_arg, *, run_id, now=None, recovery_grace_seconds=120
     ):
         assert session_arg is session
         reconcile_calls.append((run_id, now))
-        return None
+        return
 
     monkeypatch.setattr(recovery, "expire_unaccepted_run", fake_expire)
     monkeypatch.setattr(recovery, "reconcile_expired_run", fake_reconcile)
@@ -620,7 +620,7 @@ class _CleanupSession:
 
     async def execute(self, stmt):
         self.execute_calls.append(stmt)
-        return None
+        return
 
     async def flush(self):
         self.flushed = True

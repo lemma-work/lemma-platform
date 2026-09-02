@@ -51,8 +51,8 @@ def test_the_test_that_paid_for_the_session_is_judged_on_its_own_work() -> None:
     """The real numbers from the run that failed: 31.5s setup, 13.8s call."""
     durations = _load_durations()
 
-    own = dict(
-        (test, seconds)
+    own = {
+        test: seconds
         for seconds, test in durations._own_seconds(
             [_case(45.29, CARRIER)],
             {
@@ -60,7 +60,7 @@ def test_the_test_that_paid_for_the_session_is_judged_on_its_own_work() -> None:
                 "phases": {CARRIER: {"setup": 31.50, "call": 13.79, "teardown": 0.01}},
             },
         )
-    )
+    }
 
     assert own[CARRIER] == pytest.approx(13.80, abs=0.01), (
         "the carrier was judged on the JUnit total, which includes the shard's "
@@ -89,8 +89,8 @@ def test_every_other_test_is_still_judged_on_the_full_total() -> None:
     """Only the carrier is special. A non-carrier keeps its own setup."""
     durations = _load_durations()
 
-    own = dict(
-        (test, seconds)
+    own = {
+        test: seconds
         for seconds, test in durations._own_seconds(
             [_case(50.0, ORDINARY)],
             {
@@ -98,7 +98,7 @@ def test_every_other_test_is_still_judged_on_the_full_total() -> None:
                 "phases": {ORDINARY: {"setup": 40.0, "call": 10.0, "teardown": 0.0}},
             },
         )
-    )
+    }
 
     assert own[ORDINARY] == 50.0
 
@@ -107,9 +107,9 @@ def test_a_run_with_no_phase_breakdown_behaves_as_it_did_before() -> None:
     """An older artifact still checks, against the JUnit total."""
     durations = _load_durations()
 
-    own = dict(
-        (test, seconds)
+    own = {
+        test: seconds
         for seconds, test in durations._own_seconds([_case(45.29, CARRIER)], {})
-    )
+    }
 
     assert own[CARRIER] == 45.29

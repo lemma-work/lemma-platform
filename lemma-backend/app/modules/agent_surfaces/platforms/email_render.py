@@ -105,7 +105,7 @@ def _blank_line_before_lists(content: str) -> str:
             out.append(line)
             continue
         # A hyphen inside a fenced block is code, not a bullet.
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if stripped.startswith(("```", "~~~")):
             in_fence, fence = True, stripped[:3]
             out.append(line)
             continue

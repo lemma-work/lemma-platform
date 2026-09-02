@@ -639,7 +639,7 @@ def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
     ``pod_id`` matters when the owner is meant to be the pod's own assistant,
     whose row id *is* its pod's: pass the same value for both.
     """
-    surface = AgentSurfaceEntity(
+    return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=pod_id or uuid4(),
         name=platform.value.lower(),
@@ -647,7 +647,6 @@ def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
         config=SurfaceConfig(),
         agent_id=agent_id,
     )
-    return surface
 
 
 async def test_an_agent_never_reaches_out_through_another_agents_bot():
