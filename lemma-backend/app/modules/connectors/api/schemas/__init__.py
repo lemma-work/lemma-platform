@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import datetime
 from enum import Enum
-from typing import Optional, Dict, Any, List, Union
+from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationSummary,
 )
+from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
 
 
 class BaseSchema(BaseModel):

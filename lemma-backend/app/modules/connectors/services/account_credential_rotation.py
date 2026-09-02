@@ -30,10 +30,13 @@ from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.services.account_credentials import (
     validated_account_credentials,
 )
+from app.modules.connectors.services.install_service_seam import (
+    InstallServiceSeam,
+)
 
 
 async def rotate_account_credentials(
-    service: Any,
+    service: InstallServiceSeam,
     *,
     account_id: UUID,
     user_id: UUID,
@@ -59,9 +62,20 @@ async def rotate_account_credentials(
             "of supplying a credential."
         )
 
-    account.credentials = validated_account_credentials(
-        connector, auth_config.kind, credentials
-    )
+    # Validated through the entity, not assigned raw. `AccountEntity` does not
+    # set `validate_assignment`, so a plain assignment leaves a dict on the
+    # model where creation -- which validates at construction -- would have left
+    # a typed credential. The repository serialises both, so nothing broke, but
+    # the two paths storing different shapes for the same connector is the kind
+    # of difference that surfaces much later as a puzzling `AttributeError`.
+    account.credentials = AccountEntity.model_validate(
+        {
+            **account.model_dump(),
+            "credentials": validated_account_credentials(
+                connector, auth_config.kind, credentials
+            ),
+        }
+    ).credentials
     # A credential that was rejected is what put the account here, and a new one
     # deserves the benefit of the doubt: the next call decides.
     account.status = AccountStatus.CONNECTED

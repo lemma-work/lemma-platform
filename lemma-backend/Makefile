@@ -330,6 +330,10 @@ typecheck-critical:
 		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/connectors/domain/ports.py \
 		app/modules/connectors/api/dependencies.py \
+		app/modules/connectors/services/install_service_seam.py \
+		app/modules/connectors/services/install_provisioning.py \
+		app/modules/connectors/services/install_update.py \
+		app/modules/connectors/services/account_credential_rotation.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \

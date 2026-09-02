@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import String, Boolean, Text
+from sqlalchemy import Boolean, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.core.infrastructure.db.base import StringAuditBase
 from app.modules.connectors.domain.connector import ConnectorEntity
 

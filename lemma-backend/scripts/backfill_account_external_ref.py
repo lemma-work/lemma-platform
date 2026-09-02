@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import json
 from collections import Counter
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -45,23 +46,20 @@ async def _run(apply_changes: bool) -> dict[str, object]:
     scanned = 0
 
     async with async_session_maker() as session:
-        offset = 0
+        # Keyset, not OFFSET. OFFSET makes the database walk and discard every
+        # row already seen, so the scan is quadratic in the table -- and this
+        # runs over `accounts`, which is exactly the table expected to be large
+        # enough to need batching in the first place. Ordering by `id` is what
+        # makes the cursor work, and the primary key index already provides it.
+        after: UUID | None = None
         while True:
-            rows = (
-                (
-                    await session.execute(
-                        select(Account)
-                        .order_by(Account.id)
-                        .offset(offset)
-                        .limit(_BATCH)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            query = select(Account).order_by(Account.id).limit(_BATCH)
+            if after is not None:
+                query = query.where(Account.id > after)
+            rows = (await session.execute(query)).scalars().all()
             if not rows:
                 break
-            offset += len(rows)
+            after = rows[-1].id
 
             for account in rows:
                 scanned += 1

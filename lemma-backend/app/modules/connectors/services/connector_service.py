@@ -58,6 +58,9 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
+from app.modules.connectors.services.account_credentials import (
+    validated_account_credentials,
+)
 from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
 )
@@ -78,11 +81,9 @@ from app.modules.connectors.services.auth_install_resolver import (
     provider_value,
     resolve_auth_install,
 )
-from app.modules.connectors.services.account_credentials import (
-    validated_account_credentials,
-)
 from app.modules.connectors.services.connect_request_lifecycle import (
-    assert_still_open,
+    oldest_claimable_connect_request,
+    pkce_verifier_for,
     stored_code_verifier,
     stored_provider_state,
     without_spent_secrets,
@@ -101,19 +102,6 @@ from app.modules.connectors.services.profile_operation_execution import (
 )
 
 logger = get_logger(__name__)
-
-
-def _pkce_verifier_for(install: ResolvedAuthInstall) -> str | None:
-    """A PKCE verifier when the install's client has no secret to prove itself.
-
-    Which is what dynamic registration usually yields. Minted out here rather
-    than inside the provider because it has to outlive the request that makes
-    it: the callback is where it is needed, and the connect request is the thing
-    that lives that long.
-    """
-    if install.oauth2 is None or install.oauth2.client_secret:
-        return None
-    return secrets.token_urlsafe(64)
 
 
 class ConnectorService:
@@ -735,7 +723,7 @@ class ConnectorService:
         )
         state = secrets.token_urlsafe(32)
         redirect_uri = self.redirect_uri_builder.build()
-        code_verifier = _pkce_verifier_for(auth_install)
+        code_verifier = pkce_verifier_for(auth_install)
 
         try:
             (
@@ -923,10 +911,15 @@ class ConnectorService:
         if not state:
             raise ConnectRequestStateRequiredError()
 
-        pending_request = await self.connect_request_repository.get_by_state(state)
+        # Claimed, not merely read: the status check and the write that spends
+        # it used to be separated by the whole provider exchange, so two
+        # callbacks with the same `state` both passed. See
+        # `claim_pending_by_state`.
+        pending_request = await self.connect_request_repository.claim_pending_by_state(
+            state, not_before=oldest_claimable_connect_request()
+        )
         if not pending_request:
             raise ConnectRequestNotFoundError()
-        assert_still_open(pending_request)
 
         user_id = pending_request.user_id
         auth_config = await self._resolve_auth_config(

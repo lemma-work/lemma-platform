@@ -318,3 +318,80 @@ def test_account_repository_serializes_expires_at_as_json_string():
     assert serialized is not None
     assert serialized["expires_at"] == "2026-03-16T12:00:00Z"
     assert serialized["connection_id"] == "ca_test_connection"
+
+
+def _provider_recording_which_id_it_fetched(fetched: list[str]) -> ComposioAuthProvider:
+    """A provider that records the id it was asked to resolve."""
+
+    def _get(connected_account_id):
+        fetched.append(connected_account_id)
+        return SimpleNamespace(
+            id=connected_account_id,
+            status="ACTIVE",
+            state=SimpleNamespace(
+                val=_FakeConnectionState(access_token="tok", token_type="Bearer")
+            ),
+            word_id=None,
+            alias=None,
+        )
+
+    return ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: SimpleNamespace(
+            connected_accounts=SimpleNamespace(get=_get)
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_connection_is_used_when_the_url_names_none():
+    """What this flow recorded is enough on its own.
+
+    Worth being precise about what carries the security property here, because
+    it is not the `state or callback_id` preference order. Given the mismatch
+    rejection below, the two orderings are behaviourally identical: they differ
+    only when both values are present and disagree, which is exactly the case
+    that raises. Flipping the order leaves every test green because there is no
+    observable difference left to catch -- so the ordering is a readability
+    choice, and the rejection is the control.
+
+    What this pins is that the recorded id is usable without the URL at all,
+    which is what makes the rejection safe to enforce rather than a way to
+    break flows whose callback omits the parameter.
+    """
+    fetched: list[str] = []
+    provider = _provider_recording_which_id_it_fetched(fetched)
+
+    await provider.exchange_code_for_credentials(
+        install=_install(),
+        redirect_uri="https://app.example.com/callback",
+        user_id=uuid4(),
+        state="ca_recorded",
+    )
+
+    assert fetched == ["ca_recorded"]
+
+
+@pytest.mark.asyncio
+async def test_a_callback_naming_a_different_connection_is_refused():
+    """The mismatch branch, which no test reached.
+
+    Disabling it entirely left all 850 connector tests passing. It is the half
+    that turns "prefer what we recorded" into "refuse what we did not", so an
+    attacker cannot simply omit or vary the parameter and have the recorded id
+    used silently against a flow it did not belong to.
+    """
+    fetched: list[str] = []
+    provider = _provider_recording_which_id_it_fetched(fetched)
+
+    with pytest.raises(ConnectorValidationError, match="does not belong"):
+        await provider.exchange_code_for_credentials(
+            install=_install(),
+            redirect_uri=(
+                "https://app.example.com/callback?connectedAccountId=ca_somebody_else"
+            ),
+            user_id=uuid4(),
+            state="ca_recorded",
+        )
+
+    assert fetched == [], "nothing may be fetched once the callback is disowned"

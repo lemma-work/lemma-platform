@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, Union, List
-from uuid import UUID
-from pydantic import ConfigDict, Field, BaseModel
-from datetime import datetime
 import enum
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.domain.entity import Entity
-
 from app.modules.connectors.domain.connector import ConnectorEntity
 
 

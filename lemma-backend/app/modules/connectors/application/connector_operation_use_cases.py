@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any, Callable
 from uuid import UUID
 
+import httpx
 from fastapi import Request
 
 from app.core.authorization.scope import current_context_scope, uow_scope
@@ -21,8 +22,6 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
-import httpx
-
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     OperationExecutionAccessDeniedError,
@@ -32,8 +31,14 @@ from app.modules.connectors.domain.errors import (
 )
 from app.modules.connectors.infrastructure.operation_breaker import (
     breaker_scope,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     guard as breaker_guard,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     record_failure as breaker_record_failure,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     record_success as breaker_record_success,
 )
 from app.modules.connectors.services.connector_operation_service import (

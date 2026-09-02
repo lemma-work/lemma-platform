@@ -41,6 +41,9 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigStatus,
 )
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
+from app.modules.connectors.services.install_service_seam import (
+    InstallServiceSeam,
+)
 
 logger = get_logger(__name__)
 
@@ -138,7 +141,9 @@ def apply_updates(
     if name is not None:
         auth_config.name = name
     if config is not None:
-        auth_config.config = merged_install_config(auth_config.config, config) or None
+        # Already merged by the caller, which needs the merged shape to decide
+        # what the change invalidates.
+        auth_config.config = config or None
     if status is not None:
         auth_config.status = status
     if is_default is not None:
@@ -217,7 +222,11 @@ async def mark_accounts_for_reauth(
 
 
 async def _clear_default_install(
-    service: Any, *, organization_id: UUID, connector_id: str, keep_id: UUID
+    service: InstallServiceSeam,
+    *,
+    organization_id: UUID,
+    connector_id: str,
+    keep_id: UUID,
 ) -> None:
     """Demote whichever install currently answers a bare connector_id.
 
@@ -235,7 +244,7 @@ async def _clear_default_install(
 
 
 async def update_install(
-    service: Any,
+    service: InstallServiceSeam,
     *,
     user_id: UUID,
     organization_id: UUID,
@@ -266,10 +275,15 @@ async def update_install(
         validated = await validate_updated_config(
             connector=connector, auth_config=auth_config, config=config
         )
+        # Against the MERGED result, not the submitted shape. A form submits a
+        # partial config -- that is why the merge exists -- so comparing the
+        # submission directly reads every omitted key as a change: a PATCH that
+        # only renames an install marked every account REAUTH_REQUIRED and
+        # re-ran discovery, for a target that had not moved.
+        config = merged_install_config(auth_config.config, validated)
         rediscover, invalidates = config_change_effects(
-            kind=auth_config.kind, before=auth_config.config, after=validated
+            kind=auth_config.kind, before=auth_config.config, after=config
         )
-        config = validated
 
     if is_default:
         await _clear_default_install(

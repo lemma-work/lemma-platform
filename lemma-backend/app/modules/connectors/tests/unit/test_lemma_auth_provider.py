@@ -283,34 +283,44 @@ async def test_no_resource_is_sent_when_the_install_names_none():
     assert "resource" not in FakeOAuth2Session.last_authorization
 
 
-def test_a_secretless_client_gets_a_verifier_and_a_secret_bearing_one_does_not():
-    """PKCE has to actually be switched on for the clients that depend on it.
+def test_every_oauth_connect_gets_its_own_pkce_verifier():
+    """PKCE is minted for confidential clients too, not only public ones.
 
     A mutation making `_pkce_verifier_for` always return `None` passed the unit
-    and e2e lanes in full: PKCE would be silently off for every dynamically
-    registered client, and an authorization code intercepted on the redirect
-    would be redeemable, which for a public client is the only thing stopping
-    it. The signature change that carried this parameter is what broke Composio
-    in production, and nothing asserted the parameter was ever populated.
+    and e2e lanes in full, so nothing asserted the parameter was ever
+    populated. And the original rule -- secretless clients only -- confused two
+    questions. The client secret proves which *application* is exchanging a
+    code; it says nothing about which *flow* the code came from. So a leaked
+    `state`, which by construction travels through the provider's redirect into
+    browser history and proxy logs, plus a code the attacker minted for their
+    own identity against the same deployment client, was enough to attach their
+    account to the victim's user. Single use bounds that to one attempt inside
+    thirty minutes. PKCE closes it: the attacker's code carries their verifier,
+    not the one this flow started with.
     """
-    from app.modules.connectors.services.connector_service import _pkce_verifier_for
+    from app.modules.connectors.services.connect_request_lifecycle import (
+        pkce_verifier_for,
+    )
 
     public_client = _mcp_install()
-    verifier = _pkce_verifier_for(public_client)
+    verifier = pkce_verifier_for(public_client)
     assert verifier, "a client with no secret has only PKCE to prove itself"
     assert len(verifier) >= 43, "RFC 7636 wants at least 43 characters of entropy"
+    assert pkce_verifier_for(public_client) != verifier, "must not be reused"
 
-    assert _pkce_verifier_for(public_client) != verifier, "must not be reused"
-
-    # A confidential client proves itself with the secret. Sending a challenge
-    # to a provider that never agreed to one is a way to break a working flow.
-    assert _pkce_verifier_for(_install()) is None
+    # The case that used to return None.
+    confidential = pkce_verifier_for(_install())
+    assert confidential, "a client secret is not a substitute for PKCE"
+    assert len(confidential) >= 43
+    assert confidential != pkce_verifier_for(_install()), "must not be reused"
 
 
 def test_an_install_with_no_oauth_at_all_asks_for_no_verifier():
     """A credential-managed install reaches the same helper."""
     from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
-    from app.modules.connectors.services.connector_service import _pkce_verifier_for
+    from app.modules.connectors.services.connect_request_lifecycle import (
+        pkce_verifier_for,
+    )
 
     install = ResolvedAuthInstall(
         connector_id="mcp",
@@ -322,4 +332,4 @@ def test_an_install_with_no_oauth_at_all_asks_for_no_verifier():
         config={},
         oauth2=None,
     )
-    assert _pkce_verifier_for(install) is None
+    assert pkce_verifier_for(install) is None

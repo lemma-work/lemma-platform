@@ -410,6 +410,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.lemma_operation_gateway.skipping_token_autofill_s_because.observed': EventSpec('debug', frozenset({'operation_name'})),
     'connectors.mcp_executor.calling_mcp_tool.observed': EventSpec('debug', frozenset({'connector_id', 'tool_name'})),
     'connectors.mcp_oauth.registered': EventSpec('info', frozenset({'issuer'})),
+    'connectors.mcp_oauth.registration_refused_unsafe_url': EventSpec('warning', frozenset({'issuer'})),
     'connectors.mcp_oauth.registration_skipped': EventSpec('info', frozenset({'error_type'})),
     'connectors.openapi_http_executor.calling_http_operation.observed': EventSpec('debug', frozenset({'connector_id', 'http_method', 'mode', 'operation_name'})),
     'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),

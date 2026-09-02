@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from app.core.log.log import get_logger
+from app.core.net.url_guard import UnsafeUrlError
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.services.auth.mcp_oauth import (
     McpAuthorizationUnavailable,
@@ -69,6 +70,18 @@ async def negotiate_mcp_authorization(
         client_id, client_secret = await register_client(
             server, redirect_uri=redirect_uri
         )
+    except UnsafeUrlError:
+        # Deliberately louder than the rest, and deliberately not swallowed by
+        # the `ValueError` below -- `UnsafeUrlError` is one. Discovery lets this
+        # propagate because a metadata document pointing at a private address is
+        # the SSRF the guard exists for; registration cannot fail the install
+        # over it, since a token still works, but degrading silently would hide
+        # the one failure here worth looking at.
+        logger.warning(
+            "connectors.mcp_oauth.registration_refused_unsafe_url",
+            issuer=server.issuer,
+        )
+        return config
     except (McpAuthorizationUnavailable, httpx.HTTPError, OSError, ValueError) as exc:
         # Never fatal. An install that could not register is still usable with a
         # token, and failing the create would deny the tenant the path that does

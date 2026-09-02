@@ -11,8 +11,8 @@ from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
 )
-from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.account import OAuthCredentials
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -147,9 +147,10 @@ async def test_connect_request_and_accounts_lifecycle(
         # to reach the scheme -- not the deployment's.
         assert install.oauth2.client_secret == "client-secret"
         assert install.config_source is AuthConfigSource.ORG_CUSTOM
-        # A client with a secret does not need PKCE, and sending a challenge to
-        # a provider that never agreed to one is how a working flow breaks.
-        assert code_verifier is None
+        # Every OAuth connect carries a verifier now, this one included: the
+        # secret proves which application is exchanging the code, not which
+        # flow it came from.
+        assert code_verifier, "a confidential client gets PKCE too"
 
     _install_fake_auth_provider(
         monkeypatch,

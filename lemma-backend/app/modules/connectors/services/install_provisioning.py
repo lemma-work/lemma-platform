@@ -17,13 +17,16 @@ from typing import Any
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
-from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorValidationError,
     UnsupportedAuthProviderError,
+)
+from app.modules.connectors.services.install_service_seam import (
+    InstallServiceSeam,
 )
 
 logger = get_logger(__name__)
@@ -168,7 +171,11 @@ async def discover_install_operations(
 
 
 async def refresh_install_operations(
-    service: Any, *, user_id: UUID, organization_id: UUID, auth_config_name: str
+    service: InstallServiceSeam,
+    *,
+    user_id: UUID,
+    organization_id: UUID,
+    auth_config_name: str,
 ) -> int:
     """Re-run discovery for an existing install.
 
@@ -192,7 +199,7 @@ async def refresh_install_operations(
 
 
 async def discovery_credentials(
-    service: Any, auth_config: AuthConfigEntity
+    service: InstallServiceSeam, auth_config: AuthConfigEntity
 ) -> dict[str, Any] | None:
     """A connected account's credentials, for an install that keeps none itself.
 
@@ -229,7 +236,7 @@ async def discovery_credentials(
 
 
 async def discover_operations_for_new_account(
-    service: Any, auth_config: AuthConfigEntity
+    service: InstallServiceSeam, auth_config: AuthConfigEntity
 ) -> None:
     """Fill in an OAuth install's operations once somebody has connected.
 

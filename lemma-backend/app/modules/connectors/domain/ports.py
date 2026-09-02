@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     OAuth2Defaults,
@@ -19,7 +21,6 @@ from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
-from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 
 
 class ConnectorRepositoryPort(Protocol):
@@ -98,6 +99,10 @@ class ConnectRequestRepositoryPort(Protocol):
     async def update(self, entity: ConnectRequestEntity) -> ConnectRequestEntity: ...
 
     async def get_by_state(self, state: str) -> Optional[ConnectRequestEntity]: ...
+
+    async def claim_pending_by_state(
+        self, state: str, *, not_before: datetime
+    ) -> Optional[ConnectRequestEntity]: ...
 
 
 class ConnectorTriggerRepositoryPort(Protocol):
