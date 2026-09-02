@@ -54,18 +54,26 @@ def test_every_placeholder_names_a_declared_setting():
             )
 
 
-def test_the_github_app_install_url_is_the_one_in_the_catalog():
-    """Pinned because it is the whole connect flow.
+def test_github_connects_through_the_authorize_endpoint_not_the_install_page():
+    """Pinned because sending people to the install page does not work twice.
 
-    A GitHub App is installed, not merely authorized: sending someone to
-    `login/oauth/authorize` yields a working user token that can reach no
-    repository, because the App was never installed anywhere.
+    `/apps/{slug}/installations/new` redirects back with `code` and
+    `installation_id` on a *first* install and only then. Someone who already
+    has the App -- every reconnect, and every second person in an organization
+    where somebody installed it already -- is shown the configure page and never
+    redirected anywhere at all. Verified live: the connect request stayed
+    PENDING and no account was ever created.
+
+    The authorize endpoint always round-trips a code. The installation is
+    resolved from the token afterwards; see `github_installation`.
     """
-    assert _placeholders().get("github") == ["CONNECTOR_GITHUB_APP_SLUG"]
     github = next(a for a in _apps() if a["name"] == "github")
     assert github["oauth2_config"]["authorization_url"] == (
-        "https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new"
+        "https://github.com/login/oauth/authorize"
     )
+    # And nothing needs substituting into it -- the slug identifies the App for
+    # the *install* link, which is a different journey.
+    assert _placeholders().get("github") is None
 
 
 def test_no_placeholder_hides_in_a_field_that_is_never_filled():

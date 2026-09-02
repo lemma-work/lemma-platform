@@ -130,6 +130,13 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   schedule is created — it is not something to copy out of a URL, and a wrong
   one routes another organization's events at your pod.
 
+  **A triggered agent needs its own connector grant.** Connecting the account
+  authorizes the *person*; a scheduled run is a delegated workload and is
+  refused unless the **agent** also holds `connector.use` on the connector
+  (`PUT /pods/{pod}/agents/{name}/permissions`). Without it the run still
+  starts and the repository is still bound — the sandbox simply has no
+  credentials, and `git clone` fails with `could not read Username`.
+
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
 to `is_active: false` so it won't fire before its target exists).
 

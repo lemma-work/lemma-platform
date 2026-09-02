@@ -141,6 +141,24 @@ A pull request that fires an agent binds the conversation to the repository and
 its head branch, and the clone runs as the schedule's connected account — the
 person, not the App — so what the agent pushes is attributed to them.
 
+## What a triggered agent needs beyond the connection
+
+A connected account is not on its own enough for an agent to use `git` and `gh`
+in its sandbox. A scheduled run is a *delegated workload*, and the workspace
+credential bridge resolves the account through the same authorization the
+connector tools use. Two grants are involved and only one of them is obvious:
+
+| Grant | Given to | Why it is not enough on its own |
+|---|---|---|
+| `connector.use` on `github` | a **role** (POD_ADMIN, …) | Authorizes the *person*. A delegated workload is refused with `MISSING_WORKLOAD_RESOURCE_GRANT`. |
+| `connector.use` on `github` | the **agent** (`PUT /pods/{pod}/agents/{name}/permissions`) | This is the one that carries a triggered run. |
+
+Without the agent's own grant the failure is quiet in the way that matters: the
+credential bridge resolves nothing, caches "unavailable" for the session, and
+the checkout fails with git's own `could not read Username for 'https://github.com'`
+inside the sandbox. Nothing upstream logs an error, because nothing upstream
+went wrong.
+
 ## Uninstalling
 
 An `installation` delivery with `deleted` or `suspend` retires what the

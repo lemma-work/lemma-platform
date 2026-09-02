@@ -164,9 +164,17 @@ def _github_binding(
     wrong routes another organization's events at their pod.
     """
     if not account.external_ref:
+        from app.modules.connectors.services.auth.github_installation import install_url
+
+        where = install_url()
         raise ScheduleValidationError(
-            "This GitHub account is not bound to an App installation. "
-            "Reconnect it so events can be routed to this schedule."
+            "This GitHub account is not bound to an App installation, so there "
+            "is nothing to route events from. "
+            + (
+                f"Install the app at {where}, then reconnect the account."
+                if where
+                else "Install the app on the organization, then reconnect it."
+            )
         )
     return {
         "source": "github",

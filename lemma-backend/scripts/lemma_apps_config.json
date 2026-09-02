@@ -877,7 +877,7 @@
       "client_secret_env": "CONNECTOR_GITHUB_CLIENT_SECRET"
     },
     "oauth2_config": {
-      "authorization_url": "https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new",
+      "authorization_url": "https://github.com/login/oauth/authorize",
       "token_url": "https://github.com/login/oauth/access_token",
       "revoke_url": "",
       "userinfo_url": "https://api.github.com/user",

@@ -42,9 +42,9 @@ from app.modules.connectors.domain.errors import (
     OAuthWorkflowError,
     UnsupportedAuthProviderError,
 )
-from app.modules.connectors.domain.install_binding import (
-    bind_external_ref,
-    resolve_external_ref,
+from app.modules.connectors.domain.install_binding import resolve_external_ref
+from app.modules.connectors.services.auth.github_installation import (
+    bound_external_ref,
 )
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
@@ -1035,10 +1035,10 @@ class ConnectorService:
 
         # Re-derived on every re-auth: a reconnect is how an account moves to a
         # different workspace or installation, and a stale routing key would keep
-        # sending that account another tenant's events. The callback URL is read
-        # for it too -- a GitHub App install names its installation there and
-        # nowhere else.
-        external_ref = bind_external_ref(connector.id, credentials, redirect_uri)
+        # sending that account another tenant's events. The callback names it on
+        # a first GitHub App install and nowhere else, so a reconnect falls back
+        # to asking GitHub which installation the new token speaks for.
+        external_ref = await bound_external_ref(connector.id, credentials, redirect_uri)
 
         if account:
             account.credentials = credentials
