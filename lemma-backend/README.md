@@ -31,7 +31,8 @@ The repository does not use submodules. Backend code depends on sibling packages
 | Path | Purpose |
 |------|---------|
 | `../lemma-frontend/` | Next.js frontend used by the local app runner |
-| `../lemma-python/` | Python SDK and `lemma` CLI |
+| `../lemma-python/` | `lemma-sdk`, the Python SDK (the `lemma` CLI is `lemma-terminal`, in `../lemma-cli/`) |
+| `../lemma-pod-bundle/` | The pod bundle format, shared with the CLI |
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
 | `lemma-connectors/` | Backend-local editable Python connector package |

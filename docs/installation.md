@@ -110,13 +110,14 @@ Supported setup paths include:
 - local Ollama;
 - local LM Studio.
 
-To run models on your own machine, start Ollama or LM Studio and press
-**Ollama** or **LM Studio**. Each fills in that tool's loopback base
-URL, which **Validate & apply** then probes for its model list. Lemma talks to
-them as ordinary OpenAI-compatible providers, so the models, their memory, and
-their lifecycle stay owned by the tool you already run. Local inference then
-works without internet; connectors, web access, and other external services
-still require their own networks.
+To run models on your own machine — and this is also the answer if you have no
+API key at all, since nothing here requires a hosted account — start Ollama or
+LM Studio and press **Ollama** or **LM Studio**. Each fills in that tool's
+loopback base URL, which **Validate & apply** then probes for its model list.
+Lemma talks to them as ordinary OpenAI-compatible providers, so the models,
+their memory, and their lifecycle stay owned by the tool you already run. Local
+inference then works without internet; connectors, web access, and other
+external services still require their own networks.
 
 Enter a base URL, default model, and API key when required, then choose
 **Validate & apply**. Lemma discovers models and verifies that the default
@@ -125,7 +126,8 @@ failed backend restart restores the prior configuration. Secrets live in
 macOS Keychain or Windows Credential Manager.
 
 Agents remain unavailable with a clear reason until a provider validates.
-Non-AI features remain available.
+Non-AI features remain available. Configure a provider before the first `lemma
+chat` or `lemma agent run`, or those are the commands that report it.
 
 ## Configure integrations and surfaces
 
@@ -218,8 +220,22 @@ container runtime and never rewrites localhost automatically.
 
 ## CLI control
 
-The optional `lemma-stack` CLI discovers the installed Desktop daemon and its
-dynamic endpoints. Complete one Desktop local installation first.
+The `lemma-stack` CLI discovers the installed Desktop daemon and its dynamic
+endpoints. Complete one Desktop local installation first. Desktop does not
+install `lemma-stack`, and it is not on PyPI, so get it from the bootstrap
+script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only
+```
+
+`--cli-only` installs `lemma-stack` and registers the `local` server in one
+step. Without that flag the same script starts the Docker/Podman compatibility
+install described under [External-runtime
+compatibility](#external-runtime-compatibility), which is not the Desktop path.
+
+Then, against the running installation:
 
 ```bash
 lemma-stack status
@@ -247,16 +263,32 @@ lemma-stack config set \
 lemma-stack config unset ai.protocol
 ```
 
-The separate `lemma` CLI operates pods. Register it against the resolved local
-server rather than hardcoding ports:
+The separate `lemma` CLI operates pods. It ships knowing one server,
+`lemma-cloud`; `local` is written from the endpoints Desktop actually allocated
+rather than from hardcoded ports. The bootstrap above already ran the
+registration, so this is the step to repeat after a reinstall or when `lemma
+servers select local` reports `Server not found: local`:
 
 ```bash
+uv tool install lemma-terminal      # the `lemma` CLI; --cli-only does not install it
 lemma-stack self register-cli --use
 lemma servers select local
 lemma auth login
 ```
 
+Install it with `uv tool install`, which provisions the Python 3.14 the CLI
+requires. `pip install lemma-terminal` on an older interpreter resolves back to
+an obsolete release instead of failing; `lemma --version` shows what you have.
+
 ## Diagnostics and repair
+
+Start from the symptom:
+
+| Symptom | Start here |
+| --- | --- |
+| `lemma servers select local` says `Server not found: local` | `lemma-stack self register-cli --use`, above. |
+| A `lemma` command behaves differently from the app, or reports an unexpected schema | `lemma doctor` — it diagnoses client/server version skew and duplicate CLI installs. |
+| The stack will not start, or a component is unhealthy | `lemma-stack doctor`, then the logs below. |
 
 The setup error view and **Local settings → Diagnostics** expose bounded,
 redacted logs for:
