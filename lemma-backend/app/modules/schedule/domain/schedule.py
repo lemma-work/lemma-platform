@@ -41,6 +41,16 @@ class TimeScheduleConfig(BaseModel):
     scheduled_at: str | None = Field(
         None, description="ISO format date for one-time schedule"
     )
+    # Absent means UTC, and stays absent: a stored "UTC" and a missing key
+    # behave identically, so no existing config needs rewriting to gain the
+    # field and no exported pod bundle grows a diff for it.
+    timezone: str | None = Field(
+        None,
+        description=(
+            "IANA zone the cron expression (or a scheduled_at without an "
+            "offset) is read in, e.g. 'Europe/Berlin'. Omitted means UTC."
+        ),
+    )
 
 
 class WebhookScheduleConfig(BaseModel):

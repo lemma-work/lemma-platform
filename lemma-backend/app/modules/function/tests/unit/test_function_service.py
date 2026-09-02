@@ -22,9 +22,11 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
     FunctionValidationError,
 )
+from app.modules.function.services.execution_preflight import (
+    LegacyFunctionRevisionRequired,
+)
 from app.modules.function.services.function_service import (
     FunctionService,
-    LegacyFunctionRevisionRequired,
     parse_python_packages,
 )
 from app.modules.test_support.authz import allow_all_context, deny_all_context

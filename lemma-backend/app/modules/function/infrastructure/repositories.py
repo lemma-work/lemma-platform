@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import load_only
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -32,6 +32,7 @@ from app.modules.function.domain.events import (
     FunctionRunFailedEvent,
 )
 from app.modules.function.domain.errors import (
+    FunctionConflictError,
     FunctionNotFoundError,
     FunctionRunNotFoundError,
 )
@@ -42,6 +43,13 @@ from app.modules.function.domain.ports import (
 from app.modules.function.infrastructure.models import (
     FunctionModel,
     FunctionRunModel,
+)
+
+#: Run states that have not settled. A function cannot be deleted while any of
+#: its runs is in one of them.
+_NON_TERMINAL_RUN_STATUSES = (
+    FunctionRunStatus.PENDING,
+    FunctionRunStatus.RUNNING,
 )
 
 
@@ -256,6 +264,24 @@ class FunctionRepository(FunctionRepositoryPort):
         return await self.get(function_id)
 
     async def delete(self, id: UUID) -> bool:
+        # Refuse while anything is still executing. `function_id` is SET NULL
+        # now, so history survives the delete -- but a PENDING/RUNNING run
+        # detached from its definition can never finish, and whatever suspended
+        # on it (a workflow FUNCTION node) waits until its own deadline sweep
+        # notices. Better to say so than to strand it.
+        in_flight = await self.session.scalar(
+            select(func.count())
+            .select_from(FunctionRunModel)
+            .where(
+                FunctionRunModel.function_id == id,
+                FunctionRunModel.status.in_(_NON_TERMINAL_RUN_STATUSES),
+            )
+        )
+        if in_flight:
+            raise FunctionConflictError(
+                f"{in_flight} run(s) of this function are still executing. "
+                "Wait for them to finish, then delete it."
+            )
         pod_id = (
             await self.session.execute(
                 select(FunctionModel.pod_id).where(FunctionModel.id == id)
@@ -357,7 +383,16 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         return model.to_entity()
 
     async def get_run(self, run_id: UUID) -> FunctionRunEntity | None:
-        stmt = select(FunctionRunModel).where(FunctionRunModel.id == run_id)
+        stmt = select(FunctionRunModel).where(
+            FunctionRunModel.id == run_id,
+            # A run detached from a deleted function is history, not something
+            # to execute or reconcile against. Everything asking here is asking
+            # about live work -- the dispatcher, the workflow adapter, the event
+            # handlers -- and "gone" is the answer each of them already handles.
+            # The row keeps its record of what happened; nothing here can act on
+            # it, and `FunctionRunEntity` requires the function it belonged to.
+            FunctionRunModel.function_id.is_not(None),
+        )
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None

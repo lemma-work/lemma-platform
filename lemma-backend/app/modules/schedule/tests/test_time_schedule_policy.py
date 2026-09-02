@@ -86,3 +86,72 @@ def test_one_time_schedule_is_not_subject_to_frequency_limit() -> None:
 def test_time_schedule_requires_exactly_one_trigger(config: dict) -> None:
     with pytest.raises(ScheduleValidationError, match="exactly one"):
         validate_time_schedule_config(config)
+
+
+def test_an_unknown_timezone_is_a_422_not_a_500() -> None:
+    """Naming a zone that does not exist is the user's mistake, told plainly."""
+    with pytest.raises(ScheduleValidationError, match="Unknown time zone") as exc_info:
+        validate_time_schedule_config(
+            {"cron": "0 9 * * *", "timezone": "Europe/Berlim"}
+        )
+
+    assert exc_info.value.code == "SCHEDULE_VALIDATION_ERROR"
+    assert exc_info.value.status_code == 422
+    assert "IANA" in exc_info.value.message
+
+
+def test_a_miscased_timezone_is_refused_rather_than_accepted_on_macos() -> None:
+    """`ZoneInfo("america/new_york")` succeeds on a case-insensitive filesystem.
+
+    Validating by constructing a `ZoneInfo` would accept this on a developer's
+    Mac and fail in the Linux container, so the check is membership of
+    `available_timezones()`. This is the case that catches the difference.
+    """
+    with pytest.raises(ScheduleValidationError, match="Unknown time zone"):
+        validate_time_schedule_config(
+            {"cron": "0 9 * * *", "timezone": "america/new_york"}
+        )
+
+
+def test_the_frequency_floor_is_measured_in_the_schedules_own_zone() -> None:
+    """The floor must police the instants the poller will actually produce.
+
+    01:00 and 03:00 are two hours apart on the wall clock and one hour apart in
+    real time on the day the clocks go forward. Measured in UTC this expression
+    never comes within 90 minutes of itself; measured in New York it does.
+    """
+    assert (
+        validate_cron_expression("0 1,3 * * *", minimum_interval_minutes=90) is not None
+    )
+
+    with pytest.raises(ScheduleTooFrequentError):
+        validate_cron_expression(
+            "0 1,3 * * *",
+            zone="America/New_York",
+            minimum_interval_minutes=90,
+        )
+
+
+def test_a_scheduled_at_without_an_offset_is_read_in_the_schedules_zone() -> None:
+    """ "09:00 on the first" means where the author is, not in UTC."""
+    parsed = validate_time_schedule_config(
+        {"scheduled_at": "2099-07-01T09:00:00", "timezone": "Europe/Berlin"}
+    )
+    assert parsed == datetime(2099, 7, 1, 7, 0, tzinfo=timezone.utc)
+
+
+def test_a_scheduled_at_with_an_offset_keeps_its_own_instant() -> None:
+    """An explicit offset already names an instant; the zone must not move it."""
+    parsed = validate_time_schedule_config(
+        {"scheduled_at": "2099-07-01T09:00:00+00:00", "timezone": "Europe/Berlin"}
+    )
+    assert parsed == datetime(2099, 7, 1, 9, 0, tzinfo=timezone.utc)
+
+
+def test_no_timezone_key_still_means_utc() -> None:
+    """Absence has to keep behaving exactly as it did before zones existed."""
+    without = validate_time_schedule_config({"scheduled_at": "2099-07-01T09:00:00"})
+    explicit = validate_time_schedule_config(
+        {"scheduled_at": "2099-07-01T09:00:00", "timezone": "UTC"}
+    )
+    assert without == explicit == datetime(2099, 7, 1, 9, 0, tzinfo=timezone.utc)

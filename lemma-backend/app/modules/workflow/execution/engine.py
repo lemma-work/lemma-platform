@@ -43,6 +43,7 @@ from app.composition.workflow_agent import AgentControlAdapter
 from app.composition.workflow_function import FunctionControlAdapter
 from app.composition.workflow_notifications import WorkflowNotificationAdapter
 from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.workflow.execution.wait_failure import fail_run_for_wait
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
     stop_underlying_work_for_wait,
@@ -354,24 +355,18 @@ class WorkflowEngine:
         if wait is None:
             logger.debug("workflow.fail.stale_event", wait_type=wait_type.value)
             return None
-        run = await self.run_repo.get_for_update(wait.run_id)
-        if run is None or run.status not in (
-            WorkflowRunStatus.WAITING,
-            WorkflowRunStatus.RUNNING,
-        ):
-            return None
+        return await fail_run_for_wait(self, wait, error=error, output=output)
 
-        normalized = normalize_node_output(output)
-        wait.fail(normalized or {"error": error})
-        await self.wait_repo.update(wait)
-        if normalized:
-            run.record_node_output(wait.node_id, {**normalized, "error": error})
-        run.fail(error, node_id=wait.node_id)
-        run = await self.run_repo.update(run)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        return run
+    async def fail_for_wait(
+        self, wait: WorkflowRunWaitEntity, *, error: str
+    ) -> WorkflowRunEntity | None:
+        """Fail the run this wait belongs to, for a caller already holding it.
+
+        The reconciliation sweep expires waits it has already read, and a HUMAN
+        wait has no external ref for `fail_internal` to find it by. No node
+        output: expiry is the absence of one.
+        """
+        return await fail_run_for_wait(self, wait, error=error)
 
     async def cancel_run(
         self,
