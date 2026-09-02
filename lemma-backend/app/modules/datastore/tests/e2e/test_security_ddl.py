@@ -143,3 +143,102 @@ class TestDdlInjectionSafety:
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         ), resp.text
+
+
+class TestAdHocQueryCannotLeaveThePodSchema:
+    """The second control on cross-pod isolation, and the only one Postgres owns.
+
+    Ad-hoc SQL runs as a single role that holds SELECT on every pod's schema,
+    so what keeps one pod's query out of another's tables is the
+    ``search_path`` plus ``analyze_query`` refusing a schema-qualified name.
+    One parser gap in that is exposure rather than a degraded error, so the
+    plan is checked too — and this is the test that the plan really does name
+    the schema PostgreSQL resolved, which no fake can establish.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_plan_that_resolves_into_another_pod_is_refused(
+        self,
+        pod_api: DatastoreApi,
+        authenticated_client: AsyncClient,
+        fixed_test_org,
+    ):
+        from sqlalchemy import text
+
+        from app.modules.datastore.domain.errors import DatastoreQueryError
+        from app.modules.datastore.infrastructure.record_query_cost import (
+            guard_query_plan,
+        )
+        from app.modules.datastore.infrastructure.session import (
+            get_datastore_session_maker,
+        )
+
+        table_name = f"secrets_{uuid4().hex[:8]}"
+        neighbour_suffix = uuid4().hex[:8]
+        neighbour_response = await authenticated_client.post(
+            "/pods",
+            json={
+                "name": f"Neighbour Pod {neighbour_suffix}",
+                "slug": f"neighbour-pod-{neighbour_suffix}",
+                "type": "ASSISTANT",
+                "organization_id": fixed_test_org["id"],
+            },
+        )
+        assert neighbour_response.status_code == status.HTTP_201_CREATED
+        neighbour = DatastoreApi(authenticated_client, neighbour_response.json()["id"])
+        await neighbour.create_table(
+            {
+                "name": table_name,
+                "enable_rls": False,
+                "columns": [{"name": "note", "type": "TEXT"}],
+            }
+        )
+
+        def schema_of(pod_id: str) -> str:
+            return f"pod_{pod_id.replace('-', '_')}"
+
+        async with get_datastore_session_maker()() as session:
+            # Stands in for a parser gap: a bare name, resolved by the
+            # search_path in a schema that is not the caller's pod. Reaching
+            # the planner at all means the first control has already failed.
+            await session.execute(
+                text(f'SET LOCAL search_path TO "{schema_of(neighbour.pod_id)}"')
+            )
+            with pytest.raises(DatastoreQueryError, match="outside this pod"):
+                await guard_query_plan(
+                    session,
+                    f"SELECT note FROM {table_name}",
+                    schema_name=schema_of(pod_api.pod_id),
+                )
+
+    @pytest.mark.asyncio
+    async def test_a_plan_confined_to_the_caller_s_pod_is_planned_normally(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        from sqlalchemy import text
+
+        from app.modules.datastore.infrastructure.record_query_cost import (
+            guard_query_plan,
+        )
+        from app.modules.datastore.infrastructure.session import (
+            get_datastore_session_maker,
+        )
+
+        table_name = f"notes_{uuid4().hex[:8]}"
+        await pod_api.create_table(
+            {
+                "name": table_name,
+                "enable_rls": False,
+                "columns": [{"name": "note", "type": "TEXT"}],
+            }
+        )
+        schema_name = f"pod_{pod_api.pod_id.replace('-', '_')}"
+
+        async with get_datastore_session_maker()() as session:
+            await session.execute(text(f'SET LOCAL search_path TO "{schema_name}"'))
+            await guard_query_plan(
+                session,
+                f"SELECT note FROM {table_name}",
+                schema_name=schema_name,
+            )

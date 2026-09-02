@@ -6,6 +6,23 @@ from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.file_entities import SearchMethod
 
+#: Largest page any record listing will serve (`PS-DATA-011`).
+#:
+#: One number for the whole module: `table.list` and `file.list` already bound
+#: themselves at 1000 and `record.list` bounded itself at nothing, so a table
+#: could be pulled whole by a caller who typed a big number — and it is the one
+#: datastore read the ad-hoc query cost ceiling does not cover.
+MAX_RECORD_PAGE_SIZE = 1000
+
+#: Largest number of records one bulk request may carry (`PS-DATA-013`).
+#:
+#: The same ceiling, for the same reason: a bulk write is validated row by row
+#: in Python and executed inside a single transaction holding row locks for its
+#: whole duration, so the batch size is the length of that transaction. The
+#: bind-parameter chunking below it splits a batch to fit Postgres' 65 535
+#: parameters; it is not a limit on how much work one request may ask for.
+MAX_BULK_RECORDS = 1000
+
 
 class CreateTableRequest(BaseModel):
     """Schema for creating a new table."""
@@ -109,7 +126,11 @@ class BulkCreateRecordsRequest(BaseModel):
 
     records: List[Dict[str, Any]] = Field(
         ...,
-        description="List of record payload objects to insert.",
+        description=(
+            "List of record payload objects to insert. At most "
+            f"{MAX_BULK_RECORDS} per request."
+        ),
+        max_length=MAX_BULK_RECORDS,
     )
     upsert: bool = Field(
         default=False,
@@ -126,8 +147,10 @@ class BulkUpdateRecordsRequest(BaseModel):
     records: List[Dict[str, Any]] = Field(
         ...,
         description=(
-            "List of record updates. Each item must include the table primary key field."
+            "List of record updates. Each item must include the table primary "
+            f"key field. At most {MAX_BULK_RECORDS} per request."
         ),
+        max_length=MAX_BULK_RECORDS,
     )
 
 
@@ -136,7 +159,10 @@ class BulkDeleteRecordsRequest(BaseModel):
 
     record_ids: List[Union[str, int, UUID]] = Field(
         ...,
-        description="Primary key values to delete.",
+        description=(
+            f"Primary key values to delete. At most {MAX_BULK_RECORDS} per request."
+        ),
+        max_length=MAX_BULK_RECORDS,
     )
 
 
@@ -329,7 +355,23 @@ class DatastoreQueryResponse(BaseModel):
     """Schema for read-only datastore query results."""
 
     items: List[Dict[str, Any]]
-    total: int
+    total: int = Field(
+        ...,
+        description=(
+            "Number of rows in `items`. This is what came back, not how many "
+            "rows the query matched: when `truncated` is true the result was "
+            "cut at the deployment's row cap and more rows exist."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the row cap cut the result short, so `items` is a "
+            "prefix of the query's real answer. Narrow the query (add a WHERE, "
+            "aggregate, or LIMIT) to see the rest. Reported because a capped "
+            "result is otherwise indistinguishable from a complete one."
+        ),
+    )
 
 
 class DatastoreCountResponse(BaseModel):

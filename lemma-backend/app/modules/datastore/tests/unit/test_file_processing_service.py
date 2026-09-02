@@ -26,6 +26,9 @@ from app.modules.datastore.infrastructure.kreuzberg_circuit import (
 from app.modules.datastore.infrastructure.kreuzberg_helper import (
     KreuzbergTransientError,
 )
+from app.modules.datastore.services.search.indexing_availability import (
+    sanitize_processing_error,
+)
 from app.modules.datastore.services.file_processing_service import (
     DatastoreFileProcessingService,
 )
@@ -865,7 +868,7 @@ async def test_process_file_async_terminally_fails_corrupt_original():
 def test_processing_error_summary_never_persists_provider_payload():
     canary = "CANARY_DATASTORE_PROVIDER_SECRET"
 
-    summary = DatastoreFileProcessingService._sanitize_error(
+    summary = sanitize_processing_error(
         RuntimeError(f"provider response api_key={canary}")
     )
 
@@ -908,3 +911,49 @@ async def test_process_file_async_terminally_fails_oversize_file():
     terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
     compiled = str(terminal_stmt.compile().params)
     assert "FAILED_PERMANENT" in compiled
+
+
+@pytest.mark.asyncio
+async def test_an_unconfigured_embedding_provider_is_persisted_as_a_deployment_fact():
+    """The operator-visible symptom used to be "every upload says it failed".
+
+    A fresh install whose embedding endpoint was never configured raises inside
+    indexing, and the sanitised summary collapsed every cause into
+    ``"<ExcName>: document processing failed"``. That is the right answer for a
+    corrupt document and useless for a missing setting -- nothing anywhere named
+    the thing to change. `PS-DATA-021` decided this for querying; this is the
+    same decision for ingestion.
+    """
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="notes.md",
+        path="/notes.md",
+        mime_type="text/markdown",
+        file_metadata={},
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    _set_source_bytes(service, b"# notes")
+    service.document_processor.extract.return_value = DocumentExtraction(
+        markdown="# notes",
+        chunks=[DocumentChunk(text="notes", metadata={})],
+    )
+    service.search_service.index_file_chunks.side_effect = RuntimeError(
+        "OpenAI-compatible embeddings require LEMMA_OPENAI_API_KEY to be set "
+        "(or set EMBEDDING_PROVIDER=local to use offline embeddings)."
+    )
+
+    with pytest.raises(RuntimeError):
+        await service.process_file_async(file_id)
+
+    recorded = str(factory.sessions[-1].execute.await_args.args[0].compile().params)
+    assert "EMBEDDING_PROVIDER" in recorded, (
+        f"the stored failure names no setting an operator could change: {recorded}"
+    )
+    assert "document processing failed" not in recorded
