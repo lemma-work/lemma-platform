@@ -337,11 +337,22 @@ Email transport, sender identity, and the sign-up abuse controls are covered in
 each default. The short version:
 
 ```dotenv
-EMAIL_TRANSPORT=resend        # smtp | resend | filesystem
+EMAIL_TRANSPORT=smtp          # smtp | filesystem
 EMAIL_OUTPUT_DIR=/tmp/lemma-emails   # filesystem transport only
 AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_ABUSE_PROTECTION_ENABLED=true
 ```
+
+**Resend is not a transport.** To send through Resend, leave
+`EMAIL_TRANSPORT=smtp`, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, and leave
+`SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM_EMAIL` unset — the
+sender then dials `smtp.resend.com:465` with the key as the password. Setting
+all four explicit SMTP values wins over Resend, which is how a deployment ends
+up sending through a server it configured months ago and forgot.
+
+`EMAIL_TRANSPORT=resend` was documented here and is not a value the setting
+accepts. It aborts `Settings()` at import, before logging is set up, so the
+operator gets a bare pydantic traceback rather than a message.
 
 `RESEND_FROM_EMAIL` has **no default**. It used to fall back to a Lemma-owned
 domain, which meant an unconfigured deployment sent password resets from a
@@ -427,14 +438,19 @@ LOCAL_FILE_STORAGE_ROOT=/var/lib/lemma/files
 ## Secret encryption
 
 Connector credentials and other stored secrets are encrypted at rest. The
-provider decides where the key comes from; `auto` uses an explicit key if one is
-set and falls back to a local key otherwise.
+provider decides where the key comes from. `auto` resolves by what you have
+configured, in this order: `gcp_kms` when `GCP_KMS_KEY_NAME` is set, else
+`gcp_secret_manager` when `GCP_SECRET_MANAGER_SECRET_NAME` is set, else
+`static`.
 
 ```dotenv
-SECRET_KEY_PROVIDER=auto      # auto | env | gcp_kms | gcp_secret_manager | keychain
+SECRET_KEY_PROVIDER=auto      # auto | static | gcp_kms | gcp_secret_manager | keychain
 SECRET_ENCRYPTION_KEY=
 GCP_KMS_KEY_NAME=
 ```
+
+The local-key provider is named `static`. This said `env`, which the setting
+does not accept and which aborts `Settings()` at import.
 
 Rotating or losing this key makes every encrypted row unreadable. Treat it as
 durable state, not configuration.
