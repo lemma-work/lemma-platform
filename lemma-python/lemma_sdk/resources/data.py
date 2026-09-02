@@ -266,7 +266,10 @@ class PodQueries(BoundResource):
     def run(self, query: str) -> DatastoreQueryResponse:
         """Run a read-only SQL query over the pod's tables.
 
-        Returns a response whose ``.to_dict()`` is ``{"items": [...], "total": N}``.
+        Returns a response whose ``.to_dict()`` is
+        ``{"items": [...], "total": N, "truncated": bool}``. ``total`` counts the
+        rows returned, not the rows matched: the query is capped, and
+        ``truncated`` says whether that cap was reached.
         A single SELECT only — no writes. Joins, aggregates, and subqueries across
         tables are allowed, including RLS tables, whose rows are scoped to the
         caller unless they administer the table.
