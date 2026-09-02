@@ -39,6 +39,14 @@ class ResolvedInstall:
     spec: KindSpec
 
 
+#: Whatever a provider handed back. Genuinely unknown here -- it is the
+#: provider's own JSON, or a `BinaryContentResult` for the five operations that
+#: download a file -- and it is not narrowed until an operation's output schema
+#: is applied further out. Named rather than written as a bare `Any` at each
+#: site so the reason is stated once and reads as a decision.
+ExecutionResult = Any
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionRequest:
     """Everything the executor needs, carrying no session-bound state."""

@@ -17,6 +17,7 @@ a new kind cannot forget to add a timeout.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -26,9 +27,15 @@ from app.modules.connectors.domain.errors import OperationExecutionTimeoutError
 from app.modules.connectors.domain.kinds import (
     DiscoveredOperation,
     ExecutionRequest,
+    ExecutionResult,
+    KindPlugin,
     ResolvedInstall,
 )
 from app.modules.connectors.infrastructure.kinds.registry import KindRegistry
+from app.modules.connectors.services.execution.credential_presenter import (
+    PresenterRegistry,
+)
+from app.modules.connectors.services.execution.presenters import default_presenters
 from app.modules.connectors.services.execution.failure_translation import (
     execution_failures_translated,
 )
@@ -53,8 +60,11 @@ _TIMEOUT_BY_KIND: dict[str, float] = {
 class KindDispatcher:
     """Routes to a kind's plugin and bounds how long it may take."""
 
-    def __init__(self, registry: KindRegistry):
+    def __init__(
+        self, registry: KindRegistry, presenters: PresenterRegistry | None = None
+    ):
         self._registry = registry
+        self._presenters = presenters or default_presenters()
 
     def timeout_for(self, kind: ConnectorKind | str) -> float:
         value = kind.value if isinstance(kind, ConnectorKind) else str(kind)
@@ -86,7 +96,7 @@ class KindDispatcher:
         plugin = self._registry.get(request.kind)
         try:
             return await asyncio.wait_for(
-                plugin.executor.execute(request),
+                self._executed(plugin, request),
                 timeout=request.deadline_seconds,
             )
         except (asyncio.TimeoutError, TimeoutError) as exc:
@@ -103,6 +113,21 @@ class KindDispatcher:
                     "timeout_seconds": request.deadline_seconds,
                 },
             ) from exc
+
+    async def _executed(
+        self, plugin: KindPlugin, request: ExecutionRequest
+    ) -> ExecutionResult:
+        """Present the credential, then run.
+
+        Inside the deadline on purpose: presenting can mean a call to the
+        provider -- minting a GitHub installation token is one -- and work that
+        can hang belongs under the same bound as the operation it is for.
+        """
+        presenter = self._presenters.for_connector(request.connector_id)
+        credentials = await presenter.present(request)
+        if credentials is not request.credentials:
+            request = replace(request, credentials=credentials)
+        return await plugin.executor.execute(request)
 
     async def discover(
         self, install: ResolvedInstall, credentials: dict[str, Any] | None = None
