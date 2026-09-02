@@ -21,6 +21,8 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from aiohttp import web
 from fastapi import status
 
@@ -108,12 +110,18 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     pod = response.json()
+    # The pod's own assistant, as `run_context_builder` builds it: addressed by
+    # its `agents` row id, which is its pod's. These tests are about the
+    # workspace and research tools, and the assistant is the agent a person
+    # actually reaches them through.
     ctx = BaseAgentContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
         conversation_id=uuid4(),
-        agent_name="long_running_e2e",
+        workload_id=UUID(pod["id"]),
+        agent_name=DEFAULT_POD_AGENT_NAME,
+        is_pod_default_agent=True,
     )
 
     # Provision the container before the tests that assert on timing. Starting

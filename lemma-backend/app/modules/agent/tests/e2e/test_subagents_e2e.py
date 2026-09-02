@@ -367,7 +367,7 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
     unhandled exception reaching the harness.
     """
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-    await _create_agent(authenticated_client, pod_id, "owner", "Owns children.")
+    owner = await _create_agent(authenticated_client, pod_id, "owner", "Owns children.")
     await _create_agent(
         authenticated_client, pod_id, "stranger", "Owns other children."
     )
@@ -391,6 +391,7 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(owner_conversation_id),
+            workload_id=UUID(owner["id"]),
             agent_name="owner",
         )
     )
@@ -424,10 +425,15 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
     """Cancellation: `stop()` on a real, owned child moves it to STOP_REQUESTED,
     and is idempotent against a run that is already stopping."""
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-    await _create_agent(
+    supervisor = await _create_agent(
         authenticated_client, pod_id, "supervisor", "Spawns and stops children."
     )
     await _create_agent(authenticated_client, pod_id, "worker_agent", "Does the work.")
+    # Stopping a child re-checks `agent.execute` on the child's agent, exactly
+    # as spawning it did -- a named parent needs the grant for both.
+    await _grant_agent_execute(
+        authenticated_client, pod_id, "supervisor", "worker_agent"
+    )
 
     parent_conversation_id = await _create_conversation(
         authenticated_client, pod_id, "supervisor"
@@ -448,6 +454,7 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(parent_conversation_id),
+            workload_id=UUID(supervisor["id"]),
             agent_name="supervisor",
         )
     )
@@ -484,10 +491,13 @@ async def test_query_subagents_list_mode_and_interact_send_on_a_real_owned_child
     an already-spawned child.
     """
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-    await _create_agent(
+    list_supervisor = await _create_agent(
         authenticated_client, pod_id, "list_supervisor", "Spawns and lists children."
     )
     await _create_agent(authenticated_client, pod_id, "list_worker", "Does the work.")
+    await _grant_agent_execute(
+        authenticated_client, pod_id, "list_supervisor", "list_worker"
+    )
 
     parent_conversation_id = await _create_conversation(
         authenticated_client, pod_id, "list_supervisor"
@@ -517,6 +527,7 @@ async def test_query_subagents_list_mode_and_interact_send_on_a_real_owned_child
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(parent_conversation_id),
+            workload_id=UUID(list_supervisor["id"]),
             agent_name="list_supervisor",
         )
     )

@@ -32,6 +32,7 @@ from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
@@ -274,6 +275,7 @@ class ResumeToolReturnBuilder:
             agent_run_id=agent_run_id,
             workload_type="agent",
             workload_id=agent.id,
+            is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
             configured_accounts=configured_accounts,
             runtime_profile=resolved.public_snapshot(),
             runtime_credentials=resolved.credentials or {},

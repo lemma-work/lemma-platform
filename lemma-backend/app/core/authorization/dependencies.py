@@ -13,18 +13,28 @@ from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
 from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
     DESTRUCTIVE_ACTIONS,
+    is_pod_default_agent,
 )
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 
 
 def _is_default_pod_agent_claims(claims) -> bool:
+    """Whether this token was minted for the pod's own assistant.
+
+    The one place the answer comes from a token rather than a row: this runs on
+    every delegated request, and ``is_pod_default_agent`` is deliberately free
+    of I/O so it need not become a query.
+
+    Both claims have to agree. The id arm alone would promote any workload
+    whose id happened to equal its pod's, and what turns on this is whether a
+    token acts with its user's permissions or only its own grants.
+    """
     return (
         claims is not None
-        and claims.actor_id == DEFAULT_POD_AGENT_ID
+        and is_pod_default_agent(claims.actor_id, pod_id=claims.pod_id)
         and claims.actor_name in {None, DEFAULT_POD_AGENT_NAME}
     )
 

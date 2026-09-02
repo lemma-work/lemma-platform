@@ -8,7 +8,6 @@ import pytest
 
 from app.core.authorization.context import ActorType, ResourceType
 from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
     WorkloadPrincipalType,
 )
@@ -43,14 +42,24 @@ def _delegated_actor(
     pod_id,
     actor_id=None,
     actor_name="test-agent",
+    is_default_pod_agent=False,
 ) -> SimpleNamespace:
+    """A stand-in for the context ``build_delegated_workload_context`` returns.
+
+    Every field here has to carry the value that builder would give it. This
+    double used to capitalise the ``actor_id`` prefix, which production
+    lowercases, and the service compared that prefix against the CAPS enum
+    value -- so the double agreed with the bug and the pair of them passed.
+    """
     resolved_actor_id = actor_id or uuid4()
     return SimpleNamespace(
         actor_type=ActorType.DELEGATED_USER_WORKLOAD,
-        actor_id=f"{WorkloadPrincipalType.AGENT.value}:{resolved_actor_id}",
+        actor_id=f"{WorkloadPrincipalType.AGENT.value.lower()}:{resolved_actor_id}",
         pod_id=pod_id,
         delegated_by_user_id=user_id,
         delegation_actor_name=actor_name,
+        # The builder sets this for the pod's assistant and for nothing else.
+        is_user_equivalent=is_default_pod_agent,
         require=AsyncMock(),
     )
 
@@ -359,8 +368,10 @@ async def test_default_pod_agent_delegation_uses_explicit_user_account():
     auth_actor = _delegated_actor(
         user_id=user_id,
         pod_id=pod_id,
-        actor_id=DEFAULT_POD_AGENT_ID,
+        # The assistant's ``agents`` row id, which is its pod's.
+        actor_id=pod_id,
         actor_name=DEFAULT_POD_AGENT_NAME,
+        is_default_pod_agent=True,
     )
 
     resolved = await service.resolve_account(

@@ -27,11 +27,15 @@ router = APIRouter(prefix="/tools", tags=["agent-tools"])
 def _delegated_agent_id(request: Request) -> UUID | None:
     """The agent this call is delegated for, when it is a real one.
 
-    ``DEFAULT_POD_AGENT_ID`` is a sentinel for "the pod's default agent" and has
-    no row in ``agents``, so storing it violated
-    ``agent_feedback_agent_id_fkey`` and turned reporting feedback from a
-    default-agent conversation into a 500. ``agent_id`` is nullable for exactly
-    this case: no specific agent to attribute it to.
+    "Real" means a row exists to point at. The assistant has one now -- its id
+    is its pod's -- so feedback from a default-agent conversation attributes to
+    it like any other agent's would.
+
+    The guard below is only about the retired ``DEFAULT_POD_AGENT_ID``: that
+    sentinel never had a row, so storing it violated
+    ``agent_feedback_agent_id_fkey`` and turned reporting feedback into a 500.
+    Signed tokens still carry it across a deploy, and ``agent_id`` is nullable
+    for exactly that case -- no specific agent to attribute it to.
     """
     claims = getattr(request.state, "delegation_claims", None)
     if not claims:

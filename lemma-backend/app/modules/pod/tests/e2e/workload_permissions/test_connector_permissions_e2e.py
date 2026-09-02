@@ -41,10 +41,8 @@ from app.modules.pod.tests.e2e.workload_permissions.harness import (
     seed_auth_config,
     seed_connector,
 )
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.test_support.e2e_authz import add_pod_member, invite_org_member
 
 pytestmark = pytest.mark.e2e
 
@@ -297,7 +295,7 @@ async def test_default_pod_agent_resolves_own_account_without_grant(
         db_session,
         user_id=fixed_test_user["id"],
         workload_type=AGENT,
-        workload_id=str(DEFAULT_POD_AGENT_ID),
+        workload_id=env["pod_id"],
         pod_id=env["pod_id"],
         workload_name=DEFAULT_POD_AGENT_NAME,
         is_default_pod_agent=True,
@@ -308,3 +306,78 @@ async def test_default_pod_agent_resolves_own_account_without_grant(
         auth_actor=ctx,
     )
     assert str(account.id) == env["owner_account_id"]
+
+
+@pytest.mark.asyncio
+async def test_default_pod_agent_resolves_own_account_without_connector_use(
+    authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session
+):
+    """The shortcut, on the only member for whom it changes the answer.
+
+    For the pod owner the shortcut is invisible: they hold ``connector.use``,
+    so the branch it skips would have said yes anyway. A POD_VIEWER does not
+    hold it. They still own their account, and the assistant acting for them
+    still has to reach it -- that is what "acts as the invoking user" means,
+    and it is what this test would lose if the shortcut stopped firing.
+    """
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
+    viewer = await signup_user(async_client, "conn-viewer")
+    viewer_org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=viewer,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=env["pod_id"],
+        organization_member_id=viewer_org_member["id"],
+        role="POD_VIEWER",
+        roles=["POD_VIEWER"],
+    )
+    viewer_account_id = await seed_account(
+        db_session,
+        user_id=viewer["id"],
+        organization_id=fixed_test_org["id"],
+        auth_config_id=env["auth_config_id"],
+        connector_id=env["connector_id"],
+    )
+    svc = build_account_resolution_service(db_session)
+
+    assistant_ctx = await build_workload_ctx(
+        db_session,
+        user_id=viewer["id"],
+        workload_type=AGENT,
+        workload_id=env["pod_id"],
+        pod_id=env["pod_id"],
+        workload_name=DEFAULT_POD_AGENT_NAME,
+        is_default_pod_agent=True,
+    )
+    account = await svc.resolve_account(
+        user_id=UUID(viewer["id"]),
+        connector_id=env["connector_id"],
+        auth_actor=assistant_ctx,
+    )
+    assert str(account.id) == viewer_account_id
+
+    # And the shortcut is the assistant's alone: a named agent acting for the
+    # same viewer, holding no grants, is still refused.
+    named = await create_agent(
+        authenticated_client, env["pod_id"], f"named_{uuid4().hex[:6]}"
+    )
+    named_ctx = await build_workload_ctx(
+        db_session,
+        user_id=viewer["id"],
+        workload_type=AGENT,
+        workload_id=named["id"],
+        pod_id=env["pod_id"],
+        workload_name=named["name"],
+    )
+    with pytest.raises(ConnectorAccessDeniedError):
+        await svc.resolve_account(
+            user_id=UUID(viewer["id"]),
+            connector_id=env["connector_id"],
+            auth_actor=named_ctx,
+        )
