@@ -22,6 +22,7 @@ from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.tests.e2e.test_schedule_e2e import (
+    _create_agent,
     _create_pod,
     _create_schedule,
     _create_workflow,
@@ -457,3 +458,83 @@ async def test_another_installations_uninstall_leaves_this_one_alone(
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
     ).scalar_one()
     assert row.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_picking_a_trigger_and_an_account_binds_the_routing_key(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    fixed_test_user,
+    db_session: AsyncSession,
+    worker,
+):
+    """The path a person actually takes: choose the event, choose the account.
+
+    Nobody types `installation_id`. It comes from the account the App install
+    redirected back with, and this is the only test that runs the two halves
+    together -- the key `_github_binding` stores when the schedule is created,
+    and the key `GitHubWebhookSource` derives when a delivery arrives. They live
+    in different modules, and if they disagreed by so much as the type of the
+    id, nothing would ever match and nothing would say so.
+    """
+    from sqlalchemy import select
+
+    from app.modules.connectors.infrastructure.models.account import Account
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    await _seed_connector_trigger(
+        db_session,
+        connector_id="github",
+        trigger_id=TRIGGER_ID,
+        event_type="pull_request",
+    )
+    auth_config = AuthConfig(
+        organization_id=fixed_test_org["id"],
+        connector_id="github",
+        kind="http",
+        name=f"github-{INSTALLATION_ID}",
+    )
+    db_session.add(auth_config)
+    await db_session.flush()
+    account = Account(
+        user_id=fixed_test_user["id"],
+        organization_id=fixed_test_org["id"],
+        connector_id="github",
+        auth_config_id=auth_config.id,
+        # What the App install redirect recorded. A string column; the payload's
+        # `installation.id` is a JSON number.
+        external_ref=INSTALLATION_ID,
+        credentials={"access_token": "gho_x"},
+    )
+    db_session.add(account)
+    await db_session.commit()
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        agent_name=agent["name"],
+        account_id=str(account.id),
+        connector_trigger_id=TRIGGER_ID,
+        # Only the narrowing the person chose. The routing key is not theirs to
+        # type.
+        config={"actions": ["opened"]},
+    )
+
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Schedule).where(Schedule.id == schedule["id"]))
+    ).scalar_one()
+    assert stored.config["source"] == "github"
+    assert stored.config["installation_id"] == INSTALLATION_ID
+    assert stored.config["event"] == "pull_request"
+    assert stored.config["actions"] == ["opened"]
+
+    response = await _deliver(
+        authenticated_client, _payload(), delivery_id="delivery-bound"
+    )
+    assert response.status_code == 200, response.text
+    await _wait_for_run_count(db_session, schedule["id"], count=1)
