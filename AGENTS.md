@@ -86,6 +86,17 @@ rates, costs, customer names or internal URLs. Keep the reasoning, drop the
 figures. Configured limits, TTLs and API ceilings are contract and stay.
 [CONTRIBUTING.md](CONTRIBUTING.md#code-and-comments) has the full rule.
 
+**Write the type.** No `Any`, and no bare `dict`, `list` or `tuple`, in an
+annotation. Both mean "not checked here", and they cost most at exactly the
+place two pieces of code meet — a helper taking `service: Any` and calling six
+methods on it has a type, it just isn't written down, so nothing notices when
+one of those methods is renamed. Parameterise the container, or name the shape:
+a `TypedDict`, a dataclass, a pydantic model, a `Protocol` for something you
+only call methods on. `Any` is for data with no shape until it is validated — a
+provider's JSON, an untyped third-party library — and then say so in a comment
+and narrow it once the data is checked. `make architecture` ratchets the count
+per module; it may fall, not rise.
+
 ## Before opening a pull request
 
 ```bash
