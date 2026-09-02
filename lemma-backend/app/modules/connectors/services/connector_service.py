@@ -1,14 +1,11 @@
-from contextlib import suppress
-from datetime import datetime
 import secrets
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from app.core.domain.uow import IUnitOfWork
 from app.core.domain.errors import DomainError
-from app.modules.connectors.services.account_identity import (
-    resolve_account_identity,
-)
+from app.core.domain.uow import IUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import (
     AccountEntity,
     AccountStatus,
@@ -20,38 +17,39 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
 )
-from app.modules.connectors.domain.connector import (
-    ConnectorEntity,
-    AuthScheme,
-    AuthProvider,
-    ConnectorKind,
-    ComposioProviderCapability,
-    KindSpec,
-    OAuth2Config,
-    OAuth2CredentialConfig,
-)
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
+)
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    AuthScheme,
+    ComposioProviderCapability,
+    ConnectorEntity,
+    ConnectorKind,
+    KindSpec,
+    OAuth2CredentialConfig,
 )
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
     ConnectorNotFoundError,
+    ConnectorValidationError,
     ConnectRequestNotFoundError,
     ConnectRequestStateRequiredError,
-    ConnectorValidationError,
     CredentialsNotFoundError,
     OAuthWorkflowError,
     UnsupportedAuthProviderError,
 )
+from app.modules.connectors.domain.install_binding import resolve_external_ref
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
-    ConnectorOperationRepositoryPort,
-    ConnectorRepositoryPort,
     AppOperationGatewayPort,
     AuthProviderPort,
     AuthProviderRegistryPort,
+    ConnectorOperationRepositoryPort,
+    ConnectorRepositoryPort,
     ConnectRequestRepositoryPort,
     OAuthRedirectUriBuilderPort,
     OrganizationAccessPort,
@@ -60,15 +58,39 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
-from app.modules.connectors.services.auth_config_schemas import (
-    default_auth_config_schema,
+from app.modules.connectors.services.account_credentials import (
+    validated_account_credentials,
+)
+from app.modules.connectors.services.account_identity import (
+    resolve_account_identity,
 )
 from app.modules.connectors.services.account_profile import (
     load_native_account_profile,
     profile_to_dict,
 )
+from app.modules.connectors.services.account_revocation import revoke_one
+from app.modules.connectors.services.auth.mcp_install_authorization import (
+    negotiate_mcp_authorization,
+)
+from app.modules.connectors.services.auth_config_schemas import (
+    default_auth_config_schema,
+)
+from app.modules.connectors.services.auth_install_resolver import (
+    composio_capability,
+    lemma_capability,
+    provider_value,
+    resolve_auth_install,
+)
+from app.modules.connectors.services.connect_request_lifecycle import (
+    oldest_claimable_connect_request,
+    pkce_verifier_for,
+    stored_code_verifier,
+    stored_provider_state,
+    without_spent_secrets,
+)
 from app.modules.connectors.services.install_provisioning import (
     discover_install_operations,
+    discover_operations_for_new_account,
     org_has_install,
     refresh_install_operations,
     resolve_install_kind,
@@ -78,7 +100,6 @@ from app.modules.connectors.services.install_update import update_install
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
 )
-from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -296,58 +317,22 @@ class ConnectorService:
             raise AccountNotFoundError(str(organization_id))
 
     def _provider_value(self, auth_config: AuthConfigEntity) -> str:
-        provider = auth_config.provider
-        return provider.value if hasattr(provider, "value") else str(provider)
+        return provider_value(auth_config)
 
-    def _build_effective_connector(
+    def _resolve_auth_install(
         self,
         connector: ConnectorEntity,
         auth_config: AuthConfigEntity,
-    ) -> ConnectorEntity:
-        provider = self._provider_value(auth_config)
-        provider_config = auth_config.provider_config or {}
-        updates: dict[str, object] = {}
+    ) -> ResolvedAuthInstall:
+        return resolve_auth_install(connector, auth_config, self.system_oauth_config)
 
-        if provider == AuthProvider.LEMMA.value:
-            capability = self._lemma_capability(connector)
-            if capability.auth_scheme != AuthScheme.OAUTH2:
-                return connector
-            if auth_config.config_source == AuthConfigSource.ORG_CUSTOM:
-                credential_config = OAuth2CredentialConfig.model_validate(
-                    provider_config.get("oauth2_credentials") or provider_config
-                )
-                # OAuth endpoints/scopes are resolved at runtime (stored
-                # capability, else the native registry + env) rather than baked
-                # into the DB, so org-custom credentials are paired with the
-                # provider's canonical endpoints here.
-                oauth2_defaults = self.system_oauth_config.resolve_oauth2_defaults(
-                    connector
-                )
-                if oauth2_defaults is None:
-                    raise ConnectorValidationError(
-                        f"OAuth2 defaults are not configured for '{connector.id}'."
-                    )
-                oauth2_config = OAuth2Config(
-                    **oauth2_defaults.model_dump(),
-                    client_id=credential_config.client_id,
-                    client_secret=credential_config.client_secret,
-                )
-            else:
-                oauth2_config = self.system_oauth_config.get_default_oauth_config(
-                    connector
-                )
-            if oauth2_config:
-                updates["oauth2_config"] = (
-                    oauth2_config
-                    if isinstance(oauth2_config, OAuth2Config)
-                    else OAuth2Config.model_validate(oauth2_config)
-                )
+    def _lemma_capability(self, connector: ConnectorEntity) -> KindSpec:
+        return lemma_capability(connector)
 
-        if provider == AuthProvider.COMPOSIO.value:
-            capability = self._composio_capability(connector)
-            updates["composio_toolkit_slug"] = capability.toolkit_slug
-
-        return connector.model_copy(update=updates)
+    def _composio_capability(
+        self, connector: ConnectorEntity
+    ) -> ComposioProviderCapability:
+        return composio_capability(connector)
 
     def _should_revoke_account(
         self,
@@ -363,33 +348,6 @@ class ConnectorService:
         if provider != AuthProvider.LEMMA.value:
             return False
         return self._lemma_capability(connector).auth_scheme == AuthScheme.OAUTH2
-
-    def _lemma_capability(
-        self,
-        connector: ConnectorEntity,
-    ) -> KindSpec:
-        try:
-            capability = connector.capability_for(AuthProvider.LEMMA)
-        except ValueError as exc:
-            raise UnsupportedAuthProviderError(AuthProvider.LEMMA.value) from exc
-        # "LEMMA" means any kind we serve ourselves, which is now sql/mcp/http as
-        # well as the vendored package. Asserting the package spec specifically
-        # rejected every tenant-configured install.
-        if capability.kind is ConnectorKind.COMPOSIO:
-            raise UnsupportedAuthProviderError(AuthProvider.LEMMA.value)
-        return capability
-
-    def _composio_capability(
-        self,
-        connector: ConnectorEntity,
-    ) -> ComposioProviderCapability:
-        try:
-            capability = connector.capability_for(AuthProvider.COMPOSIO)
-        except ValueError as exc:
-            raise UnsupportedAuthProviderError(AuthProvider.COMPOSIO.value) from exc
-        if not isinstance(capability, ComposioProviderCapability):
-            raise UnsupportedAuthProviderError(AuthProvider.COMPOSIO.value)
-        return capability
 
     def _enrich_connector_defaults(
         self,
@@ -539,6 +497,12 @@ class ConnectorService:
             kind=kind,
             config=provider_config or {},
             config_source=config_source_enum,
+        )
+
+        validated_config = await negotiate_mcp_authorization(
+            kind=kind,
+            config=validated_config,
+            redirect_uri=self.redirect_uri_builder.build(),
         )
 
         entity = AuthConfigEntity(
@@ -734,9 +698,13 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider_value = self._provider_value(auth_config)
+        auth_install = self._resolve_auth_install(connector, auth_config)
         if provider_value == AuthProvider.LEMMA.value:
-            capability = self._lemma_capability(connector)
-            if capability.auth_scheme != AuthScheme.OAUTH2:
+            # The *install's* scheme, not the catalog's. `mcp` is one catalog
+            # entry standing for every server a tenant may point at, so whether
+            # a given install signs in through a browser is a property of that
+            # server -- discovered when the install was created.
+            if auth_install.auth_scheme != AuthScheme.OAUTH2:
                 raise ConnectorValidationError(
                     "Credential-managed native accounts must be connected with the accounts API."
                 )
@@ -750,22 +718,23 @@ class ConnectorService:
         # is always permitted. The OAuth callback dedups by provider account id:
         # re-authing an existing identity updates it, a new identity is created.
 
-        effective_connector = self._build_effective_connector(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(
             self._provider_value(auth_config)
         )
         state = secrets.token_urlsafe(32)
         redirect_uri = self.redirect_uri_builder.build()
+        code_verifier = pkce_verifier_for(auth_install)
 
         try:
             (
                 authorization_url,
                 provider_state,
             ) = await auth_provider.get_authorization_url(
-                connector=effective_connector,
+                install=auth_install,
                 user_id=user_id,
                 state=state,
                 redirect_uri=redirect_uri,
+                code_verifier=code_verifier,
             )
         except DomainError:
             raise
@@ -787,7 +756,11 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes={"state": state, "provider_state": provider_state},
+            attributes={
+                "state": state,
+                "provider_state": provider_state,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+            },
         )
         connect_request = await self.connect_request_repository.create(connect_request)
         await self.uow.commit()
@@ -835,10 +808,9 @@ class ConnectorService:
                 "OAuth2 accounts must be connected with an OAuth connect request."
             )
 
-        if not isinstance(credentials, dict) or not credentials:
-            raise ConnectorValidationError(
-                "Credential-managed accounts require a non-empty credentials object."
-            )
+        credentials = validated_account_credentials(
+            connector, auth_config.kind, credentials
+        )
 
         existing_account = await self.account_repository.get_by_user_and_auth_config(
             user_id, auth_config.id
@@ -849,10 +821,10 @@ class ConnectorService:
 
         # Composio credential-managed apps must establish a connected account on
         # Composio's side; native (Lemma) apps store the credentials verbatim.
-        effective_connector = self._build_effective_connector(connector, auth_config)
+        auth_install = self._resolve_auth_install(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(provider.value)
         stored_credentials = await auth_provider.connect_with_credentials(
-            connector=effective_connector,
+            install=auth_install,
             user_id=user_id,
             credentials=credentials,
         )
@@ -892,6 +864,7 @@ class ConnectorService:
                 is_default=is_default,
                 credentials=stored_credentials,
                 provider_account_id=provider_account_id,
+                external_ref=resolve_external_ref(connector.id, stored_credentials),
                 email=email,
                 display_name=display_name,
                 preferences=preferences,
@@ -938,7 +911,13 @@ class ConnectorService:
         if not state:
             raise ConnectRequestStateRequiredError()
 
-        pending_request = await self.connect_request_repository.get_by_state(state)
+        # Claimed, not merely read: the status check and the write that spends
+        # it used to be separated by the whole provider exchange, so two
+        # callbacks with the same `state` both passed. See
+        # `claim_pending_by_state`.
+        pending_request = await self.connect_request_repository.claim_pending_by_state(
+            state, not_before=oldest_claimable_connect_request()
+        )
         if not pending_request:
             raise ConnectRequestNotFoundError()
 
@@ -948,17 +927,22 @@ class ConnectorService:
             auth_config_id=pending_request.auth_config_id,
         )
         connector = await self.get_connector(pending_request.connector_id)
-        effective_connector = self._build_effective_connector(connector, auth_config)
+        auth_install = self._resolve_auth_install(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(
             self._provider_value(auth_config)
         )
 
         try:
             credentials = await auth_provider.exchange_code_for_credentials(
-                connector=effective_connector,
+                install=auth_install,
                 redirect_uri=redirect_uri,
                 user_id=user_id,
-                state=None,
+                # What we recorded when this flow was started, not what the
+                # caller put in the URL. A scheme that identifies the resulting
+                # connection by a query parameter has no other way to tell
+                # whether the callback belongs to the flow it is completing.
+                state=stored_provider_state(pending_request),
+                code_verifier=stored_code_verifier(pending_request),
             )
         except DomainError:
             raise
@@ -978,9 +962,7 @@ class ConnectorService:
         provider_account_id = self._extract_provider_account_id(
             connector.id, credentials
         )
-        native_profile = await self._load_native_account_profile(
-            effective_connector, credentials
-        )
+        native_profile = await self._load_native_account_profile(connector, credentials)
         if native_profile:
             credentials = credentials.model_copy(
                 update={
@@ -990,31 +972,40 @@ class ConnectorService:
                     }
                 }
             )
-        provider_account_id = (
-            provider_account_id
-            or self._extract_provider_account_id_from_profile(
-                connector.id, native_profile
-            )
-        )
         email_profile = await self._fetch_account_profile(
             connector,
             self._provider_value(auth_config),
             credentials,
+        )
+        # The one profile this app actually populates. The catalog-driven
+        # fetch works for any connector with a profile operation configured;
+        # the Lemma-native one covers Gmail/Drive/Slack alone, and only one of
+        # the two is ever populated for a given app.
+        #
+        # Reading the identity from `native_profile` only meant every
+        # `http`-kind connector with a profile operation -- GitHub, and every
+        # native connector after it -- stored an account with no provider
+        # identity. That is the value the duplicate-connect guard and re-auth
+        # matching key on, so without it a second identity's re-auth is matched
+        # to the user's default account and overwrites its credentials.
+        account_profile = email_profile or native_profile
+        provider_account_id = (
+            provider_account_id
+            or self._extract_provider_account_id_from_profile(
+                connector.id, account_profile
+            )
         )
         email = self._extract_account_email(
             connector.id, credentials, email_profile
         ) or self._extract_account_email(connector.id, credentials, native_profile)
 
         # Human-friendly label for the account list (team name / mailbox / …),
-        # falling back to the email when the app has no better label. Prefer
-        # the catalog-driven profile (works for any app with a profile
-        # operation configured) over the Lemma-native one (Gmail/Drive/Slack
-        # only) since only one of the two is ever populated for a given app.
+        # falling back to the email when the app has no better label.
         display_name = (
             await resolve_account_identity(
                 connector_id=connector.id,
                 credentials=credentials,
-                profile=email_profile or native_profile,
+                profile=account_profile,
             )
         ).display_name or email
 
@@ -1042,6 +1033,10 @@ class ConnectorService:
 
         if account:
             account.credentials = credentials
+            # Re-derived on every re-auth: a reconnect is how an account moves
+            # to a different workspace or installation, and a stale routing key
+            # would keep sending that account another tenant's events.
+            account.external_ref = resolve_external_ref(connector.id, credentials)
             if provider_account_id:
                 account.provider_account_id = provider_account_id
             if email:
@@ -1065,14 +1060,21 @@ class ConnectorService:
                     is_default=has_existing is None,
                     credentials=credentials,
                     provider_account_id=provider_account_id,
+                    external_ref=resolve_external_ref(connector.id, credentials),
                     email=email,
                     display_name=display_name,
                 )
             )
 
         pending_request.status = ConnectRequestStatus.SUCCESS
+        pending_request.attributes = without_spent_secrets(pending_request)
         await self.connect_request_repository.update(pending_request)
         await self.uow.commit()
+
+        # After the commit: an install whose token lives on the account can only
+        # be discovered now, and a discovery failure must not undo the
+        # connection the person just made.
+        await discover_operations_for_new_account(self, auth_config)
 
         return account
 
@@ -1140,7 +1142,7 @@ class ConnectorService:
             organization_id=resolved_organization_id,
             auth_config_id=account.auth_config_id,
         )
-        effective_connector = self._build_effective_connector(connector, auth_config)
+        auth_install = self._resolve_auth_install(connector, auth_config)
 
         oauth_credentials = self._to_oauth_credentials(credentials)
         expires_at = (
@@ -1170,7 +1172,7 @@ class ConnectorService:
             if can_refresh:
                 try:
                     new_credentials = await auth_provider.refresh_credentials(
-                        connector=effective_connector,
+                        install=auth_install,
                         credentials=oauth_credentials,
                         user_id=account.user_id,
                     )
@@ -1252,29 +1254,19 @@ class ConnectorService:
             organization_id=resolved_organization_id,
             auth_config_id=account.auth_config_id,
         )
-        effective_connector = (
-            self._build_effective_connector(connector, auth_config)
-            if connector
-            else None
+        auth_install = (
+            self._resolve_auth_install(connector, auth_config) if connector else None
         )
 
         if account.credentials and self._should_revoke_account(
-            connector=connector,
-            auth_config=auth_config,
+            connector=connector, auth_config=auth_config
         ):
-            try:
-                auth_provider = self._get_auth_provider_by_name(
-                    self._provider_value(auth_config)
-                )
-                await auth_provider.revoke_connection(
-                    connector=effective_connector,
-                    credentials=self._to_oauth_credentials(account.credentials),
-                    user_id=user_id,
-                )
-            except Exception:
-                logger.error(
-                    "connectors.connector_service.revoke.failed", exc_info=True
-                )
+            await revoke_one(
+                self._get_auth_provider_by_name(self._provider_value(auth_config)),
+                install=auth_install,
+                credentials=self._to_oauth_credentials(account.credentials),
+                user_id=user_id,
+            )
 
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
@@ -1308,10 +1300,8 @@ class ConnectorService:
         )
         accounts = await self.account_repository.list_by_auth_config(auth_config.id)
         connector = await self.connector_repository.get(auth_config.connector_id)
-        effective_connector = (
-            self._build_effective_connector(connector, auth_config)
-            if connector
-            else None
+        auth_install = (
+            self._resolve_auth_install(connector, auth_config) if connector else None
         )
         auth_provider = self._get_auth_provider_by_name(
             self._provider_value(auth_config)
@@ -1338,14 +1328,12 @@ class ConnectorService:
         await self.uow.commit()
 
         for user_id, credentials in credentials_to_revoke:
-            # Best-effort, as before: a provider that will not revoke must not
-            # strand the account rows in Lemma.
-            with suppress(Exception):
-                await auth_provider.revoke_connection(
-                    connector=effective_connector,
-                    credentials=credentials,
-                    user_id=user_id,
-                )
+            await revoke_one(
+                auth_provider,
+                install=auth_install,
+                credentials=credentials,
+                user_id=user_id,
+            )
 
         for account in accounts:
             await self.account_repository.delete(account.id)

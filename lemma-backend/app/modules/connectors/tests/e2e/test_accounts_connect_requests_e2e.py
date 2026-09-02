@@ -12,10 +12,14 @@ from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_NAME,
 )
 from app.modules.connectors.domain.account import OAuthCredentials
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
+from app.modules.connectors.tests.support.fake_auth_provider import (
+    FakeAuthProvider,
+)
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
@@ -60,6 +64,33 @@ async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, 
     )
     token = await get_user_token(UUID(user_id), delegation_claims=claims)
     return {"Authorization": f"Bearer {token}"}
+
+
+def _install_fake_auth_provider(
+    monkeypatch, fake: FakeAuthProvider
+) -> FakeAuthProvider:
+    """Route the real provider's methods to a typed double.
+
+    Each wrapper forwards ``*args, **kwargs`` instead of restating the
+    signature, so there is exactly one place -- ``FakeAuthProvider`` -- where
+    the shape of these calls is written down, and
+    ``test_auth_provider_conformance`` checks that place against the port. The
+    previous arrangement restated the signature four times in this file, and
+    when the port grew ``code_verifier`` all four silently stopped matching it.
+    """
+    for name in (
+        "connect_with_credentials",
+        "get_authorization_url",
+        "exchange_code_for_credentials",
+        "refresh_credentials",
+        "revoke_connection",
+    ):
+
+        async def _delegate(self, *args, _bound=getattr(fake, name), **kwargs):
+            return await _bound(*args, **kwargs)
+
+        monkeypatch.setattr(LemmaAuthProvider, name, _delegate)
+    return fake
 
 
 @pytest.mark.asyncio
@@ -111,30 +142,26 @@ async def test_connect_request_and_accounts_lifecycle(
     auth_config = auth_config_response.json()
     assert auth_config["config"]["oauth2_credentials"]["client_secret"] == "********"
 
-    async def _fake_get_authorization_url(
-        self, connector, user_id, state, redirect_uri
-    ):
-        assert connector.oauth2_config.client_secret == "client-secret"
-        return ("https://mock.example.com/authorize", "provider_state")
+    def _assert_the_orgs_own_client_reaches_the_scheme(install, code_verifier):
+        # The org brought its own client, so the secret it stored is what has
+        # to reach the scheme -- not the deployment's.
+        assert install.oauth2.client_secret == "client-secret"
+        assert install.config_source is AuthConfigSource.ORG_CUSTOM
+        # Every OAuth connect carries a verifier now, this one included: the
+        # secret proves which application is exchanging the code, not which
+        # flow it came from.
+        assert code_verifier, "a confidential client gets PKCE too"
 
-    async def _fake_exchange_code_for_credentials(
-        self, connector, redirect_uri, user_id, state=None
-    ):
-        return OAuthCredentials(
-            access_token="access-token",
-            refresh_token="refresh-token",
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-        )
-
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "get_authorization_url",
-        _fake_get_authorization_url,
-    )
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "exchange_code_for_credentials",
-        _fake_exchange_code_for_credentials,
+    _install_fake_auth_provider(
+        monkeypatch,
+        FakeAuthProvider(
+            credentials=OAuthCredentials(
+                access_token="access-token",
+                refresh_token="refresh-token",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            ),
+            on_authorize=_assert_the_orgs_own_client_reaches_the_scheme,
+        ),
     )
 
     response = await authenticated_client.post(
@@ -843,18 +870,11 @@ async def test_oauth_new_account_addition_and_reauth_flows(
     )
     assert auth_config_response.status_code == 200, auth_config_response.text
 
-    async def _fake_get_authorization_url(
-        self, connector, user_id, state, redirect_uri
-    ):
-        return ("https://mock.example.com/authorize", "provider_state")
-
     # The callback URL's "code" query param stands in for the provider's actual
     # authorization code; here it doubles as a way to pick which identity the
     # exchange returns, so the test can drive distinct-identity vs same-identity
     # callbacks without a real OAuth provider.
-    async def _fake_exchange_code_for_credentials(
-        self, connector, redirect_uri, user_id, state=None
-    ):
+    def _identity_from_the_callback_code(install, redirect_uri, code_verifier):
         from urllib.parse import parse_qs, urlparse
 
         code = (parse_qs(urlparse(redirect_uri).query).get("code") or [""])[0]
@@ -865,13 +885,8 @@ async def test_oauth_new_account_addition_and_reauth_flows(
             raw_response={"provider_account_id": code},
         )
 
-    monkeypatch.setattr(
-        LemmaAuthProvider, "get_authorization_url", _fake_get_authorization_url
-    )
-    monkeypatch.setattr(
-        LemmaAuthProvider,
-        "exchange_code_for_credentials",
-        _fake_exchange_code_for_credentials,
+    _install_fake_auth_provider(
+        monkeypatch, FakeAuthProvider(on_exchange=_identity_from_the_callback_code)
     )
 
     async def _connect(identity_code: str) -> dict:
@@ -1150,3 +1165,209 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         f"/organizations/{org_id}/connectors/auth-configs/{connector_id}"
     )
     assert still_there.status_code == 200, still_there.text
+
+
+async def _oauth_install(authenticated_client, db_session, org_id) -> str:
+    """An ORG_CUSTOM OAuth install, returning its connector id."""
+    connector_id = f"replay-app-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Replay App",
+            description="connect-request replay coverage",
+            kinds=[
+                {
+                    "kind": "package",
+                    "auth_scheme": "OAUTH2",
+                    "supports_org_custom_oauth": True,
+                    "oauth2_defaults": {
+                        "default_scopes": ["openid"],
+                        "authorization_url": "https://mock.example.com/auth",
+                        "token_url": "https://mock.example.com/token",
+                    },
+                }
+            ],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/auth-configs",
+        json={
+            "connector_id": connector_id,
+            "kind": "package",
+            "config_source": "ORG_CUSTOM",
+            "config": {
+                "oauth2_credentials": {
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                }
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    return connector_id
+
+
+@pytest.mark.e2e
+async def test_a_state_cannot_be_replayed_after_it_has_been_used(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """A completed connect request must not accept a second callback.
+
+    The `state` travels through the provider's redirect, so it lands in browser
+    history, proxy logs and Referer headers. While the status was written and
+    never read, anyone holding one could obtain their own authorization code
+    for the same client and replay it here -- and their provider identity would
+    be stored as an account belonging to the person who started the flow, whose
+    agents and schedules would then act through it.
+    """
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    assert response.status_code == 200, response.text
+    state = response.json()["attributes"]["state"]
+
+    first = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "first", "format": "json"},
+    )
+    assert first.status_code == 200, first.text
+
+    replayed = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "attacker", "format": "json"},
+    )
+    assert replayed.status_code == 404, replayed.text
+
+    accounts = await authenticated_client.get(
+        f"/organizations/{org_id}/connectors/accounts",
+        params={"connector_id": connector_id},
+    )
+    assert len(accounts.json()["items"]) == 1, "the replay must not add an account"
+
+
+@pytest.mark.e2e
+async def test_a_spent_pkce_verifier_is_not_left_behind(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """`attributes` is plaintext JSONB and the row is kept forever, so a used
+    verifier sitting in it is a readable secret with nothing left to protect."""
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    state = response.json()["attributes"]["state"]
+    await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "code", "format": "json"},
+    )
+
+    from sqlalchemy import select
+
+    from app.modules.connectors.infrastructure.models.connect_request import (
+        ConnectRequest,
+    )
+
+    row = (
+        (
+            await db_session.execute(
+                select(ConnectRequest).where(
+                    ConnectRequest.connector_id == connector_id
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None
+    assert "code_verifier" not in (row.attributes or {})
+
+
+@pytest.mark.e2e
+async def test_a_credential_is_rotated_without_replacing_the_account(
+    authenticated_client, fixed_test_org, db_session
+):
+    """Rotating in place keeps the id, and a rejected credential keeps the account.
+
+    There was no way to do this, so the UI deleted the account and created a
+    replacement. A failed create left nothing behind -- the old account was
+    already gone, revoked upstream on the way out -- and a successful one
+    issued a NEW id, stranding every schedule, surface and grant pinned to the
+    old one. `install_update` avoids exactly this on the install side ("the
+    row, its id, and every reference to it survive"); the account side had no
+    equivalent.
+    """
+    connector_id = f"rotate-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Rotatable",
+            description="credential rotation coverage",
+            kinds=[
+                {
+                    "kind": "package",
+                    "auth_scheme": "API_KEY",
+                    "credential_schema": {
+                        "type": "object",
+                        "required": ["api_key"],
+                        "properties": {"api_key": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    org_id = fixed_test_org["id"]
+    assert (
+        await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/auth-configs",
+            json={
+                "connector_id": connector_id,
+                "kind": "package",
+                "config_source": "ORG_CUSTOM",
+                "name": connector_id,
+            },
+        )
+    ).status_code == 200
+
+    created = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/accounts",
+        json={"auth_config_name": connector_id, "credentials": {"api_key": "first"}},
+    )
+    assert created.status_code == 200, created.text
+    account_id = created.json()["id"]
+
+    rotated = await authenticated_client.patch(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}",
+        json={"credentials": {"api_key": "second"}},
+    )
+    assert rotated.status_code == 200, rotated.text
+    assert rotated.json()["id"] == account_id, (
+        "a new id strands every reference to the old one"
+    )
+
+    # A credential the schema rejects must leave the account exactly as it was,
+    # which is the half that delete-then-create could never offer.
+    refused = await authenticated_client.patch(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}",
+        json={"credentials": {"api_kye": "typo"}},
+    )
+    assert refused.status_code == 400, refused.text
+
+    still_there = await authenticated_client.get(
+        f"/organizations/{org_id}/connectors/accounts/{account_id}"
+    )
+    assert still_there.status_code == 200, "the account survived a rejected rotation"

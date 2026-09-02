@@ -18,8 +18,6 @@ class ResolvedConnectorExecution:
     provider: str | None
     third_party_credentials: dict[str, Any]
     payload: dict[str, Any]
-    auth_token: str | None
-    api_url: str | None
     # The install's kind selects the executor; `provider` above is the legacy
     # view kept only while the old gateways still exist behind the composio and
     # package plugins.

@@ -467,7 +467,12 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
     assert exc_info.value.details == {
         "error_type": "_HttpFailure",
         "upstream_status": 404,
+        # What the provider said. A status alone cannot tell a caller which of
+        # the several things a 404 might mean actually happened.
+        "upstream_message": "GitHub said: Not Found for /repos/acme/crm",
     }
+    # The top-level message stays fixed and ours; the provider's words travel in
+    # the details, where they are scrubbed of anything secret-shaped.
     assert "acme/crm" not in str(exc_info.value)
 
 

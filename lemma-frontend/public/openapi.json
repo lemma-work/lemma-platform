@@ -86,6 +86,22 @@
         "title": "AccountCreateSchema",
         "type": "object"
       },
+      "AccountCredentialsUpdateSchema": {
+        "description": "A replacement credential for an account that already exists.",
+        "properties": {
+          "credentials": {
+            "additionalProperties": true,
+            "description": "The new credential, validated against the kind's schema",
+            "title": "Credentials",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credentials"
+        ],
+        "title": "AccountCredentialsUpdateSchema",
+        "type": "object"
+      },
       "AccountListResponseSchema": {
         "description": "Schema for account list response.",
         "properties": {
@@ -20315,6 +20331,78 @@
           "resource": "connector.account",
           "result": "entity",
           "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Replace a credential-managed account's credential, keeping the account and its id. Rotating by deleting and reconnecting issues a new id and strands every schedule, surface and grant that referenced the old one.",
+        "operationId": "connector.account.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCredentialsUpdateSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Account",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "update"
         }
       }
     },

@@ -96,10 +96,25 @@ must never use personal or production credentials.
 - Classify errors at process boundaries. Preserve cancellation, redact secrets,
   and never return or log raw provider exceptions.
 - Add an Alembic upgrade and downgrade test for schema changes.
+- Do not annotate with `Any`, or with a bare `dict`, `list` or `tuple`. Both
+  say "this boundary is not checked", and the checker then cannot help at
+  exactly the place two pieces of code meet. Parameterise the container, or
+  name the shape: a `TypedDict`, a dataclass, a pydantic model, a `Protocol`
+  for an object you only call methods on.
+
+`Any` is legitimate for data that genuinely has no shape until it is
+validated — a provider's JSON response, an arbitrary payload a tenant supplies
+— and for a third-party library that is untyped. Say which, in a comment, and
+narrow it as soon as the data has been checked. What is not legitimate is
+reaching for it because writing the type is work: a helper taking
+`service: Any` and calling six methods on it has a type, it just isn't written
+down, and nothing then notices when one of those methods is renamed.
 
 `make architecture` enforces most of this as a no-growth ratchet against
 `architecture-baseline.json`: existing violations are tolerated, new ones are
-not.
+not. The `Any` rule is ratcheted too, per module — there are thousands of
+existing annotations and no plan to rewrite them at once, but the count only
+goes down.
 
 ## Code and comments
 

@@ -137,6 +137,136 @@ ALLOWLIST = [
         "search/code",
         # Orgs
         "orgs/list-for-authenticated-user",
+        # GitHub Actions. Run history, the logs and artifacts a run leaves behind, and
+        # the controls a dev-team app needs over work in flight. Secrets and
+        # variables are list-only on purpose: rotating one is a `gh` job, not an
+        # agent's.
+        "actions/list-repo-workflows",
+        "actions/get-workflow",
+        "actions/enable-workflow",
+        "actions/disable-workflow",
+        "actions/create-workflow-dispatch",
+        "actions/list-workflow-runs",
+        "actions/list-workflow-runs-for-repo",
+        "actions/get-workflow-run",
+        "actions/cancel-workflow-run",
+        "actions/re-run-workflow",
+        "actions/re-run-workflow-failed-jobs",
+        "actions/list-jobs-for-workflow-run",
+        "actions/get-job-for-workflow-run",
+        "actions/download-job-logs-for-workflow-run",
+        "actions/download-workflow-run-logs",
+        "actions/list-workflow-run-artifacts",
+        "actions/get-artifact",
+        "actions/download-artifact",
+        "actions/delete-artifact",
+        "actions/get-workflow-run-usage",
+        "actions/list-repo-secrets",
+        "actions/list-repo-variables",
+        "actions/list-environment-secrets",
+        "actions/get-pending-deployments-for-run",
+        "actions/review-pending-deployments-for-run",
+        "repos/create-dispatch-event",
+        "repos/get-all-environments",
+        # Checks and commit statuses -- how anything reports back on a ref.
+        "checks/create",
+        "checks/update",
+        "checks/get",
+        "checks/list-for-ref",
+        "checks/list-suites-for-ref",
+        "repos/create-commit-status",
+        "repos/get-combined-status-for-ref",
+        "repos/list-commit-statuses-for-ref",
+        # Review, rather than just open and merge.
+        "pulls/list-review-comments",
+        "pulls/create-review-comment",
+        "pulls/create-reply-for-review-comment",
+        "pulls/submit-review",
+        "pulls/dismiss-review",
+        "pulls/update-review",
+        "pulls/request-reviewers",
+        "pulls/remove-requested-reviewers",
+        "pulls/list-requested-reviewers",
+        "pulls/list-commits",
+        "pulls/update-branch",
+        "pulls/check-if-merged",
+        # Triage: labels, assignees, milestones, and the timeline that explains how
+        # an issue got where it is.
+        "issues/list-labels-for-repo",
+        "issues/create-label",
+        "issues/update-label",
+        "issues/delete-label",
+        "issues/remove-label",
+        "issues/set-labels",
+        "issues/add-assignees",
+        "issues/remove-assignees",
+        "issues/lock",
+        "issues/unlock",
+        "issues/update-comment",
+        "issues/delete-comment",
+        "issues/get-comment",
+        "issues/list-milestones",
+        "issues/create-milestone",
+        "issues/update-milestone",
+        "issues/list-events-for-timeline",
+        "issues/list-for-authenticated-user",
+        "issues/list-assignees",
+        # Repository lifecycle. No delete and no transfer: an agent should not be
+        # able to end a repository, and `gh` is there when a person means to.
+        "repos/update",
+        "repos/create-in-org",
+        "repos/create-using-template",
+        "repos/create-fork",
+        "repos/list-languages",
+        "repos/get-all-topics",
+        "repos/replace-all-topics",
+        "repos/get-readme",
+        "repos/list-contributors",
+        "repos/list-teams",
+        "repos/add-collaborator",
+        "repos/remove-collaborator",
+        "repos/check-collaborator",
+        "repos/merge",
+        "repos/compare-commits",
+        "repos/get-branch-protection",
+        "repos/list-invitations",
+        # The rest of git data. `create-ref` was missing outright, so nothing could
+        # open a branch.
+        "git/create-ref",
+        "git/delete-ref",
+        "git/list-matching-refs",
+        "git/get-tree",
+        "git/get-commit",
+        "git/get-blob",
+        "git/create-tag",
+        # Releases beyond creating one.
+        "repos/update-release",
+        "repos/delete-release",
+        "repos/generate-release-notes",
+        "repos/list-release-assets",
+        "repos/get-release-by-tag",
+        # Who is in the organization.
+        "orgs/get",
+        "orgs/list-members",
+        "teams/list",
+        "teams/get-by-name",
+        # Security alerts -- the thing a dev team most wants a bot watching.
+        "code-scanning/list-alerts-for-repo",
+        "code-scanning/get-alert",
+        "dependabot/list-alerts-for-repo",
+        "dependabot/get-alert",
+        "secret-scanning/list-alerts-for-repo",
+        # Reactions, so an agent can acknowledge without adding noise.
+        "reactions/create-for-issue",
+        "reactions/create-for-issue-comment",
+        "reactions/create-for-pull-request-review-comment",
+        # Search, notifications and the rate limit an agent should check before a
+        # long run.
+        "search/users",
+        "search/commits",
+        "rate-limit/get",
+        "activity/list-notifications-for-authenticated-user",
+        "activity/mark-notifications-as-read",
     ]
 ]
 
@@ -153,20 +283,96 @@ OVERRIDES = {
     # real ref.
     "git/get-ref": {"multi_segment_path_params": ["ref"]},
     "git/update-ref": {"multi_segment_path_params": ["ref"]},
+    # Same whole-ref-path problem, for the operations that read or delete one.
+    "git/list-matching-refs": {"multi_segment_path_params": ["ref"]},
+    "git/delete-ref": {"multi_segment_path_params": ["ref"]},
+    # Logs and artifacts answer with a redirect to a signed URL, the same shape
+    # as the archive downloads above.
+    "actions/download-job-logs-for-workflow-run": {"binary_response": True},
+    "actions/download-workflow-run-logs": {"binary_response": True},
+    "actions/download-artifact": {"binary_response": True},
 }
 
 RAW_PASSTHROUGH_NAME = "github_http_request"
+GRAPHQL_PASSTHROUGH_NAME = "github_graphql_request"
+
+# Top-level property names and types, and nothing below that. Output schemas
+# were 93% of this catalog entry -- `repos_get` alone was 72 KB, so one
+# `describe_connector_operation` on it cost an agent roughly 18k tokens. What a
+# model actually needs from an output schema is which fields come back; the
+# shape of `owner.plan.collaborators` three levels down it can read off the
+# response it already has.
+_PROSE_KEYS = frozenset(
+    {"description", "example", "examples", "title", "format", "default"}
+)
 
 
-def _operation_to_static_entry(op: OpenAPIOperation) -> dict:
+def _prune_output_schema(node: object, depth: int = 0) -> object:
+    if not isinstance(node, dict):
+        return node
+    pruned: dict = {}
+    for key, value in node.items():
+        if key in _PROSE_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            pruned[key] = {
+                name: {"type": sub.get("type")} if isinstance(sub, dict) else {}
+                for name, sub in value.items()
+            }
+        elif key == "items":
+            pruned[key] = _prune_output_schema(value, depth + 1)
+        elif key in ("anyOf", "oneOf", "allOf") and isinstance(value, list):
+            pruned[key] = [_prune_output_schema(value[0], depth + 1)] if value else []
+        elif isinstance(value, dict):
+            pruned[key] = _prune_output_schema(value, depth + 1)
+        else:
+            pruned[key] = value
+    return pruned
+
+
+def _token_kinds_by_route(spec: dict) -> dict[tuple[str, str], str]:
+    """Whether an installation token can run each route, per GitHub's own spec.
+
+    ``x-github.enabledForGitHubApps: false`` marks the endpoints only a
+    user-to-server token reaches -- everything under `/user/...`, and gists.
+    Read from the spec rather than hand-listed, so the answer cannot drift from
+    what GitHub actually enforces. Keyed by (method, path), which is what the
+    execution descriptor carries back.
+    """
+    kinds: dict[tuple[str, str], str] = {}
+    for path, item in spec["paths"].items():
+        for method, operation in item.items():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            enabled = (operation.get("x-github") or {}).get(
+                "enabledForGitHubApps", True
+            )
+            kinds[(method.upper(), path)] = (
+                "installation_ok" if enabled else "user_only"
+            )
+    return kinds
+
+
+def _operation_to_static_entry(
+    op: OpenAPIOperation, token_kinds: dict[tuple[str, str], str]
+) -> dict:
+    descriptor = op.execution or {}
+    route = (
+        str(descriptor.get("method", "")).upper(),
+        str(descriptor.get("path", "")),
+    )
+    execution = {
+        **descriptor,
+        "github_token_kind": token_kinds.get(route, "installation_ok"),
+    }
     entry: dict = {
         "name": op.public_name,
         "description": op.description,
-        "execution": op.execution,
+        "execution": execution,
         "input_schema": op.input_schema,
     }
     if op.output_schema is not None:
-        entry["output_schema"] = op.output_schema
+        entry["output_schema"] = _prune_output_schema(op.output_schema)
     return entry
 
 
@@ -186,7 +392,53 @@ def build_static_operations() -> list[dict]:
         name=RAW_PASSTHROUGH_NAME,
         default_headers=DEFAULT_HEADERS,
     )
-    return [_operation_to_static_entry(op) for op in [*operations, raw]]
+    token_kinds = _token_kinds_by_route(spec)
+    entries = [_operation_to_static_entry(op, token_kinds) for op in [*operations, raw]]
+    entries.append(_graphql_passthrough_entry())
+    return entries
+
+
+def _graphql_passthrough_entry() -> dict:
+    """A GraphQL escape hatch, because Projects v2 has no REST surface at all.
+
+    Projects is the one thing a dev team reaches for that GitHub never exposed
+    over REST, so a catalog built only from the OpenAPI description can never
+    reach it however many operations it lists.
+    """
+    return {
+        "name": GRAPHQL_PASSTHROUGH_NAME,
+        "description": (
+            "Run a GraphQL query or mutation against GitHub's v4 API. Use this "
+            "for Projects v2, which has no REST equivalent. Prefer a curated "
+            "operation or github_http_request for anything REST can do."
+        ),
+        "execution": {
+            "kind": "http",
+            "mode": "raw",
+            "method": "POST",
+            "path": "/graphql",
+            "server_url": "https://api.github.com",
+            "default_headers": DEFAULT_HEADERS,
+            "github_token_kind": "installation_ok",
+        },
+        "input_schema": {
+            "type": "object",
+            "title": GRAPHQL_PASSTHROUGH_NAME,
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The GraphQL query or mutation document.",
+                },
+                "variables": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Variables referenced by the document.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
 
 
 def _write_into_lemma_apps_config(static_operations: list[dict]) -> None:

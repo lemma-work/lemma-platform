@@ -4,6 +4,7 @@ import { AuthScheme, ConnectorKind } from 'lemma-sdk';
 import type { Connector } from '@/lib/types';
 import {
     canConnectWithDefaults,
+    describeConnectorError,
     describeInstallTarget,
     getCredentialSchema,
     getKindDescription,
@@ -304,5 +305,69 @@ describe('describeInstallTarget', () => {
     it('says nothing rather than guessing when there is no config', () => {
         expect(describeInstallTarget('sql', null)).toBeNull();
         expect(describeInstallTarget('composio', { toolkit: 'slack' })).toBeNull();
+    });
+});
+
+describe('describeConnectorError', () => {
+    // The SDK's `ApiError` is flat and has never had a `body`, but this
+    // function looked for one and bailed when it was absent -- which was
+    // always. So the branch it exists for, unwrapping `details.violations`,
+    // was unreachable, and a schema rejection rendered as the backend's
+    // generic "Invalid install config." with no indication of which field.
+    // There was no test for it at all.
+    class ApiErrorLike extends Error {
+        constructor(
+            readonly statusCode: number,
+            message: string,
+            readonly code?: string,
+            readonly details?: unknown,
+        ) {
+            super(message);
+            this.name = 'ApiError';
+        }
+    }
+
+    it('names the field the backend rejected', () => {
+        const error = new ApiErrorLike(400, 'Invalid install config.', 'VALIDATION', {
+            violations: [{ path: 'server_url', message: 'is not a valid URL' }],
+        });
+
+        expect(describeConnectorError(error, 'Failed')).toBe(
+            'server_url: is not a valid URL',
+        );
+    });
+
+    it('drops a (root) path rather than showing it to a person', () => {
+        const error = new ApiErrorLike(400, 'Invalid install config.', 'VALIDATION', {
+            violations: [{ path: '(root)', message: "'oauth' was unexpected" }],
+        });
+
+        expect(describeConnectorError(error, 'Failed')).toBe("'oauth' was unexpected");
+    });
+
+    it("keeps the SSRF guard's own explanation, which a user can act on", () => {
+        const error = new ApiErrorLike(
+            400,
+            "Host 'x' resolves to an address that is not routable on the public internet.",
+        );
+
+        expect(describeConnectorError(error, 'Failed')).toContain('not routable');
+    });
+
+    it('falls back to the message when there are no violations', () => {
+        const error = new ApiErrorLike(409, 'That name is already in use.');
+
+        expect(describeConnectorError(error, 'Failed')).toBe('That name is already in use.');
+    });
+
+    it('still reads an envelope carried under body, if one ever is', () => {
+        const error = { body: { message: 'Wrapped', details: { violations: [] } } };
+
+        expect(describeConnectorError(error, 'Failed')).toBe('Wrapped');
+    });
+
+    it('falls back for something that is not an error at all', () => {
+        expect(describeConnectorError(null, 'Failed')).toBe('Failed');
+        expect(describeConnectorError('a string', 'Failed')).toBe('Failed');
     });
 });

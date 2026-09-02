@@ -262,3 +262,31 @@ def test_validate_function_payload_reports_problems(tmp_path: Path):
         tmp_path, "hello", {"code": code, "config_schema": {"type": "object"}}
     )
     assert [i.message for i in issues] == ["Missing required header #config_type_name."]
+
+
+def test_normalize_schedule_payload_drops_the_source_orgs_provider_trigger():
+    """A `provider_trigger_id` names a subscription the exporting organization
+    owns. Webhook matching applies no tenant filter, so a bundle that carried it
+    into another org produced a schedule answering to the first org's events."""
+    schedule = {
+        "name": "on_ticket",
+        "schedule_type": "WEBHOOK",
+        "connector_trigger_id": "jira_new_issue",
+        "config": {"source": "composio", "provider_trigger_id": "ti_abc123"},
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {"source": "composio"}
+    # The rest of the config is untouched.
+    assert payload["connector_trigger_id"] == "jira_new_issue"
+
+
+def test_normalize_schedule_payload_leaves_a_clean_config_alone():
+    schedule = {
+        "name": "nightly",
+        "schedule_type": "TIME",
+        "config": {"cron": "0 9 * * *"},
+    }
+
+    assert _normalize_schedule_payload(schedule)["config"] == {"cron": "0 9 * * *"}

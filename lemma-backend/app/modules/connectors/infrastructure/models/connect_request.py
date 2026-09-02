@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import String, ForeignKey, Text
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,7 @@ from app.modules.connectors.domain.connect_request import (
 
 if TYPE_CHECKING:
     from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+
     from .connector import Connector
 
 

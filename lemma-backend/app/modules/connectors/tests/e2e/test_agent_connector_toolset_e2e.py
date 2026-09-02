@@ -306,3 +306,172 @@ class TestTheAgentCanUseATenantConnector:
         assert "error" in result
         names = {item["auth_config"] for item in result.get("items", [])}
         assert install.name not in names
+
+
+class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
+    """The grant gate, over a real MCP server.
+
+    Both halves of this existed and never met. The tests above prove an agent
+    can drive a live MCP install, but they run as the *default* pod agent, which
+    mirrors the person who asked and needs no grant -- so they say nothing about
+    whether a grant is required. The pod module proves a named agent needs one,
+    but against a synthetic connector with a stub operation, so it says nothing
+    about MCP.
+
+    Worth stating plainly, because it is the question this answers: a granted
+    MCP connector is *not* registered as an MCP server on the agent. Nothing in
+    the backend wires one -- the runtime is built with toolsets and no
+    `MCPServer` anywhere. The agent reaches the server's tools through the
+    connector toolset, so every call is resolved and authorized on this side and
+    the credential never leaves it.
+    """
+
+    @staticmethod
+    def _named_agent_context(installed_connector, pod_id, *, agent_id, agent_name):
+        from app.modules.agent.tools.context import BaseAgentContext
+
+        _install, org_id, user_id = installed_connector
+        return BaseAgentContext(
+            user_id=user_id,
+            org_id=org_id,
+            pod_id=pod_id,
+            conversation_id=uuid4(),
+            workload_id=agent_id,
+            agent_name=agent_name,
+        )
+
+    async def test_a_named_agent_without_a_grant_cannot_run_anything(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        """Refused as data, not as an exception: the toolset reports it so the
+        model can say so, rather than ending the run."""
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            run_connector_operation,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            RunConnectorOperationRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(str(connector_test_pod["id"])),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+
+        result = await run_connector_operation(
+            _run_context(deps),
+            RunConnectorOperationRequest(
+                auth_config=install.name,
+                operation="convert_currency",
+                arguments={"amount": 21, "to_currency": "EUR"},
+            ),
+        )
+        assert "error" in result, result
+        assert "42" not in str(result), result
+
+    async def test_reading_the_operation_list_is_not_itself_gated(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        """Stated because it surprised the author of this test.
+
+        The grant is checked where a credential is resolved, so it gates
+        *running* an operation, not seeing that one exists. An ungranted agent
+        in the organization can still read the install's operation list -- the
+        same surface the install itself already advertises org-wide. Nothing
+        here reaches the server or the credential.
+        """
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            search_connector_operations,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            SearchConnectorOperationsRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(str(connector_test_pod["id"])),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+
+        result = await search_connector_operations(
+            _run_context(deps),
+            SearchConnectorOperationsRequest(auth_config=install.name),
+        )
+        assert "error" not in result, result
+        assert [item["name"] for item in result["items"]] == ["convert_currency"]
+
+    async def test_a_granted_named_agent_reaches_the_real_server(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            run_connector_operation,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            RunConnectorOperationRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        pod_id = str(connector_test_pod["id"])
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        await _grant_connector_to_agent(
+            authenticated_client,
+            pod_id=pod_id,
+            agent_name=agent["name"],
+            connector_id=install.connector_id,
+        )
+
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(pod_id),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+        result = await run_connector_operation(
+            _run_context(deps),
+            RunConnectorOperationRequest(
+                auth_config=install.name,
+                operation="convert_currency",
+                arguments={"amount": 21, "to_currency": "EUR"},
+            ),
+        )
+        # The answer comes from the MCP server itself, so this is the whole
+        # path: grant, resolution, credential, transport, tool call.
+        assert "error" not in result, result
+        assert "42" in str(result), result
+
+
+async def _create_agent(authenticated_client, connector_test_pod) -> dict:
+    response = await authenticated_client.post(
+        f"/pods/{connector_test_pod['id']}/agents",
+        json={
+            "name": f"connector-agent-{uuid4().hex[:8]}",
+            "instruction": "Drive the tenant connector.",
+            "toolsets": ["CONNECTORS"],
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+    return response.json()
+
+
+async def _grant_connector_to_agent(
+    authenticated_client, *, pod_id: str, agent_name: str, connector_id: str
+) -> None:
+    response = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{agent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "connector",
+                    "resource_name": connector_id,
+                    "permission_ids": ["connector.use"],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text

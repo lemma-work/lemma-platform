@@ -54,6 +54,85 @@ def _imported_modules(node: ast.AST) -> list[str]:
     return []
 
 
+# Bare containers say "a collection of something" and stop there, which is the
+# same abdication as `Any` wearing a different word.
+_UNPARAMETERISED = frozenset({"dict", "list", "tuple", "set", "frozenset"})
+
+
+class _UntypedEscapes(ast.NodeVisitor):
+    """Count annotations that opt out of the type system.
+
+    `Any` and a bare `dict` are how a boundary stops being checked. Some are
+    unavoidable -- a provider's JSON really is unknown until it is validated --
+    but each one is a place the type checker cannot help, and the number should
+    only ever go down. Counted per file and aggregated per module, like the
+    other metrics here, so the ratchet stays reviewable.
+
+    Only annotations. An `Any` in a comment, a string, or a `cast` the code
+    immediately narrows is not the thing being discouraged.
+    """
+
+    def __init__(self, relative_path: str) -> None:
+        self.relative_path = relative_path
+        self.count = 0
+
+    def _inspect(self, annotation: ast.expr | None) -> None:
+        """Walk an annotation, counting only what actually gives up.
+
+        `dict[str, int]` must not count. Walking the tree naively sees the
+        `dict` inside the subscript and reads a fully specified container as an
+        escape -- which would inflate the baseline with the very thing the rule
+        asks for, and leave the number meaning something other than what it
+        says. So a subscript's own name is skipped and only its parameters are
+        examined: `dict[str, Any]` counts once, for the `Any`.
+        """
+        if annotation is None:
+            return
+        if isinstance(annotation, ast.Subscript):
+            # Parameterised: the container is specified, so only what it is
+            # parameterised *with* can still be an escape.
+            self._inspect(annotation.slice)
+            return
+        if isinstance(annotation, ast.Tuple):
+            for element in annotation.elts:
+                self._inspect(element)
+            return
+        if isinstance(annotation, ast.BinOp):  # `X | Y`
+            self._inspect(annotation.left)
+            self._inspect(annotation.right)
+            return
+        if isinstance(annotation, ast.Name):
+            if annotation.id == "Any" or annotation.id in _UNPARAMETERISED:
+                self.count += 1
+            return
+        if isinstance(annotation, ast.Attribute) and annotation.attr == "Any":
+            self.count += 1
+            return
+        if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            # A stringised annotation. Parsing it keeps `"dict"` from hiding
+            # behind quotes, and a fragment that will not parse is not one this
+            # check should have an opinion about.
+            try:
+                self._inspect(ast.parse(annotation.value, mode="eval").body)
+            except SyntaxError:
+                return
+
+    def visit_arg(self, node: ast.arg) -> None:
+        self._inspect(node.annotation)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._inspect(node.annotation)
+        self.generic_visit(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self._inspect(node.returns)
+        self.generic_visit(node)
+
+    visit_FunctionDef = _visit_function
+    visit_AsyncFunctionDef = _visit_function
+
+
 class _FunctionMetrics(ast.NodeVisitor):
     def __init__(self, relative_path: str) -> None:
         self.relative_path = relative_path
@@ -109,6 +188,7 @@ def snapshot() -> dict[str, Any]:
     oversized: dict[str, int] = {}
     complex_functions: dict[str, int] = {}
     broad_catches: dict[str, int] = {}
+    untyped_escapes: dict[str, int] = {}
 
     for path in _python_files():
         relative = path.relative_to(ROOT).as_posix()
@@ -123,6 +203,11 @@ def snapshot() -> dict[str, Any]:
         metrics.visit(tree)
         complex_functions.update(metrics.complex)
         broad_catches.update(metrics.broad_catches)
+
+        escapes = _UntypedEscapes(relative)
+        escapes.visit(tree)
+        if escapes.count:
+            untyped_escapes[relative] = escapes.count
 
         for node in ast.walk(tree):
             for imported in _imported_modules(node):
@@ -142,6 +227,7 @@ def snapshot() -> dict[str, Any]:
         "oversized_files": dict(sorted(oversized.items())),
         "complex_functions": _aggregate_by_module(complex_functions),
         "broad_catches": _aggregate_by_module(broad_catches),
+        "untyped_escapes": _aggregate_by_module(untyped_escapes),
     }
 
 
@@ -232,6 +318,7 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         ("oversized file", "oversized_files"),
         ("complex function", "complex_functions"),
         ("broad catch count", "broad_catches"),
+        ("untyped escape count", "untyped_escapes"),
     ):
         for name, (before, after) in _growth(
             current[key], baseline.get(key, {})

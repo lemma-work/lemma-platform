@@ -10,10 +10,6 @@ from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
     ComposioWebhookVerifierDep,
 )
-from app.core.domain.events import RawWebhookReceivedEvent
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
-from app.core.redaction import redact_value
 
 logger = get_logger(__name__)
 
@@ -119,19 +115,11 @@ async def handle_webhook(
     if source == "slack" and payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge")}
 
-    # Publish raw webhook event for other modules (e.g. assistant surfaces) to listen to
-    source_event_id = payload.get("id") or payload.get("metadata", {}).get("log_id")
-    event = RawWebhookReceivedEvent(
-        event_id=stable_event_id(
-            {"event_id": f"schedule-webhook:{source}:{source_event_id}"}
-        ),
-        source=source,
-        payload=payload,
-        headers=redact_value(headers),
-    )
-    await EventPublisher.publish(event.stream_name(), event)
-
-    # Handle webhook
+    # No fan-out here. This used to publish a `RawWebhookReceivedEvent` on
+    # `webhook_events` "for other modules to listen to" and nothing ever did --
+    # no module declares a consumer group on that stream -- so every delivery
+    # paid an outbox insert, a Redis XADD and a header redaction for a message
+    # nobody read. Surfaces have their own verified ingress.
     await webhook_handler.handle_webhook(
         source=source, payload=payload, headers=headers
     )

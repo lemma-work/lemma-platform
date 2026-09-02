@@ -69,11 +69,9 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
-        del connector_id, auth_token, api_url, provider
+        del connector_id, provider
         connection_id = (
             third_party_credentials.get("connection_id")
             if isinstance(third_party_credentials, dict)

@@ -86,7 +86,5 @@ class PackageKindExecutor:
             operation_name=request.operation.execution_name,
             payload=request.payload,
             third_party_credentials=request.credentials,
-            auth_token=request.auth_token,
-            api_url=request.api_url,
             provider=kind_to_provider(request.kind).value,
         )

@@ -50,13 +50,28 @@ interface AccountVariableFieldProps {
     onChange: (value: string) => void;
 }
 
+/**
+ * Match a bundle's connector reference against a catalog entry.
+ *
+ * `id` is what a bundle actually carries, and it was the one field this did
+ * not compare. `ConnectorResponseSchema` has no `name` and no `slug` — the
+ * schema even has a commented-out `# name: str` where one used to be — so of
+ * the three comparisons only `title` was live, and ids are snake_case slugs.
+ * `"Google Calendar".toLowerCase()` is not `google_calendar`, so every
+ * multi-word connector failed to resolve and the field degraded to asking the
+ * person to paste an account UUID. It worked for `github` and `slack` by
+ * coincidence, which is why it looked fine.
+ *
+ * The frontend's own `Connector` type widens the generated one with a phantom
+ * `name?: string`, which is what let the dead comparison compile. Title is
+ * kept as a courtesy for a hand-written bundle that names a connector the way
+ * it is displayed.
+ */
 function matchesConnector(connector: Connector, connectorId: string): boolean {
-    const p = connectorId.toLowerCase();
-    const slug = (connector as { slug?: string }).slug;
+    const wanted = connectorId.trim().toLowerCase();
     return (
-        connector.name?.toLowerCase() === p ||
-        connector.title?.toLowerCase() === p ||
-        slug?.toLowerCase() === p
+        connector.id?.toLowerCase() === wanted ||
+        connector.title?.toLowerCase() === wanted
     );
 }
 
@@ -145,7 +160,17 @@ export function AccountVariableField({
         const started = Date.now();
         const timer = setInterval(async () => {
             const res = await refetch();
-            const items = (res.data ?? []) as Account[];
+            // Filtered the same way `accounts` is. `refetch` returns the raw
+            // list, and `seenIdsRef` was seeded from the filtered one, so
+            // anything the kind filter excludes looked "fresh" on the very
+            // first tick — and an org holding a retired Composio account for
+            // this connector had it selected 2.5s after the OAuth tab opened,
+            // before they had done anything. That is the exact account the
+            // callers pin `connectorKind` to keep out.
+            const raw = (res.data ?? []) as Account[];
+            const items = connectorKind
+                ? raw.filter((a) => !a.kind || a.kind === connectorKind)
+                : raw;
             const fresh = items.find((a) => !seenIdsRef.current.has(a.id));
             if (fresh) {
                 onChangeRef.current(fresh.id);
@@ -156,7 +181,7 @@ export function AccountVariableField({
             }
         }, 2500);
         return () => clearInterval(timer);
-    }, [awaitingOAuth, refetch, connectorId]);
+    }, [awaitingOAuth, refetch, connectorId, connectorKind]);
 
     async function resolveAuthConfigId(): Promise<string> {
         const active = authConfigs.find((cfg) => cfg.connector_id === connector!.id && cfg.status === 'ACTIVE');

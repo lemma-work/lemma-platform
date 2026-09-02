@@ -309,6 +309,14 @@ test-connectors:
 # port, which is the only place basedpyright checks the two against each other.
 # Without it the port can drift *ahead* of its implementation and nothing fails
 # -- the mirror image of the drift the services directory now catches.
+#
+# `app/modules/connectors/api/dependencies.py` earns its place the same way, and
+# the cost of its absence was measured: adding `code_verifier` to the auth port
+# left `ComposioAuthProvider` behind, and because nothing type-checked the line
+# handing it to a `dict[str, AuthProviderPort]`, every Composio OAuth connect
+# raised TypeError into a broad except and returned 502. Structural, not a test:
+# no amount of test writing catches a port that drifts from an implementation
+# nobody exercises.
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \
@@ -320,6 +328,12 @@ typecheck-critical:
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \
 		app/modules/agent_surfaces/domain/ports.py \
+		app/modules/connectors/domain/ports.py \
+		app/modules/connectors/api/dependencies.py \
+		app/modules/connectors/services/install_service_seam.py \
+		app/modules/connectors/services/install_provisioning.py \
+		app/modules/connectors/services/install_update.py \
+		app/modules/connectors/services/account_credential_rotation.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \

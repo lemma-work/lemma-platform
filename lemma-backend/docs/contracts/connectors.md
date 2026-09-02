@@ -14,6 +14,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.account.delete` | DELETE | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Delete Account |
 | `connector.account.get` | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Get Account |
 | `connector.account.list` | GET | `/organizations/{organization_id}/connectors/accounts` | List Accounts |
+| `connector.account.update` | PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Update Account |
 | `connector.auth_config.create` | POST | `/organizations/{organization_id}/connectors/auth-configs` | Create Auth Config |
 | `connector.auth_config.delete` | DELETE | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | Delete Auth Config |
 | `connector.auth_config.get` | GET | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | Get Auth Config |

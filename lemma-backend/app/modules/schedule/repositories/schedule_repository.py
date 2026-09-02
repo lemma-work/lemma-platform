@@ -467,16 +467,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         result = await self.session.execute(stmt)
         return [t.to_entity() for t in result.scalars().all()]
 
-    async def find_by_webhook_config(
-        self, source: str, criteria: dict[str, Any]
-    ) -> List[ScheduleEntity]:
-        """Find webhook schedules by source and config criteria."""
-        full_criteria = {"source": source, **criteria}
-        return await self.find_by_config(
-            schedule_type=ScheduleType.WEBHOOK,
-            criteria=full_criteria,
-        )
-
     async def find_by_pod_table_event(
         self,
         pod_id: UUID,

@@ -4,15 +4,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser
+from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
+    AccountCredentialsUpdateSchema,
     AccountListResponseSchema,
     AccountResponseSchema,
     MessageResponseSchema,
+)
+from app.modules.connectors.services.account_credential_rotation import (
+    rotate_account_credentials,
 )
 
 router = APIRouter(
@@ -86,6 +90,40 @@ async def create_account(
         email=payload.email,
         preferences=payload.preferences,
         allowed_scopes=payload.allowed_scopes,
+    )
+    return await _account_response(connector_service, account)
+
+
+# `PATCH /{account_id}`, not `/{account_id}/credentials`. A test asserts that
+# GET on the latter returns 404 -- deliberately, so raw credentials can never
+# be read back through the public API, and explicitly as a tripwire against "a
+# future route registration". Registering any method there makes GET a 405
+# instead, which trips it. The guard is worth more than the tidier path, and
+# PATCH on the resource is the more conventional shape anyway.
+@router.patch(
+    "/{account_id}",
+    response_model=AccountResponseSchema,
+    operation_id="connector.account.update",
+    summary="Update Account",
+    description=(
+        "Replace a credential-managed account's credential, keeping the account "
+        "and its id. Rotating by deleting and reconnecting issues a new id and "
+        "strands every schedule, surface and grant that referenced the old one."
+    ),
+)
+async def rotate_account_credentials_endpoint(
+    user: CurrentUser,
+    organization_id: UUID,
+    account_id: UUID,
+    payload: AccountCredentialsUpdateSchema,
+    connector_service: ConnectorServiceDep,
+) -> AccountResponseSchema:
+    account = await rotate_account_credentials(
+        connector_service,
+        account_id=account_id,
+        user_id=user.id,
+        organization_id=organization_id,
+        credentials=payload.credentials,
     )
     return await _account_response(connector_service, account)
 

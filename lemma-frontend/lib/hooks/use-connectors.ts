@@ -281,6 +281,27 @@ export const useCreateConnectRequest = (organizationId?: string) => {
     });
 };
 
+export const useRotateAccountCredentials = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: {
+            accountId: string;
+            credentials: Record<string, unknown>;
+        }) => {
+            if (!organizationId) throw new Error('organizationId is required to rotate credentials');
+            return getLemmaClient().connectors.rotateAccountCredentials(
+                organizationId,
+                data.accountId,
+                data.credentials,
+            );
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
+        },
+    });
+};
+
 export const useCreateConnectorAccount = (organizationId?: string) => {
     const queryClient = useQueryClient();
 

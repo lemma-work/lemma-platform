@@ -62,8 +62,12 @@ class Schedule(UUIDAuditBase):
         index=True,
     )
     # For WEBHOOK schedules: reference to app connector
+    # SET NULL, not CASCADE: deleting a connector account must not delete the
+    # schedules bound to it, nor their run history through the cascade below.
+    # `agent_surfaces.account_id` and `connector_trigger_id` on this same table
+    # already do this. See migration 0027.
     account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True, index=True
+        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
     connector_trigger_id: Mapped[str | None] = mapped_column(
         ForeignKey("connector_triggers.id", ondelete="SET NULL"),

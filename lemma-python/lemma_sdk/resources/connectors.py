@@ -1,40 +1,48 @@
 from __future__ import annotations
 
 from ..openapi_client.api.connectors import (
-    connector_operation_search,
+    connector_account_create,
+    connector_account_update,
+    connector_account_delete,
+    connector_account_get,
+    connector_account_list,
+    connector_connect_request_create,
     connector_get,
     connector_list,
     connector_operation_detail,
     connector_operation_details_batch,
     connector_operation_discover,
     connector_operation_execute,
+    connector_operation_search,
     connector_trigger_get,
     connector_trigger_list,
 )
 from ..openapi_client.api.connectors import (
-    connector_account_create,
-    connector_account_delete,
-    connector_account_get,
-    connector_account_list,
     connector_auth_config_create as auth_config_create,
+)
+from ..openapi_client.api.connectors import (
     connector_auth_config_delete as auth_config_delete,
+)
+from ..openapi_client.api.connectors import (
     connector_auth_config_get as auth_config_get,
+)
+from ..openapi_client.api.connectors import (
     connector_auth_config_list as auth_config_list,
+)
+from ..openapi_client.api.connectors import (
     connector_auth_config_refresh_operations as auth_config_refresh_operations,
+)
+from ..openapi_client.api.connectors import (
     connector_auth_config_update as auth_config_update,
-    connector_connect_request_create,
 )
 from ..openapi_client.models.account_create_schema import AccountCreateSchema
+from ..openapi_client.models.account_credentials_update_schema import (
+    AccountCredentialsUpdateSchema,
+)
 from ..openapi_client.models.account_list_response_schema import (
     AccountListResponseSchema,
 )
 from ..openapi_client.models.account_response_schema import AccountResponseSchema
-from ..openapi_client.models.connector_detail_response_schema import (
-    ConnectorDetailResponseSchema,
-)
-from ..openapi_client.models.connector_list_response_schema import (
-    ConnectorListResponseSchema,
-)
 from ..openapi_client.models.app_trigger_list_response_schema import (
     AppTriggerListResponseSchema,
 )
@@ -44,15 +52,21 @@ from ..openapi_client.models.auth_config_list_response_schema import (
     AuthConfigListResponseSchema,
 )
 from ..openapi_client.models.auth_config_response_schema import AuthConfigResponseSchema
-from ..openapi_client.models.auth_config_update_schema import AuthConfigUpdateSchema
 from ..openapi_client.models.auth_config_update_response_schema import (
     AuthConfigUpdateResponseSchema,
 )
+from ..openapi_client.models.auth_config_update_schema import AuthConfigUpdateSchema
 from ..openapi_client.models.connect_request_initiate_schema import (
     ConnectRequestInitiateSchema,
 )
 from ..openapi_client.models.connect_request_response_schema import (
     ConnectRequestResponseSchema,
+)
+from ..openapi_client.models.connector_detail_response_schema import (
+    ConnectorDetailResponseSchema,
+)
+from ..openapi_client.models.connector_list_response_schema import (
+    ConnectorListResponseSchema,
 )
 from ..openapi_client.models.operation_detail import OperationDetail
 from ..openapi_client.models.operation_details_batch_request import (
@@ -199,6 +213,23 @@ class ConnectorAccounts:
     def delete(self, account_id: str) -> None:
         self._parent._call(
             connector_account_delete, self._parent._org_uuid(), account_id
+        )
+
+    def rotate_credentials(
+        self, account_id: str, credentials: dict
+    ) -> AccountResponseSchema:
+        """Replace a credential-managed account's credential, keeping its id.
+
+        Deleting and reconnecting also rotates a credential, and issues a new
+        account id doing it -- stranding every schedule, surface and grant that
+        referenced the old one, and leaving nothing behind if the reconnect
+        fails.
+        """
+        return self._parent._call(
+            connector_account_update,
+            self._parent._org_uuid(),
+            account_id,
+            body=AccountCredentialsUpdateSchema.from_dict({"credentials": credentials}),
         )
 
 

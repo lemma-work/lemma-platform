@@ -35,7 +35,10 @@ from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorAccessDeniedError,
 )
-from app.modules.connectors.domain.ports import AccountRepositoryPort
+from app.modules.connectors.domain.ports import (
+    AccountRepositoryPort,
+    OrganizationAccessPort,
+)
 
 
 class AccountResolutionService:
@@ -45,10 +48,41 @@ class AccountResolutionService:
         account_repository: AccountRepositoryPort,
         authz_read_port: object | None = None,
         authorization_service: object | None = None,
+        organization_access: OrganizationAccessPort | None = None,
     ):
         self.account_repo = account_repository
         self.authz_read_port = authz_read_port
         self.authorization_service = authorization_service
+        self.organization_access = organization_access
+
+    async def _assert_owner_is_still_a_member(
+        self, account: AccountEntity, organization_id: UUID | None
+    ) -> None:
+        """Refuse an account whose owner has left the organization.
+
+        Removing a member deletes the `organization_members` row and nothing
+        else -- the account, and the provider credential inside it, stay
+        exactly where they were. An agent or schedule pinned to that account
+        with `connector_account.use` therefore went on acting as the departed
+        person at the provider, reading their mail and writing under their
+        name, indefinitely. Nobody could clean it up either: they can no longer
+        reach their own account, and there is no org-wide account listing for
+        an admin to find it in.
+
+        Checked at resolution rather than at removal because this is the moment
+        that matters and the only one that cannot be skipped -- a credential
+        left behind by some other path is refused here too.
+        """
+        if self.organization_access is None or organization_id is None:
+            return
+        still_a_member = await self.organization_access.user_has_organization_role(
+            account.user_id, organization_id
+        )
+        if not still_a_member:
+            raise AccountResolutionError(
+                "The person who connected this account is no longer a member of "
+                "this organization."
+            )
 
     @staticmethod
     def _context_org_id(auth_ctx: Context | None) -> UUID | None:
@@ -202,6 +236,9 @@ class AccountResolutionService:
                     pod_id=auth_ctx.pod_id,
                     pod_account_id=requested_account.id,
                 ),
+            )
+            await self._assert_owner_is_still_a_member(
+                requested_account, organization_id
             )
             return requested_account
 

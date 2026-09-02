@@ -15,10 +15,11 @@ from app.modules.connectors.domain.account import (
     ComposioCredentials,
     OAuthCredentials,
 )
+from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import (
     AuthScheme,
-    ConnectorEntity,
-    ComposioProviderCapability,
+    ConnectorKind,
 )
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.infrastructure.repositories.account_repository import (
@@ -36,12 +37,21 @@ class _FakeConnectionState(BaseModel):
     token_type: str | None = None
 
 
-def _connector(app_id: str = "google_calendar") -> ConnectorEntity:
-    return ConnectorEntity(
-        id=app_id,
-        provider_capabilities=[
-            ComposioProviderCapability(toolkit_slug="googlecalendar")
-        ],
+def _install(
+    app_id: str = "google_calendar",
+    *,
+    toolkit_slug: str = "googlecalendar",
+    auth_scheme: AuthScheme = AuthScheme.OAUTH2,
+) -> ResolvedAuthInstall:
+    return ResolvedAuthInstall(
+        connector_id=app_id,
+        kind=ConnectorKind.COMPOSIO,
+        auth_scheme=auth_scheme,
+        auth_config_id=uuid4(),
+        organization_id=uuid4(),
+        config_source=AuthConfigSource.SYSTEM_DEFAULT,
+        config={},
+        composio_toolkit_slug=toolkit_slug,
     )
 
 
@@ -90,7 +100,7 @@ async def test_exchange_code_uses_composio_expires_in_for_google_accounts():
     provider._get_google_token_expiration = AsyncMock(return_value=None)
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector(),
+        install=_install(),
         redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
         user_id=uuid4(),
     )
@@ -114,7 +124,7 @@ async def test_exchange_code_surfaces_word_id_and_alias_for_account_labeling():
     )
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector("github"),
+        install=_install("github"),
         redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
         user_id=uuid4(),
     )
@@ -128,7 +138,7 @@ async def test_exchange_code_raw_response_omits_word_id_and_alias_when_absent():
     provider = _provider(_FakeConnectionState(access_token="access-token"))
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector("github"),
+        install=_install("github"),
         redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
         user_id=uuid4(),
     )
@@ -150,7 +160,7 @@ async def test_refresh_credentials_falls_back_to_default_expiry_when_missing():
     provider._get_google_token_expiration = AsyncMock(return_value=None)
 
     credentials = await provider.refresh_credentials(
-        connector=_connector(),
+        install=_install(),
         credentials=OAuthCredentials(
             access_token="stale-token",
             connection_id="ca_test_connection",
@@ -174,7 +184,7 @@ async def test_exchange_code_succeeds_when_access_token_missing():
     )
 
     credentials = await provider.exchange_code_for_credentials(
-        connector=_connector("canva"),
+        install=_install("canva"),
         redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
         user_id=uuid4(),
     )
@@ -192,7 +202,7 @@ async def test_exchange_code_raises_on_terminal_connection_state():
 
     with pytest.raises(ConnectorValidationError):
         await provider.exchange_code_for_credentials(
-            connector=_connector("canva"),
+            install=_install("canva"),
             redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
             user_id=uuid4(),
         )
@@ -200,14 +210,8 @@ async def test_exchange_code_raises_on_terminal_connection_state():
 
 @pytest.mark.asyncio
 async def test_connect_with_credentials_initiates_api_key_connection():
-    connector = ConnectorEntity(
-        id="airtable",
-        provider_capabilities=[
-            ComposioProviderCapability(
-                toolkit_slug="airtable",
-                auth_scheme=AuthScheme.API_KEY,
-            )
-        ],
+    install = _install(
+        "airtable", toolkit_slug="airtable", auth_scheme=AuthScheme.API_KEY
     )
 
     initiate = MagicMock(return_value=SimpleNamespace(id="ca_new_connection"))
@@ -225,7 +229,7 @@ async def test_connect_with_credentials_initiates_api_key_connection():
 
     user_id = uuid4()
     credentials = await provider.connect_with_credentials(
-        connector=connector,
+        install=install,
         user_id=user_id,
         credentials={"api_key": "secret-key"},
     )
@@ -258,15 +262,7 @@ async def test_connect_with_credentials_initiates_api_key_connection():
 async def test_connect_with_credentials_creates_custom_auth_config():
     # No pre-existing auth config id -> must create a use_custom_auth config
     # (API-key toolkits have no Composio-managed credentials).
-    connector = ConnectorEntity(
-        id="tavily",
-        provider_capabilities=[
-            ComposioProviderCapability(
-                toolkit_slug="tavily",
-                auth_scheme=AuthScheme.API_KEY,
-            )
-        ],
-    )
+    install = _install("tavily", toolkit_slug="tavily", auth_scheme=AuthScheme.API_KEY)
     create = MagicMock(return_value=SimpleNamespace(id="ac_created"))
     initiate = MagicMock(return_value=SimpleNamespace(id="ca_created"))
     composio = SimpleNamespace(
@@ -279,7 +275,7 @@ async def test_connect_with_credentials_creates_custom_auth_config():
     )
 
     creds = await provider.connect_with_credentials(
-        connector=connector,
+        install=install,
         user_id=uuid4(),
         credentials={"generic_api_key": "k"},
     )
@@ -301,7 +297,7 @@ async def test_connect_with_credentials_rejects_oauth_apps():
 
     with pytest.raises(ConnectorValidationError):
         await provider.connect_with_credentials(
-            connector=_connector("canva"),  # defaults to OAUTH2
+            install=_install("canva"),  # defaults to OAUTH2
             user_id=uuid4(),
             credentials={"api_key": "x"},
         )
@@ -322,3 +318,80 @@ def test_account_repository_serializes_expires_at_as_json_string():
     assert serialized is not None
     assert serialized["expires_at"] == "2026-03-16T12:00:00Z"
     assert serialized["connection_id"] == "ca_test_connection"
+
+
+def _provider_recording_which_id_it_fetched(fetched: list[str]) -> ComposioAuthProvider:
+    """A provider that records the id it was asked to resolve."""
+
+    def _get(connected_account_id):
+        fetched.append(connected_account_id)
+        return SimpleNamespace(
+            id=connected_account_id,
+            status="ACTIVE",
+            state=SimpleNamespace(
+                val=_FakeConnectionState(access_token="tok", token_type="Bearer")
+            ),
+            word_id=None,
+            alias=None,
+        )
+
+    return ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: SimpleNamespace(
+            connected_accounts=SimpleNamespace(get=_get)
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_connection_is_used_when_the_url_names_none():
+    """What this flow recorded is enough on its own.
+
+    Worth being precise about what carries the security property here, because
+    it is not the `state or callback_id` preference order. Given the mismatch
+    rejection below, the two orderings are behaviourally identical: they differ
+    only when both values are present and disagree, which is exactly the case
+    that raises. Flipping the order leaves every test green because there is no
+    observable difference left to catch -- so the ordering is a readability
+    choice, and the rejection is the control.
+
+    What this pins is that the recorded id is usable without the URL at all,
+    which is what makes the rejection safe to enforce rather than a way to
+    break flows whose callback omits the parameter.
+    """
+    fetched: list[str] = []
+    provider = _provider_recording_which_id_it_fetched(fetched)
+
+    await provider.exchange_code_for_credentials(
+        install=_install(),
+        redirect_uri="https://app.example.com/callback",
+        user_id=uuid4(),
+        state="ca_recorded",
+    )
+
+    assert fetched == ["ca_recorded"]
+
+
+@pytest.mark.asyncio
+async def test_a_callback_naming_a_different_connection_is_refused():
+    """The mismatch branch, which no test reached.
+
+    Disabling it entirely left all 850 connector tests passing. It is the half
+    that turns "prefer what we recorded" into "refuse what we did not", so an
+    attacker cannot simply omit or vary the parameter and have the recorded id
+    used silently against a flow it did not belong to.
+    """
+    fetched: list[str] = []
+    provider = _provider_recording_which_id_it_fetched(fetched)
+
+    with pytest.raises(ConnectorValidationError, match="does not belong"):
+        await provider.exchange_code_for_credentials(
+            install=_install(),
+            redirect_uri=(
+                "https://app.example.com/callback?connectedAccountId=ca_somebody_else"
+            ),
+            user_id=uuid4(),
+            state="ca_recorded",
+        )
+
+    assert fetched == [], "nothing may be fetched once the callback is disowned"

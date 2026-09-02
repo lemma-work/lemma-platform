@@ -12974,6 +12974,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Update Account
+     * Replace a credential-managed account's credential, keeping the account and its id. Rotating by deleting and reconnecting issues a new id and strands every schedule, surface and grant that referenced the old one.
+     * @param organizationId
+     * @param accountId
+     * @param requestBody
+     * @returns AccountResponseSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorAccountUpdate(organizationId, accountId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/organizations/{organization_id}/connectors/accounts/{account_id}",
+        path: {
+          "organization_id": organizationId,
+          "account_id": accountId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Auth Configs
      * @param organizationId
      * @param limit
@@ -13447,18 +13471,58 @@ var LemmaClient = (() => {
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
     }
+    /**
+     * Enable a connector for an organization, reusing an existing install only
+     * when the caller has described nothing that would distinguish a new one.
+     *
+     * This used to return ANY active install with a matching connector id,
+     * ignoring the submitted kind, config and name. The backend deliberately
+     * permits many installs of one connector -- see the comment on the
+     * `auth_configs` model, which says there is deliberately no
+     * `(organization_id, connector_id)` uniqueness -- so this was the SDK
+     * enforcing a constraint the schema had dropped, client-side and silently.
+     *
+     * Two things it broke. Every MCP server shares the catalog id `mcp`, every
+     * database shares `sql`, every REST API shares `openapi`: a second one
+     * returned the first, and the caller was told it worked. And choosing "use
+     * my own credentials" for a connector the org already had returned the
+     * Lemma-managed install, dropping the submitted client id and secret, so
+     * OAuth then ran against Lemma's app rather than theirs.
+     */
     async enableApp(organizationId, connectorId, options = {}) {
-      var _a;
-      const configs = await this.authConfigs.list(organizationId, { limit: 100 });
-      const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
-      if (existing) return existing;
+      var _a, _b;
+      const describesAParticularInstall = Boolean(
+        options.name || options.config || options.config_source === "ORG_CUSTOM"
+      );
+      if (!describesAParticularInstall) {
+        const configs = await this.authConfigs.list(organizationId, { limit: 100 });
+        const candidates = configs.items.filter(
+          (config) => config.connector_id === connectorId && config.status === "ACTIVE" && (!options.kind || config.kind === options.kind)
+        );
+        const existing = (_a = candidates.find((config) => config.is_default)) != null ? _a : candidates[0];
+        if (existing) return existing;
+      }
       return this.authConfigs.create(organizationId, {
         connector_id: connectorId,
         kind: options.kind,
-        config_source: (_a = options.config_source) != null ? _a : "SYSTEM_DEFAULT",
+        config_source: (_b = options.config_source) != null ? _b : "SYSTEM_DEFAULT",
         config: options.config,
         name: options.name
       });
+    }
+    /**
+     * Replace a credential-managed account's credential, keeping its id.
+     *
+     * Deleting and reconnecting also rotates a credential, and issues a new
+     * account id doing it — stranding every schedule, surface and grant pinned
+     * to the old one, and leaving nothing behind at all if the reconnect fails.
+     */
+    rotateAccountCredentials(organizationId, accountId, credentials) {
+      return this.client.request(() => ConnectorsService.connectorAccountUpdate(
+        organizationId,
+        accountId,
+        { credentials }
+      ));
     }
     createConnectRequest(organizationId, input) {
       const payload = typeof input === "string" ? { connector_id: input } : input;

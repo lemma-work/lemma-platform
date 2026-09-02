@@ -12,6 +12,8 @@ _NAME_TO_MODULE = {
     'AccountCreateSchema': 'account_create_schema',
     'AccountCreateSchemaCredentials': 'account_create_schema_credentials',
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
+    'AccountCredentialsUpdateSchema': 'account_credentials_update_schema',
+    'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
@@ -530,6 +532,8 @@ if TYPE_CHECKING:
     from .account_create_schema import AccountCreateSchema
     from .account_create_schema_credentials import AccountCreateSchemaCredentials
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
+    from .account_credentials_update_schema import AccountCredentialsUpdateSchema
+    from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
     from .account_list_response_schema import AccountListResponseSchema
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
@@ -1061,6 +1065,8 @@ __all__ = [
     'AccountCreateSchema',
     'AccountCreateSchemaCredentials',
     'AccountCreateSchemaPreferencesType0',
+    'AccountCredentialsUpdateSchema',
+    'AccountCredentialsUpdateSchemaCredentials',
     'AccountListResponseSchema',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',

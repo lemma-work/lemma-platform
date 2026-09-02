@@ -3,11 +3,7 @@ contract on the way back out."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from typing import Any
-
-import httpx
 
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.services.execution.dispatcher import KindDispatcher
@@ -50,88 +46,14 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
         payload=resolved.payload or {},
         credentials=resolved.third_party_credentials,
         config=resolved.connection_config or {},
-        auth_token=resolved.auth_token,
-        api_url=resolved.api_url,
     )
 
 
-def _upstream_details(exc: Exception) -> dict[str, Any]:
-    details: dict[str, Any] = {"error_type": type(exc).__name__}
-    status_code = getattr(exc, "status_code", None)
-    if isinstance(status_code, int):
-        details["upstream_status"] = status_code
-    code = getattr(exc, "code", None)
-    if isinstance(code, str) and len(code) <= 100:
-        details["upstream_code"] = code
-    return details
+# Re-exported so the many callers that import translation from here keep
+# working; it lives in `failure_translation` now, which the dispatcher can
+# import at module scope without closing a cycle.
+from app.modules.connectors.services.execution.failure_translation import (  # noqa: E402
+    execution_failures_translated,
+)
 
-
-def _status_classified(exc: Exception):
-    """The domain error an upstream HTTP status deserves, if it carries one.
-
-    The http/sql/mcp executors raise their own exception types carrying the
-    provider's status code. Without this they would all land in the catch-all
-    below and read as "our fault, 500" -- so a caller could not tell a repo that
-    does not exist from a connector that is broken, which is the difference
-    between a normal branch and a failed publish. The package and Composio
-    gateways already classify their own errors this way; this gives the same
-    contract to every other kind.
-    """
-    from app.modules.connectors.domain.errors import (
-        OperationExecutionAccessDeniedError,
-        OperationExecutionNotFoundError,
-        OperationExecutionUnauthorizedError,
-        OperationExecutionValidationError,
-    )
-
-    status_code = getattr(exc, "status_code", None)
-    if not isinstance(status_code, int):
-        return None
-    error_cls = {
-        400: OperationExecutionValidationError,
-        401: OperationExecutionUnauthorizedError,
-        403: OperationExecutionAccessDeniedError,
-        404: OperationExecutionNotFoundError,
-        422: OperationExecutionValidationError,
-    }.get(status_code)
-    if error_cls is None:
-        return None
-    # The message is fixed by the error class; the exception's own text may
-    # carry provider request bodies or credentials and never travels.
-    return error_cls("", details=_upstream_details(exc))
-
-
-@contextlib.contextmanager
-def execution_failures_translated():
-    """Turn whatever escapes an executor into an honest domain error.
-
-    Transport failures are transient and say so. A failure the provider itself
-    described with a status code is reported as that. Anything else is a fault
-    on this side: it is still bounded here, so no traceback and no upstream
-    message reaches the caller, but it is not reported as a provider outage --
-    that invites a retry which cannot succeed, and files our own bug under
-    someone else's name.
-    """
-    from app.modules.connectors.domain.errors import (
-        ConnectorDomainError,
-        OperationExecutionError,
-        OperationExecutionInfrastructureError,
-    )
-
-    try:
-        yield
-    except ConnectorDomainError:
-        raise
-    except (httpx.HTTPError, OSError, asyncio.TimeoutError) as exc:
-        raise OperationExecutionInfrastructureError(
-            "Connector provider is temporarily unavailable.",
-            details=_upstream_details(exc),
-        ) from exc
-    except Exception as exc:
-        classified = _status_classified(exc)
-        if classified is not None:
-            raise classified from exc
-        raise OperationExecutionError(
-            "The connector operation could not be completed.",
-            details=_upstream_details(exc),
-        ) from exc
+__all__ = ["build_dispatcher", "execution_request", "execution_failures_translated"]

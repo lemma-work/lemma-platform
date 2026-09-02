@@ -28,7 +28,10 @@ from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import to_json_value
-from app.modules.agent.tools.connectors.connector_access import connector_services
+from app.modules.agent.tools.connectors.connector_access import (
+    connector_execution_only,
+    connector_services,
+)
 from app.modules.agent.tools.connectors.models import (
     DescribeConnectorOperationRequest,
     RunConnectorOperationRequest,
@@ -209,8 +212,11 @@ async def run_connector_operation(
         except ValueError:
             return _error("invalid_account_id", "account_id must be a UUID.")
 
-    async with connector_services(deps) as services:
-        try:
+    try:
+        # Phase 1, in a short scope: every DB read, the authorization check and
+        # the credential resolution. The scope closes -- releasing the pooled
+        # connection -- before anything reaches the provider.
+        async with connector_services(deps) as services:
             detail = await services.operations.get_operation_details_for_auth_config(
                 user_id=deps.user_id,
                 organization_id=deps.org_id,
@@ -236,9 +242,15 @@ async def run_connector_operation(
                 actor=services.ctx,
                 account_id=account_id,
             )
-            response = await services.operations.execute_resolved(resolved)
-        except DomainError as exc:
-            # Connector failures are information for the model (wrong argument,
-            # account needs reconnecting), not a reason to end the run.
-            return _error(exc.code or "connector_error", safe_error_text(exc))
+
+        # Phase 2: the provider call, holding no connection. The REST path has
+        # split these two since it was written; this one had not, so the
+        # hottest connector path in the system was the one that pinned a
+        # connection for the length of an external call.
+        async with connector_execution_only() as operations:
+            response = await operations.execute_resolved(resolved)
+    except DomainError as exc:
+        # Connector failures are information for the model (wrong argument,
+        # account needs reconnecting), not a reason to end the run.
+        return _error(exc.code or "connector_error", safe_error_text(exc))
     return bounded_tool_payload(to_json_value(response), what="connector response")

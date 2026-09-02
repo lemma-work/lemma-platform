@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
@@ -6,7 +6,7 @@ from uuid import UUID
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from app.modules.connectors.domain.account import OAuthCredentials
-from app.modules.connectors.domain.connector import ConnectorEntity
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
 from app.modules.connectors.services.helpers.helpers import get_atlassian_cloud_id
@@ -30,7 +30,7 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def connect_with_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         credentials: dict,
     ) -> dict:
@@ -40,29 +40,45 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> Tuple[str, str]:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
 
         # create_authorization_url is pure URL/PKCE building (no network), so it
         # stays synchronous even on the async client — no thread hop needed.
+        #
+        # `code_verifier` is supplied by the caller rather than made here: it has
+        # to survive until the callback, and the connect request is what lives
+        # that long. A client registered dynamically has no secret, so PKCE is
+        # the only thing binding the code to whoever asked for it.
         async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=redirect_uri,
             scope=oauth_config.default_scopes,
+            **({"code_challenge_method": "S256"} if code_verifier else {}),
         ) as oauth:
             authorization_url, provider_state = oauth.create_authorization_url(
                 url=oauth_config.authorization_url,
                 state=state,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+                # RFC 8707, and it has to be here as well as at the token
+                # endpoint. The authorization server binds the grant to the
+                # resource named here; asking at exchange time for a resource
+                # the grant was never associated with is refused as
+                # `invalid_target`, which is exactly what Phoenix did.
+                **(
+                    {"resource": oauth_config.resource} if oauth_config.resource else {}
+                ),
                 **(oauth_config.extra_params or {}),
             )
 
@@ -70,17 +86,18 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
         authorization_response = redirect_uri
         normalized_redirect_uri = self._normalize_redirect_uri(authorization_response)
 
@@ -93,9 +110,17 @@ class LemmaAuthProvider(AuthProviderInterface):
             token_data = await oauth.fetch_token(
                 url=oauth_config.token_url,
                 authorization_response=authorization_response,
+                **({"code_verifier": code_verifier} if code_verifier else {}),
+                # RFC 8707, matching the authorization request above. An
+                # authorization server guarding several MCP servers issues a
+                # token for one of them, and a token minted without this is
+                # refused by the resource it was meant for.
+                **(
+                    {"resource": oauth_config.resource} if oauth_config.resource else {}
+                ),
             )
 
-        return await self._create_oauth_credentials(token_data, connector)
+        return await self._create_oauth_credentials(token_data, install)
 
     def _normalize_redirect_uri(self, callback_url: str) -> str:
         parsed = urlsplit(callback_url)
@@ -103,11 +128,11 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials:
-        if not connector.oauth2_config:
+        if not install.oauth2:
             raise ConnectorValidationError(
                 "OAuth2 configuration not found for connector"
             )
@@ -118,7 +143,7 @@ class LemmaAuthProvider(AuthProviderInterface):
                 "This connector might not support refresh tokens."
             )
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
 
         async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
@@ -130,23 +155,23 @@ class LemmaAuthProvider(AuthProviderInterface):
                 refresh_token=credentials.refresh_token,
             )
 
-        return await self._create_oauth_credentials(token_data, connector)
+        return await self._create_oauth_credentials(token_data, install)
 
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None:
         return None
 
     async def _create_oauth_credentials(
-        self, token_data: dict, connector: ConnectorEntity
+        self, token_data: dict, install: ResolvedAuthInstall
     ) -> OAuthCredentials:
         if not isinstance(token_data, dict):
             token_data = dict(token_data) if token_data else {}
 
-        oauth_config = connector.oauth2_config
+        oauth_config = install.oauth2
         access_token_path = oauth_config.access_token_path if oauth_config else None
         access_token = self._extract_token_field(
             token_data, access_token_path or "access_token", fallback_key="access_token"
@@ -167,14 +192,23 @@ class LemmaAuthProvider(AuthProviderInterface):
                 "connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic"
             )
 
+        # Both arms are UTC-aware on purpose. `credential_freshness._as_aware`
+        # reads a naive value as UTC, so a naive *local* expiry was being
+        # shifted by the host's offset -- west of UTC the token looked fresher
+        # than it was and proactive refresh fired late. Nothing caught it
+        # because the providers shipped here either report no expiry at all or,
+        # like GitHub's OAuth App tokens, never expire; a GitHub App's 8-hour
+        # user token is the first credential on this path with a real one.
         expires_at = None
         if "expires_at" in token_data:
-            expires_at = datetime.fromtimestamp(token_data["expires_at"])
+            expires_at = datetime.fromtimestamp(
+                token_data["expires_at"], tz=timezone.utc
+            )
         elif "expires_in" in token_data:
-            expires_at = datetime.now().replace(microsecond=0) + timedelta(
+            expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(
                 seconds=token_data["expires_in"]
             )
-        if connector.id == "microsoft_teams":
+        if install.connector_id == "microsoft_teams":
             import base64
             import json as _json
 
@@ -199,9 +233,9 @@ class LemmaAuthProvider(AuthProviderInterface):
                     break
             user_data = {"tid": tid, "tenant_id": tid, "oid": oid} if tid else None
 
-        elif connector.id in ["jira", "confluence"]:
+        elif install.connector_id in ["jira", "confluence"]:
             cloud_id = await self._cloud_id_resolver(access_token)
-            if "jira" in connector.id:
+            if "jira" in install.connector_id:
                 server_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
             else:
                 server_url = (
@@ -215,7 +249,7 @@ class LemmaAuthProvider(AuthProviderInterface):
             user_data = None
 
         token_type = token_data.get("token_type", "Bearer")
-        if connector.id == "slack" and token_type.lower() in {"bot", "user"}:
+        if install.connector_id == "slack" and token_type.lower() in {"bot", "user"}:
             token_type = "Bearer"
 
         return OAuthCredentials(

@@ -121,11 +121,9 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
-        del auth_token, api_url, provider
+        del provider
         logger.debug(
             "connectors.lemma_operation_gateway.calling_s_native_operation_s.observed",
             connector_id=connector_id,

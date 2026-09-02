@@ -20,6 +20,10 @@ def _safe_connector_details(details: object | None) -> dict | None:
             "error_type",
             "upstream_status",
             "upstream_code",
+            # What the provider itself said. Hiding it left a caller holding a
+            # status code and no way to tell "invalid_scope" from "repository
+            # not found". Scrubbed of secret-shaped text where it is built.
+            "upstream_message",
             # Which connector and operation, and when to come back. The circuit
             # breaker builds both and they were dropped here, so a caller got
             # `details: null` and a message naming nothing at all.

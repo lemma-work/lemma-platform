@@ -8,6 +8,7 @@ export { OpenAPI } from './core/OpenAPI.js';
 export type { OpenAPIConfig } from './core/OpenAPI.js';
 
 export type { AccountCreateSchema } from './models/AccountCreateSchema.js';
+export type { AccountCredentialsUpdateSchema } from './models/AccountCredentialsUpdateSchema.js';
 export type { AccountListResponseSchema } from './models/AccountListResponseSchema.js';
 export type { AccountResponseSchema } from './models/AccountResponseSchema.js';
 export type { AddColumnRequest } from './models/AddColumnRequest.js';

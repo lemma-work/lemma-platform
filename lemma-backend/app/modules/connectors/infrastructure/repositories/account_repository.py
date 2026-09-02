@@ -89,6 +89,7 @@ class AccountRepository(
             "is_default": instance.is_default,
             "status": instance.status,
             "provider_account_id": instance.provider_account_id,
+            "external_ref": instance.external_ref,
             "email": instance.email,
             "display_name": instance.display_name,
             "credentials": credentials,
@@ -142,6 +143,12 @@ class AccountRepository(
             self._serialize_credentials(entity.credentials)
         )
         instance.provider_account_id = entity.provider_account_id
+        # Written here because re-auth changes it. Someone reconnecting Slack
+        # into a different workspace keeps the old `team.id` otherwise, and
+        # inbound events for the workspace they left keep routing to this
+        # account -- the cross-tenant leak the column exists to prevent. The
+        # caller already sets it on the entity for exactly this reason.
+        instance.external_ref = entity.external_ref
         instance.email = entity.email
         instance.display_name = entity.display_name
         instance.status = (
