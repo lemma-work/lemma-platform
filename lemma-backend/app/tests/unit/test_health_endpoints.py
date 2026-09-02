@@ -395,5 +395,6 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
     assert [
         record.msg["event"]
         for record in caplog.records
-        if isinstance(record.msg, dict) and record.msg["event"].startswith("dependency.")
+        if isinstance(record.msg, dict)
+        and record.msg["event"].startswith("dependency.")
     ] == ["dependency.recovered"]

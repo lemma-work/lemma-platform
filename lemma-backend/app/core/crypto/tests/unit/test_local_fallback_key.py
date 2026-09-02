@@ -72,7 +72,9 @@ def test_rows_written_under_the_fallback_still_read_after_a_key_is_configured(
     monkeypatch.setattr(crypto_keys, "settings", after)
     upgraded = _cipher(after)
 
-    assert upgraded.decrypt_json(stored) == {"api_key": "ROW-WRITTEN-BEFORE-THE-UPGRADE"}
+    assert upgraded.decrypt_json(stored) == {
+        "api_key": "ROW-WRITTEN-BEFORE-THE-UPGRADE"
+    }
     # And a new write is under the new key, not the published one.
     fresh = upgraded.encrypt_json({"api_key": "NEW"})
     assert fresh is not None

@@ -47,7 +47,10 @@ def probe_sandbox_provider() -> dict[str, str]:
     from app.modules.workspace.services.provider_factory import build_provider
 
     provider = workspace_settings.provider
-    if provider == "docker" and not Path(workspace_settings.docker_socket_path).exists():
+    if (
+        provider == "docker"
+        and not Path(workspace_settings.docker_socket_path).exists()
+    ):
         logger.error(
             "sandbox_health.probe.docker_socket_missing.failed",
             provider=provider,

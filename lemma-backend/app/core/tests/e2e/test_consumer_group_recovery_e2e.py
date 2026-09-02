@@ -21,7 +21,6 @@ loop's docstring stops being a promise the code cannot keep.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 from faststream.redis import RedisBroker, RedisRouter
@@ -32,6 +31,8 @@ from app.core.infrastructure.events.stream_subscriber import (
     redis_stream_sub,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e]
 
@@ -46,9 +47,18 @@ _DELIVERY_TIMEOUT_SECONDS = 20.0
 
 
 async def _await_delivery(received: list[str], expected: str) -> None:
-    async with asyncio.timeout(_DELIVERY_TIMEOUT_SECONDS):
-        while expected not in received:
-            await asyncio.sleep(0.05)
+    await eventually(
+        label=f"{expected!r} delivered on {_STREAM}",
+        probe=lambda: _snapshot(received),
+        done=lambda seen: expected in seen,
+        timeout_seconds=_DELIVERY_TIMEOUT_SECONDS,
+        interval_seconds=0.05,
+    )
+
+
+async def _snapshot(received: list[str]) -> list[str]:
+    """A copy, so the waiter never reads a list the subscriber is appending to."""
+    return list(received)
 
 
 async def test_a_deleted_consumer_group_is_recreated_and_delivery_resumes(

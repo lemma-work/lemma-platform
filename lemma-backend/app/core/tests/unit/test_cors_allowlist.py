@@ -29,7 +29,9 @@ from app.core import cors
 def _origins(monkeypatch):
     """A deployment that configured its URLs and nothing else."""
     monkeypatch.setattr(cors.settings, "frontend_url", "https://app.lemma.work")
-    monkeypatch.setattr(cors.settings, "auth_frontend_url", "https://app.lemma.work/auth")
+    monkeypatch.setattr(
+        cors.settings, "auth_frontend_url", "https://app.lemma.work/auth"
+    )
     monkeypatch.setattr(
         cors.settings,
         "cors_origins",
