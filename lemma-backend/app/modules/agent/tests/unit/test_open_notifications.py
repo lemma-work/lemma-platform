@@ -110,3 +110,33 @@ def test_the_replying_agent_is_told_to_acknowledge_not_to_hold_forth():
     assert "invent" in rendered
     # And the asker's private framing still reaches the agent, never the person.
     assert "Record their answer as the summary." in rendered
+
+
+async def test_a_refusal_reaches_the_model_instead_of_ending_the_run():
+    """The capability hands its toolset over directly, so nothing else wraps it.
+
+    Every other tool surface is wrapped by the assembler. This one is built
+    here, and `respond_to_notification` deliberately carries no try/except --
+    it documents that this wrapper is what turns a refusal into a result. It
+    was not wrapped, so a notification that asked nothing, or that somebody had
+    already answered, raised straight through the toolset and ended the
+    conversation.
+    """
+    from dataclasses import dataclass
+
+    from app.modules.agent.capabilities.open_notifications import (
+        OpenNotificationsCapability,
+    )
+
+    toolset = OpenNotificationsCapability("anything").get_toolset()
+
+    @dataclass
+    class _Boom:
+        async def call_tool(self, name, tool_args, ctx, tool):
+            raise ValueError("this notification did not ask for a response")
+
+    toolset.wrapped = _Boom()
+    result = await toolset.call_tool("respond_to_notification", {}, None, None)
+
+    assert isinstance(result, dict), result
+    assert result.get("success") is False

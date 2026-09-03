@@ -187,6 +187,17 @@ class NotificationRepository:
     ) -> list[NotificationEntity]:
         """What the recipient's agent must be told about when they reply.
 
+        This is `NotificationEntity.awaiting_response` as a query, and the
+        `expects_response` arm is load-bearing rather than tidying. The one
+        thing the caller does with this list is tell an agent to answer it with
+        `respond_to_notification` -- and `respond()` refuses a notification that
+        never asked for an answer. Without the filter, an informational notice
+        delivered into the same thread was rendered as a question, the agent
+        did as it was told, and the domain refused it.
+
+        Informational rows are not simply missing a tool here: they are closed
+        by `acknowledge()`, which is the reader's action, not the agent's.
+
         Ordered oldest first: if two questions are outstanding in one thread,
         the reply most likely answers the one that has been waiting longest.
         """
@@ -195,6 +206,7 @@ class NotificationRepository:
             .where(
                 NotificationModel.delivery_conversation_id == conversation_id,
                 NotificationModel.status == NotificationStatus.OPEN.value,
+                NotificationModel.expects_response.is_(True),
             )
             .order_by(NotificationModel.id.asc())
         )
