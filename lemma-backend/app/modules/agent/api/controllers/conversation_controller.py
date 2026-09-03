@@ -32,6 +32,7 @@ from app.modules.agent.api.controllers.shared import (
     _parse_metadata_filters,
     conversation_channel,
     iter_subscription,
+    with_keepalive,
 )
 from app.modules.agent.api.dependencies import (
     ConversationServiceDep,
@@ -557,7 +558,9 @@ async def stream_conversation(
                 yield terminal_chunk
                 return
 
-            async for chunk in iter_subscription(iterator, target_run.id):
+            async for chunk in with_keepalive(
+                iter_subscription(iterator, target_run.id)
+            ):
                 yield chunk
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

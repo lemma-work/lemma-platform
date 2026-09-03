@@ -495,7 +495,9 @@ async def test_send_message_encodes_a_dead_subscription_as_stream_error(
         uow_factory=uow_factory,
     )
     chunks = [chunk async for chunk in response.body_iterator]
-    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    # The stream opens with the status frame saying whether this message
+    # started a run; the transport failure is the one after it.
+    payload = json.loads(chunks[-1].removeprefix("data: ").strip())
 
     assert payload == {
         "type": "stream_error",
@@ -565,3 +567,115 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
         )
 
     assert channel_service.exited is True
+
+
+class TestTheStreamSaysWhetherTheMessageStartedARun:
+    """`PS-AGENT-015` asks the system to record whether a message joined a run
+    already working, "so a person can be told which happened rather than
+    watching an apparently unanswered message". `TurnCoordinator.start` decides
+    it and `AgentRunStartResult` carries it; only the append route reported it,
+    and the primary chat path is the streaming one.
+    """
+
+    async def _first_frame(self, monkeypatch, *, started_new_run: bool) -> dict:
+        result = AgentRunStartResult(
+            conversation_id=uuid4(),
+            agent_run_id=uuid4(),
+            started_new_run=started_new_run,
+        )
+        service = _ConversationService(result)
+        uow_factory, _ = _make_uow_factory()
+        monkeypatch.setattr(
+            conversation_controller, "_build_conversation_service", lambda uow: service
+        )
+        monkeypatch.setattr(
+            "app.core.authorization.scope.resolve_pod_context",
+            AsyncMock(return_value=allow_all_context()),
+        )
+
+        response = await send_message(
+            pod_id=uuid4(),
+            conversation_id=result.conversation_id,
+            data=SimpleNamespace(content="say ok", metadata=None),
+            user=SimpleNamespace(id=uuid4()),
+            channel_service=_ChannelService(_empty_iterator()),
+            request=SimpleNamespace(),
+            uow_factory=uow_factory,
+        )
+        chunks = [chunk async for chunk in response.body_iterator]
+        return json.loads(chunks[0].removeprefix("data: ").strip())
+
+    @pytest.mark.asyncio
+    async def test_a_message_that_started_a_run_says_so(self, monkeypatch) -> None:
+        payload = await self._first_frame(monkeypatch, started_new_run=True)
+
+        assert payload["type"] == "status"
+        assert payload["data"] == {"started_new_run": True}
+
+    @pytest.mark.asyncio
+    async def test_a_message_that_joined_one_says_so(self, monkeypatch) -> None:
+        payload = await self._first_frame(monkeypatch, started_new_run=False)
+
+        assert payload["type"] == "status"
+        assert payload["data"] == {"started_new_run": False}
+
+
+class TestASilentStreamStillSendsSomething:
+    """Nothing is published while a tool runs, so a stream can sit silent for
+    minutes on a healthy connection -- past the idle timeout intermediaries
+    commonly apply. The client then sees a closed socket rather than the
+    `stream_error` frame, and the run carries on writing for nobody.
+    """
+
+    async def _slow_then_done(self, gate: asyncio.Event):
+        await gate.wait()
+        yield "data: {}\n\n"
+
+    @pytest.mark.asyncio
+    async def test_a_comment_frame_goes_out_while_nothing_happens(self) -> None:
+        from app.modules.agent.api.controllers.shared import (
+            KEEPALIVE_FRAME,
+            with_keepalive,
+        )
+
+        gate = asyncio.Event()
+        stream = with_keepalive(self._slow_then_done(gate), interval_seconds=0.01)
+
+        assert await anext(stream) == KEEPALIVE_FRAME
+        assert await anext(stream) == KEEPALIVE_FRAME
+
+        # And the real frame still arrives: the pull is held across the
+        # timeouts, not cancelled and restarted.
+        gate.set()
+        assert await anext(stream) == "data: {}\n\n"
+        await stream.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_busy_stream_gets_no_keepalives(self) -> None:
+        from app.modules.agent.api.controllers.shared import (
+            KEEPALIVE_FRAME,
+            with_keepalive,
+        )
+
+        async def _chatty():
+            for index in range(3):
+                yield f"data: {index}\n\n"
+
+        chunks = [chunk async for chunk in with_keepalive(_chatty())]
+
+        assert KEEPALIVE_FRAME not in chunks
+        assert chunks == ["data: 0\n\n", "data: 1\n\n", "data: 2\n\n"]
+
+    @pytest.mark.asyncio
+    async def test_the_underlying_failure_is_not_swallowed(self) -> None:
+        """A dead subscription must still reach the caller, which is what turns
+        it into the `stream_error` frame."""
+        from app.modules.agent.api.controllers.shared import with_keepalive
+
+        async def _dies():
+            raise RuntimeError("redis pubsub disconnected")
+            if False:  # pragma: no cover - makes this an async generator
+                yield None
+
+        with pytest.raises(RuntimeError):
+            [chunk async for chunk in with_keepalive(_dies())]

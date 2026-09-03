@@ -123,6 +123,35 @@ def user_facing_error_message(exc: Exception) -> str:
                 "and the request was retried without success. Nothing you sent "
                 "was lost — try again shortly."
             )
+        # The remaining 4xx were one message telling everybody to "check the
+        # agent runtime configuration", which is the right advice for roughly
+        # none of them: a rejected key, a model the provider does not serve and
+        # a conversation past the context window need three different actions,
+        # and the first is the commonest failure an organization bringing its
+        # own key will ever see. The identifiers below are the ones already
+        # extracted for the log line, so nothing new is read out of the body.
+        _, code = provider_error_identifiers(getattr(exc, "body", None))
+        if code == "context_length_exceeded":
+            return (
+                "This conversation is too long for the model's context window. "
+                "Start a new conversation, or switch the agent to a model with "
+                "a larger context."
+            )
+        if exc.status_code in (401, 403):
+            return (
+                "The model provider rejected the credential for this workspace "
+                f"(HTTP {exc.status_code}). Check that the agent runtime's API "
+                "key is present, current, and allowed to use this model."
+            )
+        if exc.status_code == 404:
+            # The model is named in the log line and deliberately not here: a
+            # provider's model id can carry a private deployment or endpoint
+            # name, and this string is written into the transcript.
+            return (
+                "The model this agent is configured with is not available on "
+                "this provider (HTTP 404). Pick another model for the agent, "
+                "or check the runtime's base URL."
+            )
         return (
             f"The model provider returned an error (HTTP {exc.status_code}). "
             "Please check the agent runtime configuration."
@@ -133,8 +162,7 @@ def user_facing_error_message(exc: Exception) -> str:
         # configuration" sends people hunting a bug that isn't theirs.
         return (
             "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message, or press Retry to pick up "
-            "where it stopped."
+            "sent was lost — send another message to pick up where it stopped."
         )
     if isinstance(exc, UnexpectedModelBehavior):
         return (
@@ -151,8 +179,8 @@ def user_facing_error_message(exc: Exception) -> str:
         # honest advice. Everything it finished before that point is persisted.
         return (
             "The agent stopped part-way through a step and could not finish. "
-            "Nothing you sent was lost — send another message, or press Retry "
-            "to pick up where it stopped."
+            "Nothing you sent was lost — send another message to pick up where "
+            "it stopped."
         )
     return (
         "The model provider returned an error. "
