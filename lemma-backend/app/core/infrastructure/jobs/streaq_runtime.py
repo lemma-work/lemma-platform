@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
 import logging
 import time
 import traceback
@@ -48,11 +47,14 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.infrastructure.jobs.job_liveness import (
+    register_job_liveness_middleware,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
     get_streaq_job_queue,
-    job_context_key,
+    load_job_observability_context,
 )
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
@@ -864,22 +866,6 @@ async def run_worker_lanes(
         await _stop_secondary_lanes()
 
 
-async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
-    """Best-effort read of the rolling-deployment-compatible sidecar."""
-    try:
-        raw = await redis.get(job_context_key(job_id))
-        parsed = json.loads(raw) if raw else {}
-        if not isinstance(parsed, dict):
-            return {}
-        return {
-            str(key): str(value)
-            for key, value in parsed.items()
-            if isinstance(key, str) and isinstance(value, str | int)
-        }
-    except Exception:
-        return {}
-
-
 def _register_observability_middleware(
     worker: Worker[AppWorkerContext],
 ) -> None:
@@ -965,10 +951,11 @@ def _register_observability_middleware(
     registered = worker.middleware(observability_context_middleware)
 
 
-# Every lane gets the same observability wrapper — a job must be traced the same
-# way regardless of which queue carried it.
+# Every lane gets the same two wrappers — a job must be traced the same way, and
+# must report the same liveness, regardless of which queue carried it.
 for _lane_worker in LANE_WORKERS.values():
     _register_observability_middleware(_lane_worker)
+    register_job_liveness_middleware(_lane_worker)
 
 
 def _register_lane(name: str | None, lane: Lane) -> None:

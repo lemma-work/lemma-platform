@@ -263,6 +263,11 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
         async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
             return []
 
+        async def list_active_runs_pending_liveness(
+            self, *, cutoff_seconds, decided_after_seconds, limit=200
+        ):
+            return []
+
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
             return stale
 
@@ -327,6 +332,11 @@ async def test_reconcile_settles_a_conversation_its_run_already_left_behind(
             self.uow = uow
 
         async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
+            return []
+
+        async def list_active_runs_pending_liveness(
+            self, *, cutoff_seconds, decided_after_seconds, limit=200
+        ):
             return []
 
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
