@@ -335,18 +335,14 @@ class Settings(BaseSettings):
     worker_shutdown_grace_period_seconds: int = Field(
         default=10,
         description=(
-            "Seconds the streaq worker waits for in-flight tasks to finish on "
-            "SIGTERM/SIGINT before forcing cancellation (streaq grace_period). "
-            "streaq stops claiming new work the moment it sees the signal, so "
-            "this is the drain window and not a delay before one. Gives an "
-            "interrupted agent run time to finalize its status in the DB before "
-            "the engine is disposed, avoiding runs stuck in RUNNING. Keep below "
-            "the orchestrator's termination grace period (e.g. Kubernetes "
-            "terminationGracePeriodSeconds, default 30s) — raising it past that "
-            "buys nothing, since the platform SIGKILLs the worker regardless. "
-            "A task longer than this window is not saved by a bigger number; it "
-            "is recovered by the job heartbeat, which notices a dead worker "
-            "within 90 seconds."
+            "Seconds the streaq worker waits for in-flight tasks on SIGTERM "
+            "(streaq grace_period). It stops claiming new work the moment it "
+            "sees the signal, so this is the drain window, not a delay before "
+            "one: enough for an interrupted agent run to finalize its status "
+            "rather than stick in RUNNING. Keep below the orchestrator's "
+            "termination grace period (Kubernetes defaults to 30s) — past that "
+            "the platform SIGKILLs regardless. A longer task is not saved by a "
+            "bigger number here; the job heartbeat recovers it in ~90s."
         ),
     )
     worker_queue_name: str = Field(
