@@ -26,8 +26,6 @@
     "issue_comment",
     "workflow_run",
     "check_suite",
-    "release",
-    "installation",
-    "installation_repositories"
+    "release"
   ]
 }

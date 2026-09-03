@@ -14,13 +14,22 @@ App for each, and give each its own `CONNECTOR_GITHUB_*` values.
 [`config/github-app-manifest.json`](../../config/github-app-manifest.json) is
 the source of truth for what the App needs. It is checked in so the permission
 set is reviewable, and so a new environment is a copy rather than a memory
-exercise. Create the App from it:
+exercise.
 
-    https://github.com/settings/apps/new?state=<anything>
+```bash
+uv run python scripts/create_github_app.py --name lemma-dev --base-url https://api.dev.example.com
+uv run python scripts/create_github_app.py --name Lemma --base-url https://api.lemma.work --org lemma-work
+```
 
-and paste the manifest, or POST it as `manifest=<json>`. Set the two URLs first
-— they are deliberately absent from the file, because they differ per
-environment:
+Open the URL it prints and press **Create GitHub App**. That click cannot be
+automated — GitHub gates App creation on a person, deliberately — but everything
+else is: the script fills in the two per-environment URLs, exchanges GitHub's
+temporary code, writes the private key to a file and prints the env block, so
+nobody types a callback URL into a form and gets it subtly wrong. We did exactly
+that twice by hand before this existed.
+
+The two URLs it fills in, which are deliberately absent from the manifest
+because they differ per environment:
 
 | Field | Value |
 |---|---|
@@ -161,11 +170,13 @@ went wrong.
 
 ## Uninstalling
 
-Nothing has to be subscribed for this. GitHub delivers `installation` events to
-an App whether or not they appear in its event list -- observed live:
+Nothing has to be subscribed for this, and nothing *can* be: GitHub rejects a
+manifest that lists `installation` or `installation_repositories` --
+"Default events unsupported" -- and delivers them to every App regardless.
+Observed live before the rejection was known:
 `installation.new_permissions_accepted` arrived twice while the App's `events`
-contained neither `installation` nor `installation_repositories`. The seven
-trigger events do have to be ticked; these do not.
+contained neither. The seven trigger events do have to be subscribed; these two
+must be left out.
 
 An `installation` delivery with `deleted` or `suspend` retires what the
 installation leaves behind: its accounts go to `REAUTH_REQUIRED` and its
