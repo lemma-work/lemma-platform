@@ -62,7 +62,7 @@ LLM_OTEL      ?= 0
 # and the harness refuses to delete anything outside it.
 E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 
-UNIT_MARKERS  ?= not e2e and not local_guest and not desktop_e2e and not provider
+UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
