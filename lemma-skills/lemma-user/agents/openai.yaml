@@ -1,4 +1,4 @@
 interface:
   display_name: "Lemma User"
   short_description: "Operate a Lemma pod from the CLI"
-  default_prompt: "Use the current Lemma CLI to operate the active pod: inspect tables and records, query under RLS, chat with and run pod agents, manage shared and /me files (search, read converted markdown, view page images), run functions and workflows, submit waiting forms, handle schedules, run first-party tools, and discover or execute connector operations."
+  default_prompt: "Use the current Lemma CLI to operate the active pod: inspect tables and records, query under RLS, chat with and run pod agents, manage shared and /me files (search, read converted markdown, view page images), run functions and workflows, submit waiting forms, handle schedules, message pod members, and discover or execute connector operations."

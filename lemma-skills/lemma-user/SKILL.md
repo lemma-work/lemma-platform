@@ -1,6 +1,6 @@
 ---
 name: lemma-user
-description: "Operate an existing Lemma pod from the CLI as a human or agent: inspect resources, query tables and records under RLS, search and read pod files (converted markdown, page images), run functions and workflows, submit waiting workflow forms, chat with pod agents, run first-party tools, and execute third-party connector operations. Do not use for designing or building pods; use lemma-builder instead."
+description: "Operate an existing Lemma pod from the CLI as a human or agent: inspect resources, query tables and records under RLS, search and read pod files (converted markdown, page images), run functions and workflows, submit waiting workflow forms, chat with pod agents, message pod members, and execute third-party connector operations. Do not use for designing or building pods; use lemma-builder instead."
 ---
 
 # Lemma User
@@ -23,6 +23,12 @@ boundary. What that means when you run commands:
   agent) runs under **delegated identity** — it acts *as the user who invoked it*,
   never as a service account. So `/me` and row visibility always resolve to *that*
   user.
+- **A workload's authority is the intersection**, not the union: its own grants
+  **and** what the invoking person could do themselves. A grant is a ceiling on
+  the workload, never a promotion for the person driving it — a `POD_VIEWER` who
+  invokes an agent granted `datastore.record.write` still cannot write through
+  it, and someone removed from the pod can do nothing through any workload. So
+  "the agent is granted this" is only half an answer; check the person too.
 - **RLS scopes what you see.** On an **RLS table** (the per-user default) you see
   and edit **only your own rows** — another member's row is invisible (a fetch
   returns `404`, a list omits it). On a **shared table** (`enable_rls: false`)
@@ -33,9 +39,13 @@ boundary. What that means when you run commands:
   (owner-only). Every other path is **pod-shared** — top-level folders like
   `/knowledge`, `/contracts`. There is **no `/pod` prefix**: a path is shared
   unless it's under `/me`. Folder grants cascade to everything beneath them.
-- **Missing access has two shapes.** A human without the pod role gets a
-  permission error; a **workload** missing a grant gets
-  `MISSING_WORKLOAD_RESOURCE_GRANT` (naming the resource a builder must grant).
+- **Missing access has three shapes**, and the refusal code says which. A human
+  without the pod role gets `INSUFFICIENT_PERMISSION`. A **workload** missing a
+  grant gets `MISSING_WORKLOAD_RESOURCE_GRANT`, naming the resource a builder
+  must grant. A workload that *holds* the grant but is acting for someone who
+  lacks the permission gets `DELEGATION_EXCEEDS_INVOKER` — granting the workload
+  more is the one fix that cannot work; give the person the permission, or run
+  it as someone who already has it.
 
 Put user-facing deliverables in `/me` (or the appropriate shared folder) — never
 leave the only copy in a local temp path.
@@ -56,12 +66,17 @@ project-root `.lemma.<server>.env` files supply the same `LEMMA_*` values per
 server for that folder; injected/real env always takes precedence.) Default output is a **compact,
 complete** table/detail view (schemas
 included) — prefer it; it costs far fewer tokens than JSON. Use `--output json`
-only to pipe/save, and `--full` to expand folded fields. Pass payloads with
+(or `--json`) only to pipe/save, and `--full` to expand folded fields. **Errors,
+warnings and progress lines go to stderr**, so stdout carries the result and
+nothing else: `lemma --json … | jq` stays parseable even when the command fails,
+and you never need to redirect to keep the JSON clean. Pass payloads with
 `--data '<json>'` (`-d`) or `--file path.json` (`-f`); target another pod with
 `--pod <id-or-slug>`; add `--yes` for destructive commands in automation. CLI
 groups are plural (`lemma files`, `lemma tables`, `lemma records`, …), and most
-have a singular alias (`lemma file`, `lemma table`). Not all: `tools`, `query`,
-`datastore`, `runtime`, `servers`, `auth`, and `config` exist only as written.
+have a singular alias (`lemma file`, `lemma table`). Not all: `query`,
+`datastore`, `runtime`, `servers`, `telemetry`, `auth`, and `config` exist only
+as written. There is no `lemma tools` group — first-party tools are the
+in-process agent tools described below, not a CLI surface.
 
 For multi-step scripting prefer the Python SDK over chained CLI calls:
 
@@ -75,7 +90,9 @@ pod = Pod.from_env()       # auth + pod from the environment
 This is the area you'll lean on most. **Uploaded documents are auto-indexed —
 the pod *is* the RAG system.** PDF/DOC/DOCX/ODT/RTF/Markdown/text/HTML/EPUB are
 extracted, chunked, embedded, and converted to page-marked markdown on upload.
-Data/binary (CSV, JSON, XLSX, images, email) are stored but **never indexed** —
+That allow-list is the whole of it: spreadsheets and tabular data (CSV, TSV,
+JSON, YAML, XLSX, ODS), **presentations (PPTX, ODP)**, images (no OCR), email
+(`.eml`/`.msg`), audio, video and archives are stored but **never indexed** —
 they won't appear in search. So: **search to find, cat to read, child + view-image
 to see.**
 
@@ -140,9 +157,17 @@ lemma files child /knowledge/handbook.pdf/pages/page_0003.jpg ./p3.jpg  # fetch 
 **Use view-image to actually *see* a pod file.** Those rendered page JPEGs (and any
 uploaded image) are exactly what the **view-image** capability reads — fetch one
 with `files child` (or a URL with `files url`) and view it to see a chart, a
-signature, a scanned form, a layout. This also works on **workspace** files
-directly. So: "what does page 3 *look* like?" → `files child …/pages/page_0003.jpg`
-→ view-image; "what does it *say*?" → `files cat … --pages 3`.
+signature, a scanned form, a layout. So: "what does page 3 *look* like?" →
+`files child …/pages/page_0003.jpg` → view-image; "what does it *say*?" →
+`files cat … --pages 3`.
+
+As an in-process tool, `view_image` takes exactly one of `pod_file_path` (the
+datastore, no download needed) or `workspace_file_path` (the sandbox) — it never
+infers the store from the path, and both or neither is an error. It handles
+**images only**; hand it a PDF and it points you at `pod_view_document_pages`,
+which renders that document's pages directly and skips the `files child` round
+trip. It rides on any vision-capable model regardless of configured toolsets, so
+you probably have it.
 
 ### Write & transfer
 
@@ -160,7 +185,9 @@ lemma files rm /scratch/data.csv
 
 Indexing lags briefly after upload — `stat` shows status (`COMPLETED` =
 searchable, `NOT_REQUIRED` = stored but not an indexed document,
-`PENDING`/`PROCESSING`/`FAILED`).
+`PENDING`/`PROCESSING` = still working, `FAILED` = will be retried,
+`FAILED_PERMANENT` = out of retries or unprocessable, and never re-driven; only a
+fresh upload of the content re-opens it).
 
 ### Link to a file — pick by who opens it
 
@@ -196,6 +223,16 @@ including RLS tables, where it returns only your own rows (RLS scopes every call
 the same way). To read across all users' rows on an RLS table you'd pass
 `mode=ADMIN` — admin-gated, not the default, and agents never use it.
 
+**`query run` returns `{items, total, truncated}`, and `total` is not a count of
+matches** — it is how many rows came back, equal to the match count only when
+nothing was cut. Results stop at the deployment's row cap (1,000 by default);
+past it `truncated` is `true` and `items` is a *prefix*. Read `truncated` before
+you quote a number: a capped result looks exactly like a complete one, and
+reporting `total` as a total is how you tell somebody they have 1,000 orders when
+they have forty thousand. There is no cursor — aggregate in SQL (`count(*)`) or
+narrow the query. (The in-process `pod_query` tool is the same shape under other
+names: `rows`/`row_count`/`truncated`, plus a `note` when it was cut.)
+
 ## Functions, workflows, schedules
 
 ```bash
@@ -217,19 +254,27 @@ lemma schedules list
 lemma schedules pause <id> ; lemma schedules resume <id>
 ```
 
-A run in `WAITING` is paused on a human form, an agent conversation, an async
-function, or a timer — `runs get` shows which via `active_wait` (`wait_type`,
-`node_id`, assignee, external reference, and the form schema for human waits). If a
-form wait is assigned to you (`runs waiting` lists them), `runs submit-form --data`
-with the form's fields completes it and advances the run. This is how you
-participate in human-agent workflows.
+**`WAITING` on a run means a person, and only a person.** A run parked on an
+agent conversation, an async function, or a timer stays `RUNNING` — so `RUNNING`
+is not proof that anything is executing, and `WAITING` is not the general
+"blocked" state. `runs get` settles it via `active_wait`: `wait_type` is `HUMAN`,
+`AGENT`, `FUNCTION`, or `TIME`, alongside `node_id`, assignee, external
+reference, and the form schema for human waits. If a form wait is assigned to you
+(`runs waiting` lists them), `runs submit-form --data` with the form's fields
+completes it and advances the run. This is how you participate in human-agent
+workflows. A form with no assignee is submittable by any member with execute
+access but belongs to nobody's queue, so an empty `runs waiting` does not mean
+no run is parked.
 
 A **conversation** in `WAITING` is a different thing, and the difference matters
 before you go chasing it: it is either blocked on you (an `ask_user` question or an
 approval card — answer it and the agent continues) or **snoozed**, meaning the agent
-suspended itself and wakes on its own within 24 hours. A snoozed conversation is
-healthy and needs nothing from you. Conversation status carries `wait_reason`
-(`HUMAN` or `SNOOZE`) and, when snoozed, `wakes_at`.
+suspended itself and wakes on its own within 24 hours (the ceiling; requests above
+it are clamped). A snoozed conversation is healthy and needs nothing from you.
+The CLI does not distinguish the two — `conversations get` reports `status` and
+`last_run_status` but no wait reason — so tell them apart from the transcript:
+`conversations approvals <id>` lists an outstanding `ask_user`/approval, and an
+empty list on a `WAITING` conversation means it is asleep.
 
 A **notification** is the third thing, and unlike the other two it comes looking for
 you: an agent or a workflow has asked *you* for something. They arrive wherever you
@@ -237,32 +282,74 @@ already talk to the pod — Slack, Telegram, WhatsApp, email — and always leav
 in your Lemma inbox, so nothing is only on a channel that can fail.
 
 Each carries two independent states, and reading them as one is the usual mistake.
-`status` is about you: `OPEN` (still owed), `RESPONDED`, `ACKNOWLEDGED`, `EXPIRED`
-(nobody answered in 72h), `CANCELLED`. `delivery_status` is about the channel:
-`DELIVERED`, or `UNDELIVERABLE` when no chat app or mailbox could carry it —
-usually because you have never messaged the pod's bot. `UNDELIVERABLE` is not a
-failure; the notification exists and the inbox has it.
+`status` is about you: `OPEN` (still owed), `RESPONDED`, `ACKNOWLEDGED` (seen and
+dismissed, or sent as a pure FYI), `EXPIRED` (nobody answered in 72h),
+`CANCELLED`. `delivery_status` is about the channel: `PENDING`, `DELIVERED`,
+`UNDELIVERABLE` when no chat app or mailbox could carry it — usually because you
+have never messaged the pod's bot — or `FAILED` when a channel *was* chosen and
+the send raised. Only `FAILED` is a real delivery fault. `UNDELIVERABLE` is not:
+the notification exists and the inbox has it.
 
 Answer it in the app, or just reply on the surface it arrived on — the agent handling
 that thread records your answer either way, and the asker sees the same result. A
 notification with `responds_through_action` is a workflow form: it is answered by
 `runs submit-form`, which validates against the node's schema, not by free text.
+It resolves exactly once: a second answer, from another device or after an
+expiry swept it, is refused rather than overwriting the first.
 
 ## Agents and chat
 
 ```bash
+lemma chat "What can you do in this pod?"                           # one-shot to the DEFAULT pod agent
+lemma chat                                                          # interactive, default pod agent
 lemma agents list
-lemma agents chat triage-agent "Summarize today's urgent tickets"   # interactive or one-shot
-lemma agents run triage-agent "Classify this: ..."                  # waits + streams the result (--no-wait to detach)
+lemma agents chat triage-agent "Summarize today's urgent tickets"   # named agent; interactive without a message
+lemma agents run triage-agent "Classify this: ..."                  # waits + streams the ANSWER (--no-wait to detach)
 lemma conversations list --agent triage-agent                       # an agent's runs (each run is a conversation)
 lemma conversations list --parent-id <conversation-id>              # what a sub-agent was asked, and answered
 lemma conversations messages <conversation-id>
 lemma conversations send <conversation-id> "Continue with the next batch"
+lemma conversations approvals <conversation-id>                     # gated tool calls / ask_user awaiting a decision
+lemma conversations approve <approval-id> -c <conversation-id>      # --deny to reject; --session for the whole run
 ```
 
+`lemma chat` takes an agent name, a message, or both, and tells them apart by
+whitespace: one quoted multi-word argument is a **message** to the default pod
+agent, one bare word is an **agent name** and opens an interactive session. Be
+explicit with `--agent`/`--message` when a name could be mistaken for prose.
+
+`conversations approve` with **no** approval id acts on *every* pending approval
+in the conversation — it prints the list and asks you to confirm first, and
+`--yes` skips even that. Name the id whenever you mean one decision.
+
 An agent acts under your delegated identity — it sees exactly what you'd see (your
-RLS rows, your `/me`, your connected accounts), plus only the resource grants its
-builder gave it.
+RLS rows, your `/me`, your connected accounts), and its grants are bounded by
+your own access, never added to it (see "Missing access has three shapes").
+
+### An agent can come and find a person
+
+With the `MESSAGING` toolset an agent reaches a pod member who is **not** in the
+conversation — that is where the notifications above come from. It is not a
+paused wait: `message_user` returns immediately, the agent finishes its turn, and
+it is given a *fresh* turn in the same conversation once the last person answers,
+where `check_messages` reads the replies. Nothing sleeps and nothing polls.
+
+- `list_pod_members` — resolve a name to an id or exact email (a name will not
+  resolve on its own), and read `reachable_on`: the channels that can actually
+  carry a message to that person right now.
+- `message_user` — `to`, a Markdown `message`, an optional `background_instruction`
+  (never shown to them; it tells the agent handling their reply what counts as an
+  answer), an optional `title`, and an optional `channel` — `email`, `slack`,
+  `teams`, `telegram`, `whatsapp`. Omit `channel` unless you have a reason: the
+  default reaches them where they last spoke. A named channel is honored or
+  refused, never quietly swapped, so check `reachable_on` first. Keep the returned
+  `notification_id`.
+- `check_messages` — status by notification id. `RESPONDED` is the only status
+  that means somebody answered; call it when a turn opens saying replies landed,
+  not in a loop.
+
+To answer the person you are *already* talking to, just reply — `ask_user` is for
+a question that must block this turn, and neither is `message_user`.
 
 ## Connectors
 
@@ -272,7 +359,11 @@ Two ways in, and which one you have depends on how the agent was granted:
   are *deferred*: they are not in your prompt prefix, so reach them with
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
-- **The CLI** (`lemma connectors …`, needs the workspace toolset) — same
+  (`CONNECTORS` is not alone behind `search_tools`: `POD`, `SUBAGENTS`,
+  `MESSAGING` and `SNOOZE` are deferred the same way. Not seeing a tool in your
+  prefix is not the same as not having it — go looking before concluding you
+  cannot do something.)
+- **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same
   operations through a sandbox round trip. Use it when you are driving a shell
   anyway, or when you need the discovery views below.
 
@@ -320,9 +411,11 @@ The first argument is the **connector id** you already know from the task
 operation id, or plain English — the resolved id is printed so you can name it
 exactly next time. `--dry-run`, or simply omitting `--data` on an operation that
 needs input, prints the input schema instead of failing. `--account` accepts an
-account id or the connected email. An operation that CHANGES data and was
-inferred from text rather than named is refused without `--yes` — matching is
-lexical, so a read intent can land on a write.
+account id or the connected email. `--metadata-only` strips large HTML body
+fields from the response — reach for it when listing mail or documents, where
+the bodies are most of the payload and none of the answer. An operation that
+CHANGES data and was inferred from text rather than named is refused without
+`--yes` — matching is lexical, so a read intent can land on a write.
 
 When you want the wider picture rather than one call:
 
@@ -359,24 +452,38 @@ a connect request and hand the link to the user:
   **own** rows — an absent row usually belongs to another member, not a missing
   record. Confirm with the owner or, if you have the admin role and the feature
   warrants it, the `mode=ADMIN` read path. Don't assume data loss.
-- **Permission denied / resource not visible.** As a human you may lack the pod
-  role — they ladder up: `POD_VIEWER` reads; `POD_USER` also writes records and
-  runs agents/functions/workflows; `POD_EDITOR` also creates/updates tables and
+- **Permission denied / resource not visible.** Read the refusal code before you
+  do anything. As a human you may lack the pod role — they ladder up:
+  `POD_VIEWER` reads; `POD_USER` also writes records and runs
+  agents/functions/workflows; `POD_EDITOR` also creates/updates tables and
   writes files; `POD_ADMIN` also deletes and manages members. As an agent,
   `MISSING_WORKLOAD_RESOURCE_GRANT` names a missing **workload grant** — a builder
   must add it (it never silently grants itself). `lemma pods doctor` lists every
   workload in the pod holding no grants at all, which is the usual cause; the fix
-  is `lemma agents permissions add <name> <resource>:<perms>`.
+  is `lemma agents permissions add <name> <resource>:<perms>`. But
+  `DELEGATION_EXCEEDS_INVOKER` means the opposite: the grant is there and the
+  *person* is short. Adding grants will not move it — the person needs the
+  permission, or the run needs a different invoker.
 - **Resource not found.** Confirm the active pod (`lemma pods list`) and exact
   names (`lemma pods describe`; `lemma apps list` for apps).
+- **"No such command" / "has no option".** You may be on an older CLI than the
+  server. `lemma doctor` diagnoses version skew and duplicate installs;
+  `lemma update` upgrades this CLI in place (`--version` to pin an exact one).
+  Errors print on stderr, so a `--json … | jq` pipeline shows you an empty
+  stdout rather than a parse failure — read the terminal, not just the pipe.
 - **ENUM rejected on a record write.** Read `lemma tables get <table>` and use one
   of the listed `options`.
 - **Fresh upload not in search.** Indexing lag — `files stat` for status, retry
-  shortly. `NOT_REQUIRED` means it isn't an indexed document (CSV/JSON/XLSX/images/
-  email are stored but never searchable).
+  shortly. `NOT_REQUIRED` means it isn't an indexed document (spreadsheets,
+  presentations, images and email are stored but never searchable);
+  `FAILED_PERMANENT` means retrying will not help.
+- **A query's numbers look too round.** Check `truncated` on the `query run`
+  payload before believing `total` — 1,000 rows exactly is usually the row cap,
+  not the answer.
 - **Workflow stuck.** `runs get <run-id>` → `active_wait` shows what it's blocked
-  on; `step_history` shows the failing node, its input, and error. A human wait
-  needs `runs submit-form`.
+  on; `step_history` shows the failing node, its input, and error. Remember the
+  run's own `status` is `RUNNING` for every wait except a human form, so
+  `RUNNING` is not evidence of progress. A human wait needs `runs submit-form`.
 
 ## Report what got in your way
 
