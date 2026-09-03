@@ -22,8 +22,6 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfaceChannelResponse,
     AvailableSurfaceChannelsResponse,
     AvailableSurfacesResponse,
-    SurfaceConfigResponse,
-    SurfaceConnection,
     SurfaceCreateRequest,
     SurfaceReach,
     SurfaceSendRequest,
@@ -35,6 +33,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.contracts.provisioning import surface_response
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     merge_surface_config,
     require_own_account,
@@ -43,7 +42,6 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
     surface_setup_for_reader,
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
-from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
@@ -69,36 +67,6 @@ setup_guide_router = APIRouter(
 available_surfaces_router = APIRouter(
     prefix="/pods/{pod_id}/available-surfaces", tags=["Agent Surfaces"]
 )
-
-
-def _surface_response(
-    surface: AgentSurfaceEntity,
-    *,
-    agent_name: str | None = None,
-    reach: SurfaceReach | None = None,
-    connection: SurfaceConnection | None = None,
-) -> AgentSurfaceResponse:
-    return AgentSurfaceResponse(
-        id=surface.id,
-        pod_id=surface.pod_id,
-        name=surface.name,
-        agent_id=surface.agent_id,
-        agent_name=agent_name,
-        uses_default_agent=is_pod_default_agent(
-            surface.agent_id, pod_id=surface.pod_id
-        ),
-        platform=surface.surface_type,
-        credential_mode=surface.credential_mode,
-        account_id=surface.account_id,
-        connection=connection,
-        surface_identity_id=surface.surface_identity_id,
-        surface_identity_username=surface.surface_identity_username,
-        surface_identity_email=surface.surface_identity_email,
-        webhook_url=computed_webhook_url(surface),
-        reach=reach,
-        config=SurfaceConfigResponse.from_domain(surface.config),
-        status=surface.status,
-    )
 
 
 async def _resolve_surface_reach(
@@ -215,7 +183,7 @@ async def list_surfaces(
         viewer_user_id=user.id,
     )
     items = [
-        _surface_response(
+        surface_response(
             surface,
             agent_name=resolved_agent_name,
             reach=reach,
@@ -279,7 +247,6 @@ async def create_surface(
         pod_id=pod_id,
         platform=request.platform,
         config_input=request.config,
-        agent_service=agent_service,
         ctx=ctx,
     )
     surface = await service.create_surface_minting_address(
@@ -306,7 +273,7 @@ async def create_surface(
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
-    return _surface_response(
+    return surface_response(
         surface,
         agent_name=agent.name if agent else None,
         reach=reach,
@@ -343,7 +310,7 @@ async def get_surface(
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
-    return _surface_response(
+    return surface_response(
         surface, agent_name=agent_name, reach=reach, connection=connection
     )
 
@@ -406,7 +373,6 @@ async def update_surface(
         pod_id=pod_id,
         platform=existing.surface_type,
         config_input=request.config,
-        agent_service=agent_service,
         ctx=ctx,
     )
     updated = await service.update_surface(
@@ -444,7 +410,7 @@ async def update_surface(
     connection = await connection_resolver.for_surface(
         updated, pod_id=pod_id, viewer_user_id=user.id
     )
-    return _surface_response(
+    return surface_response(
         updated,
         agent_name=resolved_agent_name,
         reach=reach,

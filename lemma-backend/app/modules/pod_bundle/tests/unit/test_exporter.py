@@ -38,28 +38,31 @@ class _Named:
     kind: AgentKind = AgentKind.USER
 
 
-class _FakeTableService:
-    def __init__(self, tables):
+_DATASTORE = "app.modules.datastore.contracts.provisioning"
+_SURFACES = "app.modules.agent_surfaces.contracts.provisioning"
+
+
+class _FakeTableOperations:
+    """The three table operations the exporter names, over a fixed set of tables.
+
+    Nothing here knows that rows are addressed through a ``TableContext`` built
+    from a schema name — which is what the datastore contract is for, and what
+    the service-shaped double this replaced had to reproduce.
+    """
+
+    def __init__(self, tables, rows_by_table):
         self._tables = tables
-        self.schema_manager = SimpleNamespace(
-            get_schema_name=lambda pod_id: "pod_schema"
-        )
-
-    async def list_tables(self, pod_id, ctx, limit=100, cursor=None):
-        return list(self._tables), None
-
-    async def get_table(self, pod_id, table_name, ctx):
-        return next(t for t in self._tables if t.name == table_name)
-
-
-class _FakeRecordService:
-    def __init__(self, rows_by_table):
         self._rows = rows_by_table
 
-    async def list_records(self, table_context, user_id, limit=20, offset=0):
-        rows = self._rows.get(table_context.name, [])
-        page = rows[offset : offset + limit]
-        return [SimpleNamespace(data=r) for r in page], len(rows)
+    async def list_table_names(self, uow, *, pod_id, ctx):
+        return [str(table.name) for table in self._tables]
+
+    async def get_table(self, uow, *, pod_id, name, ctx):
+        return next((t for t in self._tables if t.name == name), None)
+
+    async def read_table_rows(self, uow, *, pod_id, table, user_id, limit, offset):
+        rows = self._rows.get(table.name, [])
+        return list(rows[offset : offset + limit]), len(rows)
 
 
 @dataclass
@@ -81,7 +84,7 @@ class _FakeFileEntity:
         return self.kind == "FILE"
 
 
-class _FakeFileService:
+class _FakeFileOperations:
     """Serves a fixed file tree (by directory) + file bytes for the with_files
     export path."""
 
@@ -91,87 +94,102 @@ class _FakeFileService:
         self._by_dir = by_dir
         self._contents = contents
 
-    async def list_files(self, pod_id, ctx, directory_path="/", limit=100, cursor=None):
+    async def list_files(self, uow, *, pod_id, ctx, directory_path, limit, cursor):
         return list(self._by_dir.get(directory_path, [])), None
 
-    async def download_file_content_by_path(self, pod_id, path, ctx):
-        return None, self._contents.get(path, b"")
+    async def download_file(self, uow, *, pod_id, path, ctx):
+        return self._contents.get(path, b"")
 
 
-class _FakeFunctionService:
-    def __init__(self, functions):
-        self._functions = functions
-
-    async def list_functions(self, pod_id, user_id, limit=100, cursor=None, ctx=None):
-        return list(self._functions), None
-
-    async def get_function_by_name(
-        self, pod_id, name, user_id, raise_not_found=False, ctx=None
-    ):
-        return next(f for f in self._functions if f.name == name)
+def _patch_file_operations(monkeypatch, by_dir, contents) -> _FakeFileOperations:
+    """Bind the two datastore file operations the file export names."""
+    double = _FakeFileOperations(by_dir, contents)
+    monkeypatch.setattr(f"{_DATASTORE}.list_files", double.list_files)
+    monkeypatch.setattr(f"{_DATASTORE}.download_file", double.download_file)
+    return double
 
 
-class _FakeAgentService:
-    def __init__(self, agents):
-        self._agents = agents
-
-    async def list_agents(
-        self, pod_id, cursor=None, limit=100, requester_user_id=None, ctx=None
-    ):
-        return list(self._agents), None
-
-    async def get_agent_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
-        return next(a for a in self._agents if a.name == name)
+_FUNCTIONS = "app.modules.function.contracts.provisioning"
+_AGENTS = "app.modules.agent.contracts.provisioning"
+_WORKFLOWS = "app.modules.workflow.contracts.provisioning"
+_SCHEDULES = "app.modules.schedule.contracts.provisioning"
+_APPS = "app.modules.apps.contracts.provisioning"
 
 
-class _EmptyListService:
-    async def list_workflows(
-        self, pod_id, limit=100, cursor=None, requester_user_id=None, ctx=None
-    ):
-        return [], None
+class _FakeNamedResource:
+    """`list_<kind>_names` + `require_<kind>` over a fixed set of resources."""
 
-    async def list_schedules(self, pod_id=None, limit=100, cursor=None, ctx=None):
-        return [], None
+    def __init__(self, items):
+        self._items = items
 
-    async def list_apps(self, pod_id, user_id, limit, cursor, ctx=None):
-        return [], None
+    async def list_names(self, uow, *, pod_id, user_id, ctx):
+        return [str(item.name) for item in self._items]
+
+    async def require(self, uow, *, pod_id, name, user_id, ctx):
+        return next(item for item in self._items if item.name == name)
 
 
-class _FakeAppService:
-    """App service that can return an app plus its stored source/dist archives so
-    the exporter's asset-download path is exercised without object storage."""
+async def _no_names(uow, *, pod_id, user_id=None, ctx=None):
+    return []
+
+
+async def _no_schedules(uow, *, pod_id, ctx=None):
+    return []
+
+
+def _listing(items):
+    """`list_agents` publishes entities, not names: the caller needs `kind`."""
+
+    async def _list(uow, *, pod_id, user_id, ctx):
+        return list(items)
+
+    return _list
+
+
+class _FakeAppOperations:
+    """The app operations the exporter names, including the archive pair.
+
+    A source or dist archive is either resolvable or absent; the double raises
+    ``AppNotFoundError`` for absent exactly as the operation does.
+    """
 
     def __init__(self, apps, *, source: bytes | None = None, dist: bytes | None = None):
         self._apps = apps
         self._source = source
         self._dist = dist
 
-    async def list_apps(self, pod_id, user_id, limit, cursor, ctx=None):
-        return list(self._apps), None
+    async def list_app_names(self, uow, *, pod_id, user_id, ctx):
+        return [str(app.name) for app in self._apps]
 
-    async def get_app_by_name(
-        self, pod_id, name, user_id, raise_not_found=False, ctx=None
-    ):
-        return next(a for a in self._apps if a.name == name)
+    async def require_app(self, uow, *, pod_id, name, user_id, ctx):
+        return next(app for app in self._apps if app.name == name)
 
-    async def resolve_source_archive(self, pod_id, name, user_id, ctx=None):
+    async def resolve_app_source_archive(self, uow, *, pod_id, name, user_id, ctx):
+        return self._resolve(self._source, name, "source/archive.zip")
+
+    async def resolve_app_dist_archive(self, uow, *, pod_id, name, user_id, ctx):
+        return self._resolve(self._dist, name, "releases/v1/dist/archive.zip")
+
+    def _resolve(self, archive, name, path):
         from app.modules.apps.domain.errors import AppNotFoundError
 
-        if self._source is None:
-            raise AppNotFoundError(f"no source for {name}")
-        app = next(a for a in self._apps if a.name == name)
-        return app.id, "source/archive.zip"
+        if archive is None:
+            raise AppNotFoundError(f"no archive for {name}")
+        return next(app for app in self._apps if app.name == name).id, path
 
-    async def resolve_dist_archive(self, pod_id, name, user_id, ctx=None):
-        from app.modules.apps.domain.errors import AppNotFoundError
-
-        if self._dist is None:
-            raise AppNotFoundError(f"no dist for {name}")
-        app = next(a for a in self._apps if a.name == name)
-        return app.id, "releases/v1/dist/archive.zip"
-
-    async def read_archive(self, app_id, archive_path):
+    async def read_app_archive(self, uow, *, app_id, archive_path):
         return self._source if "source" in archive_path else self._dist
+
+    def patch(self, monkeypatch) -> "_FakeAppOperations":
+        for name in (
+            "list_app_names",
+            "require_app",
+            "resolve_app_source_archive",
+            "resolve_app_dist_archive",
+            "read_app_archive",
+        ):
+            monkeypatch.setattr(f"{_APPS}.{name}", getattr(self, name))
+        return self
 
 
 def _zip_bytes(files: dict[str, str]) -> bytes:
@@ -185,15 +203,6 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
-class _FakeTableContext:
-    def __init__(self, name):
-        self.name = name
-
-    @classmethod
-    def from_table_entity(cls, table, schema_name, events_enabled=False):
-        return cls(table.name)
-
-
 @pytest.fixture
 def patched_exporter(monkeypatch):
     """Patch the exporter's lazily-imported service builders + response adapters
@@ -205,41 +214,23 @@ def patched_exporter(monkeypatch):
         "leads": [{"id": "1", "email": "a@x.com"}, {"id": "2", "email": "b@x.com"}]
     }
 
-    empty = _EmptyListService()
+    # Every provider module's operations, bound where the exporter reads them.
+    datastore = _FakeTableOperations(tables, rows_by_table)
+    monkeypatch.setattr(f"{_DATASTORE}.list_table_names", datastore.list_table_names)
+    monkeypatch.setattr(f"{_DATASTORE}.get_table", datastore.get_table)
+    monkeypatch.setattr(f"{_DATASTORE}.read_table_rows", datastore.read_table_rows)
 
-    # Service builders (imported lazily inside export()).
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_table_service",
-        lambda uow: _FakeTableService(tables),
-    )
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_record_service",
-        lambda uow: _FakeRecordService(rows_by_table),
-    )
-    monkeypatch.setattr(
-        "app.modules.datastore.contracts.TableContext",
-        _FakeTableContext,
-    )
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: _FakeFunctionService(functions),
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: _FakeAgentService(agents),
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.api.dependencies.get_workflow_service",
-        lambda uow: empty,
-    )
-    monkeypatch.setattr(
-        "app.modules.schedule.api.dependencies.get_schedule_service",
-        lambda uow: empty,
-    )
-    monkeypatch.setattr(
-        "app.modules.apps.api.dependencies.build_app_service",
-        lambda uow: empty,
-    )
+    function_ops = _FakeNamedResource(functions)
+    monkeypatch.setattr(f"{_FUNCTIONS}.list_function_names", function_ops.list_names)
+    monkeypatch.setattr(f"{_FUNCTIONS}.require_function", function_ops.require)
+
+    agent_ops = _FakeNamedResource(agents)
+    monkeypatch.setattr(f"{_AGENTS}.list_agents", _listing(agents))
+    monkeypatch.setattr(f"{_AGENTS}.require_agent", agent_ops.require)
+
+    monkeypatch.setattr(f"{_WORKFLOWS}.list_workflow_names", _no_names)
+    monkeypatch.setattr(f"{_SCHEDULES}.list_schedules", _no_schedules)
+    _FakeAppOperations([]).patch(monkeypatch)
 
     # Pod fetch: PodRepository(uow).get(pod_id) -> object with name.
     class _FakePodRepo:
@@ -454,10 +445,7 @@ async def test_named_folder_exports_its_subtree_bytes_and_manifest(
     )
     by_dir = {"/": [folder, private], "/docs": [doc]}
     contents = {"/docs/guide.md": b"hello", "/secret.txt": b"no!"}
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service",
-        lambda uow: _FakeFileService(by_dir, contents),
-    )
+    _patch_file_operations(monkeypatch, by_dir, contents)
 
     _filename, zip_bytes, _progress = await _run_export(
         patched_exporter, file_folders=["/docs"]
@@ -494,10 +482,7 @@ async def test_a_folder_outside_the_named_ones_is_not_exported(
         "/private-notes": [note],
     }
     contents = {"/docs/guide.md": b"hello", "/private-notes/salaries.csv": b"1234"}
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service",
-        lambda uow: _FakeFileService(by_dir, contents),
-    )
+    _patch_file_operations(monkeypatch, by_dir, contents)
 
     _filename, zip_bytes, _progress = await _run_export(
         patched_exporter, file_folders=["/docs"]
@@ -516,11 +501,8 @@ async def test_naming_the_root_folder_is_refused(
     doc = _FakeFileEntity(
         path="/docs/guide.md", name="guide.md", kind="FILE", size_bytes=5
     )
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service",
-        lambda uow: _FakeFileService(
-            {"/": [docs], "/docs": [doc]}, {"/docs/guide.md": b"hello"}
-        ),
+    _patch_file_operations(
+        monkeypatch, {"/": [docs], "/docs": [doc]}, {"/docs/guide.md": b"hello"}
     )
 
     _filename, zip_bytes, _progress = await _run_export(
@@ -536,10 +518,7 @@ async def test_naming_the_root_folder_is_refused(
 async def test_unknown_folder_warns_rather_than_failing(
     patched_exporter, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service",
-        lambda uow: _FakeFileService({"/": []}, {}),
-    )
+    _patch_file_operations(monkeypatch, {"/": []}, {})
 
     await _run_export(patched_exporter, file_folders=["/nope"])
     warnings = _run_export.last_warnings  # type: ignore[attr-defined]
@@ -616,10 +595,7 @@ async def test_app_source_exported_and_slug_tokenized(
 ):
     app = _Named("dashboard")
     source = _zip_bytes({"index.html": "<h1>hi</h1>", "package.json": "{}"})
-    monkeypatch.setattr(
-        "app.modules.apps.api.dependencies.build_app_service",
-        lambda uow: _FakeAppService([app], source=source),
-    )
+    _FakeAppOperations([app], source=source).patch(monkeypatch)
     monkeypatch.setattr(
         exporter_mod,
         "_app_response_dict",
@@ -654,10 +630,7 @@ async def test_app_dist_fallback_when_no_source(
 ):
     app = _Named("widget")
     dist = _zip_bytes({"index.html": "<h1>widget</h1>"})
-    monkeypatch.setattr(
-        "app.modules.apps.api.dependencies.build_app_service",
-        lambda uow: _FakeAppService([app], source=None, dist=dist),
-    )
+    _FakeAppOperations([app], source=None, dist=dist).patch(monkeypatch)
     monkeypatch.setattr(
         exporter_mod,
         "_app_response_dict",
@@ -681,10 +654,7 @@ async def test_app_asset_over_byte_budget_is_skipped(
 ):
     app = _Named("big_app")
     source = _zip_bytes({"index.html": "x" * 5000})
-    monkeypatch.setattr(
-        "app.modules.apps.api.dependencies.build_app_service",
-        lambda uow: _FakeAppService([app], source=source),
-    )
+    _FakeAppOperations([app], source=source).patch(monkeypatch)
     monkeypatch.setattr(
         exporter_mod,
         "_app_response_dict",
@@ -793,7 +763,7 @@ async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):
 
 
 class _SelfListingFiles:
-    """A file service whose home folder lists itself.
+    """A ``list_files`` whose home folder lists itself.
 
     Not hypothetical: a pod's per-user home folder answers its own listing with
     itself, which is what sent the walk infinite.
@@ -802,8 +772,8 @@ class _SelfListingFiles:
     def __init__(self):
         self.calls: list[str] = []
 
-    async def list_files(self, pod_id, ctx, *, directory_path, limit, cursor):
-        del pod_id, ctx, limit, cursor
+    async def list_files(self, uow, *, pod_id, ctx, directory_path, limit, cursor):
+        del uow, pod_id, ctx, limit, cursor
         self.calls.append(directory_path)
         entries = {
             "/": [
@@ -819,18 +789,21 @@ class _SelfListingFiles:
         return entries.get(directory_path, []), None
 
 
-async def test_a_folder_that_lists_itself_does_not_sink_the_file_export():
+async def test_a_folder_that_lists_itself_does_not_sink_the_file_export(monkeypatch):
     """Regression: the walk recursed until RecursionError, which the best-effort
     caller swallowed — so every pod with a home folder exported an empty
     `files/` and said nothing. Every real pod has one."""
-    service = _SelfListingFiles()
+    from app.modules.pod_bundle.infrastructure.exporter_files import walk_pod_files
 
-    entities = await BundleExporter()._walk_pod_files(service, uuid4(), object())
+    listing = _SelfListingFiles()
+    monkeypatch.setattr(f"{_DATASTORE}.list_files", listing.list_files)
+
+    entities = await walk_pod_files(object(), uuid4(), object())
 
     paths = sorted(str(e.path) for e in entities)
     assert paths == ["/home", "/reports", "/reports/notes.md"]
     # Each directory is listed once; the self-reference is not followed twice.
-    assert service.calls.count("/home") == 1
+    assert listing.calls.count("/home") == 1
 
 
 async def test_the_pods_own_assistant_is_never_exported(
@@ -843,8 +816,8 @@ async def test_the_pods_own_assistant_is_never_exported(
     assistant *is* comes from constants rather than from a row worth copying.
     """
     monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: _FakeAgentService(
+        f"{_AGENTS}.list_agents",
+        _listing(
             [
                 _Named("assistant"),
                 _Named("pod_default", kind=AgentKind.POD_DEFAULT),
@@ -884,12 +857,10 @@ async def test_surface_export_warns_when_the_pod_s_surfaces_cannot_be_listed(
     it has to be audible, or the person importing finds out when the surface
     never answers."""
 
-    def _boom(uow):
+    async def _boom(uow, *, pod_id):
         raise RuntimeError("surface service down")
 
-    monkeypatch.setattr(
-        "app.composition.pod_bundle_resources.get_surface_service", _boom
-    )
+    monkeypatch.setattr(f"{_SURFACES}.list_surfaces", _boom)
     warnings: list[str] = []
     await export_surfaces(
         tmp_path, SimpleNamespace(session=object()), uuid4(), warnings
@@ -905,22 +876,17 @@ async def test_one_unserializable_surface_warns_and_the_rest_still_export(
 ):
     """One bad surface is not fatal, but it is named in the warnings."""
 
-    async def _list(pod_id, limit=100):
-        return [_FakeSurface("support_bot"), _FakeSurface("sales_bot")], None
+    async def _list(uow, *, pod_id):
+        return [_FakeSurface("support_bot"), _FakeSurface("sales_bot")]
 
-    monkeypatch.setattr(
-        "app.composition.pod_bundle_resources.get_surface_service",
-        lambda uow: SimpleNamespace(list_surfaces_by_pod=_list),
-    )
+    monkeypatch.setattr(f"{_SURFACES}.list_surfaces", _list)
 
     def _respond(surface):
         if surface.name == "sales_bot":
             raise ValueError("no connector row")
         return surface
 
-    monkeypatch.setattr(
-        "app.composition.pod_bundle_resources._surface_response", _respond
-    )
+    monkeypatch.setattr(f"{_SURFACES}.surface_response", _respond)
     warnings: list[str] = []
     await export_surfaces(
         tmp_path, SimpleNamespace(session=object()), uuid4(), warnings

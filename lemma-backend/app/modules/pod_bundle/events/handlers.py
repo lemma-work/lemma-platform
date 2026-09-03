@@ -904,12 +904,12 @@ def _github_import_operation_runner(
                 user_id=state.user_id,
                 pod_id=state.pod_id,
             )
-            from app.composition.pod_bundle_resources import (
-                build_connector_operation_service,
+            from app.modules.connectors.contracts.provisioning import (
+                execute_operation,
             )
 
-            service = build_connector_operation_service(uow)
-            response = await service.execute_operation(
+            response = await execute_operation(
+                uow,
                 connector_id="github",
                 operation_name=operation_name,
                 payload=payload,

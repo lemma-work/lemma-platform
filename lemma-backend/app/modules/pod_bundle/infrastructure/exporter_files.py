@@ -45,15 +45,14 @@ async def export_pod_files(
     failing the export."""
     from lemma_pod_bundle.layout import FILES_MANIFEST
 
-    from app.composition.pod_bundle_resources import build_file_service
+    from app.modules.datastore.contracts.provisioning import download_file
 
     if not folder_paths:
         return False
 
     try:
-        service = build_file_service(uow)
         entities = await _collect_named_folders(
-            service, pod_id, ctx, folder_paths, warnings
+            uow, pod_id, ctx, folder_paths, warnings
         )
     except Exception as exc:  # noqa: BLE001 - files are best-effort
         logger.debug(
@@ -107,9 +106,7 @@ async def export_pod_files(
         if declared and not data_budget.allow(name=f"files{path}", size=declared):
             continue
         try:
-            _entity, content = await service.download_file_content_by_path(
-                pod_id, path, ctx
-            )
+            content = await download_file(uow, pod_id=pod_id, path=path, ctx=ctx)
         except Exception as exc:  # noqa: BLE001 - one bad file is not fatal
             warnings.append(f"file '{path}' skipped: {exc}")
             continue
@@ -137,7 +134,7 @@ async def export_pod_files(
 
 
 async def _collect_named_folders(
-    service: Any,
+    uow: SqlAlchemyUnitOfWork,
     pod_id: UUID,
     ctx: Context,
     folder_paths: list[str],
@@ -160,14 +157,14 @@ async def _collect_named_folders(
                 "rather than the pod's whole file tree"
             )
             continue
-        found = await _folder_entity(service, pod_id, ctx, folder_path)
+        found = await _folder_entity(uow, pod_id, ctx, folder_path)
         if found is None:
             warnings.append(
                 f"folder '{folder_path}' requested for export but not found "
                 f"in the pod; skipped"
             )
             continue
-        subtree = await walk_pod_files(service, pod_id, ctx, folder_path)
+        subtree = await walk_pod_files(uow, pod_id, ctx, folder_path)
         for entity in [found, *subtree]:
             path = str(entity.path or "")
             if path in seen_paths:
@@ -178,18 +175,20 @@ async def _collect_named_folders(
 
 
 async def _folder_entity(
-    service: Any, pod_id: UUID, ctx: Context, folder_path: str
+    uow: SqlAlchemyUnitOfWork, pod_id: UUID, ctx: Context, folder_path: str
 ) -> Any | None:
     """The folder entity at ``folder_path``, or None when it isn't one.
 
     Found by listing the parent rather than the path itself: a folder that lists
     itself would otherwise look indistinguishable from one that does not exist.
     """
+    from app.modules.datastore.contracts.provisioning import list_files
+
     parent = folder_path.rsplit("/", 1)[0] or "/"
     cursor: str | None = None
     while True:
-        items, cursor = await service.list_files(
-            pod_id, ctx, directory_path=parent, limit=100, cursor=cursor
+        items, cursor = await list_files(
+            uow, pod_id=pod_id, ctx=ctx, directory_path=parent, limit=100, cursor=cursor
         )
         for item in items:
             if str(item.path or "") == folder_path and item.is_folder:
@@ -199,7 +198,7 @@ async def _folder_entity(
 
 
 async def walk_pod_files(
-    service: Any,
+    uow: SqlAlchemyUnitOfWork,
     pod_id: UUID,
     ctx: Context,
     dir_path: str = "/",
@@ -215,6 +214,8 @@ async def walk_pod_files(
     RecursionError was then swallowed by the best-effort caller, so every
     pod with a home folder at its root -- which is every real pod -- exported
     an empty `files/` and said nothing about it."""
+    from app.modules.datastore.contracts.provisioning import list_files
+
     seen = _seen if _seen is not None else set()
     if dir_path in seen:
         return []
@@ -223,8 +224,13 @@ async def walk_pod_files(
     out: list[Any] = []
     cursor: str | None = None
     while True:
-        items, cursor = await service.list_files(
-            pod_id, ctx, directory_path=dir_path, limit=100, cursor=cursor
+        items, cursor = await list_files(
+            uow,
+            pod_id=pod_id,
+            ctx=ctx,
+            directory_path=dir_path,
+            limit=100,
+            cursor=cursor,
         )
         for item in items:
             child = str(item.path or "")
@@ -233,9 +239,7 @@ async def walk_pod_files(
             out.append(item)
             if item.is_folder:
                 out.extend(
-                    await walk_pod_files(
-                        service, pod_id, ctx, dir_path=child, _seen=seen
-                    )
+                    await walk_pod_files(uow, pod_id, ctx, dir_path=child, _seen=seen)
                 )
         if not cursor:
             break
