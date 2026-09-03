@@ -16,7 +16,7 @@ A test earns its place by being able to fail for the reason it claims.
 Most weak tests here are not wrong, they are *inert*: they pass whether or not
 the behaviour they name works. Three ways that happens, all measured below — the
 test asserts nothing; the test asserts that a mock was called; or the test
-patches the very thing it is named after, so the real code never runs.
+patches the very thing it is exercising, so the real code never runs.
 
 The estate is large and, in the places that matter most, good: 6,491 backend
 tests, a 405-test black-box scenario suite traced to a numbered specification,
@@ -50,15 +50,22 @@ If `test_exporter.py` patches `exporter._build_manifest`, the exporter no longer
 runs. Inject the collaborator through the constructor or factory seam the code
 already has — and if there isn't one, that is the finding.
 
-*Check:* `make lint-test-doubles` — an AST pass over every `test_<x>.py` for a
-double installed on a target whose path contains `<x>`, in all three forms the
-codebase uses (`patch("a.b.c")`, `patch.object(module, "name")`, and
-`monkeypatch.setattr`, which is most of them)
-*Today:* **326** — 316 in the backend and 10 in the CLI, recorded per module in
-`lemma-backend/test-doubles-baseline.json` — ratchet, the number only goes down.
-The backend figure is higher than the 206 first reported because that survey
-read only the string form; `monkeypatch.setattr` is 2,052 of the 2,235 patch
-sites and installs a double in exactly the same place.
+*Check:* `make lint-test-doubles` — an AST pass over every `test_*.py` and
+`conftest.py` for a double installed on a name inside a module the file
+imports, in all three forms the codebase uses (`patch("a.b.c")`,
+`patch.object(module, "name")`, and `monkeypatch.setattr`, which is most of
+them). The subject is read from the imports because the filename cannot supply
+it: 571 test files have a stem no source file answers to, which put two thirds
+of the repo's patch calls beyond the old rule's reach —
+`test_schedule_idempotency_regression.py` scored zero while installing twenty
+doubles on the service module it drives, and no `conftest.py` was read at all.
+Swapping a name for a *value* (`settings.api_url`) arranges the run rather than
+doubling a unit, and does not count.
+*Today:* **1,345** — 1,170 in the backend and 175 in the CLI, recorded per
+module in `lemma-backend/test-doubles-baseline.json` — ratchet, the number only
+goes down. It is four times the 326 previously published because the old survey
+could only see a test whose name matched a source file, not because anything
+grew.
 
 ### TST-03 — a fake implements the port; it does not patch attributes on a real object
 
