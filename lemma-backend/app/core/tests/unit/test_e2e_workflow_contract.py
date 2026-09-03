@@ -213,21 +213,48 @@ def test_e2e_union_gate_is_separate_from_unit_aggregate() -> None:
     workflow = (_REPO_ROOT / ".github/workflows/backend-coverage.yml").read_text()
 
     assert "coverage-backend/e2e-union.json" in workflow
-    assert "--min-module agent=80" in workflow
-    # 79, not 80, and pinned here so moving it stays a deliberate act. The
-    # floor was set fractionally above the value it measures: across 38 runs
-    # where this gate executed, `agent_surfaces` reported 79.56 to 79.98 and
-    # failed 32 of them, with four head SHAs producing both a pass and a
-    # failure. That is xdist coverage variance -- the same cause
-    # `.github/e2e-shards.json` records a ~0.4-point spread for on `agent` --
-    # not a number anybody can push over the line. Raise it when real coverage
-    # moves.
-    assert "--min-module agent_surfaces=79" in workflow
-    assert "--min-module datastore=80" in workflow
-    assert "--min-module function=80" in workflow
+    assert "--lane e2e_union" in workflow
     assert workflow.index("Combine E2E-only coverage") > workflow.index(
         "Download validated unit coverage"
     )
+
+
+def test_every_module_of_any_size_has_a_recorded_coverage_floor() -> None:
+    """Four modules were named on the command line and the rest had none.
+
+    A module with no floor can lose all of its coverage while the whole-repo
+    figure -- one number over ~190k statements -- barely moves, which is how
+    the largest modules came to be the least protected. The floors are a
+    ratchet now, so this asserts every module the gate measures is in it: a new
+    module arriving without one is the case that would otherwise pass quietly.
+    """
+    baseline = json.loads(
+        (_REPO_ROOT / "lemma-backend/coverage-baseline.json").read_text()
+    )
+
+    assert set(baseline) == {"combined", "e2e_union"}, sorted(baseline)
+    for lane, floors in baseline.items():
+        assert floors, f"{lane} records no floors at all"
+        for module, floor in floors.items():
+            assert 0 < float(floor) <= 100, f"{lane}/{module} floor is {floor}"
+
+    # `test_support` is scaffolding for other modules' tests and is not
+    # measured at all; `analytics` is five statements, where one of them is
+    # worth twenty points and a floor would report noise rather than coverage.
+    # Anything else arriving without a floor is the case this test is for.
+    unfloored = {"test_support", "analytics"}
+    modules = {
+        path.name
+        for path in (_REPO_ROOT / "lemma-backend/app/modules").iterdir()
+        if path.is_dir() and not path.name.startswith("_")
+    } - unfloored
+    for lane, floors in baseline.items():
+        missing = sorted(modules - set(floors))
+        assert not missing, (
+            f"{lane} has no coverage floor for {missing}. Run "
+            f"`make coverage-baseline` after a full coverage run — a module "
+            f"with no floor is one nothing would notice going uncovered."
+        )
 
 
 def test_coverage_aggregation_is_not_on_the_pull_request_critical_path() -> None:

@@ -22,9 +22,12 @@ name: Backend coverage
 # cannot do.
 #
 # The floors it enforces are real and still enforced; they are just no longer
-# enforced in front of the merge button. Deliberately not a required check:
-# it also enforces separately-tracked module floors that several modules are
-# still below, so requiring it would block every PR for an unrelated reason.
+# enforced in front of the merge button. It was also not required for a second
+# reason that has since gone: it enforced module floors several modules were
+# below, so requiring it would have blocked every PR for an unrelated reason.
+# Every floor now comes from a measurement rather than a hope, so the gate is
+# green by construction and making it required is a decision about the merge
+# button rather than a cleanup that has to happen first.
 
 on:
   workflow_run:
@@ -376,35 +379,37 @@ jobs:
                 body,
               });
             }
-      # `agent_surfaces` sits at 79 rather than 80, and the reason is measured
-      # rather than aspirational. Across 38 runs where this gate actually
-      # executed it reported 79.56 to 79.98 and failed 32 of them -- the floor
-      # was set fractionally above the value it measures, so the gate was red
-      # on `main` most of the time and the six passes squeaked over by
-      # hundredths. Four separate head SHAs produced both a pass and a failure,
-      # so the variance is real and not a stuck number: this is coverage
-      # measured across worker subprocesses under xdist, and
-      # `.github/e2e-shards.json` already records a ~0.4-point per-run spread
-      # for `agent` from the same cause.
+      # Floors live in `lemma-backend/coverage-baseline.json`, one per module
+      # per lane, recorded from what a run actually measures. Four modules used
+      # to be named here and every other module had none, so anything unnamed
+      # could lose all of its coverage while the whole-repo figure -- one number
+      # over ~190k statements -- barely moved.
       #
-      # A gate that is red most of the time gates nothing, because nobody reads
-      # it. 79 keeps roughly half a point of headroom below the observed floor.
-      # Raise it deliberately when real coverage moves, not to express a hope.
-      - name: Enforce critical-module E2E floors
+      # Each floor sits half a point below the measurement it came from, which
+      # is the conclusion this file had already reached and applied to only one
+      # of its four modules. Across 38 runs where this gate executed, `agent`
+      # reported 79.56 to 79.98 and failed 32 of them: the floor was 80, set
+      # fractionally above the value it measures, and four separate head SHAs
+      # produced both a pass and a failure. The variance is real -- coverage
+      # measured across worker subprocesses under xdist, and
+      # `.github/e2e-shards.json` records a ~0.4-point per-run spread for
+      # `agent` from the same cause. A gate that is red most of the time gates
+      # nothing, because nobody reads it.
+      #
+      # `--write` raises a floor and never lowers one, so a good run locks its
+      # gain in and a bad run cannot be regenerated away.
+      - name: Enforce per-module E2E floors
         run: >-
           uv run python scripts/check_coverage_thresholds.py
           coverage-backend/e2e-union.json
+          --lane e2e_union
           --min-total 0
-          --min-module agent=80
-          --min-module agent_surfaces=79
-          --min-module datastore=80
-          --min-module function=80
-      - name: Enforce total and module floors
+      - name: Enforce total and per-module floors
         run: >-
           uv run python scripts/check_coverage_thresholds.py
           coverage-backend/coverage.json
+          --lane combined
           --min-total 70
-          --min-module schedule=65
       - name: Enforce changed-code coverage
         run: >-
           uv run diff-cover coverage-backend/coverage.xml

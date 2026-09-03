@@ -188,12 +188,20 @@ its `needs:` list again.
 Both workflows are path-filtered. A PR that touches only the frontend runs
 neither, and both report green.
 
-Coverage floors live in `backend-coverage.yml` — a separate workflow that runs
-after Backend E2E finishes, so it is not on the critical path of a PR — and are
-enforced by
-`lemma-backend/scripts/check_coverage_thresholds.py`. `CONTRIBUTING.md` names
-coverage below floor as a merge blocker. Run the command rather than quoting a
-number:
+Coverage floors live in `lemma-backend/coverage-baseline.json` — one per module
+per lane, recorded from measurement rather than chosen — and are enforced by
+`lemma-backend/scripts/check_coverage_thresholds.py` from `backend-coverage.yml`,
+a separate workflow that runs after Backend E2E finishes so it is not on the
+critical path of a PR. The two lanes answer different questions: **combined**
+(unit + e2e) is how well the code is covered at all, **e2e_union** is how much
+of a module a real request reaches.
+
+`make coverage-baseline` refreshes the file after a full run. It only ever
+raises a floor, so a good run locks its gain in and a failing one cannot be
+regenerated away — the way to clear a coverage failure is to write the test.
+
+`CONTRIBUTING.md` names coverage below floor as a merge blocker. Run the
+command rather than quoting a number:
 
 ```bash
 make coverage-backend
