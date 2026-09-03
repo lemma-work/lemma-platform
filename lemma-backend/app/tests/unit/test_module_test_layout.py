@@ -60,3 +60,43 @@ def test_every_test_directory_a_module_has_is_a_known_lane() -> None:
         f"Add the lane to _LANES here and to whatever selects it, or move the "
         f"files into an existing one."
     )
+
+
+def test_no_fixture_is_named_like_a_test() -> None:
+    """`@pytest.fixture def test_connector(...)` reads as a test to everything.
+
+    pytest knows the decorator wins, but nothing else does: an audit counted
+    one of these as a test that asserts nothing, and the day somebody
+    refactors the decorator off it, it becomes an always-passing test for
+    real.
+    """
+    import ast
+
+    offenders: list[str] = []
+    for path in sorted((_BACKEND / "app").rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test_"):
+                continue
+            # The decorator itself, not anything mentioning fixtures:
+            # `@pytest.mark.usefixtures("x")` names a fixture and defines a
+            # test, which is the opposite of what this looks for.
+            decorators = {
+                ast.unparse(d.func if isinstance(d, ast.Call) else d)
+                for d in node.decorator_list
+            }
+            if any(
+                decorator.rsplit(".", 1)[-1] == "fixture" for decorator in decorators
+            ):
+                offenders.append(
+                    f"{path.relative_to(_BACKEND)}:{node.lineno} {node.name}"
+                )
+
+    assert not offenders, (
+        f"fixtures named like tests: {offenders}. Name it for what it provides "
+        f"— the `test_` prefix means 'a test' to every reader and every tool "
+        f"except pytest's own decorator handling, and it becomes a real "
+        f"always-passing test the day the decorator comes off."
+    )

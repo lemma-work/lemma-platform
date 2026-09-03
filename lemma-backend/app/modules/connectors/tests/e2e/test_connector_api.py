@@ -15,8 +15,12 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 
 
+# Not `test_connector`: a fixture whose name starts with `test_` reads as a
+# test to everything that is not pytest itself -- an audit counted this one
+# as an assertion-free test -- and becomes one for real the moment somebody
+# refactors the decorator off it.
 @pytest.fixture
-async def test_connector(db_session: AsyncSession):
+async def seeded_connector(db_session: AsyncSession):
     app = Connector(
         id="google_calendar",
         title="Google Calendar",
@@ -58,7 +62,7 @@ async def _seed_trigger_auth_config(
 
 
 @pytest.mark.asyncio
-async def test_list_connectors(authenticated_client: AsyncClient, test_connector):
+async def test_list_connectors(authenticated_client: AsyncClient, seeded_connector):
     response = await authenticated_client.get("/connectors")
     assert response.status_code == 200, response.text
     data = response.json()
@@ -66,19 +70,19 @@ async def test_list_connectors(authenticated_client: AsyncClient, test_connector
     assert len(data["items"]) >= 1
     found = False
     for item in data["items"]:
-        if item["id"] == test_connector.id:
+        if item["id"] == seeded_connector.id:
             found = True
-            assert item["title"] == test_connector.title
+            assert item["title"] == seeded_connector.title
 
     assert found
 
 
 @pytest.mark.asyncio
-async def test_get_connector(authenticated_client: AsyncClient, test_connector):
-    response = await authenticated_client.get(f"/connectors/{test_connector.id}")
+async def test_get_connector(authenticated_client: AsyncClient, seeded_connector):
+    response = await authenticated_client.get(f"/connectors/{seeded_connector.id}")
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == test_connector.id
+    assert data["id"] == seeded_connector.id
     assert data["operations"]["list_events"]["description"] == "List calendar events"
 
 
