@@ -33,10 +33,10 @@ Given a problem statement, answer these in order:
 6. **External actions → connectors.** Which third-party apps are touched (Gmail, Slack, Calendar)? Note the connector ids and the operations needed; they get wired through an org auth config and granted (`connector.use`) to the workloads that call them. Connectors are **not** part of the bundle — record their setup in the README (see `connectors.md`).
 7. **Experience → chat, surface, or app.** How do users meet the pod? The interface is often the whole product — design it like the thing people will live in, not an afterthought. For an app, the design-doc-first method lives in `apps.md` → "Plan first".
    - occasional Q&A or ad-hoc tasks → agent chat is enough
-   - users live in Slack/Teams/WhatsApp/email → **surface** (`surfaces.md`)
+   - users live in Slack/Teams/Telegram/WhatsApp/email → **surface** (`surfaces.md`)
    - operators work queues daily, submit workflow forms, need dashboards → **app** (single-file HTML for one page/dashboard; Vite for a multi-page app)
 
-   **Surface vs. event-workflow** (heuristic #3): if a *human converses* on a chat platform, it's a **surface**; if a *system event* (inbound mail treated as data, a row change) drives *unattended* work, it's an **event-based schedule → workflow/agent**. The same Gmail account can back both — a surface answers people conversationally while a `WEBHOOK` schedule runs the intake pipeline. See the *Reacting to events* table below.
+   **Surface vs. event-workflow** (heuristic #3): if a *human converses* on a chat platform, it's a **surface**; if a *system event* (inbound mail treated as data, a row change) drives *unattended* work, it's an **event-based schedule → workflow/agent**. Both can be about email at once — the pod's own agent address answers people conversationally (a **surface**) while a `WEBHOOK` schedule on the Gmail *connector* runs the intake pipeline. Note that Gmail and Outlook are **connectors, not surfaces**: a pod is reached on email at its own provisioned address (`surfaces.md`). See the *Reacting to events* table below.
 8. **Hero moment → the one demo-able "oh".** Name the single thing this pod does that a one-shot chatbot or a CRUD form can't — the agent doing real work on its own, behind an interface someone adopts. Make it screenshottable in ~60 seconds with no narration ("the agent texts you on WhatsApp before declining the meeting"; "a stale lead turns red and the scout has already drafted the nudge"). The hero moment is the agentic unlock made visible — design the app, surface, and seed data so it lands the moment someone opens the pod. If you can't point to one, the pod is plumbing, not a product; rethink before building.
 9. **Seed it so it demos itself.** Sample rows, a few files, one completed workflow run — enough that opening the pod or app shows the hero moment immediately instead of an empty state. Put seed commands in a `seed/seed.sh` (CLI calls / a small SDK script) so anyone can reproduce the live demo after import. (File contents and records are not part of bundle import — the seed script is how they get there; record it in the README.)
 10. **Success criteria.** Write the one end-to-end scenario that proves the pod works. This becomes your final verification script.
@@ -88,7 +88,7 @@ Keep the note short (half a page). Name every resource in it — those names bec
 
 | Trigger | Use |
 | --- | --- |
-| A human converses on a chat platform (Slack/Teams/WhatsApp/email) | **Surface** — the agent answers conversationally (`surfaces.md`) |
+| A human converses on a chat platform (Slack/Teams/Telegram/WhatsApp) or emails the agent's address | **Surface** — the agent answers conversationally (`surfaces.md`) |
 | A system event drives unattended work — a connector trigger or a table write/update | **Schedule** (`WEBHOOK` / `DATASTORE`) → **workflow or agent** (`schedules-and-triggers.md`) |
 | One workload should react to what another wrote | `DATASTORE` schedule on the written table → the reacting workload (heuristic #4) |
 | An app must reflect row changes live | `datastore.watchChanges` (WebSocket, client-side) — never poll (`apps.md`) |
@@ -96,7 +96,7 @@ Keep the note short (half a page). Name every resource in it — those names bec
 ### Parsing a document
 
 - In, or going into, the pod → **pod auto-processing**: upload it and read the
-  auto-produced `…/document.md`, `…/pages/*.jpg`, `…/images/*.png` via `lemma file`
+  auto-produced `…/document.md`, `…/pages/*.jpg`, `…/image_N.png` via `lemma file`
   (no parsing step; it's also indexed for search).
 - From the web/external, a local one-off, or a pod file **missing** its derived
   artifact (scanned/OCR, bounding boxes) → **liteparse** (`lit`, the
@@ -113,14 +113,16 @@ exactly one agent or one workflow:
 
 ## Roles & Access
 
-Pod **members** (humans) hold one of four roles, assigned by an admin. This is separate from the zero-default **workload grants** that functions and agents receive per resource (see `functions.md`).
+Pod **members** (humans) hold one of four roles, assigned by an admin. It is a different ledger from the zero-default **workload grants** that functions and agents receive per resource (see `functions.md`) — **and it is also the ceiling on them**: a workload does only what its grants *and* the person it acts for both allow, so a member's role decides how far any agent gets on their behalf (`authorization-model.md` §2). Design the role before you design the grants.
 
 | Role | Can |
 | --- | --- |
 | `POD_VIEWER` | Read tables, records, and files |
-| `POD_USER` | + write records; run agents, functions, and workflows |
-| `POD_EDITOR` | + create/update tables; write files |
-| `POD_ADMIN` | + delete tables/files; manage members and roles |
+| `POD_USER` | + write records; run agents, functions, and workflows; use connectors and connected accounts; create their own schedules |
+| `POD_EDITOR` | + create/update tables, agents, functions, workflows, apps and schedules; write files |
+| `POD_ADMIN` | + delete tables/files/agents/functions/workflows/apps/schedules; manage members, roles and connector accounts |
+
+The bottom two rows are the destructive set from `authorization-model.md` §3 — which is why an approval from an `EDITOR` cannot unlock a delete, and why a pod whose automation deletes things needs an admin behind it.
 
 Record writes require `POD_USER` or above on **both** RLS and shared tables — RLS changes *which rows* a member touches, not *whether* they can write. On an RLS table **everyone is scoped to their own rows, pod admins included**; reading across all members takes an explicit `mode=admin` request and table-admin permission (see `tables.md`).
 

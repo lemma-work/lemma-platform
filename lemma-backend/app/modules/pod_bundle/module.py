@@ -1,8 +1,11 @@
 """Pod bundle module registration.
 
 Export, import, and GitHub sharing of pods as bundles — long-running work runs
-as streaq jobs with ephemeral Redis state. No migrations: this module owns no
-tables.
+as streaq jobs whose state is authoritative in PostgreSQL (`pod_bundle_jobs`,
+`pod_bundle_job_steps`) and mirrored to Redis for realtime. The docstring here
+used to say the module owned no tables and needed no migrations; both stopped
+being true when job state became durable, which left an operator with two
+growing tables nothing told them to watch.
 """
 
 from app.core.registry import LemmaModule
@@ -25,6 +28,7 @@ def _routers():
 def _register_streaq() -> None:
     import app.modules.pod_bundle.events.handlers  # noqa: F401
     import app.modules.pod_bundle.events.publish_task  # noqa: F401
+    import app.modules.pod_bundle.events.sweep  # noqa: F401
 
 
 module = LemmaModule(

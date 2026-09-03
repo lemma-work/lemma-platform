@@ -36,6 +36,7 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.poll_backoff import poll_delay
 from app.composition.authorization import create_authorization_service
 from app.composition.agent_usage import build_usage_service
 
@@ -51,6 +52,9 @@ class SubAgentHandle:
     status: str
 
 
+#: Pause between the first few checks of a child run; `poll_delay` grows it
+#: from there, because a wait that lasts minutes should not spend a pooled
+#: connection every second asking.
 _AWAIT_POLL_SECONDS = 1.0
 
 
@@ -318,6 +322,7 @@ class SubAgentService:
         """Poll the child run until terminal or timeout (fresh reads each tick)."""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout_seconds
+        attempt = 0
         while True:
             async with self.uow_factory() as uow:
                 await self._owned_child(uow, deps, conversation_id)
@@ -341,4 +346,11 @@ class SubAgentService:
                         "or interact_subagent (action='await') again."
                     ),
                 }
-            await asyncio.sleep(_AWAIT_POLL_SECONDS)
+            attempt += 1
+            await asyncio.sleep(
+                poll_delay(
+                    attempt,
+                    base_seconds=_AWAIT_POLL_SECONDS,
+                    remaining_seconds=deadline - loop.time(),
+                )
+            )

@@ -21,11 +21,16 @@ import pytest
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
-MODULES_ROOT = Path(__file__).resolve().parents[2]
+MODULES_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _conftests() -> list[Path]:
-    return sorted(MODULES_ROOT.glob("*/tests/e2e/conftest.py"))
+    found = sorted(MODULES_ROOT.glob("*/tests/e2e/conftest.py"))
+    # Counting from this file's own depth is what makes the glob wrong the
+    # moment the file moves, and an empty parameter set skips rather than
+    # fails — so the walk has to say it found nothing.
+    assert found, f"no module e2e conftest found under {MODULES_ROOT}"
+    return found
 
 
 def _rebound_names(tree: ast.Module) -> set[str]:

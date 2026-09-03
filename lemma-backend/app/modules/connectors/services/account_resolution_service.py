@@ -6,17 +6,28 @@ Resolution rule:
   early-return below handles it.
 - **Default pod agent**: mirrors the invoking user, so it resolves to the
   user's own account for the connector.
-- **Named workload with a pinned (shared) account id**: authority comes from
-  the workload's grants alone — ``connector.use`` on the connector plus
-  ``connector_account.use`` on the pinned account — and is therefore
-  invoker-independent. This is what makes a shared-sender setup (e.g. one
-  team Gmail account pinned on a function) work for every pod member.
+- **Named workload with a pinned (shared) account id**: the workload needs
+  ``connector.use`` on the connector plus ``connector_account.use`` on the
+  pinned account. This is the shared-mailbox pattern — one team account an
+  agent operates on behalf of the pod — and it works for every member who may
+  run the agent, which is the point of it. The pod is the trust boundary: an
+  agent visible inside it, configured with an account, uses that account
+  whoever set the run going.
 
-Connector-account *visibility* is derived (RESTRICTED iff any grant row
-exists); for human actors that still means "non-owners need a user-level
-grant". For workloads the derived visibility is inert: the grant-first
-evaluation in ``_authorize_delegated_workload`` consults the workload's own
-grants for every visibility.
+  A workload's authority is still its grants intersected with the invoking
+  person's (PS-ACCESS-020, ``core/authorization/workload_authority.py``). What
+  makes both true at once is that the invoker half asks whether *they* may use
+  the account, and a grant to an agent is a workload capability grant that does
+  not restrict people from the resource — see ``HUMAN_GRANTEE_TYPES``. So a
+  member holding ``connector_account.use`` passes; a POD_VIEWER, who holds no
+  such permission at all, still does not.
+
+Connector-account *visibility* is derived: RESTRICTED once a **human** sharing
+grant exists on it, POD-visible otherwise. Workload grants are deliberately not
+counted, or pinning an account on an agent would be the very act that hid the
+account from the people the agent runs for. Visibility is not what keeps a
+person out of a colleague's account either — ``_get_owned_account`` refuses a
+non-delegated caller another person's account outright, whatever it says.
 """
 
 from uuid import UUID
@@ -269,12 +280,17 @@ class AccountResolutionService:
         try:
             await auth_actor.require(action, resource)
         except Exception as exc:
+            # The two halves of the intersection fail for opposite reasons and
+            # are fixed in opposite places -- grant the workload, or raise the
+            # access of the person running it -- so say which one gave way
+            # rather than sending everyone to look at the workload's grants.
+            reason_code = str(getattr(exc, "code", "ACCESS_DENIED"))
             raise ConnectorAccessDeniedError(
-                "Delegated workload is not authorized",
-                details={
-                    "reason_code": getattr(exc, "code", "ACCESS_DENIED"),
-                    "action": str(action),
-                },
+                "The person running this workload is not allowed to use this "
+                "connector account themselves"
+                if reason_code == "DELEGATION_EXCEEDS_INVOKER"
+                else "Delegated workload is not authorized",
+                details={"reason_code": reason_code, "action": str(action)},
             ) from exc
 
     async def resolve_account(

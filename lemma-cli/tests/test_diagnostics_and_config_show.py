@@ -130,3 +130,39 @@ def test_config_show_json_still_carries_the_loader_summary(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["project_env"]["files"] == [".lemma.env"]
     assert payload["project_env"]["project_dir"] == str(root)
+
+
+# --- doctor: CLI/SDK pairing ----------------------------------------------
+
+
+def _doctor_without_a_server(monkeypatch):
+    """`doctor` with the server lookup stubbed out: the pairing check is local."""
+    from lemma_cli.cli_core.commands import system
+
+    monkeypatch.setattr(
+        system, "_fetch_server_api_version", lambda _state: (None, "unreachable")
+    )
+
+
+def test_doctor_reports_an_sdk_that_does_not_match_this_cli(tmp_path, monkeypatch):
+    """The CLI reaches into generated SDK request classes, so a CLI pinned to an
+    older release paired with a newer `lemma-sdk` fails as an AttributeError
+    traceback. `doctor` already knew both versions and never compared them."""
+    from lemma_cli.cli_core import versions
+
+    _doctor_without_a_server(monkeypatch)
+    monkeypatch.setattr(versions, "sdk_dist_version", lambda: "9.9.9")
+
+    result = _invoke(["--json", "doctor"], tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["sdk_pairing"] == "version_mismatch"
+    assert versions.cli_version() != "9.9.9"
+
+
+def test_doctor_says_nothing_is_wrong_when_the_pairing_matches(tmp_path, monkeypatch):
+    _doctor_without_a_server(monkeypatch)
+
+    result = _invoke(["--json", "doctor"], tmp_path)
+
+    assert json.loads(result.stdout)["sdk_pairing"] == "in_sync"

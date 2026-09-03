@@ -104,6 +104,7 @@ async def get_operation_details_batch(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_names=body.operation_names,
+        limit=body.limit,
     )
 
 

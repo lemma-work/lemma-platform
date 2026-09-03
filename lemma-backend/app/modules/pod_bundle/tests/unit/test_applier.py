@@ -1206,3 +1206,107 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
     applier = _applier(root, replacements={"teams_account": str(account)})
     await applier.apply_step(_step(StepKind.SURFACE, "teams"))
     assert surface_fake.created is not None
+
+
+async def test_an_explicitly_empty_grant_list_clears_the_target_s_grants(
+    tmp_path, monkeypatch
+):
+    """`{"grants": []}` is a write meaning "this workload holds nothing".
+
+    The exporter goes out of its way to keep it distinct from an absent
+    `permissions` key ("leave the target's grants alone"), because collapsing
+    the two lets an export silently change an imported workload's access. The
+    applier discarded the distinction at the other end: it parsed the manifest
+    first and returned on an empty list, so importing a bundle that says an
+    agent holds nothing into a pod whose same-named agent holds something left
+    those grants in place."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {"name": "support", "permissions": {"grants": []}},
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    # The replace ran with nothing to write, which is what clears the row set;
+    # `grants` on the call is the normalize stub's sentinel, so the empty input
+    # is what the assertion has to look at.
+    assert calls["replace"]["grantee_id"] == _AGENT_ID
+    assert calls["normalized"] == []
+
+
+async def test_an_agent_manifest_without_permissions_leaves_grants_alone(
+    tmp_path, monkeypatch
+):
+    """The other half of the distinction: no `permissions` key is not a write."""
+    root = tmp_path / "bundle"
+    _write(root / "agents" / "support" / "support.json", {"name": "support"})
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    assert "replace" not in calls
+
+
+async def test_an_unreadable_files_manifest_is_reported_not_silently_defaulted(
+    tmp_path, monkeypatch
+):
+    """A malformed `.files.json` imports every file with default description,
+    `visibility="POD"` and search on.
+
+    POD is the conservative direction, so the import is not wrong -- but it is a
+    silent default on a visibility field, and returning `{}` mutely left nobody
+    with any way to know the bundle had said otherwise. Reported once for the
+    manifest, not once per file it describes."""
+    root = tmp_path / "bundle"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / ".files.json").write_text("{ not json", encoding="utf-8")
+    for name in ("guide.md", "notes.md"):
+        (root / "files" / name).write_text("hi", encoding="utf-8")
+    fake = _FakeFileService()
+    monkeypatch.setattr(
+        "app.modules.datastore.api.dependencies.build_file_service", lambda uow: fake
+    )
+
+    warnings: list[str] = []
+    applier = _applier(root, warnings=warnings)
+    await applier.apply_step(_file_step("guide.md", is_folder=False))
+    await applier.apply_step(_file_step("notes.md", is_folder=False))
+
+    assert len(fake.created_files) == 2
+    assert len(warnings) == 1
+    assert ".files.json" in warnings[0]
+
+
+async def test_a_bundle_with_no_files_manifest_warns_about_nothing(
+    tmp_path, monkeypatch
+):
+    """Absent is normal -- a bundle need not carry layout metadata at all."""
+    root = tmp_path / "bundle"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / "guide.md").write_text("hi", encoding="utf-8")
+    fake = _FakeFileService()
+    monkeypatch.setattr(
+        "app.modules.datastore.api.dependencies.build_file_service", lambda uow: fake
+    )
+
+    warnings: list[str] = []
+    await _applier(root, warnings=warnings).apply_step(
+        _file_step("guide.md", is_folder=False)
+    )
+
+    assert fake.created_files == [("guide.md", b"hi", "/", "POD", True)]
+    assert warnings == []

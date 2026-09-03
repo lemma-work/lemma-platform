@@ -70,6 +70,7 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
     SurfaceFileIngestService,
+    every_attachment_failed,
 )
 from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
@@ -242,13 +243,29 @@ class AgentSurfaceIngressService(
         # so surface files behave like web uploads; failures never block the run.
         ingest = AttachmentIngest()
         if context.pod_id is not None:
-            with suppress(Exception):
+            try:
                 ingest = await self.file_ingest_service.ingest_attachments(
                     pod_id=context.pod_id,
                     platform=context.platform,
                     user_id=context.user_id,
                     parsed=context.event,
                     credentials=credentials,
+                )
+            except Exception as exc:
+                # `ingest_attachments` reports a per-file failure itself, so
+                # reaching here is the whole call coming apart. This was a
+                # `suppress`, which left `ingest` empty -- indistinguishable
+                # downstream from a message that carried no files, which is the
+                # one thing `failed_files` below exists to prevent. The run
+                # still goes ahead: losing the photo is not a reason to lose
+                # the question that came with it.
+                logger.warning(
+                    "agent_surfaces.ingress_service.attachment_ingest_failed.degraded",
+                    error_type=type(exc).__name__,
+                    surface_id=str(context.surface_id) if context.surface_id else None,
+                )
+                ingest = every_attachment_failed(
+                    context.event, reason="Lemma could not receive this file"
                 )
         ingested: list[IngestedAttachment] = ingest.saved
 

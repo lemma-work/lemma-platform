@@ -18,8 +18,14 @@ from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 
 
 def get_schedule_service(uow: UoWDep) -> ScheduleService:
-    """Provide schedule service."""
-    return ScheduleService(uow=uow)
+    """Provide schedule service.
+
+    The webhook registry comes in here because this is the one factory every
+    creator of a schedule reaches -- the API, pod-bundle import, surface
+    lifecycle -- so a WEBHOOK schedule is checked against the sources this
+    deployment actually accepts no matter which door it arrives through.
+    """
+    return ScheduleService(uow=uow, webhook_sources=get_webhook_source_registry())
 
 
 def get_webhook_handler(

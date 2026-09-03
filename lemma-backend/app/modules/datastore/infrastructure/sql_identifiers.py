@@ -29,6 +29,37 @@ def sanitize_identifier(identifier: str) -> str:
     return identifier
 
 
+#: PostgreSQL's identifier ceiling. Longer names are truncated *silently*, so
+#: two table or column names sharing a 63-byte prefix become one object in the
+#: physical schema: the second ``table.create`` answers 409 "already exists" for
+#: a name ``table.list`` does not show, and nothing tells the user why.
+#: ``record_indexes.py`` already defends its generated names against exactly
+#: this; the user-chosen ones underneath had no rule at all.
+MAX_IDENTIFIER_BYTES = 63
+
+
+def ensure_identifier_fits(identifier: str, *, kind: str) -> str:
+    """Reject a name PostgreSQL would truncate, naming the limit.
+
+    Measured in encoded bytes rather than characters, which is what PostgreSQL
+    counts: a non-ASCII name reaches the ceiling sooner than its length says.
+
+    Deliberately not folded into ``sanitize_identifier``, which also runs on the
+    read path -- a table created before this rule exists is already truncated in
+    the physical schema and still resolves, and refusing it there would take a
+    working table away rather than prevent a broken one.
+    """
+    encoded = len(identifier.encode("utf-8"))
+    if encoded > MAX_IDENTIFIER_BYTES:
+        raise DatastoreValidationError(
+            f"{kind} '{identifier}' is {encoded} bytes; PostgreSQL truncates "
+            f"names at {MAX_IDENTIFIER_BYTES} bytes, which would silently "
+            "collide with another name sharing that prefix. Choose a shorter "
+            "name."
+        )
+    return identifier
+
+
 def escape_like(value: str) -> str:
     """Escape ``%``/``_`` wildcards for a ``LIKE ... ESCAPE '!'`` clause."""
     return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")

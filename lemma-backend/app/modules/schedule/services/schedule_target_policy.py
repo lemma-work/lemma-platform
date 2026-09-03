@@ -27,6 +27,7 @@ recognised the *name*; this sees the resolved target and asks it directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.authorization.context import ResourceRef, ResourceType
@@ -40,6 +41,7 @@ from app.modules.schedule.domain.interfaces import ScheduleTarget
 from app.modules.schedule.domain.schedule import (
     INSTRUCTION_REQUIRED,
     ScheduleCreateEntity,
+    ScheduleEntity,
     ScheduleUpdateEntity,
 )
 
@@ -94,6 +96,25 @@ def validate_single_target(schedule_create: ScheduleCreateEntity) -> bool:
             "Schedule can target either an agent or workflow, not both"
         )
     return any(targets)
+
+
+def validate_global_workflow_is_unclaimed(
+    conflicting: Sequence[ScheduleEntity],
+) -> None:
+    """A GLOBAL workflow gets one schedule per user per pod, and no more.
+
+    Create and update both have to enforce it; stating it once is what keeps
+    them from naming different schedules as the conflict.
+    """
+    if not conflicting:
+        return
+    raise ScheduleValidationError(
+        "Global workflow already has a schedule for this user in this "
+        "pod (GLOBAL workflows are system-wide singletons). "
+        f"Conflicting schedule: '{conflicting[0].name}' "
+        f"({conflicting[0].id}). Update or delete it instead of "
+        "creating another."
+    )
 
 
 def validate_target_instruction(agent, instruction: str | None) -> None:

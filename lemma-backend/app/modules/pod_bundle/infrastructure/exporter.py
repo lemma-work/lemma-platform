@@ -40,13 +40,15 @@ from lemma_pod_bundle.normalize import (
     _normalize_function_payload,
     _normalize_pod_payload,
     _normalize_schedule_payload,
-    _normalize_surface_payload,
     _normalize_table_payload,
     _normalize_workflow_payload,
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
+    export_surfaces,
+)
 from app.core.authorization.context import Context
 from app.core.concurrency.offload import run_blocking
 from app.core.helpers.slug import slugify
@@ -336,6 +338,8 @@ class BundleExporter:
                             pod_id=pod_id,
                             grantee_type="FUNCTION",
                             grantee_id=grantee_id,
+                            warnings=warnings,
+                            grantee_name=function_name,
                         )
                         # Attach even an EMPTY grant list — see
                         # _resource_grants_payload for why None differs from [].
@@ -360,6 +364,7 @@ class BundleExporter:
                     user_id=user_id,
                     ctx=ctx,
                     grants_payload=_resource_grants_payload,
+                    warnings=warnings,
                 )
                 done += 1
                 await on_progress(done, total)
@@ -422,7 +427,7 @@ class BundleExporter:
 
             # --- surfaces (best-effort) ---------------------------------------
             if "surfaces" in selected:
-                await self._export_surfaces(root, uow, pod_id)
+                await export_surfaces(root, uow, pod_id, warnings)
                 done += 1
                 await on_progress(done, total)
 
@@ -538,58 +543,6 @@ class BundleExporter:
         data_budget.consume(len(csv_text.encode("utf-8")))
         return kept, max(available, len(cleaned))
 
-    async def _export_surfaces(
-        self, root: Path, uow: SqlAlchemyUnitOfWork, pod_id: UUID
-    ) -> None:
-        """Export configured surfaces best-effort: a surface that can't be
-        serialized is skipped with a warning, never failing the whole export."""
-        from app.composition.pod_bundle_resources import (
-            _surface_response,
-        )
-        from app.composition.pod_bundle_resources import get_surface_service
-
-        try:
-            service = get_surface_service(uow)
-            surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
-        except Exception:  # noqa: BLE001 - surfaces are best-effort
-            logger.debug(
-                "pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic",
-                pod_id=pod_id,
-            )
-            return
-
-        seen_names: set[str] = set()
-        for surface in surfaces:
-            try:
-                raw_surface = _dump_response(_surface_response(surface))
-                account_id = raw_surface.get("account_id")
-                if account_id:
-                    info = await _resolve_account_connector_info(
-                        uow, UUID(str(account_id))
-                    )
-                    if info is None:
-                        raise ValueError(
-                            f"Surface references account {account_id}, which no "
-                            "longer exists."
-                        )
-                    raw_surface["connector_id"], raw_surface["connector_kind"] = info
-                payload = _normalize_surface_payload(raw_surface)
-                platform = str(payload.get("platform") or "")
-                # De-dup by the surface's pod-unique name (not platform), so a pod
-                # with several surfaces of one platform exports all of them.
-                surface_name = str(payload.get("name") or "")
-                if not platform or not surface_name or surface_name in seen_names:
-                    continue
-                seen_names.add(surface_name)
-                dir_ = root / "surfaces" / surface_name
-                dir_.mkdir(parents=True, exist_ok=True)
-                _write_json(dir_ / f"{surface_name}.json", payload)
-            except Exception:  # noqa: BLE001 - one bad surface is not fatal
-                logger.debug(
-                    "pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic",
-                    pod_id=pod_id,
-                )
-
     async def _export_app_assets(
         self,
         *,
@@ -688,6 +641,8 @@ async def _resource_grants_payload(
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
+    warnings: list[str],
+    grantee_name: str,
 ) -> dict[str, Any] | None:
     """Serialize an agent's/function's resource grants into the bundle's portable
     ``{"grants": [...]}`` shape (keyed by ``resource_name``, never a source-org id).
@@ -698,11 +653,13 @@ async def _resource_grants_payload(
     but can't call the tables/functions it was granted. ``list_grantee_resource_grants``
     already drops grants whose resource no longer resolves to a name, and the applier
     skips any that don't resolve in the target pod, so this stays best-effort/portable.
-    Best-effort: a failure to read grants logs and returns ``None`` — "grants
-    unknown, leave the target's alone" — rather than sinking the whole export. A
-    grantee that simply holds none returns ``{"grants": []}``, which imports as
-    "holds nothing". Collapsing those two is what let an export silently change an
-    imported workload's access."""
+    Best-effort: a failure to read grants logs, warns the exporter, and returns
+    ``None`` — "grants unknown, leave the target's alone" — rather than sinking
+    the whole export. A grantee that simply holds none returns ``{"grants": []}``,
+    which imports as "holds nothing". Collapsing those two is what let an export
+    silently change an imported workload's access — and returning ``None``
+    *without* a warning is the same silence by another route, because the
+    imported workload then runs on whatever the target pod happens to grant."""
     from app.core.authorization.grants import list_grantee_resource_grants
 
     try:
@@ -712,11 +669,16 @@ async def _resource_grants_payload(
             grantee_type=grantee_type,
             grantee_id=grantee_id,
         )
-    except Exception:  # noqa: BLE001 - grant export is best-effort
+    except Exception as exc:  # noqa: BLE001 - grant export is best-effort
         logger.debug(
             "pod_bundle.exporter.skipping_grant_export_s_s.diagnostic",
             grantee_type=grantee_type,
             grantee_id=grantee_id,
+        )
+        warnings.append(
+            f"{grantee_type.lower()} '{grantee_name}' exported without its "
+            f"permissions: they could not be read ({type(exc).__name__}). On "
+            f"import it will keep whatever grants the target pod already gives it."
         )
         return None
     return {

@@ -41,11 +41,24 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigStatus,
 )
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
+from app.modules.connectors.services.auth.mcp_install_authorization import (
+    MCP_OAUTH_CONFIG_KEY,
+    negotiate_mcp_authorization,
+)
+from app.modules.connectors.services.install_provisioning import (
+    DiscoveryOutcome,
+    DiscoveryStatus,
+)
 from app.modules.connectors.services.install_service_seam import (
     InstallServiceSeam,
 )
 
 logger = get_logger(__name__)
+
+#: An install's configuration: keys the connector's schema declares, plus the
+#: `oauth` block the system writes. Tenant-shaped, so the values are only known
+#: once something reads a named one.
+InstallConfig = dict[str, object]
 
 # Config keys that name where we connect to, per kind. A change to any of them
 # means the credential now points at a different system.
@@ -174,12 +187,16 @@ def merged_install_config(
 
     And keys the system wrote are not in the user's form at all. MCP OAuth
     registration stores an ``oauth`` block -- issuer, endpoints, a dynamically
-    registered client id and secret -- after validation, and only ever at
-    create time. A replace dropped it, and nothing re-negotiates on update, so
-    an install that had been signed into reverted to a paste-a-token one that
-    could no longer refresh anybody's credential. The install schema declares
-    what the person owns; anything else on the record was put there for them
-    and survives an edit they never saw it in.
+    registered client id and secret -- after validation. A replace dropped it,
+    so an install that had been signed into reverted to a paste-a-token one
+    that could no longer refresh anybody's credential. The install schema
+    declares what the person owns; anything else on the record was put there
+    for them and survives an edit they never saw it in.
+
+    Preserving is the right default and the wrong answer for exactly one case,
+    which `renegotiated_authorization` below handles: an ``oauth`` block
+    carried onto a *different* server describes an authorization server that
+    has never heard of the new one.
     """
     existing = dict(stored or {})
     merged = dict(existing)
@@ -198,6 +215,54 @@ def _unmasked(stored: Any, submitted: Any) -> Any:
             key: _unmasked(nested.get(key), value) for key, value in submitted.items()
         }
     return submitted
+
+
+async def renegotiated_authorization(
+    *,
+    kind: ConnectorKind,
+    before: InstallConfig | None,
+    after: InstallConfig,
+    redirect_uri: str,
+) -> InstallConfig:
+    """Ask the *new* server how people are meant to sign in to it.
+
+    The `oauth` block is one of the keys `merged_install_config` preserves --
+    issuer, endpoints, `resource`, and a client registered with the previous
+    server. Carried across a move to a different origin it is worse than
+    nothing: every account has just been marked ``REAUTH_REQUIRED``, and each
+    one then reconnects against an authorization server that has never heard of
+    the resource it is presenting a token for. The new server refuses the
+    token, and there is no way out except deleting the install -- which
+    cascades away the accounts this module exists to keep.
+
+    Only when the target actually moved, and only when the block being carried
+    is the one we stored. Re-registering on every edit would leave a trail of
+    abandoned clients on the tenant's server, which is the reason
+    `negotiate_mcp_authorization` declines to do it; and a block the caller
+    supplied with this very edit is their answer, not ours to replace.
+    """
+    if kind is not ConnectorKind.MCP:
+        return after
+    if not _target_changed(kind, dict(before or {}), after):
+        return after
+    stored = (before or {}).get(MCP_OAUTH_CONFIG_KEY)
+    carried = after.get(MCP_OAUTH_CONFIG_KEY)
+    if carried is not None and carried != stored:
+        return after
+    fresh = {key: value for key, value in after.items() if key != MCP_OAUTH_CONFIG_KEY}
+    logger.info(
+        # `authorization` is a banned field-name fragment (it only ever holds a
+        # secret), so the flag says what it means instead: an install that had
+        # been signed into is being re-registered against the new server.
+        "connectors.install_update.renegotiating_mcp_authorization",
+        replacing_registered_client=stored is not None,
+    )
+    # A server that wants no authorization, or describes none we can follow,
+    # returns the config untouched -- which is the correct outcome, and the
+    # reason the stale block has to be dropped before asking rather than after.
+    return await negotiate_mcp_authorization(
+        kind=kind.value, config=fresh, redirect_uri=redirect_uri
+    ) or dict(fresh)
 
 
 async def mark_accounts_for_reauth(
@@ -253,12 +318,13 @@ async def update_install(
     config: dict[str, Any] | None = None,
     status: str | None = None,
     is_default: bool | None = None,
-) -> tuple[AuthConfigEntity, int, int]:
-    """Apply an update, returning ``(install, discovered, accounts_marked)``.
+) -> tuple[AuthConfigEntity, "DiscoveryOutcome", int]:
+    """Apply an update, returning ``(install, discovery, accounts_marked)``.
 
-    The counts are returned rather than logged and forgotten so an admin is
-    told what their change actually did -- particularly that some accounts now
-    need reconnecting -- instead of finding out when something stops working.
+    The outcome and the count are returned rather than logged and forgotten so
+    an admin is told what their change actually did -- particularly that some
+    accounts now need reconnecting, or that the new server refused to list its
+    tools -- instead of finding out when something stops working.
     """
     await service._require_org_member(
         user_id=user_id,
@@ -269,6 +335,12 @@ async def update_install(
         organization_id=organization_id, auth_config_name=auth_config_name
     )
     connector = await service.get_connector(auth_config.connector_id)
+    stored_config = auth_config.config
+    # Nothing is written until `apply_updates` below, and everything between
+    # here and there reaches the network -- the SSRF guard resolves DNS, and
+    # re-negotiation is up to three round trips to a server the tenant names.
+    # So the pooled connection goes back first. See `docs/development.md`.
+    await service.uow.commit()
 
     rediscover = invalidates = False
     if config is not None:
@@ -280,9 +352,17 @@ async def update_install(
         # submission directly reads every omitted key as a change: a PATCH that
         # only renames an install marked every account REAUTH_REQUIRED and
         # re-ran discovery, for a target that had not moved.
-        config = merged_install_config(auth_config.config, validated)
+        config = merged_install_config(stored_config, validated)
         rediscover, invalidates = config_change_effects(
-            kind=auth_config.kind, before=auth_config.config, after=config
+            kind=auth_config.kind, before=stored_config, after=config
+        )
+        # Before the update is applied, so an install that moved is stored with
+        # the new server's authorization or with none -- never the old one's.
+        config = await renegotiated_authorization(
+            kind=auth_config.kind,
+            before=stored_config,
+            after=config,
+            redirect_uri=service.redirect_uri_builder.build(),
         )
 
     if is_default:
@@ -310,7 +390,9 @@ async def update_install(
         )
     await service.uow.commit()
 
-    discovered = 0
+    discovery = DiscoveryOutcome(
+        DiscoveryStatus.NOT_APPLICABLE, reason="target_unchanged"
+    )
     if rediscover:
         from app.modules.connectors.services.install_provisioning import (
             discover_install_operations,
@@ -319,11 +401,12 @@ async def update_install(
 
         # With a credential, for the same reason `refresh_install_operations`
         # uses one: an install whose token lives on the account cannot list its
-        # operations unauthenticated, and the 401 is swallowed into
-        # `discovered=0`. Without this, repointing an OAuth-protected MCP
-        # install reports success while leaving the OLD server's tool list in
-        # place, so every later call names a tool the new host does not have.
-        discovered = await discover_install_operations(
+        # operations unauthenticated, and an unauthenticated 401 would be
+        # reported as a discovery that simply found nothing. Without this,
+        # repointing an OAuth-protected MCP install leaves the OLD server's
+        # tool list in place, so every later call names a tool the new host
+        # does not have.
+        discovery = await discover_install_operations(
             auth_config,
             connector,
             repository=service.auth_config_operation_repository,
@@ -334,10 +417,11 @@ async def update_install(
         "connectors.connector_service.auth_config_updated",
         auth_config_id=auth_config.id,
         organization_id=organization_id,
-        operations_discovered=discovered,
+        operations_discovered=discovery.operation_count,
+        operations_discovery_status=discovery.status.value,
         accounts_marked_for_reauth=marked,
     )
-    return auth_config, discovered, marked
+    return auth_config, discovery, marked
 
 
 async def validate_updated_config(

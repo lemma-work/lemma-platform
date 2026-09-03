@@ -11,9 +11,17 @@ Design notes:
   short TTL, so each UTC day gets its own self-expiring key — no cron cleanup and
   no stale reads across days. The same ``INCR``/``EXPIRE`` pattern the schedule
   circuit breaker uses (:mod:`app.modules.schedule.services.schedule_fire_store`).
-- **Fails open**: a Redis blip must never block a legitimate export/import, so any
-  Redis error is logged and treated as "under the limit". The cap is an abuse
-  guard, not a correctness invariant.
+- **Fails open**: a Redis blip must never block a legitimate export/import, so a
+  Redis error *reading the counter* is logged and treated as "under the limit".
+  The cap is an abuse guard, not a correctness invariant — and it fails open into
+  a narrower gap than it looks: the job queue is Redis-backed too, so a Redis
+  outage stops the enqueue whether or not this counter answered. Once the
+  counter *has* answered, its verdict is enforced; only the read may fail open.
+- The cap is per **user**. PS-PACK-013 promises a bound per **organization**,
+  which this does not give: an organization with many members has no org-level
+  bound at all. Closing that needs an org-level limit to configure, so the two
+  are named apart here rather than the docstring claiming what the code does not
+  do.
 - The increment happens on the *accepted* path only (the caller invokes this after
   authorization, before enqueue), so a rejected over-limit attempt still counts —
   which is the desired behavior: hammering the endpoint keeps you rejected rather
@@ -71,6 +79,13 @@ class BundleRateLimiter:
         """
         if limit <= 0:
             return
+        # Only an unknown count fails open. The TTL write used to share this
+        # block's early return, so an EXPIRE that failed after a successful INCR
+        # skipped the check entirely: the counter had answered, the caller was
+        # over the limit, and the guard let them through anyway. A key that
+        # misses its TTL only lingers — the day is in the key, so it is never
+        # read on another one.
+        count: int | None = None
         try:
             redis = await self._get_redis()
             key = self._key(operation, user_id)
@@ -82,8 +97,10 @@ class BundleRateLimiter:
                 "pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded",
                 operation=operation,
                 user_id=user_id,
+                exc_info=True,
             )
-            return
+            if count is None:
+                return
         if count > limit:
             raise BundleRateLimitExceededError(
                 f"Daily {operation} limit reached ({limit} per day). "

@@ -58,9 +58,13 @@ function too. A workflow node runs as the workflow run owner but under the calle
 own grants, so the graph alone does not describe its effective behavior.
 
 Never overwrite the only baseline to create a candidate. Use an isolated eval pod,
-two versioned resources, or a reproducible bundle revision. Function schemas are not
-updated by ordinary upsert, so treat a schema change as a versioned target or recreate
-it deliberately outside the evaluation run.
+two versioned resources, or a reproducible bundle revision. A function's
+`input_schema`, `output_schema` and `config_schema` are *derived from its code*,
+not sent by the client, and every create or update that carries `code` re-analyzes
+it and refreshes all three along with `revision_hash`. So you cannot pin a schema
+while changing an implementation: pushing candidate code to the baseline function
+replaces the baseline outright, schemas included. Keep the two as separate
+resources and compare `revision_hash` to prove which one a run executed.
 
 ## Build replayable cases
 
@@ -118,9 +122,12 @@ Do not blanket-approve an agent while evaluating its approval behavior. Inspect
 `lemma conversations approvals <conversation-id>` and approve or deny the specific
 request with
 `lemma conversations approve <approval-id> --conversation <conversation-id>` (add
-`--deny` to reject). Always pass the approval id: omitting it resolves every pending
-request. Use session approval only when the contract explicitly requires it. An
-attempted unsafe action is evidence even if the platform blocks it.
+`--deny` to reject). Always pass the approval id: omitting it acts on *every*
+pending request in the conversation — it now lists them and asks before doing so,
+and `--yes` skips even that, so an unattended harness that omits the id will
+blanket-approve exactly what the case was meant to measure. Use `--session`
+approval only when the contract explicitly requires it. An attempted unsafe
+action is evidence even if the platform blocks it.
 
 ## Execute and collect native evidence
 
@@ -173,6 +180,10 @@ their platform work through `active_wait.wait_type` (`AGENT`, `FUNCTION`, or `TI
 For a human gate, require `active_wait.wait_type == HUMAN`, verify that the intended
 assignee sees it in `runs waiting`, submit the documented decision as that member,
 and verify the next state. Do not interpret a still-running platform wait as failure.
+`runs waiting` lists only form waits **assigned to you**: a form with no assignee
+is submittable by any member with execute access but belongs to nobody's queue, so
+assert the parked state from `runs get`'s `active_wait` and use the queue only to
+prove routing. An empty queue is not evidence that nothing is parked.
 
 ## Test delegated authority explicitly
 
@@ -182,11 +193,27 @@ Exercise authorization as a first-class contract, not only as failure debugging:
   another member's rows;
 - confirm `/me` resolves to that member's private tree;
 - confirm named agents and functions can access only explicitly granted resources;
-- expect `MISSING_WORKLOAD_RESOURCE_GRANT` for a missing workload grant and
-  distinguish it from a member-role `INSUFFICIENT_PERMISSION` failure;
+- distinguish the three refusal codes, because they have three different fixes:
+  `INSUFFICIENT_PERMISSION` (the member's role is short),
+  `MISSING_WORKLOAD_RESOURCE_GRANT` (the workload holds no grant for the action),
+  and `DELEGATION_EXCEEDS_INVOKER` (the workload *is* granted it and the person it
+  acts for is not). Assert the exact code; a suite that accepts "denied" cannot
+  tell a correct boundary from a misconfigured one;
 - confirm connector calls use the intended user-owned or explicitly pinned account;
 - confirm called functions and agents use their own grants rather than inheriting
   the parent workload's grants.
+
+A workload's effective authority is its grants **intersected with** the invoking
+member's own access — never their union — so a grant is a ceiling on the
+workload, not a promotion for the member. Two cases belong in every
+identity-sensitive suite: a low-privilege member invoking a well-granted
+workload, which must be refused with `DELEGATION_EXCEEDS_INVOKER`; and a member
+removed from the pod mid-suite, whose delegations must stop working on the next
+request. A suite that only ever runs as an admin proves neither. The exception is
+a genuinely invoker-less run, which is authorized on the workload's grants alone
+— note that schedules, webhooks and datastore events are *not* invoker-less: they
+fire as the person who owns the schedule, so the ceiling applies to automation
+too.
 
 Treat the built-in default pod assistant as the explicit exception: it has no named
 Agent entity or workload grants and mirrors the invoking member's pod permissions,

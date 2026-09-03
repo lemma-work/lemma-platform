@@ -10,6 +10,7 @@ import type { AppTriggerListResponseSchema } from '../models/AppTriggerListRespo
 import type { AppTriggerResponseSchema } from '../models/AppTriggerResponseSchema.js';
 import type { AuthConfigCreateSchema } from '../models/AuthConfigCreateSchema.js';
 import type { AuthConfigListResponseSchema } from '../models/AuthConfigListResponseSchema.js';
+import type { AuthConfigOperationsRefreshResponseSchema } from '../models/AuthConfigOperationsRefreshResponseSchema.js';
 import type { AuthConfigResponseSchema } from '../models/AuthConfigResponseSchema.js';
 import type { AuthConfigUpdateResponseSchema } from '../models/AuthConfigUpdateResponseSchema.js';
 import type { AuthConfigUpdateSchema } from '../models/AuthConfigUpdateSchema.js';
@@ -415,16 +416,16 @@ export class ConnectorsService {
     }
     /**
      * Refresh Auth Config Operations
-     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created. Answers 200 whether or not the server responded -- the install is deliberately kept either way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
      * @param organizationId
      * @param authConfigName
-     * @returns any Successful Response
+     * @returns AuthConfigOperationsRefreshResponseSchema Successful Response
      * @throws ApiError
      */
     public static connectorAuthConfigRefreshOperations(
         organizationId: string,
         authConfigName: string,
-    ): CancelablePromise<Record<string, any>> {
+    ): CancelablePromise<AuthConfigOperationsRefreshResponseSchema> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh',

@@ -25,3 +25,12 @@ COLUMN_TYPES: tuple[str, ...] = tuple(v.value for v in DatastoreDataType)
 DATASTORE_OPERATIONS: tuple[str, ...] = tuple(v.value for v in DatastoreOperation)
 SCHEDULE_TYPES: tuple[str, ...] = tuple(v.value for v in ScheduleType)
 SURFACE_PLATFORMS: tuple[str, ...] = tuple(v.value for v in SurfacePlatform)
+
+# The one sentence naming the platforms, so the lazy command registry in
+# `cli_core/app.py` and the `surfaces` group itself cannot disagree. Spelling it
+# out is how the help came to advertise Gmail and Outlook long after those
+# stopped being surfaces and became connectors — and then, once the group was
+# fixed, how the registry came to contradict the group.
+SURFACE_PLATFORM_HELP: str = (
+    f"Agent surface commands for {', '.join(SURFACE_PLATFORMS)}."
+)

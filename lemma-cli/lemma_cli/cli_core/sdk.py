@@ -152,9 +152,10 @@ def _ensure_pod_uuid(client: Lemma, state: CliState, pod_id: str) -> str:
     """
     if _is_uuid(pod_id):
         return pod_id
-    # Resolution needs a real catalog-capable client (pods + settings). Minimal
-    # clients without API access fall through to passthrough unchanged.
-    if not hasattr(client, "pods") or not hasattr(client, "settings"):
+    # Resolution needs a real catalog-capable client: `pods` to look up, and
+    # `for_org` to scope the slug scan to one organization. Minimal clients
+    # without API access fall through to passthrough unchanged.
+    if not hasattr(client, "pods") or not hasattr(client, "for_org"):
         return pod_id
     from .context import resolve_pod
 

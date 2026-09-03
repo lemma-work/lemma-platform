@@ -41,7 +41,7 @@ what the surrounding environment can actually do:
 | Skill | Use it for |
 |---|---|
 | [browser](browser/SKILL.md) | Driving a real browser in a Lemma workspace — navigation, screenshots, login flows, scraping |
-| [liteparse-documents](liteparse-documents/SKILL.md) | Parsing documents that live *outside* the pod's file system |
+| [liteparse-documents](liteparse-documents/SKILL.md) | Parsing documents the pod does not convert for you — anything outside its file system, and the formats its auto-indexing skips |
 
 ## Choosing between builder and user
 
@@ -71,8 +71,14 @@ skill, so it has to carry the trigger and the boundary — not just the topic. T
 "Do not use for…" clause matters as much as the affirmative one.
 
 Keep `SKILL.md` short enough to read in full, and push depth into
-`references/`. `lemma-builder` is the reference example: a 149-line `SKILL.md`
-over nineteen reference documents.
+`references/`. `lemma-builder` is the reference example: a `SKILL.md` you can
+read in one sitting, over a folder of reference documents each loaded only when
+a task reaches for it.
+
+Every `lemma …` command a skill teaches has to resolve against the shipped CLI.
+`lemma-cli/tests/test_docs_commands_resolve.py` walks the real Typer app that way
+for the markdown in `lemma-cli/` — it does **not** cover this directory, so when
+you edit a skill, run the commands you wrote.
 
 To author skills that live inside a pod rather than shipping here, use
 [lemma-skill-creator](lemma-skill-creator/SKILL.md).

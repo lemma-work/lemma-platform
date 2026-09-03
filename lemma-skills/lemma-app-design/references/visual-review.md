@@ -55,6 +55,10 @@ does not establish visual quality.
   real pod sources and scopes.
 - Check realistic extremes: zero, one, many, long names, missing values, stale work,
   failure, and RLS-scoped results.
+- Load more rows than one page holds. A count taken from the rows a read returned
+  is not a total, and a chart grouped in the client over a capped page is a chart
+  of the page. Check the figure against the source and reject any number the app
+  cannot stand behind.
 - Remove unsupported precision, arbitrary trends, and decorative data.
 
 ### 5. Layout and density

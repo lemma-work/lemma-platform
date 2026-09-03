@@ -5,19 +5,19 @@ from typing import Any
 
 import typer
 
-from ...cli_app.enums import SURFACE_PLATFORMS
+from ...cli_app.enums import SURFACE_PLATFORM_HELP, SURFACE_PLATFORMS
 from ..confirm import confirm_destructive
 from ..io import emit
 from ..payload import read_json
 from ..sdk import pod_client
 from ..state import run_with_client, state_from_ctx
 
-app = typer.Typer(
-    help="Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook."
-)
-
-# Single source for the platform help shown on every platform argument.
+# The list shown on every platform argument. The group's own help comes from
+# `SURFACE_PLATFORM_HELP` so the lazy registry in `cli_core/app.py` can use the
+# same string without importing this module.
 _PLATFORM_HELP = ", ".join(SURFACE_PLATFORMS) + "."
+
+app = typer.Typer(help=SURFACE_PLATFORM_HELP)
 
 
 @app.command("init")

@@ -73,6 +73,7 @@ def lanes() -> dict[str, str]:
 # by anything a person reads.
 ENVIRONMENT_GATED = {
     "local_guest",
+    "local_host",
     "local_cli",
     "human",
     "provider",

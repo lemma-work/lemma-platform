@@ -10,7 +10,7 @@ is never in a bundle.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from lemma_pod_bundle.layout import _write_json
@@ -22,6 +22,22 @@ from lemma_pod_bundle.normalize import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 
 
+class GrantsPayload(Protocol):
+    """``exporter._resource_grants_payload``, injected rather than imported so
+    this module stays free of the cycle back into :mod:`exporter`."""
+
+    async def __call__(
+        self,
+        uow,
+        *,
+        pod_id: UUID,
+        grantee_type: str,
+        grantee_id: UUID,
+        warnings: list[str],
+        grantee_name: str,
+    ) -> dict[str, object] | None: ...
+
+
 async def export_agents(
     uow,
     *,
@@ -29,7 +45,8 @@ async def export_agents(
     pod_id: UUID,
     user_id: UUID,
     ctx: Any,
-    grants_payload,
+    grants_payload: GrantsPayload,
+    warnings: list[str],
 ) -> None:
     """Write one directory per agent somebody made."""
     # Imported here rather than at module load: `exporter` imports this module,
@@ -67,6 +84,8 @@ async def export_agents(
                 pod_id=pod_id,
                 grantee_type="AGENT",
                 grantee_id=grantee_id,
+                warnings=warnings,
+                grantee_name=agent_name,
             )
             # Attach even an EMPTY grant list — see _resource_grants_payload
             # for why None differs from [].

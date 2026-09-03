@@ -152,6 +152,13 @@ class PodRecords(BoundResource):
         sort: list[RecordSortClause] | None = None,
         page_token: str | None = None,
     ) -> RecordListResponse:
+        """One page of a table's rows.
+
+        A table with more matching rows than ``limit`` is truncated, and the
+        response's ``next_page_token`` is the only way to see the rest -- with
+        a default of 20, a caller that must be complete (a report, an export, a
+        migration) silently sees a prefix. See :meth:`list_all`.
+        """
         serialized_filter = _serialize_record_clauses(filter)
         serialized_sort = _serialize_record_clauses(sort)
         return self._call(
@@ -164,6 +171,37 @@ class PodRecords(BoundResource):
             sort=serialized_sort if serialized_sort is not None else UNSET,
             page_token=page_token if page_token is not None else UNSET,
         )
+
+    def list_all(
+        self,
+        table: str,
+        *,
+        page_size: int = 500,
+        filter: list[RecordFilterClause] | None = None,
+        sort: list[RecordSortClause] | None = None,
+    ) -> list[RecordData]:
+        """Every matching row, paged to exhaustion.
+
+        "Read a table" and "read all of a table" are different operations, and
+        the difference is invisible at the call site -- which is why the same
+        helper exists on files. Anything that has to be complete wants this one.
+        The filter and sort are re-sent with every page, so the walk cannot
+        widen halfway through.
+        """
+        rows: list[RecordData] = []
+        token: str | None = None
+        while True:
+            page = self.list(
+                table,
+                limit=page_size,
+                filter=filter,
+                sort=sort,
+                page_token=token,
+            )
+            rows.extend(_as_record(item) for item in page.items)
+            token = page.next_page_token
+            if not isinstance(token, str) or not token:
+                return rows
 
     def create(self, table: str, data: RecordData) -> RecordData:
         """Create one record; returns the bare record object (no ``{data}`` envelope).
@@ -291,6 +329,14 @@ class Table:
 
     def list(self, **kwargs: Any) -> RecordListResponse:
         return self._records.list(self.name, **kwargs)
+
+    def list_all(self, **kwargs: Any) -> list[RecordData]:
+        """Every matching row, paged to exhaustion.
+
+        See :meth:`PodRecords.list_all` -- a table handle needs the complete
+        read as much as the records facade does.
+        """
+        return self._records.list_all(self.name, **kwargs)
 
     def create(self, data: RecordData) -> RecordData:
         return self._records.create(self.name, data)

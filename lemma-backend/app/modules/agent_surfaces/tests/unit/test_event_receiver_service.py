@@ -353,7 +353,10 @@ async def test_resend_ingest_resolves_surface_by_address_and_publishes(monkeypat
     event = published[0]
     assert event.source == "resend"
     assert event.surface_id == surface.id
-    assert event.source_event_id == "resend:native:email-1"
+    # The same id the webhook mints for this email, so a deployment running
+    # both routes deduplicates in the durable inbox rather than in a Redis key
+    # with a 15-minute TTL.
+    assert event.source_event_id == f"resend:{surface.id}:email-1"
     assert event.payload["to"] == "pod-abc@mail.example.com"
 
 

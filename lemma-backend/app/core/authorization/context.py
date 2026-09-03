@@ -266,6 +266,15 @@ def _denial_message(permission_id: str, decision: "AuthorizationDecision") -> st
     if decision.resource_name:
         target += f" '{decision.resource_name}'"
     message = f"Missing permission {permission_id}{target}"
+    if decision.reason_code == "DELEGATION_EXCEEDS_INVOKER":
+        # The workload is granted this; the person it is acting for is not. Say
+        # so, because the usual fix — grant the workload more — is the one thing
+        # that cannot work here.
+        return (
+            f"{message} — the person this run acts for does not have it, and a "
+            f"workload never exceeds its invoker. Give that person the "
+            f"permission, or run this as someone who already has it."
+        )
     if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
         spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
         if spec and decision.resource_name:
@@ -312,6 +321,17 @@ class Context:
     principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     grant_principal_sets: tuple[frozenset[PrincipalRef], ...] = ()
     workload_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
+    #: The invoking person's OWN principals and role names, kept unmerged.
+    #:
+    #: ``principal_refs`` and ``role_names`` above are the union of the person's
+    #: and the workload's, which is the right input for "may either of these
+    #: reach it". The intersection rule (PS-ACCESS-020 — a workload gets the
+    #: person's access ∩ its own grants, never the union) needs the person's
+    #: half on its own, and ``permission_ids`` is already exactly that. Empty on
+    #: every non-delegated context, and on a delegated one that means "this
+    #: person holds no grants", never "skip the check".
+    invoker_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
+    invoker_role_names: frozenset[str] = field(default_factory=frozenset)
     delegated_by_user_id: UUID | None = None
     delegation_session_id: str | None = None
     delegation_scope: frozenset[str] = field(default_factory=frozenset)

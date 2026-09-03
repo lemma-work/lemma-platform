@@ -18,6 +18,10 @@ from app.modules.datastore.domain.errors import (
     DatastoreTableNotFoundError,
     DatastoreValidationError,
 )
+from app.modules.datastore.infrastructure.sql_identifiers import (
+    MAX_IDENTIFIER_BYTES,
+    ensure_identifier_fits,
+)
 from app.modules.datastore.services.table_service import TableService
 from app.modules.test_support.authz import allow_all_context, deny_all_context
 
@@ -474,3 +478,101 @@ async def test_a_reserved_table_name_is_refused_at_creation(
 
     table_repository_mock.create.assert_not_awaited()
     schema_manager_mock.create_table.assert_not_awaited()
+
+
+class TestALongNameIsRefusedRatherThanTruncated:
+    """PostgreSQL truncates identifiers at 63 bytes *silently*, so two names
+    sharing that prefix become one physical object: the second ``table.create``
+    answers 409 "already exists" for a name ``table.list`` does not show, and
+    the same goes for ``table.column.add``. ``record_indexes`` already defends
+    its generated names with a digest; the user-chosen ones had no rule at all.
+    """
+
+    def _long(self, prefix: str) -> str:
+        return prefix + "x" * (MAX_IDENTIFIER_BYTES + 1 - len(prefix))
+
+    @pytest.mark.asyncio
+    async def test_an_over_long_table_name_is_refused_before_anything_is_written(
+        self,
+        table_service: TableService,
+        table_repository_mock: AsyncMock,
+        schema_manager_mock,
+    ) -> None:
+        pod_id = uuid4()
+        user_id = uuid4()
+        table_repository_mock.get_by_datastore_and_name.return_value = None
+
+        with pytest.raises(DatastoreValidationError, match="63 bytes"):
+            await table_service.create_table(
+                pod_id=pod_id,
+                table_name=self._long("customer_"),
+                primary_key_column="id",
+                columns=[ColumnSchema(name="content", type=DatastoreDataType.TEXT)],
+                config=None,
+                enable_rls=False,
+                ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
+            )
+
+        table_repository_mock.create.assert_not_awaited()
+        schema_manager_mock.create_table.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_over_long_column_name_is_refused_too(
+        self,
+        table_service: TableService,
+        table_repository_mock: AsyncMock,
+        schema_manager_mock,
+    ) -> None:
+        pod_id = uuid4()
+        user_id = uuid4()
+        table_repository_mock.get_by_datastore_and_name.return_value = None
+
+        with pytest.raises(DatastoreValidationError, match="63 bytes"):
+            await table_service.create_table(
+                pod_id=pod_id,
+                table_name="customers",
+                primary_key_column="id",
+                columns=[
+                    ColumnSchema(
+                        name=self._long("annual_"), type=DatastoreDataType.TEXT
+                    )
+                ],
+                config=None,
+                enable_rls=False,
+                ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
+            )
+
+        table_repository_mock.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_adding_an_over_long_column_is_refused_as_well(
+        self,
+        table_service: TableService,
+        table_repository_mock: AsyncMock,
+    ) -> None:
+        pod_id = uuid4()
+        user_id = uuid4()
+
+        with pytest.raises(DatastoreValidationError, match="63 bytes"):
+            await table_service.add_column(
+                pod_id,
+                "customers",
+                ColumnSchema(name=self._long("annual_"), type=DatastoreDataType.TEXT),
+                allow_all_context(user_id=user_id, pod_id=pod_id),
+            )
+
+        table_repository_mock.update.assert_not_awaited()
+
+    def test_the_limit_is_counted_in_bytes_not_characters(self) -> None:
+        """PostgreSQL counts bytes, so a name of 40 accented characters is over
+        the line while its length says it is not."""
+        name = "é" * 40
+
+        assert len(name) < MAX_IDENTIFIER_BYTES
+        with pytest.raises(DatastoreValidationError, match="80 bytes"):
+            ensure_identifier_fits(name, kind="Table name")
+
+    def test_a_name_that_exactly_fits_is_allowed(self) -> None:
+        name = "a" * MAX_IDENTIFIER_BYTES
+
+        assert ensure_identifier_fits(name, kind="Table name") == name

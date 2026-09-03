@@ -16,14 +16,20 @@ class OperationDetailsBatchRequest:
     """Request multiple operation details in a single call.
 
     Attributes:
+        limit (int | Unset): How many to return when `operation_names` is omitted. Ignored when names are given.
+            Default: 100.
         operation_names (list[str] | None | Unset): Operation names to fetch. Omit or pass an empty list to return
-            details for every operation in the connector.
+            details for the first `limit` operations in the connector; read `total_operations` on the response to see
+            whether that was all of them.
     """
 
+    limit: int | Unset = 100
     operation_names: list[str] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        limit = self.limit
+
         operation_names: list[str] | None | Unset
         if isinstance(self.operation_names, Unset):
             operation_names = UNSET
@@ -36,6 +42,8 @@ class OperationDetailsBatchRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if limit is not UNSET:
+            field_dict["limit"] = limit
         if operation_names is not UNSET:
             field_dict["operation_names"] = operation_names
 
@@ -44,6 +52,7 @@ class OperationDetailsBatchRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        limit = d.pop("limit", UNSET)
 
         def _parse_operation_names(data: object) -> list[str] | None | Unset:
             if data is None:
@@ -63,6 +72,7 @@ class OperationDetailsBatchRequest:
         operation_names = _parse_operation_names(d.pop("operation_names", UNSET))
 
         operation_details_batch_request = cls(
+            limit=limit,
             operation_names=operation_names,
         )
 

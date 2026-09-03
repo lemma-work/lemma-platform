@@ -206,6 +206,14 @@ class ConversationRepository(Protocol):
         limit: int = 200,
     ) -> list[StaleAgentRunRef]: ...
 
+    async def list_active_runs_pending_liveness(
+        self,
+        *,
+        cutoff_seconds: int,
+        decided_after_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]: ...
+
     async def list_runs_stuck_stopping(
         self,
         *,

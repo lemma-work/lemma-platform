@@ -156,10 +156,17 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   `agent-browser open http://localhost:<port>`; for a deployed app use
   `lemma apps open <slug>` (registers the agent bearer scoped to the API origin).
 
-Apps round-trip in bundles by shape: **Vite** → `apps/<name>/<name>.json` +
-`apps/<name>/source/`; **HTML** → `apps/<name>/<name>.json` + `apps/<name>/html.html`.
-**Trap:** never put a single HTML file under `source/` — a `source/` dir is read as
-a Vite project and import demands `package.json`.
+Apps round-trip in bundles in three shapes, all alongside `apps/<name>/<name>.json`:
+
+| On disk | What import does |
+| --- | --- |
+| `source/` **with** `package.json` | builds it (`npm install && npm run build` → `dist/index.html`) |
+| `source/` **without** `package.json`, holding `index.html` | serves the source as-is, no build |
+| `html.html` (a single file) | uploaded as-is; the CLI export writes this shape |
+| `dist.zip` | prebuilt output only — what an app deployed before its source was stored exports as |
+
+A `source/` directory with **neither** a `package.json` nor an `index.html` at its root
+is the one that fails, and the error says exactly that.
 
 ## The TypeScript SDK
 

@@ -38,6 +38,11 @@ AGGREGATORS = {
     # Every job in security.yml is path-filtered, so none of them can be named
     # in a ruleset directly; this is the one that can.
     "security.yml": "security-passed",
+    # Required as of the audit backlog. It was advisory for as long as it
+    # enforced floors several modules were below; every module has one recorded
+    # from measurement now, so the gate is green by construction and there is
+    # nothing left to be lenient about.
+    "backend-coverage.yml": "coverage-passed",
 }
 
 # Jobs that legitimately stand outside their workflow's aggregator: they are
@@ -69,10 +74,11 @@ UNWATCHED = {
     # pull-request noise in a channel that exists for the runs nobody sees,
     # which is how a channel stops being read.
     #
-    # Affordable because this one is advisory by design: not a required check,
-    # off the pull-request critical path, and enforcing module floors several
-    # modules are still below. A real regression in it is found by reading it,
-    # not by being paged about it.
+    # It is a required check now, which is what replaces the paging: a
+    # regression arrives on the pull request that caused it, in front of the
+    # person who can fix it, rather than in a channel. That was always the
+    # better answer than a Slack message the notifier cannot even attribute to
+    # the right branch.
     "backend-coverage.yml",
 }
 

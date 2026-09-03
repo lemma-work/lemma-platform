@@ -27,7 +27,8 @@ class CreateTableRequest:
             `default`, `foreign_key`, and `computed` as needed. The backend also materializes physical system columns so
             table metadata reflects the real schema: `id` when omitted as the primary key, `created_at`, `updated_at`, and
             `user_id` when RLS is enabled.
-        name (str): Table name. Use alphanumeric and underscore only. Names prefixed with `reserved_` are system-managed
+        name (str): Table name. Use alphanumeric and underscore only, at most 63 bytes — PostgreSQL truncates longer
+            names and two that share that prefix would become one table. Names prefixed with `reserved_` are system-managed
             and should not be user-created.
         config (CreateTableRequestConfigType0 | None | Unset): Optional table metadata/configuration. This updates table
             config metadata and does not directly alter physical columns.

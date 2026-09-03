@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 381.
+Scenario tests declaring a promise: 382.
 
 ## Contract coverage
 
@@ -130,7 +130,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
 | `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed`, `test_a_message_is_posted_and_taken_back` |
-| `PS-CONN-031` An operation runs as the person who owns the account | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
+| `PS-CONN-031` An operation runs as the identity its connector is bound to | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
 | `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
@@ -220,7 +220,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
 | `PS-ACCESS-011` A person grants access to a role rather than a name | `covered` | `test_a_role_grant_follows_the_role`, `test_losing_a_role_takes_back_its_grant` |
 | `PS-ACCESS-012` A person can see what they may do before trying | `covered` | `test_effective_permissions_are_readable`, `test_reported_permissions_are_honest` |
-| `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent` |
+| `PS-ACCESS-020` An agent or function never exceeds the person it acts for | `covered` | `test_an_agents_reach_can_be_set`, `test_a_functions_reach_can_be_set`, `test_a_new_agent_holds_nothing`, `test_a_new_function_holds_nothing`, `test_a_member_cannot_widen_an_agent`, `test_a_grant_is_not_a_promotion_for_the_person_driving_it` |
 | `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
 | `PS-ACCESS-022` Approving for a session means that session only | `covered` | `test_a_session_approval_stops_repeat_asking`, `test_a_session_approval_does_not_leak_to_another_conversation` |
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |

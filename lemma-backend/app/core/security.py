@@ -418,3 +418,27 @@ async def verify_auth(connection: HTTPConnection):
         )
         # `from e` so the traceback keeps the frame that actually failed.
         raise HTTPException(status_code=401, detail="Unauthorized") from e
+
+
+async def supertokens_core_reachable() -> bool:
+    """Can this process reach the SuperTokens core it verifies sessions against?
+
+    ``initialize_supertokens`` is configuration only -- it makes no network call
+    -- while ``verify_auth`` above calls the core on *every* authenticated
+    request. So a core that is down leaves readiness at 200 and every API call
+    failing, which is the state PS-OPS-030 says a process must not report itself
+    healthy in.
+
+    ``/hello`` is the core's own liveness route and needs no API key. Never
+    raises: readiness treats "did not answer" and "answered badly" alike, and it
+    is the caller that owns the deadline.
+    """
+    import httpx
+
+    base = settings.supertokens_core_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            response = await client.get(f"{base}/hello")
+        return response.status_code == 200
+    except httpx.HTTPError:
+        return False

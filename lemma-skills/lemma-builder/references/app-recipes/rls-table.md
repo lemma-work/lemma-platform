@@ -54,11 +54,12 @@ appear as the workflow finishes.
 ```tsx
 import { useRecords } from "lemma-sdk/react";
 
-const { records, isLoading, error, loadMore, hasMore } = useRecords({
+const { records, total, isLoading, error, loadMore, nextPageToken, refresh } = useRecords({
   client, podId: client.podId, tableName: "tickets", limit: 50,
   filters: [{ field: "status", op: "eq", value: "waiting_approval" }],
   sort:    [{ field: "created_at", direction: "desc" }],
 });
+// there is no `hasMore` — `nextPageToken !== null` is the "more to load" test
 ```
 
 ## CRUD with auto-refresh (generated hooks)
@@ -136,8 +137,10 @@ heuristic #4: *never poll a table*).
 
 ## Aggregates / cross-table
 
-`useDatastoreQuery(client, podId, sql)` runs a single read-only `SELECT` (RLS still
-applies) for counts, group-bys, and joins the record hooks don't cover.
+`useDatastoreQuery({ client, podId, query })` runs a single read-only `SELECT` (RLS
+still applies) for counts, group-bys, and joins the record hooks don't cover. One
+options object, and the SQL goes under `query`; the result is `{ items, total, sql,
+isLoading, error, refresh }`.
 
 > Exact return fields: `cat /sdk/lemma-typescript/src/react/useRecords.ts` and
 > `src/react/generated/records.ts`.

@@ -22,7 +22,7 @@ import os
 
 from cryptography.fernet import Fernet
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.crypto.ports import KeyMaterial, Keyring
 from app.core.log.log import get_logger
 
@@ -54,7 +54,9 @@ def is_valid_fernet_key(secret: bytes) -> bool:
 
 
 def _single_primary_secret() -> bytes | None:
-    configured = settings.secret_encryption_key or os.environ.get(LEGACY_ENV_VAR)
+    configured = reveal_secret(settings.secret_encryption_key) or os.environ.get(
+        LEGACY_ENV_VAR
+    )
     if configured:
         return configured.encode("utf-8")
     if settings.is_local_mode():
@@ -164,8 +166,8 @@ def legacy_candidate_secrets() -> list[bytes]:
                 exc_info=True,
             )
 
-    if settings.secret_encryption_key:
-        add(settings.secret_encryption_key.encode("utf-8"))
+    if legacy_single_key := reveal_secret(settings.secret_encryption_key):
+        add(legacy_single_key.encode("utf-8"))
     legacy_env = os.environ.get(LEGACY_ENV_VAR)
     if legacy_env:
         add(legacy_env.encode("utf-8"))

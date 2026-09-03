@@ -3406,7 +3406,7 @@
   {
     "tool_name": "view_image",
     "toolset": "VIEW_IMAGE",
-    "description": "Load an image file from the private workspace and return it as binary tool content.\n\nUse this for screenshots, generated images, charts, or any other visual artifact\nthat the agent should inspect.\n\nPATH HANDLING:\n- This tool reads only from the private current conversation workspace directory.\n- Always pass a relative path such as `images/output.png`.\n- Do not pass absolute paths or paths outside the current workspace directory.",
+    "description": "Load an image and return it as binary tool content, from either store.\n\nUse this for screenshots, generated images, charts, or any other visual artifact\nthat the agent should inspect.\n\nPATH HANDLING:\n- Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,\n  or neither, is refused \u2014 the store is the one you name, never inferred\n  from the shape of the path.\n- `workspace_file_path` is relative to the conversation's sandbox, e.g.\n  `images/output.png`. Use it for artifacts this run just produced.\n- `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a\n  file that lives in the pod.\n- Images only. For a PDF, use `pod_view_document_pages` instead.",
     "input_schema": {
       "properties": {
         "pod_file_path": {

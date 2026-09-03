@@ -123,7 +123,7 @@ def sync_detailed(
     page_token: None | str | Unset = UNSET,
     mode: None | RecordAccessMode | Unset = UNSET,
 ) -> Response[ErrorResponse | RecordListResponse]:
-    """List Records
+    r"""List Records
 
      List table records with token pagination only. Use the datastore query endpoint for joins,
     aggregates, or custom read-only SQL.
@@ -137,10 +137,13 @@ def sync_detailed(
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
             `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed
-            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query
-            parameter to combine multiple filters with AND semantics. Examples:
-            `filter={"field":"amount","op":"gt","value":100}` and
-            `filter={"field":"status","op":"eq","value":"OPEN"}`.
+            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an
+            array `value` and matches any of its members; an empty array matches nothing. `like` and
+            `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches
+            exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat
+            the query parameter to combine multiple filters with AND semantics. Examples:
+            `filter={"field":"amount","op":"gt","value":100}`,
+            `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
         sort (list[str] | None | Unset): Optional repeated JSON sort clauses. Each `sort` value
             must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`.
             Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column
@@ -190,7 +193,7 @@ def sync(
     page_token: None | str | Unset = UNSET,
     mode: None | RecordAccessMode | Unset = UNSET,
 ) -> ErrorResponse | RecordListResponse | None:
-    """List Records
+    r"""List Records
 
      List table records with token pagination only. Use the datastore query endpoint for joins,
     aggregates, or custom read-only SQL.
@@ -204,10 +207,13 @@ def sync(
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
             `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed
-            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query
-            parameter to combine multiple filters with AND semantics. Examples:
-            `filter={"field":"amount","op":"gt","value":100}` and
-            `filter={"field":"status","op":"eq","value":"OPEN"}`.
+            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an
+            array `value` and matches any of its members; an empty array matches nothing. `like` and
+            `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches
+            exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat
+            the query parameter to combine multiple filters with AND semantics. Examples:
+            `filter={"field":"amount","op":"gt","value":100}`,
+            `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
         sort (list[str] | None | Unset): Optional repeated JSON sort clauses. Each `sort` value
             must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`.
             Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column
@@ -252,7 +258,7 @@ async def asyncio_detailed(
     page_token: None | str | Unset = UNSET,
     mode: None | RecordAccessMode | Unset = UNSET,
 ) -> Response[ErrorResponse | RecordListResponse]:
-    """List Records
+    r"""List Records
 
      List table records with token pagination only. Use the datastore query endpoint for joins,
     aggregates, or custom read-only SQL.
@@ -266,10 +272,13 @@ async def asyncio_detailed(
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
             `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed
-            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query
-            parameter to combine multiple filters with AND semantics. Examples:
-            `filter={"field":"amount","op":"gt","value":100}` and
-            `filter={"field":"status","op":"eq","value":"OPEN"}`.
+            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an
+            array `value` and matches any of its members; an empty array matches nothing. `like` and
+            `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches
+            exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat
+            the query parameter to combine multiple filters with AND semantics. Examples:
+            `filter={"field":"amount","op":"gt","value":100}`,
+            `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
         sort (list[str] | None | Unset): Optional repeated JSON sort clauses. Each `sort` value
             must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`.
             Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column
@@ -317,7 +326,7 @@ async def asyncio(
     page_token: None | str | Unset = UNSET,
     mode: None | RecordAccessMode | Unset = UNSET,
 ) -> ErrorResponse | RecordListResponse | None:
-    """List Records
+    r"""List Records
 
      List table records with token pagination only. Use the datastore query endpoint for joins,
     aggregates, or custom read-only SQL.
@@ -331,10 +340,13 @@ async def asyncio(
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
             `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed
-            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query
-            parameter to combine multiple filters with AND semantics. Examples:
-            `filter={"field":"amount","op":"gt","value":100}` and
-            `filter={"field":"status","op":"eq","value":"OPEN"}`.
+            operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an
+            array `value` and matches any of its members; an empty array matches nothing. `like` and
+            `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches
+            exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat
+            the query parameter to combine multiple filters with AND semantics. Examples:
+            `filter={"field":"amount","op":"gt","value":100}`,
+            `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
         sort (list[str] | None | Unset): Optional repeated JSON sort clauses. Each `sort` value
             must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`.
             Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column

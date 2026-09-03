@@ -1,10 +1,14 @@
 from datetime import datetime
 from enum import Enum
+from collections.abc import Sequence
 from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.file_entities import SearchMethod
+from app.modules.datastore.infrastructure.sql_identifiers import (
+    MAX_IDENTIFIER_BYTES,
+)
 
 #: Largest page any record listing will serve (`PS-DATA-011`).
 #:
@@ -31,11 +35,14 @@ class CreateTableRequest(BaseModel):
         ...,
         validation_alias=AliasChoices("name", "table_name"),
         description=(
-            "Table name. Use alphanumeric and underscore only. Names prefixed with "
-            "`reserved_` are system-managed and should not be user-created."
+            "Table name. Use alphanumeric and underscore only, at most "
+            f"{MAX_IDENTIFIER_BYTES} bytes — PostgreSQL truncates longer names "
+            "and two that share that prefix would become one table. Names "
+            "prefixed with `reserved_` are system-managed and should not be "
+            "user-created."
         ),
         min_length=1,
-        max_length=255,
+        max_length=MAX_IDENTIFIER_BYTES,
     )
     primary_key_column: str = Field(
         default="id",
@@ -118,6 +125,16 @@ class UpdateRecordRequest(BaseModel):
     data: Dict[str, Any] = Field(
         ...,
         description="Partial record patch keyed by table column names.",
+    )
+    expected_updated_at: Optional[datetime] = Field(
+        default=None,
+        description=(
+            "Optional optimistic-concurrency guard: the `updated_at` value the "
+            "caller last read. The patch applies only while the row still "
+            "carries it, and answers 409 when it does not — so two clients "
+            "editing the same field cannot silently keep the later one. Omit it "
+            "for last-writer-wins."
+        ),
     )
 
 
@@ -478,9 +495,50 @@ class FileSearchResultSchema(BaseModel):
 
 class FileSearchResponse(BaseModel):
     items: List[FileSearchResultSchema]
-    total: int
+    total: int = Field(
+        ...,
+        description=(
+            "Number of matches in `items`. This is what came back, not how many "
+            "matches the pod holds: when `truncated` is true the result was cut "
+            "at `limit` and more exist."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the result filled the requested `limit`, so there are "
+            "likely further matches this response does not show. Narrow the "
+            "query or raise `limit` to see more. Reported because a capped "
+            "result is otherwise indistinguishable from a complete one — an "
+            "agent reading `total` as the number of matching documents states "
+            "it to a person as fact."
+        ),
+    )
     query: str
     search_method: SearchMethod
+
+    @classmethod
+    def of(
+        cls,
+        results: Sequence[object],
+        *,
+        request: "FileSearchRequest",
+    ) -> "FileSearchResponse":
+        """Build the response, deciding `truncated` from the page it filled.
+
+        A full page is the only evidence available: the ranker merges, reranks
+        and diversifies before truncating, so "one more than asked for" is not
+        a question the search can be asked cheaply. Answered in the safe
+        direction -- there may be more -- rather than as a total.
+        """
+        items = [FileSearchResultSchema.model_validate(item) for item in results]
+        return cls(
+            items=items,
+            total=len(items),
+            truncated=len(items) >= request.limit,
+            query=request.query,
+            search_method=request.search_method,
+        )
 
 
 class FileUrlResponse(BaseModel):

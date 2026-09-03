@@ -47,8 +47,11 @@ from app.core.observability.telemetry import (
     instrument_fastapi_app,
     shutdown_telemetry,
 )
+from app.core.infrastructure.db.migration_state import schema_migration_state
 from app.core.observability.dependency_incident import DependencyIncident
+from app.core.observability import readiness
 from app.core.observability.worker_liveness import worker_readiness_state
+from app.core.security import supertokens_core_reachable
 from app.sandbox_health import record_sandbox_probe, sandbox_capability
 from app.core.infrastructure.channels.channel_service import channel_service
 
@@ -57,7 +60,7 @@ from app.core.registry.assembly import enter_api_lifespans, include_module_route
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
-from app.core.infrastructure.db.session import get_engine
+from app.core.infrastructure.db.session import database_reachable, get_engine
 from app.core.request_context import (
     bind_request_context,
     create_background_task,
@@ -760,7 +763,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     #: is already the transition worth reporting.
     _readiness_incidents = {
         name: DependencyIncident(name, logger=logger, degradation_threshold=1)
-        for name in ("db", "redis")
+        for name in ("db", "redis", "supertokens")
     }
 
     # Readiness: bounded, concurrent checks for dependencies required to serve
@@ -770,14 +773,6 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     @app.get("/health/ready", include_in_schema=False)
     async def health_ready():
         import asyncio as _asyncio
-
-        from sqlalchemy import text
-
-        async def _db_ok() -> bool:
-            engine = get_engine()
-            async with engine.connect() as conn:
-                await conn.execute(text("SELECT 1"))
-            return True
 
         async def _probe(name: str, check) -> bool:
             """One bounded dependency check that says why it failed, once.
@@ -801,49 +796,48 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 incident.record_failure(error_type="unavailable")
             return healthy
 
-        # Run dependency checks concurrently; each is individually bounded and
-        # the set is bounded by the overall gather timeout.
-        db_task = redis_task = worker_task = None
+        # Concurrent, each individually bounded and the set bounded by the
+        # gather. SuperTokens is in here because `initialize_supertokens` makes
+        # no network call while `verify_auth` calls the core on every
+        # authenticated request: its outage leaves readiness at 200 and the
+        # whole product unusable.
+        tasks: list[_asyncio.Task[object]] = []
         try:
-            db_task = create_inherited_task(_probe("db", _db_ok))
-            redis_task = create_inherited_task(_probe("redis", channel_service.ping))
-            worker_task = create_inherited_task(
-                worker_readiness_state(
-                    embedded=getattr(app.state, "embedded_worker", False)
-                )
-            )
-            db_ok, redis_ok, worker_state = await _asyncio.wait_for(
-                _asyncio.gather(db_task, redis_task, worker_task), timeout=2.0
+            embedded = getattr(app.state, "embedded_worker", False)
+            tasks = [
+                create_inherited_task(_probe("db", database_reachable)),
+                create_inherited_task(_probe("redis", channel_service.ping)),
+                create_inherited_task(
+                    _probe("supertokens", supertokens_core_reachable)
+                ),
+                create_inherited_task(worker_readiness_state(embedded=embedded)),
+                create_inherited_task(schema_migration_state()),
+            ]
+            db_ok, redis_ok, auth_ok, worker, schema = await _asyncio.wait_for(
+                _asyncio.gather(*tasks), timeout=2.0
             )
         except Exception:
             # Readiness itself failing to run is not "the database is down";
             # it answers 503 either way, so the log is the only place the
             # difference can be seen.
             logger.error("app.health_ready.probe_failed.failed", exc_info=True)
-            db_ok, redis_ok, worker_state = False, False, None
+            db_ok, redis_ok, auth_ok, worker, schema = False, False, False, None, None
         finally:
-            for t in (db_task, redis_task, worker_task):
-                if t is not None and not t.done():
-                    t.cancel()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
 
-        components = {
-            "db": "ok" if db_ok else "down",
-            "redis": "ok" if redis_ok else "down",
-        }
-        # `False` is `_with_timeout`'s answer for a check that did not finish;
-        # for the worker that is "we could not ask", which is not a verdict.
-        if worker_state is False:
-            worker_state = None
-        if worker_state is not None:
-            components["worker"] = worker_state
-        ready = bool(db_ok) and bool(redis_ok) and worker_state != "stalled"
-        payload = {
-            "status": "ready" if ready else "not_ready",
-            "components": components,
-        }
-        if settings.lemma_runtime_instance_id:
-            payload["instance_id"] = settings.lemma_runtime_instance_id
-        return JSONResponse(payload, status_code=200 if ready else 503)
+        report = readiness.build_readiness_report(
+            components={
+                "db": readiness.dependency_state(db_ok),
+                "redis": readiness.dependency_state(redis_ok),
+                "supertokens": readiness.dependency_state(auth_ok),
+                "worker": readiness.worker_state(worker),
+                "migrations": readiness.migrations_state(schema) if schema else None,
+            },
+            instance_id=settings.lemma_runtime_instance_id,
+        )
+        return JSONResponse(report.payload, status_code=report.status_code)
 
     @app.get("/health/capabilities", include_in_schema=False)
     async def health_capabilities():
@@ -883,14 +877,18 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         # being visible rather than hidden.
         #
         # The rest is this deployment's security posture — whether signup is
-        # rate limited, whether a connector may reach a private address — and is
-        # withheld in production, where the honest answer to a stranger asking
-        # "are your gates on?" is that it is none of their business.
+        # rate limited, whether a connector may reach a private address — and
+        # the honest answer to a stranger asking "are your gates on?" is that it
+        # is none of their business. Written as "not production", that was one
+        # environment value narrower than the principle: a staging or preview
+        # deployment on the internet runs as `development` and advertised which
+        # of its abuse controls were off. The block is for the scenario suite,
+        # which runs locally.
         configuration: dict[str, object] = {
             "environment": settings.environment,
             "llm_mode": settings.e2e_llm_mode,
         }
-        if settings.environment != "production":
+        if settings.is_local_mode():
             configuration |= {
                 "abuse_protection": settings.auth_abuse_protection_enabled,
                 "altcha": settings.auth_altcha_enabled,

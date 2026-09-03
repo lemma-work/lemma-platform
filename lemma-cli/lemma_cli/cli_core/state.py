@@ -12,7 +12,7 @@ from rich.console import Console
 from lemma_sdk.auth import refresh_cli_session
 from lemma_sdk.errors import LemmaAPIError
 
-from .errors import set_dialed_base_url
+from .errors import next_step_for, set_dialed_base_url
 
 if TYPE_CHECKING:
     # The Lemma client pulls in the full resource/model tree; import it only when
@@ -160,21 +160,22 @@ def _extract_field_errors(details: Any) -> list[str]:
 def humanize_error(exc: Exception) -> str:
     """Turn raw create/import failures into actionable messages: a bare
     `KeyError` from `*Request.from_dict` becomes 'Missing required field: X',
-    and API validation details are appended to the API error line."""
+    API validation details are appended to the API error line, and a status the
+    user can act on carries the action.
+
+    The next-step wording comes from `errors.next_step_for`, shared with the
+    top-level boundary so the same 401 does not read two different ways
+    depending on which handler caught it."""
     if isinstance(exc, KeyError):
         key = exc.args[0] if exc.args else ""
         return f"Missing required field: {key}." if key else "Missing required field."
     if isinstance(exc, LemmaAPIError):
-        if getattr(exc, "status_code", None) == 429:
-            return (
-                str(exc)
-                + "\nYou've hit a rate limit — export/import are capped per day. "
-                "Wait and try again, or ask an admin to raise the limit."
-            )
-        fields = _extract_field_errors(exc.details)
-        if fields:
-            return str(exc) + "\n" + "\n".join(f"  - {line}" for line in fields)
-        return str(exc)
+        lines = [str(exc)]
+        lines.extend(f"  - {line}" for line in _extract_field_errors(exc.details))
+        step = next_step_for(exc)
+        if step:
+            lines.append(step)
+        return "\n".join(lines)
     return str(exc)
 
 

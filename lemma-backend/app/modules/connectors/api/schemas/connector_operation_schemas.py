@@ -54,14 +54,34 @@ class OperationDiscoverResponse(BaseModel):
     )
 
 
+#: The most operation details one call may return. A detail carries the
+#: operation's whole input and output JSON Schema -- for a catalog the size of
+#: Jira's, "every operation" is tens of megabytes of JSON assembled in memory,
+#: which any org member could ask for repeatedly. Matches the `le=1000` the
+#: discovery endpoint next door already bounds itself by.
+MAX_OPERATION_DETAILS_PER_REQUEST = 1000
+
+
 class OperationDetailsBatchRequest(BaseModel):
     """Request multiple operation details in a single call."""
 
     operation_names: list[str] | None = Field(
         default=None,
+        max_length=MAX_OPERATION_DETAILS_PER_REQUEST,
         description=(
             "Operation names to fetch. Omit or pass an empty list to return "
-            "details for every operation in the connector."
+            "details for the first `limit` operations in the connector; read "
+            "`total_operations` on the response to see whether that was all "
+            "of them."
+        ),
+    )
+    limit: int = Field(
+        default=100,
+        ge=1,
+        le=MAX_OPERATION_DETAILS_PER_REQUEST,
+        description=(
+            "How many to return when `operation_names` is omitted. Ignored "
+            "when names are given."
         ),
     )
 
@@ -75,6 +95,13 @@ class OperationDetailsBatchResponse(BaseModel):
     )
     returned_count: int = Field(
         description="Number of operation details returned in this response."
+    )
+    total_operations: int = Field(
+        default=0,
+        description=(
+            "Operations the connector exposes in total. Greater than "
+            "`returned_count` means the unnamed request was capped."
+        ),
     )
 
 

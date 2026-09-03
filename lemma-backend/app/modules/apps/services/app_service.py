@@ -546,10 +546,10 @@ class AppService:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
         # No session reaches this route -- the ingress serves it to anonymous
         # browsers by host -- so only an app published to everyone belongs here.
-        # Apps default to POD, which made the default "exposed to anyone who
-        # guesses the slug". An unrecognized stored value is not PUBLIC either.
-        # Report it as missing rather than forbidden: a 403 would confirm the
-        # slug exists to a caller who only guessed it.
+        # Apps default to PUBLIC (see the note on ``AppModel.visibility``), so
+        # this is the whole of what keeps a POD app off its public host; an
+        # unrecognized stored value is not PUBLIC either. Report it as missing
+        # rather than forbidden: a 403 confirms the slug to a caller who guessed.
         if (
             normalize_resource_visibility(app.visibility)
             is not ResourceVisibility.PUBLIC
