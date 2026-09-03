@@ -26,7 +26,7 @@ from ..app_scaffold import (
 )
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
-from ..payload import read_json
+from ..payload import build_request, read_json
 from ..sdk import pod_client
 from ..state import console, fail, run_with_client, state_from_ctx
 from lemma_sdk.config import resolve_auth_url, resolve_base_url, resolve_token
@@ -245,7 +245,7 @@ def create_app(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).apps.create(
-            CreateAppRequest.from_dict(payload)
+            build_request(CreateAppRequest, payload, context="app")
         ),
     )
     if result is not None:
@@ -270,7 +270,7 @@ def update_app(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).apps.update(
-            app, UpdateAppRequest.from_dict(payload)
+            app, build_request(UpdateAppRequest, payload, context="app")
         ),
     )
     if result is not None:
