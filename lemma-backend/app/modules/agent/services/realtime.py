@@ -9,8 +9,17 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+
+#: Every token, message and terminal frame a watching client sees goes through
+#: `publish_conversation_event`. When the channel is down the user-visible
+#: symptom is "the agent never answers" while runs complete normally in the
+#: database -- and at `logger.debug`, production (LOG_LEVEL=INFO) had nothing at
+#: all to distinguish that from a quiet day. One degraded/recovered pair, which
+#: is what the volume exemption in `docs/development.md` actually permits.
+_publish_incident = DependencyIncident("agent.realtime.publish", logger=logger)
 
 
 def conversation_channel(conversation_id: UUID) -> str:
@@ -34,6 +43,9 @@ async def publish_conversation_event(
             conversation_id=str(conversation_id),
             error_type=type(exc).__name__,
         )
+        _publish_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _publish_incident.record_success()
 
 
 def input_added_payload(

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
     apply_inline_workload_grants,
     list_grantee_resource_grants,
@@ -305,6 +306,18 @@ async def replace_agent_permissions(
         ctx=ctx,
     )
     validate_pod_resource_grant_permissions(data.grants)
+    # Granting an agent a permission is conferral like any other (PS-ACCESS-010):
+    # an agent acts on its grants, so handing it one the granter does not hold
+    # would be a way to do through the agent what you may not do yourself.
+    assert_can_confer(
+        ctx,
+        [
+            permission_id
+            for grant in data.grants
+            for permission_id in grant.permission_ids
+        ],
+        action="grant an agent permissions you do not hold",
+    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,

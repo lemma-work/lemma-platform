@@ -23,6 +23,7 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import (
     resolve_resend_inbound_secret,
     surface_settings,
+    surface_webhook_verification_enabled,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -133,7 +134,7 @@ class SurfaceWebhookSecurityService:
             yield self._resolver_factory(uow)
 
     def verification_enabled(self) -> bool:
-        return bool(surface_settings.surface_webhook_security_enabled)
+        return surface_webhook_verification_enabled()
 
     def assert_platform_request_allowed(self, platform: str) -> None:
         if str(platform).upper() not in {"SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"}:

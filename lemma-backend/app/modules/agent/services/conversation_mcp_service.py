@@ -38,6 +38,8 @@ from app.modules.agent.infrastructure.mcp import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.authorization.dependencies import assert_pod_membership
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.agent_host.repository import (
@@ -68,6 +70,10 @@ from app.modules.agent.tools.tool_errors import (
 )
 
 logger = get_logger(__name__)
+
+#: What a caller is refused for on this mount, phrased the way
+#: `assert_pod_membership` renders it ("You need access to this pod to ...").
+_CONVERSATION_MCP_ACCESS = "use this conversation's tools"
 
 
 class ConversationMCPService:
@@ -104,7 +110,28 @@ class ConversationMCPService:
                 conversation_id,
                 include_runs=False,
             )
-        return conversation is not None and conversation.user_id == token_user_id
+            if conversation is None or conversation.user_id != token_user_id:
+                return False
+            # Owning the conversation is not access to the pod it lives in. Every
+            # HTTP conversation route also asserts membership
+            # (``CONVERSATION_MEMBERSHIP``), because ownership plus an agent grant
+            # survives being removed from a pod -- which is how a removed member
+            # kept the ability to instruct that pod's agents (PS-POD-040,
+            # DEV-ACCESS-001). This mount is the tool path for every remote
+            # harness and was the one entry point that checked only ownership.
+            auth_ctx = await create_authorization_data_service(uow).build_user_context(
+                user_id=token_user_id,
+                pod_id=conversation.pod_id,
+            )
+        try:
+            assert_pod_membership(auth_ctx, _CONVERSATION_MCP_ACCESS)
+        except DomainError:
+            logger.warning(
+                "agent.conversation_mcp_service.pod_membership_missing.denied",
+                conversation_id=str(conversation_id),
+            )
+            return False
+        return True
 
     async def parked_tool_return(
         self,
@@ -313,6 +340,17 @@ class ConversationMCPService:
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
                 agent_name=agent.name if agent is not None else None,
+                # All three, exactly as `services/run_context_builder` sets
+                # them for the in-process harness. `workload_id` is the principal
+                # `pod_data_access` builds its delegated context from, and left
+                # unset it means "the pod default assistant" -- which runs with
+                # the invoking *user's* pod permissions rather than this agent's
+                # grants, so every Agent Host tool call authorized wider than the
+                # agent it belonged to. `is_pod_default_agent` is the separate
+                # question of whether this *is* the assistant, which is now
+                # answered by the row's kind rather than by a sentinel id.
+                workload_type="agent",
+                workload_id=agent.id if agent is not None else None,
                 is_pod_default_agent=(
                     agent is None or agent.kind is AgentKind.POD_DEFAULT
                 ),

@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.datastore.domain.errors import (
-    DatastoreRecordNotFoundError,
-    DatastoreValidationError,
-)
+from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
 from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
 from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.infrastructure.record_bulk_delete import (
+    bulk_delete_records as write_bulk_deletes,
+)
 from app.modules.datastore.infrastructure.record_bulk_update import (
     bulk_update_records as write_bulk_updates,
 )
@@ -400,8 +400,12 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        await self._write_delete(
-            ctx, record_id, user_id, enforce_user_scope=enforce_user_scope
+        await self.record_repository.delete_record(
+            ctx,
+            record_id,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=self._delete_event_factory(ctx, user_id),
         )
         if ctx.events_enabled:
             await self.events.dispatch()
@@ -539,31 +543,15 @@ class RecordService:
             await self.events.dispatch()
         return count
 
-    async def _write_delete(
-        self,
-        ctx: TableContext,
-        record_id: Any,
-        user_id: UUID,
-        *,
-        enforce_user_scope: bool,
-    ) -> None:
-        """Delete one row, without the per-caller preamble. See `_write_update`."""
-        event_factory = (
-            partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.DELETE,
-                user_id=user_id,
-            )
-            if ctx.events_enabled
-            else None
-        )
-        await self.record_repository.delete_record(
-            ctx,
-            record_id,
-            user_id,
-            enforce_user_scope=enforce_user_scope,
-            event_factory=event_factory,
+    def _delete_event_factory(self, ctx: TableContext, user_id: UUID):
+        """The DELETE event builder both delete paths stage their rows through."""
+        if not ctx.events_enabled:
+            return None
+        return partial(
+            self.events.required_for_record,
+            ctx=ctx,
+            operation=DatastoreRecordOperation.DELETE,
+            user_id=user_id,
         )
 
     async def bulk_delete_records(
@@ -574,24 +562,31 @@ class RecordService:
         *,
         admin_mode: bool = False,
     ) -> int:
+        """Delete every named row, or none of them (`PS-DATA-013`).
+
+        See `infrastructure/record_bulk_delete` for why this is one
+        transaction and why an id that matched nothing is a refusal rather
+        than a smaller count.
+        """
         await self._require_record_write(user_id=user_id, ctx=ctx)
+        if not record_ids:
+            return 0
         # Decided once; see `bulk_update_records` for why.
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        count = 0
-        for record_id in record_ids:
-            try:
-                await self._write_delete(
-                    ctx, record_id, user_id, enforce_user_scope=enforce_user_scope
-                )
-                count += 1
-            except DatastoreRecordNotFoundError:
-                continue
-        # One dispatch for the batch. `_write_delete` stages per row but does
-        # not flush, so without this the DELETE events would never be published.
+        count = await write_bulk_deletes(
+            self.record_repository,
+            ctx,
+            record_ids,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=self._delete_event_factory(ctx, user_id),
+        )
+        # One dispatch for the batch, as with bulk update: the repository
+        # stages a DELETE event per row and flushes none of them.
         if ctx.events_enabled:
             await self.events.dispatch()
         return count

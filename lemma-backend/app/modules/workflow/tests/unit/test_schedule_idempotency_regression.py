@@ -13,7 +13,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleFireStatus,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.execution.engine import WorkflowEngine
@@ -36,6 +40,7 @@ def _schedule(**overrides) -> SimpleNamespace:
         "agent_id": None,
         "instruction": None,
         "is_active": True,
+        "is_internal": False,
         "schedule_type": SimpleNamespace(value="TIME"),
         "config": {},
         **overrides,
@@ -709,3 +714,84 @@ async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
     assert permission == "agent.execute"
     assert ref.resource_type is ResourceType.POD
     assert ref.resource_id == schedule.pod_id
+
+
+@pytest.mark.anyio
+async def test_a_schedule_whose_target_was_deleted_records_the_firing_as_failed(
+    monkeypatch,
+):
+    """PS-SCHED-030: say the target is missing rather than failing silently.
+
+    Deleting the workflow now leaves the schedule behind holding no target
+    (the FK is SET NULL), which is the only reason a person's schedule can
+    reach the dispatcher with nothing to start. It used to be dropped into a
+    debug log; the ledger row is what the failure breaker counts, so without it
+    the schedule fired into nothing forever and nobody was told.
+    """
+    engine = _engine_with_mocks()
+    schedule = _schedule(workflow_id=None, agent_id=None)
+
+    schedule_repo = Mock(
+        get=AsyncMock(return_value=schedule),
+        record_fire=AsyncMock(),
+    )
+    outcome_service = Mock(record_pre_dispatch_failure=AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service."
+        "ScheduleRunOutcomeService",
+        lambda uow: outcome_service,
+    )
+
+    await ScheduleStartService(engine).handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id=f"cron:{schedule.id}:2026-09-03T09:00:00+00:00",
+    )
+
+    outcome_service.record_pre_dispatch_failure.assert_awaited_once()
+    assert (
+        outcome_service.record_pre_dispatch_failure.await_args.kwargs["error_type"]
+        == "ScheduleTargetMissing"
+    )
+    schedule_repo.record_fire.assert_awaited_once()
+    recorded = schedule_repo.record_fire.await_args.kwargs
+    assert recorded["status"] == ScheduleFireStatus.ERROR
+    assert "no longer exists" in recorded["error"]
+
+
+@pytest.mark.anyio
+async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch):
+    """Internal schedules are wait timers and never had a target.
+
+    Counting one against the failure breaker would pause a workflow's own
+    machinery and email its owner about it.
+    """
+    engine = _engine_with_mocks()
+    schedule = _schedule(workflow_id=None, agent_id=None, is_internal=True)
+
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule), record_fire=AsyncMock())
+    outcome_service = Mock(record_pre_dispatch_failure=AsyncMock())
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service."
+        "ScheduleRunOutcomeService",
+        lambda uow: outcome_service,
+    )
+
+    await ScheduleStartService(engine).handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id=f"cron:{schedule.id}:2026-09-03T09:00:00+00:00",
+    )
+
+    outcome_service.record_pre_dispatch_failure.assert_not_awaited()
+    schedule_repo.record_fire.assert_not_awaited()

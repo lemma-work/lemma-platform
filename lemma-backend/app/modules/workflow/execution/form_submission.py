@@ -52,10 +52,16 @@ def validate_form_inputs(
     if not isinstance(schema, dict) or not schema:
         return
     try:
-        validator = Draft202012Validator(schema)
+        # `check_schema`, not construction: the constructor accepts a malformed
+        # schema without complaint, and the failure then surfaces from
+        # `iter_errors` as `UnknownType` — which is not a `SchemaError`, so it
+        # escaped this handler and reached the person submitting the form as an
+        # unhandled error. That is the opposite of what the docstring promises.
+        Draft202012Validator.check_schema(schema)
     except SchemaError:
         logger.warning("workflow.form.invalid_schema", node_id=node_id)
         return
+    validator = Draft202012Validator(schema)
     error = best_match(validator.iter_errors(data))
     if error is not None:
         field = ".".join(str(part) for part in error.absolute_path) or "input"

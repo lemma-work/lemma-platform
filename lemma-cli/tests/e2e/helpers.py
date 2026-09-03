@@ -38,8 +38,11 @@ def cli_json(args, *, base_url, token, pod=None, org=None):
     position; we append it to ``args`` to keep ``--json`` next to the command.
     """
     result = cli([*args, "--json"], base_url=base_url, token=token, pod=pod, org=org)
+    # The failure message has to read stderr: diagnostics go there so that the
+    # JSON on stdout stays parseable, which means a failed run has an EMPTY
+    # stdout and the reason is on the other stream.
     assert result.exit_code == 0, (
-        f"CLI {args} failed with exit {result.exit_code}:\n{result.stdout}"
+        f"CLI {args} failed with exit {result.exit_code}:\n{result.stderr}"
     )
     return json.loads(result.stdout)
 

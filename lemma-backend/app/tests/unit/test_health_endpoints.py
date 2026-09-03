@@ -63,7 +63,7 @@ class _FakeEngineDown:
 
 
 def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 200
@@ -88,7 +88,7 @@ def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
     Kubernetes liveness probe reads to restart a wedged worker. Nothing on
     desktop read it.
     """
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     heartbeat = tmp_path / "worker_heartbeat"
@@ -119,7 +119,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     unready for the absence. Nor may a process that has simply not written its
     first heartbeat yet -- which is every start before the first tick.
     """
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
@@ -138,7 +138,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
 
 
 def test_ready_echoes_runtime_instance_id(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.settings, "lemma_runtime_instance_id", "launch-123")
 
@@ -235,7 +235,7 @@ def test_capability_health_withholds_security_posture_in_production(
 
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 503
@@ -246,10 +246,155 @@ def test_ready_returns_503_when_db_down(client, monkeypatch):
 
 
 def test_ready_returns_503_when_redis_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=False))
     r = client.get("/health/ready")
     assert r.status_code == 503
     body = r.json()
     assert body["components"]["db"] == "ok"
     assert body["components"]["redis"] == "down"
+
+
+class _FakeWorkerRedis:
+    """A Redis holding whichever worker-liveness keys the test says exist."""
+
+    def __init__(self, *present: str) -> None:
+        self._present = set(present)
+
+    async def exists(self, name: str) -> int:
+        return 1 if name in self._present else 0
+
+
+def _worker_redis(monkeypatch, *present: str) -> None:
+    monkeypatch.setattr(
+        "app.core.infrastructure.redis.client.get_redis",
+        lambda **_: _FakeWorkerRedis(*present),
+    )
+
+
+def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
+    client, monkeypatch
+):
+    """The split topology, which is every deployment except desktop.
+
+    The heartbeat file answers only for a probe on the worker's own filesystem,
+    so an API process running beside `python -m app.worker` had nothing to read
+    and answered 200 with the worker dead -- the load balancer kept sending
+    traffic and agent runs queued behind nothing.
+    """
+    from app.core.observability.worker_liveness import WORKER_SEEN_KEY
+
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    # A worker was here; nothing is answering now.
+    _worker_redis(monkeypatch, WORKER_SEEN_KEY)
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "not_ready"
+    assert body["components"]["worker"] == "stalled"
+    assert body["components"]["db"] == "ok"
+
+
+def test_ready_is_ready_when_a_separate_worker_process_is_ticking(client, monkeypatch):
+    from app.core.observability.worker_liveness import (
+        WORKER_ALIVE_KEY,
+        WORKER_SEEN_KEY,
+    )
+
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
+    _worker_redis(monkeypatch, WORKER_ALIVE_KEY, WORKER_SEEN_KEY)
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 200
+    assert r.json()["components"]["worker"] == "ok"
+
+
+def test_capability_health_says_when_no_sandbox_can_be_provisioned(client, monkeypatch):
+    """A self-hoster without Docker used to find out at their first tool call.
+
+    Every provider misconfiguration this can see -- a missing runtime credential
+    key, no local runtime CLI, no E2B key, an E2B namespace it refuses to derive,
+    a Docker socket that is not there -- is raised by `build_provider`, which is
+    called lazily. So the first thing that ever read it was a user's first
+    request, as `500 INTERNAL_ERROR` with nothing actionable in it and no
+    capability to check beforehand.
+    """
+    monkeypatch.setattr(
+        appmod, "sandbox_capability", lambda: {"status": "needs_setup", "detail": "x"}
+    )
+
+    capabilities = client.get("/health/capabilities").json()["capabilities"]
+
+    assert capabilities["sandbox"]["status"] == "needs_setup"
+
+
+def test_the_sandbox_probe_names_the_setting_to_fix(monkeypatch, tmp_path):
+    from app.modules.workspace.config import workspace_settings
+    from app.sandbox_health import probe_sandbox_provider
+
+    monkeypatch.setattr(workspace_settings, "provider", "docker")
+    monkeypatch.setattr(
+        workspace_settings, "docker_socket_path", str(tmp_path / "absent.sock")
+    )
+
+    probed = probe_sandbox_provider()
+
+    assert probed["status"] == "needs_setup"
+    assert "WORKSPACE_DOCKER_SOCKET_PATH" in probed["detail"]
+
+
+def test_a_provider_that_can_be_built_reports_ready(monkeypatch):
+    from app.modules.workspace.config import workspace_settings
+    from app.sandbox_health import probe_sandbox_provider
+
+    monkeypatch.setattr(workspace_settings, "provider", "e2b")
+    monkeypatch.setattr(
+        "app.modules.workspace.services.provider_factory.build_provider",
+        object,
+    )
+
+    assert probe_sandbox_provider()["status"] == "ready"
+
+
+def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
+    """`"db": "down"` with no reason anywhere is where an outage used to start.
+
+    A prober asks every few seconds, so the obvious repair -- a record per
+    attempt -- is a wall of identical lines during exactly the incident someone
+    is trying to read. One record on the way down, one on the way back.
+    """
+    import logging
+
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+
+    with caplog.at_level(logging.DEBUG):
+        assert client.get("/health/ready").status_code == 503
+        assert client.get("/health/ready").status_code == 503
+
+    degraded = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg["event"] == "dependency.degraded"
+    ]
+    assert [event["dependency"] for event in degraded] == ["db"]
+    assert degraded[0]["error_type"] == "ConnectionError"
+
+    # And the recovery is reported too, so the incident has an end.
+    caplog.clear()
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    with caplog.at_level(logging.DEBUG):
+        assert client.get("/health/ready").status_code == 200
+    assert [
+        record.msg["event"]
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg["event"].startswith("dependency.")
+    ] == ["dependency.recovered"]

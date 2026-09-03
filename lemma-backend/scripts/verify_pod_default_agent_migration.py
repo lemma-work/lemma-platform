@@ -217,8 +217,17 @@ def _cascade_leaves_the_assistant_alone(cursor) -> None:
         "the deleted agent's surface goes with it, rather than becoming a "
         "second surface belonging to the assistant"
     )
-    cursor.execute("SELECT count(*) FROM schedules WHERE id = %s", (NAMED_SCHEDULE,))
-    assert cursor.fetchone() == (0,), "its schedule cascades too"
+    # The schedule does *not* go with it. It used to: `schedules.agent_id` was
+    # ON DELETE CASCADE, so deleting an agent silently took every schedule
+    # pointing at it and the whole run ledger underneath — the evidence of what
+    # had already happened, removed along with the thing that would happen next.
+    # It is SET NULL now, so the row survives naming nobody; the fire path
+    # dead-letters it and pauses it rather than failing forever in silence.
+    cursor.execute("SELECT agent_id FROM schedules WHERE id = %s", (NAMED_SCHEDULE,))
+    assert cursor.fetchone() == (None,), (
+        "the schedule outlives the agent it named, holding no agent, so its "
+        "history is not deleted with its target"
+    )
 
 
 def _after_downgrade(cursor) -> None:

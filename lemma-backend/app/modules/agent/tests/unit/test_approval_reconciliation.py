@@ -19,37 +19,14 @@ from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_tool_args,
 )
-from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
-    MessageKind,
-    MessageRole,
-)
+from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services import approval_reconciliation
 from app.modules.agent.services.approval_reconciliation import (
     approval_reconcile_job_id,
-    pending_user_approval_messages,
     queue_approval_reconciliation,
     should_defer_approved_tool,
 )
 from app.modules.test_support.authz import allow_all_context
-
-
-def _message(
-    kind: MessageKind,
-    *,
-    tool_name: str,
-    tool_call_id: str,
-) -> Message:
-    return Message.create(
-        conversation_id=uuid7(),
-        sequence=1,
-        agent_run_id=uuid7(),
-        role=MessageRole.ASSISTANT,
-        kind=kind,
-        tool_name=tool_name,
-        tool_call_id=tool_call_id,
-    )
 
 
 class TestJobIdentity:
@@ -167,35 +144,6 @@ class TestWhatGetsDeferred:
             decision=AgentRunApprovalDecision.APPROVE_ONCE,
             has_tool_return=False,
         )
-
-
-class TestPendingApprovals:
-    def test_a_decided_approval_stays_listed_until_its_return_lands(self) -> None:
-        """Listing by *decision* hid the card the moment Approve was clicked, so
-        a worker that then died left no way to retry. Listing by tool return
-        keeps it visible for the seconds the approved tool is actually running."""
-        call = _message(
-            MessageKind.TOOL_CALL, tool_name="request_approval", tool_call_id="c1"
-        )
-
-        assert pending_user_approval_messages([call]) == [call]
-
-    def test_a_returned_approval_disappears(self) -> None:
-        call = _message(
-            MessageKind.TOOL_CALL, tool_name="request_approval", tool_call_id="c1"
-        )
-        returned = _message(
-            MessageKind.TOOL_RETURN, tool_name="request_approval", tool_call_id="c1"
-        )
-
-        assert pending_user_approval_messages([call, returned]) == []
-
-    def test_non_pausing_tool_calls_are_never_approvals(self) -> None:
-        call = _message(
-            MessageKind.TOOL_CALL, tool_name="exec_command", tool_call_id="c1"
-        )
-
-        assert pending_user_approval_messages([call]) == []
 
 
 class TestControllerHandsOffTheSlowHalf:

@@ -56,7 +56,15 @@ async def _close_dedup_store() -> None:
 
 @asynccontextmanager
 async def _dedup_store_lifespan(app):
-    """API process: close the surface webhook dedupe store on shutdown."""
+    """API process: close the surface webhook dedupe store on shutdown.
+
+    Also the first thing the ingress side says about itself: whether inbound
+    webhooks are having their authenticity checked. This process is the one
+    that receives them, so this is where the answer is worth stating.
+    """
+    from app.modules.agent_surfaces.config import log_surface_webhook_security
+
+    log_surface_webhook_security()
     try:
         yield
     finally:

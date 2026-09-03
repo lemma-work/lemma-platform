@@ -10,7 +10,7 @@ from .io import emit
 from .lazy import LazyEntry, LazyRootGroup
 from .project_env import load_project_env
 from .sdk import pod_client
-from .state import build_state, run_with_client, state_from_ctx
+from .state import build_state, err_console, run_with_client, state_from_ctx
 
 # Command groups load lazily (see lazy.py): each entry maps the CLI name to
 # (module, Typer-app attribute, one-line help, hidden). Insertion order is the
@@ -210,6 +210,17 @@ def root(
     project_env = load_project_env(
         server_flag=server_name, config_file=config_file.expanduser()
     )
+    # The loader detects a committed secret and refuses to apply it; saying so is
+    # the other half of the feature. Silence here is what turned a typo into an
+    # unanswerable support question: the CLI switched servers and then told the
+    # user to unset a variable they had never set.
+    if project_env.get("token_in_committed_file"):
+        err_console.print(
+            f"[yellow]warning[/yellow] LEMMA_TOKEN in "
+            f"{project_env['project_dir']}/{project_env['token_file']} was ignored — "
+            "these files are committed, so a token there is a leaked secret. "
+            "Move it to the gitignored .local variant, or run `lemma auth login`."
+        )
     state = build_state(
         config_file=config_file.expanduser(),
         server=server_name,
@@ -265,8 +276,32 @@ def main() -> None:
         sys.exit(1)
     finally:
         from .telemetry import record_command
+        from .update import maybe_check_in_background, notify_if_available
 
         record_command(command, exit_status=exit_status)
+        # After the command, never before it: the check runs on a daemon thread
+        # and only records what it saw, and the notice is printed from what a
+        # previous invocation recorded. Nothing here waits on the network.
+        maybe_check_in_background()
+        notify_if_available()
+
+
+#: Top-level commands registered directly on `app` rather than as lazy groups.
+#: Anything missing here is reported as `None` by telemetry, which is how
+#: `doctor`, `schema`, `feedback`, `get` and `describe` went unmeasured.
+_TOP_LEVEL_COMMANDS = frozenset(
+    {
+        "chat",
+        "describe",
+        "doctor",
+        "feedback",
+        "get",
+        "init",
+        "schema",
+        "update",
+        "version",
+    }
+)
 
 
 def _invoked_command(argv: list[str]) -> str | None:
@@ -277,7 +312,7 @@ def _invoked_command(argv: list[str]) -> str | None:
     typed, including a path or a typo carrying a name — never becomes a
     telemetry dimension. Arguments and flag values are never looked at.
     """
-    known = set(LAZY_GROUPS) | {"init", "chat", "version", "whoami"}
+    known = set(LAZY_GROUPS) | _TOP_LEVEL_COMMANDS
     for token in argv:
         if token.startswith("-"):
             continue
@@ -291,6 +326,7 @@ def init(
     org: str | None = typer.Option(None, "--org"),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
+    """Select the default organization and pod for the active server."""
     from .commands import system
 
     system._run_init_flow(ctx, org=org, pod=pod, prompt=True)
@@ -375,6 +411,19 @@ def doctor_cmd(ctx: typer.Context) -> None:
     system.run_doctor(ctx)
 
 
+@app.command("update")
+def update_cmd(
+    ctx: typer.Context,
+    version: str | None = typer.Option(
+        None, "--version", help="Install this exact version instead of the newest."
+    ),
+) -> None:
+    """Upgrade this lemma CLI in place."""
+    from .commands import system
+
+    system.run_update(ctx, version=version)
+
+
 @app.command("get")
 def get_resource(
     ctx: typer.Context,
@@ -385,6 +434,7 @@ def get_resource(
     name: str | None = typer.Argument(None),
     limit: int = typer.Option(100, "--limit"),
 ) -> None:
+    """Fetch one resource, or list them when no name is given."""
     state = state_from_ctx(ctx)
     normalized = resource.lower().replace("_", "-")
 
@@ -454,6 +504,7 @@ def describe_resource(
     ),
     name: str | None = typer.Argument(None),
 ) -> None:
+    """Summarise a resource — by default, the selected pod's inventory."""
     normalized = resource.lower().replace("_", "-")
     if normalized in {"pod", "pods"}:
         from .commands import pods
@@ -478,6 +529,7 @@ def chat(
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
 ) -> None:
+    """Chat with a pod agent, interactively or with a single message."""
     from .commands import conversations
 
     state = state_from_ctx(ctx)
@@ -504,6 +556,18 @@ def chat(
     )
 
 
+def _looks_like_message(token: str) -> bool:
+    """Whether a lone positional is a message rather than an agent name.
+
+    Agent names are single words; anything the shell hands us as one argv entry
+    containing whitespace was quoted prose. Without this,
+    `lemma chat "what can you do in this pod?"` — the shape the README teaches —
+    took the whole question as an agent name and opened an interactive session
+    against an agent nobody has.
+    """
+    return any(character.isspace() for character in token.strip())
+
+
 def _parse_chat_args(
     args: list[str], agent: str | None, message: str | None
 ) -> tuple[str | None, str | None]:
@@ -512,6 +576,9 @@ def _parse_chat_args(
     if not args:
         return None, message
     if len(args) == 1:
+        if _looks_like_message(args[0]):
+            # An explicit --message still wins, matching the multi-word branch.
+            return None, message if message is not None else args[0]
         return args[0], message
     return args[0], message if message is not None else " ".join(args[1:])
 

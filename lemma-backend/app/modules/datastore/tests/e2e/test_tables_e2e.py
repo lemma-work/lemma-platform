@@ -277,3 +277,118 @@ class TestReservedTablesHidden:
         await pod_api.get_table(
             "reserved_users", expected_status=status.HTTP_404_NOT_FOUND
         )
+
+    @pytest.mark.asyncio
+    async def test_a_reserved_name_cannot_be_taken_by_a_user(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """Owning ``reserved_chunks`` breaks document search for the whole pod.
+
+        The search service creates its chunk table under that exact name in the
+        same pod schema with ``CREATE TABLE IF NOT EXISTS``, so a user table
+        already sitting there makes it a no-op and every subsequent upload
+        fails to index -- while the offending table is hidden from
+        ``table.list`` and cannot be dropped through the record API.
+        """
+        refusal = await pod_api.create_table(
+            {
+                "name": "reserved_chunks",
+                "enable_rls": False,
+                "columns": [{"name": "content", "type": "TEXT"}],
+            },
+            expected_status=status.HTTP_403_FORBIDDEN,
+        )
+
+        assert "reserved_" in refusal["message"], (
+            f"the refusal has to name the prefix it is about: {refusal}"
+        )
+        await pod_api.get_table(
+            "reserved_chunks", expected_status=status.HTTP_404_NOT_FOUND
+        )
+
+
+class TestSchemaChangesLeaveNothingBehind:
+    """A table is two databases, and a failed change must not strand either.
+
+    See the ordering rule on ``TableService``: the metadata row commits before
+    the DDL so that an interrupted request leaves a table the user can delete
+    rather than a physical table nothing describes. The other half of that
+    bargain is these tests -- an ordinary failure has to leave nothing at all,
+    or the early commit would trade a rare unrecoverable state for a common
+    one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_name_is_still_free_after_a_create_that_failed(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """The DDL is refused by the database, after the metadata is committed."""
+        table_name = f"ledger_{uuid4().hex[:8]}"
+
+        # A foreign key to a table that does not exist passes every check the
+        # API makes and fails inside CREATE TABLE.
+        await pod_api.create_table(
+            {
+                "name": table_name,
+                "enable_rls": False,
+                "columns": [
+                    {
+                        "name": "account_id",
+                        "type": "UUID",
+                        "foreign_key": {"references": "no_such_table.id"},
+                    }
+                ],
+            },
+            expected_status=status.HTTP_400_BAD_REQUEST,
+        )
+
+        listing = await pod_api.list_tables(limit=1000)
+        assert table_name not in {item["name"] for item in listing["items"]}, (
+            "the create failed, so its metadata row must not be left behind"
+        )
+        created = await pod_api.create_table(
+            {
+                "name": table_name,
+                "enable_rls": False,
+                "columns": [{"name": "amount", "type": "FLOAT"}],
+            }
+        )
+        assert created["name"] == table_name
+
+    @pytest.mark.asyncio
+    async def test_a_column_is_still_addable_after_an_add_that_failed(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        table_name = f"invoices_{uuid4().hex[:8]}"
+        await pod_api.create_table(
+            {
+                "name": table_name,
+                "enable_rls": False,
+                "columns": [{"name": "amount", "type": "FLOAT"}],
+            }
+        )
+
+        failed = await pod_api.request(
+            "POST",
+            f"/pods/{pod_api.pod_id}/datastore/tables/{table_name}/columns",
+            json={
+                "column": {
+                    "name": "account_id",
+                    "type": "UUID",
+                    "foreign_key": {"references": "no_such_table.id"},
+                }
+            },
+        )
+        assert failed.status_code >= 400, failed.text
+
+        schema = await pod_api.get_table(table_name)
+        assert "account_id" not in {column["name"] for column in schema["columns"]}, (
+            "the column never landed, so the declared schema must not claim it"
+        )
+        updated = await pod_api.add_column(
+            table_name, {"name": "account_id", "type": "UUID"}
+        )
+        assert "account_id" in {column["name"] for column in updated["columns"]}

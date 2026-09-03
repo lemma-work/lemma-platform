@@ -10,7 +10,10 @@ from app.core.api.callback_page import (
     render_callback_page,
     safe_provider_error,
 )
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.config import (
+    surface_settings,
+    surface_webhook_verification_enabled,
+)
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.api.dependencies import get_uow_factory
@@ -22,6 +25,7 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
 )
 from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
+    SHARED_PLATFORM_RECEIVER,
     _decode_webhook_payload,
     _handle_resend_webhook,
     _handled_slack_modal,
@@ -129,7 +133,9 @@ async def handle_platform_webhook(
     ):
         return Response(status_code=200)
 
-    source_event_id = _surface_source_event_id(platform, payload, raw_body)
+    source_event_id = _surface_source_event_id(
+        platform, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+    )
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
         source=platform,
@@ -180,7 +186,12 @@ async def handle_surface_webhook(
     )
 
     source = surface.surface_type.value.lower()
-    source_event_id = _surface_source_event_id(source, payload, raw_body)
+    # Named by the surface, not just the platform: a Telegram ``update_id`` is a
+    # per-bot counter, so every bot's first update is 1 and two of them would
+    # otherwise share one inbox row.
+    source_event_id = _surface_source_event_id(
+        source, payload, raw_body, receiver=str(surface.id)
+    )
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
         source=source,
@@ -203,7 +214,9 @@ def _webhook_verification_response(
         challenge = params.get("hub.challenge")
         verify_token = params.get("hub.verify_token")
 
-        security_enabled = bool(surface_settings.surface_webhook_security_enabled)
+        # The same answer the POST paths get, rather than the raw flag: the
+        # switch is honoured on a developer machine and nowhere else.
+        security_enabled = surface_webhook_verification_enabled()
         if (
             mode == "subscribe"
             and challenge

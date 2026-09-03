@@ -268,6 +268,7 @@ export class HttpClient {
 
       const retryDelay = retryDelayForStatus(
         response.status,
+        method,
         attempt,
         this.maxRetries,
         response.headers.get("retry-after"),

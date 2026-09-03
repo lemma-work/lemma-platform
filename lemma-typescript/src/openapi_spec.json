@@ -3331,11 +3331,12 @@
         "description": "Schema for bulk creating records.",
         "properties": {
           "records": {
-            "description": "List of record payload objects to insert.",
+            "description": "List of record payload objects to insert. At most 1000 per request.",
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
+            "maxItems": 1000,
             "title": "Records",
             "type": "array"
           },
@@ -3356,7 +3357,7 @@
         "description": "Schema for bulk deleting records.",
         "properties": {
           "record_ids": {
-            "description": "Primary key values to delete.",
+            "description": "Primary key values to delete. At most 1000 per request.",
             "items": {
               "anyOf": [
                 {
@@ -3371,6 +3372,7 @@
                 }
               ]
             },
+            "maxItems": 1000,
             "title": "Record Ids",
             "type": "array"
           }
@@ -3385,11 +3387,12 @@
         "description": "Schema for bulk updating records.",
         "properties": {
           "records": {
-            "description": "List of record updates. Each item must include the table primary key field.",
+            "description": "List of record updates. Each item must include the table primary key field. At most 1000 per request.",
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
+            "maxItems": 1000,
             "title": "Records",
             "type": "array"
           }
@@ -5388,8 +5391,15 @@
             "type": "array"
           },
           "total": {
+            "description": "Number of rows in `items`. This is what came back, not how many rows the query matched: when `truncated` is true the result was cut at the deployment's row cap and more rows exist.",
             "title": "Total",
             "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "description": "True when the row cap cut the result short, so `items` is a prefix of the query's real answer. Narrow the query (add a WHERE, aggregate, or LIMIT) to see the rest. Reported because a capped result is otherwise indistinguishable from a complete one.",
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -25760,7 +25770,7 @@
     },
     "/pods/{pod_id}/datastore/query": {
       "post": {
-        "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables \u2014 rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected.",
+        "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables \u2014 rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.",
         "operationId": "query.execute",
         "parameters": [
           {
@@ -26333,13 +26343,14 @@
             }
           },
           {
-            "description": "Max number of rows to return.",
+            "description": "Max number of rows to return, up to 1000. Page beyond that with `page_token`.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 20,
-              "description": "Max number of rows to return.",
+              "description": "Max number of rows to return, up to 1000. Page beyond that with `page_token`.",
+              "maximum": 1000,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"

@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.cards import (
     _teams_approval_card,
@@ -37,9 +38,45 @@ from app.modules.agent_surfaces.platforms.teams.cards import (
 
 logger = get_logger(__name__)
 
+#: One Bot Framework activity body: a ``type`` plus whichever of ``text``,
+#: ``summary``, ``attachments`` and ``replyToId`` the call carries.
+type BotFrameworkActivity = dict[str, object]
+
 
 class TeamsSurfaceEgress(BaseSurfaceAdapter):
     """The outbound half of :class:`TeamsSurfaceAdapter`."""
+
+    #: Overridden per instance only by tests that must not wait out a backoff.
+    _retry_policy = RetryPolicy()
+
+    async def _post_activity(
+        self, url: str, *, token: str, body: BotFrameworkActivity
+    ) -> None:
+        """Post one Bot Framework activity, retrying what is worth retrying.
+
+        The Connector throttles, and a throttled reply used to raise straight
+        out of ``raise_for_status()``: recorded as undelivered, never sent
+        again. Routed through the same ``with_retry`` seam Telegram and Slack
+        use, so one policy covers every platform.
+        """
+
+        async def send() -> None:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as session:
+                async with session.post(
+                    url,
+                    headers=client.auth_headers(token),
+                    json=body,
+                ) as response:
+                    response.raise_for_status()
+
+        await with_retry(
+            send,
+            policy=self._retry_policy,
+            classify=client.classify_teams_error,
+            retry_after=client.teams_retry_after,
+        )
 
     async def send_message(
         self,
@@ -84,15 +121,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            async with session.post(
-                url,
-                headers=client.auth_headers(token),
-                json=body,
-            ) as response:
-                response.raise_for_status()
+        await self._post_activity(url, token=token, body=body)
 
     async def _render_resource(
         self,
@@ -137,15 +166,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            async with session.post(
-                url,
-                headers=client.auth_headers(token),
-                json=body,
-            ) as response:
-                response.raise_for_status()
+        await self._post_activity(url, token=token, body=body)
 
     async def _render_choices(
         self,
@@ -181,15 +202,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            async with session.post(
-                url,
-                headers=client.auth_headers(token),
-                json=body,
-            ) as response:
-                response.raise_for_status()
+        await self._post_activity(url, token=token, body=body)
         return True
 
     async def _render_decision(
@@ -228,15 +241,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         if reply_to_id:
             body["replyToId"] = reply_to_id
 
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            async with session.post(
-                url,
-                headers=client.auth_headers(token),
-                json=body,
-            ) as response:
-                response.raise_for_status()
+        await self._post_activity(url, token=token, body=body)
         return True
 
     async def add_processing_indicator(

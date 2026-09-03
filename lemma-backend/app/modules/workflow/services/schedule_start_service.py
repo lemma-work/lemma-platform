@@ -153,7 +153,38 @@ class ScheduleStartService:
         # 2. A schedule targeting a workflow or agent.
         schedule_repo = ScheduleRepository(self._uow)
         schedule = await schedule_repo.get(UUID(schedule_id))
-        if schedule is None or not schedule.has_target:
+        if schedule is None:
+            logger.debug(
+                "workflow.schedule_start_service.no_target_schedule.observed",
+                schedule_id=schedule_id,
+            )
+            return
+        if not schedule.has_target:
+            # An internal schedule is a wait timer and never had a target; if
+            # `_dispatch_wake` did not claim it there is nothing to record.
+            # A schedule a person made always had one -- creation refuses
+            # without it -- so a missing target means the workflow or agent was
+            # deleted out from under it. PS-SCHED-030: record the firing as
+            # failed and say the target is missing, rather than dropping it
+            # into a debug log nobody reads. The ledger row is what the failure
+            # breaker counts, so a schedule left pointing at nothing is
+            # eventually paused and its owner emailed.
+            if not schedule.is_internal:
+                await ScheduleRunOutcomeService(self._uow).record_pre_dispatch_failure(
+                    schedule,
+                    source_event_id=schedule_event_id,
+                    error_type="ScheduleTargetMissing",
+                )
+                await self._record_fire(
+                    schedule_repo,
+                    schedule,
+                    status=ScheduleFireStatus.ERROR,
+                    error=(
+                        "The workflow or agent this schedule starts no longer "
+                        "exists. Point the schedule at another target, or "
+                        "delete it."
+                    ),
+                )
             logger.debug(
                 "workflow.schedule_start_service.no_target_schedule.observed",
                 schedule_id=schedule_id,

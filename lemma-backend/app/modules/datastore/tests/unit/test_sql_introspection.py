@@ -150,3 +150,66 @@ def test_extract_referenced_tables_delegates_to_analyze_query():
     assert extract_referenced_tables(
         "SELECT * FROM customers c JOIN orders o ON o.cid = c.id"
     ) == {"customers", "orders"}
+
+
+class TestAnalyzeQueryFoldsUnquotedNamesLikePostgres:
+    """The name authorization is checked against must be the name Postgres reads.
+
+    PostgreSQL folds an unquoted identifier to lower case at parse time, so
+    ``SELECT * FROM Users`` reads the relation ``users``. The authorizer
+    enforces ``DATASTORE_TABLE_READ`` on whatever this analysis returns, so
+    returning ``Users`` for that statement checks the permission on one table
+    and serves the rows of another — in a pod holding both, a table-level
+    grant on ``Users`` reads ``users``.
+    """
+
+    def test_an_unquoted_name_is_the_relation_postgres_resolves(self):
+        assert analyze_query("SELECT * FROM Users").tables == {"users"}
+
+    def test_a_quoted_name_keeps_its_case(self):
+        assert analyze_query('SELECT * FROM "Users"').tables == {"Users"}
+
+    def test_the_two_spellings_are_not_the_same_table(self):
+        """Both are authorizable names; the point is that they differ."""
+        unquoted = analyze_query("SELECT * FROM Users").tables
+        quoted = analyze_query('SELECT * FROM "Users"').tables
+
+        assert unquoted != quoted
+
+    def test_folding_applies_to_every_relation_in_the_statement(self):
+        query = 'SELECT * FROM UsErS u JOIN "Orders" o ON u.id = o.uid'
+
+        assert analyze_query(query).tables == {"users", "Orders"}
+
+    def test_an_unquoted_cte_reference_is_still_not_a_table(self):
+        query = "WITH Recent AS (SELECT * FROM expenses) SELECT * FROM Recent"
+
+        assert analyze_query(query).tables == {"expenses"}
+
+
+class TestSelectIntoIsNotReadOnly:
+    """`PS-DATA-020`: a query that attempts to change data is refused.
+
+    ``SELECT * INTO t FROM x`` creates a table in PostgreSQL, and sqlglot models
+    it as a ``Select`` carrying an ``Into`` node -- so the read-only root check
+    accepted it. Nothing was ever written (the transaction is READ ONLY), but
+    the refusal came from the driver rather than from the analyzer, after the
+    authorizer had been asked for READ on the invented name.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT * INTO newt FROM expenses",
+            "SELECT id, amount INTO TEMP scratch FROM expenses WHERE amount > 1",
+            "WITH c AS (SELECT * FROM expenses) SELECT * INTO copied FROM c",
+        ],
+    )
+    def test_select_into_is_refused_by_the_analyzer(self, query):
+        with pytest.raises(DatastoreQueryError, match="read-only"):
+            analyze_query(query)
+
+    def test_the_invented_table_is_never_offered_for_authorization(self):
+        """The refusal has to come first, or the name reaches ``get_tables``."""
+        with pytest.raises(DatastoreQueryError):
+            analyze_query("SELECT * INTO newt FROM expenses")

@@ -160,7 +160,7 @@ def test_workflows_delete_requires_yes(monkeypatch):
 
     assert result.exit_code != 0
     # Either "non-interactive" or "--yes" should appear in the output.
-    assert ("non-interactive" in result.stdout) or ("--yes" in result.stdout)
+    assert ("non-interactive" in result.stderr) or ("--yes" in result.stderr)
 
 
 # ---------------------------------------------------------------------------

@@ -60,10 +60,12 @@ class FunctionModel(UUIDAuditBase):
     # terminal write. `passive_deletes` keeps delete-orphan from re-introducing
     # that load: the FK's ON DELETE CASCADE already removes the rows, and
     # without this the cascade would emit a lazy load inside an async session.
+    # No `delete-orphan`: the FK is `ON DELETE SET NULL`, so a run detached
+    # from its function is kept, not deleted. `passive_deletes` still stands so
+    # nothing lazy-loads the run history inside an async session.
     runs: Mapped[list["FunctionRunModel"]] = relationship(
         "FunctionRunModel",
         back_populates="function",
-        cascade="all, delete-orphan",
         passive_deletes=True,
     )
 
@@ -77,8 +79,14 @@ class FunctionRunModel(UUIDAuditBase):
 
     __tablename__ = "function_runs"
 
-    function_id: Mapped[UUID] = mapped_column(
-        ForeignKey("functions.id", ondelete="CASCADE")
+    # SET NULL, not CASCADE: a function's runs are the record of what it did,
+    # and deleting the definition used to delete inputs, outputs, logs and
+    # errors along with it -- including runs still executing, which stranded
+    # whatever was waiting on the result. The run survives its function; the
+    # delete path refuses while any run is still in flight. See migration 0028.
+    function_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("functions.id", ondelete="SET NULL"),
+        nullable=True,
     )
     revision_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

@@ -55,6 +55,10 @@ from app.modules.datastore.infrastructure.storage_paths import (
 )
 from app.modules.datastore.services.files.page_markers import parse_page_offsets
 from app.modules.datastore.services.files.projection import FileProjection
+from app.modules.datastore.services.search.indexing_availability import (
+    sanitize_processing_error,
+    warn_if_a_facility_is_absent,
+)
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
@@ -135,16 +139,6 @@ class DatastoreFileProcessingService:
     def _should_store_converted_projection(self, file_entity: DatastoreFile) -> bool:
         mime_type = self._base_mime_type(file_entity)
         return mime_type in _CONVERTED_MARKDOWN_MIME_TYPES if mime_type else False
-
-    @staticmethod
-    def _sanitize_error(exc: Exception) -> str:
-        """Return a safe, user-facing error string for storage in the DB.
-
-        Provider bodies, object keys, SQL, URLs, and credentials may all appear
-        in an exception message. Persist only the failure class and a stable
-        summary; detailed diagnostics belong in redacted structured telemetry.
-        """
-        return f"{type(exc).__name__}: document processing failed"
 
     async def process_file_async(
         self,
@@ -343,8 +337,9 @@ class DatastoreFileProcessingService:
                     file_id,
                     content_sha256=content_sha256,
                     processing_attempt=processing_attempt,
-                    error=self._sanitize_error(exc),
+                    error=sanitize_processing_error(exc),
                 )
+            warn_if_a_facility_is_absent(exc, pod_id=self.pod_id)
             logger.debug(
                 "datastore.file_processing_service.datastore_persisted_s_file_s.observed",
                 file_id=file_id,

@@ -40,8 +40,7 @@ def _pausing_call(*, agent_run_id):
 
 def _coordinator(message):
     repository = AsyncMock()
-    repository.list_resolved_approval_ids.return_value = set()
-    repository.list_messages.return_value = ([message], None)
+    repository.pausing_calls_awaiting_a_decision.return_value = [message]
     repository.get_tool_return.return_value = None
     repository.record_approval_decision.return_value = True
     resume_returns = AsyncMock()

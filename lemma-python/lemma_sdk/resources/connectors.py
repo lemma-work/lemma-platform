@@ -104,19 +104,17 @@ class ConnectorApps:
         Pass kind='package' or kind='composio' for apps that ship as both.
         Falls back to the generic doc when no kind-specific file exists.
         """
-        from ..errors import LemmaAPIError
-
-        http = self._parent._transport.generated.get_httpx_client()
+        transport = self._parent._transport
+        http = transport.generated.get_httpx_client()
         params = {"kind": kind} if kind else {}
         response = http.get(f"/connectors/{app}/skill", params=params)
-        status_code = int(response.status_code)
-        if status_code >= 400:
-            message = (
-                f"No skill doc found for '{app}'"
-                if status_code == 404
-                else "Request failed"
+        if response.status_code >= 400:
+            # Through the shared mapper, so a 404 here is a LemmaNotFoundError
+            # like every other missing resource -- and keeps the server's code,
+            # details and request id.
+            raise transport.error_from_response(
+                response.status_code, None, response.content, response.headers
             )
-            raise LemmaAPIError(status_code=status_code, message=message)
         return response.json()
 
 
@@ -376,14 +374,11 @@ class BoundConnectors(BoundResource):
 
     def status(self) -> dict:
         """Return combined installed apps + connected accounts for the current org/user."""
-        from ..errors import LemmaAPIError
-
         http = self._transport.generated.get_httpx_client()
         response = http.get(f"/organizations/{self._org_uuid()}/connectors/status")
-        status_code = int(response.status_code)
-        if status_code >= 400:
-            raise LemmaAPIError(
-                status_code=status_code, message="Failed to fetch connector status"
+        if response.status_code >= 400:
+            raise self._transport.error_from_response(
+                response.status_code, None, response.content, response.headers
             )
         return response.json()
 

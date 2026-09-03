@@ -132,8 +132,18 @@ class RunResumeService:
         source of truth: finished work resumes the run, failed/vanished work
         fails it, in-progress work is left alone. TIME waits are also swept —
         there is no external source to poll (a timer just needs to fire), so a
-        past-due TIME wait whose scheduler wake was lost is fired here. Returns
-        the number of waits acted on.
+        past-due TIME wait whose scheduler wake was lost is fired here.
+
+        HUMAN waits are swept for the ceiling alone. Nothing can be polled: a
+        form is resolved by somebody answering it. But a form assigned to
+        someone who has left, or whose pod membership was removed
+        (`assigned_pod_member_id` is ON DELETE SET NULL), otherwise leaves its
+        run WAITING forever — and the inbox notification expires at 72h, so the
+        only visible trace of it disappears while the run stays open. The human
+        ceiling is deliberately far longer than the machine one; see
+        `_expire_overdue_wait`.
+
+        Returns the number of waits acted on.
         """
         now = datetime.now(timezone.utc)
         cutoff = now - RECONCILE_AFTER
@@ -143,13 +153,16 @@ class RunResumeService:
                 WorkflowRunWaitType.AGENT,
                 WorkflowRunWaitType.FUNCTION,
                 WorkflowRunWaitType.TIME,
+                WorkflowRunWaitType.HUMAN,
             ],
             created_before=cutoff,
             limit=RECONCILE_BATCH,
         )
         acted = 0
         for wait in waits:
-            if not wait.external_ref:
+            # A HUMAN wait is the one kind with no external ref: a form is
+            # answered through the wait row, not by an outside system.
+            if not wait.external_ref and wait.wait_type != WorkflowRunWaitType.HUMAN:
                 continue
             try:
                 # Fetched once and reused: the expiry check needs it to tell a
@@ -170,6 +183,10 @@ class RunResumeService:
                     wait, machine_cutoff, now=now, agent_status=agent_status
                 ):
                     acted += 1
+                    continue
+                if wait.wait_type == WorkflowRunWaitType.HUMAN:
+                    # Past the ceiling it is already handled above; short of it
+                    # there is nothing to reconcile against, so leave it.
                     continue
                 if wait.wait_type == WorkflowRunWaitType.AGENT:
                     handled = await self._apply_agent_status(
@@ -220,7 +237,7 @@ class RunResumeService:
         `SNOOZE` is on it: a sleeping agent wakes itself and is healthy, so
         failing its run would be a silent wrong outcome rather than a visible
         error. A wait blocked on a *person* is not exempt at this ceiling, but it
-        gets a much longer one — see `_expiry_cutoff_for`.
+        gets a much longer one.
         """
         if wait.wait_type == WorkflowRunWaitType.TIME:
             return False
@@ -233,14 +250,15 @@ class RunResumeService:
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
 
-        seconds = settings.workflow_wait_max_age_seconds
-        if wait_reason == "HUMAN":
-            seconds *= HUMAN_WAIT_CEILING_MULTIPLIER
-        cutoff = (
-            machine_cutoff
-            if wait_reason != "HUMAN"
-            else now - timedelta(seconds=seconds)
+        # A form wait is blocked on a person by construction; an agent wait is
+        # only when its own status says so.
+        human_paced = (
+            wait.wait_type == WorkflowRunWaitType.HUMAN or wait_reason == "HUMAN"
         )
+        seconds = settings.workflow_wait_max_age_seconds
+        if human_paced:
+            seconds *= HUMAN_WAIT_CEILING_MULTIPLIER
+        cutoff = now - timedelta(seconds=seconds) if human_paced else machine_cutoff
         if created_at > cutoff:
             return False
 
@@ -255,14 +273,18 @@ class RunResumeService:
         # without it here a hung agent or function keeps burning a sandbox after
         # the run that was waiting on it is already marked failed.
         await self._engine.stop_underlying_work(wait)
-        await self._engine.fail_internal(
-            wait.wait_type,
-            wait.external_ref,
-            error=(
+        # A form says why in the terms of the thing that did not happen: nobody
+        # answered. "Human step did not finish" reads as a system fault, and
+        # this one is not.
+        error = (
+            f"Nobody answered this form within {hours:g}h, so the run was stopped."
+            if wait.wait_type == WorkflowRunWaitType.HUMAN
+            else (
                 f"{wait.wait_type.value.title()} step did not finish within "
                 f"{hours:g}h and was stopped."
-            ),
+            )
         )
+        await self._engine.fail_for_wait(wait, error=error)
         return True
 
     async def _apply_agent_status(

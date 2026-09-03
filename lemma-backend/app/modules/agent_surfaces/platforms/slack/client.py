@@ -4,12 +4,15 @@ import ipaddress
 from typing import Any
 from urllib.parse import urlsplit
 
+import aiohttp
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.platforms.common import (
     UnsafeApiBaseError,
     assert_safe_api_base,
 )
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 
 
 def slack_access_token(credentials: dict[str, Any]) -> str | None:
@@ -143,3 +146,38 @@ def slack_customized_message_kwargs(
 
 def _normalize_base_url(value: str) -> str:
     return value if value.endswith("/") else f"{value}/"
+
+
+def classify_slack_error(exc: Exception) -> DeliveryClassification:
+    """Transient for 429 / 5xx / network errors; permanent for other 4xx.
+
+    Same shape as ``classify_telegram_error`` and ``classify_whatsapp_error``,
+    so all four platforms are retried by one policy. Slack reports a rate limit
+    as ``SlackApiError`` with HTTP 429 and a ``Retry-After`` header, and
+    ``SlackApiError`` is already a member of ``PLATFORM_TRANSPORT_ERRORS`` --
+    so without this the answer was recorded as reaching nobody and dropped.
+    """
+    if isinstance(exc, SlackApiError):
+        status = getattr(exc.response, "status_code", None)
+        if status == 429 or (isinstance(status, int) and status >= 500):
+            return DeliveryClassification.TRANSIENT
+        return DeliveryClassification.PERMANENT
+    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
+        return DeliveryClassification.TRANSIENT
+    return DeliveryClassification.PERMANENT
+
+
+def slack_retry_after(exc: Exception) -> float | None:
+    """Seconds Slack asked us to wait, from the ``Retry-After`` header."""
+    if not isinstance(exc, SlackApiError):
+        return None
+    headers = getattr(exc.response, "headers", None) or {}
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    # aiohttp hands back a multi-dict; a repeated header arrives as a list.
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else None
+    try:
+        seconds = float(raw)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return None
+    return seconds if seconds > 0 else None

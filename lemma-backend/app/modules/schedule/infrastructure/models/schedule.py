@@ -51,13 +51,20 @@ class Schedule(UUIDAuditBase):
         SQLEnum(ScheduleType, native_enum=False, length=50),
         index=True,
     )
+    # SET NULL, not CASCADE: deleting the workflow or agent a schedule starts
+    # must not delete the schedule, nor its firing history through the cascade
+    # on `schedule_runs.schedule_id`. Deleting and recreating a workflow is the
+    # normal way to restructure one, and it used to take every schedule
+    # attached to it silently. A schedule with no target survives as something
+    # a person can see and repoint, and the fire path records the firing as
+    # failed saying the target is missing. See migration 0028.
     workflow_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("workflow_flows.id", ondelete="CASCADE"),
+        ForeignKey("workflow_flows.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
     agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"),
+        ForeignKey("agents.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

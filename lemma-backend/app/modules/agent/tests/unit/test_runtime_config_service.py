@@ -407,7 +407,7 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
 
 
 @pytest.mark.asyncio
-async def test_runtime_falls_back_when_model_not_in_selected_profile():
+async def test_runtime_falls_back_when_model_not_in_selected_profile(caplog):
     # A pinned model that is no longer in the profile catalog (deprecated model,
     # swapped key) must degrade to the profile's default model rather than
     # hard-failing every run that relies on the profile.
@@ -419,17 +419,23 @@ async def test_runtime_falls_back_when_model_not_in_selected_profile():
     )
     service = AgentRuntimeProfileService(_ProfileRepository([org_profile]))
 
-    resolved = await service.resolve(
-        runtime=AgentRuntimeConfig(
-            profile_id=org_profile.id,
-            model_name="missing-model",
-        ),
-        organization_id=org_id,
-        user_id=uuid4(),
-    )
+    with caplog.at_level("WARNING"):
+        resolved = await service.resolve(
+            runtime=AgentRuntimeConfig(
+                profile_id=org_profile.id,
+                model_name="missing-model",
+            ),
+            organization_id=org_id,
+            user_id=uuid4(),
+        )
 
     assert resolved.model is not None
     assert resolved.model.name == org_profile.default_model_name
+    # ...and it says so. Silently answering (and billing) on a different model
+    # than the one an agent is pinned to is otherwise undetectable.
+    assert "model_substituted" in caplog.text
+    assert "missing-model" in caplog.text
+    assert org_profile.default_model_name in caplog.text
 
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):

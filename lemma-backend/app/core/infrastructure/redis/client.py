@@ -55,6 +55,9 @@ from __future__ import annotations
 from redis.asyncio import BlockingConnectionPool, Redis
 
 from app.core.config import settings
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 
 # How long a caller waits for a pooled connection before failing. This is the
@@ -116,4 +119,11 @@ async def close_redis_clients() -> None:
         try:
             await client.aclose()
         except Exception:  # noqa: BLE001 - teardown must not mask a real error
-            pass
+            # Still swallowed -- every remaining client has to be closed, and a
+            # teardown error must not replace whatever is already unwinding.
+            # But a pool that would not close is a pool whose connections are
+            # still on the server, and a reload that leaks one every time is
+            # only visible if this says so.
+            logger.warning(
+                "infrastructure.redis_client.close_failed.degraded", exc_info=True
+            )

@@ -6,7 +6,11 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.authorization.models import RoleAssignmentModel, RoleModel
+from app.core.authorization.models import (
+    RoleAssignmentModel,
+    RoleModel,
+    RolePermissionModel,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.composition.pod_identity_wiring import OrganizationMember
 from app.modules.pod.domain.role_entities import PodRoleEntity
@@ -41,6 +45,36 @@ class PodRoleQueryRepository:
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._to_entity(role, pod_id=pod_id) for role in rows]
+
+    async def get_permission_ids_by_role_name(
+        self, *, pod_id: UUID, names: list[str]
+    ) -> dict[str, set[str]]:
+        """Permission ids carried by each named pod role.
+
+        Roles the pod does not define are absent from the result rather than
+        mapped to an empty set, so a caller can tell "this role grants nothing"
+        apart from "there is no such role".
+        """
+        if not names:
+            return {}
+        stmt = (
+            select(RoleModel.name, RolePermissionModel.permission_id)
+            .join(
+                RolePermissionModel,
+                RolePermissionModel.role_id == RoleModel.id,
+                isouter=True,
+            )
+            .where(
+                RoleModel.pod_id == pod_id,
+                RoleModel.name.in_(names),
+            )
+        )
+        permissions: dict[str, set[str]] = {}
+        for role_name, permission_id in (await self._session.execute(stmt)).all():
+            carried = permissions.setdefault(role_name, set())
+            if permission_id is not None:
+                carried.add(permission_id)
+        return permissions
 
     async def get_member_role_names(
         self,

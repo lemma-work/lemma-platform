@@ -74,7 +74,11 @@ async def _publish_native_receiver_event(
             json.dumps(payload, sort_keys=True, default=str).encode()
         ).hexdigest()
     )
-    source_event_id = f"{source}:native:{provider_id}"
+    # The receiver is part of the identity, because `provider_id` is only unique
+    # within one. A Telegram `update_id` is a per-bot counter starting at 1, so
+    # two polled bots both produce update 1 -- and the durable inbox would claim
+    # one row for the pair, answer the first person and silently drop the second.
+    source_event_id = f"{source}:native:{receiver_key or 'unkeyed'}:{provider_id}"
     event = SurfaceWebhookReceivedEvent(
         event_id=stable_event_id({"event_id": source_event_id}),
         source=source,

@@ -94,7 +94,9 @@ def sync_detailed(
     table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the
     caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which
     requires permission to administer each referenced RLS table. Only a single read-only statement is
-    permitted; mutating statements and cross-schema references are rejected.
+    permitted; mutating statements and cross-schema references are rejected. Results are capped at the
+    deployment's row limit: `total` is how many rows came back, and `truncated` says whether more
+    matched.
 
     Args:
         pod_id (UUID):
@@ -139,7 +141,9 @@ def sync(
     table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the
     caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which
     requires permission to administer each referenced RLS table. Only a single read-only statement is
-    permitted; mutating statements and cross-schema references are rejected.
+    permitted; mutating statements and cross-schema references are rejected. Results are capped at the
+    deployment's row limit: `total` is how many rows came back, and `truncated` says whether more
+    matched.
 
     Args:
         pod_id (UUID):
@@ -179,7 +183,9 @@ async def asyncio_detailed(
     table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the
     caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which
     requires permission to administer each referenced RLS table. Only a single read-only statement is
-    permitted; mutating statements and cross-schema references are rejected.
+    permitted; mutating statements and cross-schema references are rejected. Results are capped at the
+    deployment's row limit: `total` is how many rows came back, and `truncated` says whether more
+    matched.
 
     Args:
         pod_id (UUID):
@@ -222,7 +228,9 @@ async def asyncio(
     table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the
     caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which
     requires permission to administer each referenced RLS table. Only a single read-only statement is
-    permitted; mutating statements and cross-schema references are rejected.
+    permitted; mutating statements and cross-schema references are rejected. Results are capped at the
+    deployment's row limit: `total` is how many rows came back, and `truncated` says whether more
+    matched.
 
     Args:
         pod_id (UUID):

@@ -1,6 +1,7 @@
 """Workflow run repository."""
 
 from uuid import UUID
+from collections.abc import Sequence
 from typing import List, Optional
 
 from sqlalchemy import select, update
@@ -199,6 +200,44 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
             models = models[:limit]
 
         return [self._to_summary_entity(m) for m in models], next_cursor
+
+    async def list_summaries_by_ids(
+        self, run_ids: Sequence[UUID]
+    ) -> dict[UUID, WorkflowRunEntity]:
+        """The runs behind a batch of waits, keyed by id.
+
+        One statement rather than one read per wait: the caller is rendering an
+        inbox, and a page of assignments used to be a page of sequential run
+        reads on a single request.
+        """
+        if not run_ids:
+            return {}
+        stmt = (
+            select(WorkflowRunModel)
+            .options(
+                load_only(
+                    WorkflowRunModel.id,
+                    WorkflowRunModel.flow_id,
+                    WorkflowRunModel.pod_id,
+                    WorkflowRunModel.user_id,
+                    WorkflowRunModel.start_type,
+                    WorkflowRunModel.schedule_event_id,
+                    WorkflowRunModel.status,
+                    WorkflowRunModel.current_node_id,
+                    WorkflowRunModel.error,
+                    WorkflowRunModel.failed_node_id,
+                    WorkflowRunModel.started_at,
+                    WorkflowRunModel.completed_at,
+                    WorkflowRunModel.created_at,
+                    WorkflowRunModel.updated_at,
+                )
+            )
+            .where(WorkflowRunModel.id.in_(list(run_ids)))
+        )
+        result = await self.session.execute(stmt)
+        return {
+            model.id: self._to_summary_entity(model) for model in result.scalars().all()
+        }
 
     async def find_by_schedule_event(
         self,

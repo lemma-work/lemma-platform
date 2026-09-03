@@ -441,7 +441,7 @@ def test_pod_from_env_requires_pod_id(monkeypatch, tmp_path):
 
 
 def test_transport_raises_typed_api_error():
-    error = LemmaTransport._error_from_response(
+    error = LemmaTransport.error_from_response(
         LemmaTransport.__new__(LemmaTransport),
         400,
         None,

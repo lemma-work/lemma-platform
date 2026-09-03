@@ -316,14 +316,23 @@ async def _read_table_rows(
     record_service = build_record_service(uow)
     table_service = build_table_service(uow)
     if request.query:
-        rows, total, _truncated = await record_service.execute_readonly_query(
+        rows, total, truncated = await record_service.execute_readonly_query(
             pod_id=pod_id,
             query=request.query,
             user_id=user_id,
             table_service=table_service,
             ctx=ctx,
         )
-        return [dict(row) for row in rows[:PREVIEW_ROW_LIMIT]], total, None
+        # `total` from a read-only query counts rows *returned*, and the query
+        # caps them — so on a truncated result it is a floor, not a total, and
+        # rendering it beside a preview would state a row count that is simply
+        # wrong. The other branch below gets a real count from `list_records`.
+        # No count reads better here than a confident one that is too small.
+        return (
+            [dict(row) for row in rows[:PREVIEW_ROW_LIMIT]],
+            None if truncated else total,
+            None,
+        )
     if not request.name:
         return [], None, None
     table = await table_service.get_table(pod_id, request.name, ctx)

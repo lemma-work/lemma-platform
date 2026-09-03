@@ -155,7 +155,7 @@ def test_apps_delete_without_yes_refuses_noninteractive(monkeypatch):
     result = runner.invoke(app, ["apps", "delete", "my-app", "--pod", "pod-1"])
 
     assert result.exit_code != 0
-    assert "--yes" in result.stdout or "non-interactive" in result.stdout
+    assert "--yes" in result.stderr or "non-interactive" in result.stderr
 
 
 def test_apps_init_writes_server_binding(tmp_path, monkeypatch):

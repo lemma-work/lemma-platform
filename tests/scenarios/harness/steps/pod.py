@@ -220,6 +220,34 @@ class PodSteps:
             json={"name": named, "permission_ids": permissions},
         )
 
+    async def is_refused_creating_a_role(
+        self, *, in_pod: JSON, named: str, permissions: list[str]
+    ) -> str:
+        """Attempt a role, and return *why* the system refused it.
+
+        The reason is the point. "You may not be here at all" and "you may not
+        confer that" are different refusals, and a scenario that accepts any
+        4xx cannot tell them apart — which is exactly how the conferral bound
+        went unimplemented underneath a test that claimed to prove it.
+        """
+        response = await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/roles",
+            json={"name": named, "permission_ids": permissions},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused creating role "
+                f"{named!r} carrying {permissions}, but it succeeded "
+                f"({response.status_code})"
+            )
+        code = response.json().get("code")
+        if not code:
+            raise AssertionError(
+                f"refusal for {named!r} carried no code: {response.text}"
+            )
+        return str(code)
+
     async def roles_in(self, pod: JSON) -> list[JSON]:
         return items_of(await self.api.get(f"/pods/{pod['id']}/roles"))
 

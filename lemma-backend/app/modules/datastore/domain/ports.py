@@ -33,6 +33,15 @@ if TYPE_CHECKING:
 
 
 class DatastoreTableRepositoryPort(Protocol):
+    async def commit(self) -> None:
+        """Make the staged metadata changes durable now.
+
+        Table metadata and the physical pod table live in different databases,
+        so a schema change has to choose which one commits first. See the
+        ordering rule on ``TableService`` for why the metadata goes first, and
+        why that needs a commit the request's own boundary cannot supply.
+        """
+
     async def create(self, entity: DatastoreTableEntity) -> DatastoreTableEntity: ...
 
     async def get(self, id: UUID) -> Optional[DatastoreTableEntity]: ...

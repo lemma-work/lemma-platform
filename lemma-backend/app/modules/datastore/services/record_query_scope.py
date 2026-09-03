@@ -36,7 +36,7 @@ async def resolve_query_row_scope(
 
     ``ensure_index`` is given the chance to back-fill each table's listing
     index before the query is planned. That matters more here than on the
-    listing path: ``_reject_if_too_expensive`` refuses a query whose planned
+    listing path: ``guard_query_plan`` refuses a query whose planned
     cost exceeds the ceiling, so an unindexed table does not merely make an
     ad-hoc query slow, it makes it fail.
 

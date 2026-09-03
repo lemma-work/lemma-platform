@@ -84,8 +84,9 @@ def _reserved_whatsapp_message() -> bytes:
     ],
 )
 def test_source_event_id_prefers_stable_provider_identifiers(payload, expected):
-    assert _surface_source_event_id("telegram", payload, b"body") == (
-        f"telegram:{expected}"
+    assert (
+        _surface_source_event_id("telegram", payload, b"body", receiver="a-surface")
+        == f"telegram:a-surface:{expected}"
     )
 
 
@@ -93,9 +94,21 @@ def test_source_event_id_hashes_content_when_provider_has_no_identifier():
     raw = b'{"data":"no identifier"}'
     expected = hashlib.sha256(raw).hexdigest()
 
-    assert _surface_source_event_id("custom", {"data": "not-a-dict"}, raw) == (
-        f"custom:content-sha256:{expected}"
+    assert (
+        _surface_source_event_id(
+            "custom", {"data": "not-a-dict"}, raw, receiver="a-surface"
+        )
+        == f"custom:a-surface:content-sha256:{expected}"
     )
+
+
+def test_two_receivers_sharing_a_provider_id_are_two_events():
+    """Telegram's ``update_id`` counts per bot, so every bot has an update 1."""
+    an_update = {"update_id": 1}
+
+    assert _surface_source_event_id(
+        "telegram", an_update, b"body", receiver="surface-a"
+    ) != _surface_source_event_id("telegram", an_update, b"body", receiver="surface-b")
 
 
 def test_webhook_headers_are_redacted_before_event_serialization():
@@ -152,7 +165,7 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
     security.assert_platform_request_allowed.assert_called_once_with("telegram")
     security.verify_platform_request.assert_awaited_once()
     event = publish.await_args.args[1]
-    assert event.source_event_id == "telegram:99"
+    assert event.source_event_id == "telegram:shared:99"
     assert event.source == "telegram"
 
 
@@ -274,7 +287,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
     )
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
-    assert event.source_event_id == "resend:email-1"
+    assert event.source_event_id == f"resend:{surface.id}:email-1"
 
 
 @pytest.mark.asyncio
@@ -307,4 +320,4 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     security.verify_surface_request.assert_awaited_once()
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
-    assert event.source_event_id == "whatsapp:provider-event-1"
+    assert event.source_event_id == f"whatsapp:{surface.id}:provider-event-1"

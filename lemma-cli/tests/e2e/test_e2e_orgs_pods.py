@@ -28,7 +28,7 @@ def test_pods_create_and_list(backend_server, test_user, test_org):
         base_url=backend_server["base_url"],
         token=test_user["token"],
     )
-    assert create_result.exit_code == 0, create_result.stdout
+    assert create_result.exit_code == 0, create_result.output
 
     payload = cli_json(
         ["pods", "list", "--org", org_id],
@@ -47,7 +47,7 @@ def test_pods_get_by_name(backend_server, test_user, test_pod, test_org):
         token=test_user["token"],
         org=test_org["id"],
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output
     assert test_pod["name"] in result.stdout
 
 
@@ -58,5 +58,5 @@ def test_pods_get_by_uuid(backend_server, test_user, test_pod):
         base_url=backend_server["base_url"],
         token=test_user["token"],
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output
     assert test_pod["name"] in result.stdout

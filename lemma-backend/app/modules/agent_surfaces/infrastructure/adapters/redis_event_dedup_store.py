@@ -80,6 +80,29 @@ class RedisSurfaceEventDedupStore:
         )
         return bool(claimed)
 
+    async def release_message(
+        self,
+        *,
+        surface_installation_id: UUID | None,
+        platform: str,
+        external_channel_id: str | None,
+        external_thread_id: str | None,
+        external_message_id: str | None,
+    ) -> None:
+        del external_thread_id
+        if not external_message_id:
+            return
+
+        redis = await self._get_redis()
+        await redis.delete(
+            self._key(
+                surface_installation_id=surface_installation_id,
+                platform=platform,
+                external_channel_id=external_channel_id,
+                external_message_id=external_message_id,
+            )
+        )
+
     async def close(self) -> None:
         # The client is shared process-wide; closing it here would break
         # every other component still using the same pool. Disposal is

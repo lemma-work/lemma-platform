@@ -4,7 +4,6 @@ from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
-from sqlalchemy import and_ as sa_and
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -13,7 +12,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.models import (
     RoleAssignmentModel,
     RoleModel,
-    RolePermissionModel,
 )
 from app.composition.pod_identity_wiring import OrganizationMember, User
 from app.modules.identity.contracts import normalize_identity_email
@@ -30,6 +28,10 @@ from app.modules.pod.domain.pod_entities import (
     PodMemberEntity,
 )
 from app.modules.pod.infrastructure.models import Pod, PodJoinRequest, PodMember
+from app.modules.pod.infrastructure.pod_administration_queries import (
+    count_members_who_can,
+    roles_grant_permission,
+)
 from app.modules.pod.domain.visibility import normalize_role_list
 
 
@@ -424,57 +426,20 @@ class PodMemberRepository(PodMemberRepositoryPort):
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
 
-    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int:
-        """How many members of ``pod_id`` hold a role granting ``permission_id``.
-
-        Three things this does not do, each of which was a way to get the wrong
-        number.
-
-        It does not match on a role *name*. A pod may define a custom role that
-        carries ``pod.member.manage``; its holder administers the pod as surely
-        as a ``POD_ADMIN`` does, and counting names would have refused to let
-        the last POD_ADMIN step down from a pod that has three other people who
-        can do the job.
-
-        It counts distinct members, not assignment rows -- a member assigned the
-        same role twice is one administrator, and counting rows would have
-        inflated the total and silently disarmed the guard it feeds.
-
-        It takes ``FOR UPDATE`` on the rows it counted. The callers are
-        check-then-act: two administrators leaving at the same moment would each
-        see the other and both be allowed through, which is precisely the state
-        the guard exists to prevent. Locking the members serialises them.
-
-        The de-duplication happens here rather than in SQL, and that is not a
-        stylistic choice: Postgres rejects ``SELECT DISTINCT ... FOR UPDATE``
-        outright, so asking for both in one statement raised
-        ``FeatureNotSupportedError`` and the guard answered 500 every time it
-        actually fired. It never showed up because the only scenario covering
-        the rule demoted an *organization owner*, who is exempt and returns
-        before reaching this query. See DEV-POD-002.
-        """
-        stmt = (
-            select(PodMember.id)
-            .join(
-                RoleAssignmentModel,
-                sa_and(
-                    RoleAssignmentModel.principal_type == "POD_MEMBER",
-                    RoleAssignmentModel.principal_id == PodMember.id,
-                ),
-            )
-            .join(RoleModel, RoleModel.id == RoleAssignmentModel.role_id)
-            .join(
-                RolePermissionModel,
-                RolePermissionModel.role_id == RoleModel.id,
-            )
-            .where(
-                PodMember.pod_id == pod_id,
-                RolePermissionModel.permission_id == permission_id,
-            )
-            .with_for_update(of=PodMember)
+    async def roles_grant_permission(
+        self, pod_id: UUID, role_names: Sequence[str], permission_id: str
+    ) -> bool:
+        return await roles_grant_permission(
+            self.session,
+            pod_id=pod_id,
+            role_names=role_names,
+            permission_id=permission_id,
         )
-        result = await self.session.execute(stmt)
-        return len(set(result.scalars().all()))
+
+    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int:
+        return await count_members_who_can(
+            self.session, pod_id=pod_id, permission_id=permission_id
+        )
 
 
 class PodJoinRequestRepository(PodJoinRequestRepositoryPort):

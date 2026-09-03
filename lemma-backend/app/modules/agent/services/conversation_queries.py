@@ -27,9 +27,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
 )
-from app.modules.agent.services.approval_reconciliation import (
-    pending_user_approval_messages,
-)
+from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     require_agent_action,
@@ -222,8 +220,13 @@ class ConversationQueries:
             agent_name=agent_name,
             action=Permissions.AGENT_READ,
         )
-        messages, _ = await self.conversation_repository.list_messages(
+        # A pausing call stays listed until its synthesized return is durable --
+        # the approved tool runs asynchronously, and a repeated click is how a
+        # reconciliation the worker died during gets re-enqueued. Asked in SQL
+        # rather than by scanning the newest 500 messages: a long agent run
+        # writes hundreds of tool messages, and past that window the pending
+        # approval simply disappeared from this list.
+        return await self.conversation_repository.pausing_calls_awaiting_a_return(
             conversation_id=conversation.id,
-            limit=500,
+            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
-        return pending_user_approval_messages(messages)

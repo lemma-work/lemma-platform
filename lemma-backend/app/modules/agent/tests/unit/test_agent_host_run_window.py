@@ -65,6 +65,21 @@ class TestTheCeilingsAgree:
     def test_the_orphan_sweep_never_reaps_a_healthy_run(self) -> None:
         assert _ORPHANED_RUN_CUTOFF_SECONDS > AGENT_RUN_JOB_TIMEOUT_SECONDS
 
+    def test_an_approval_is_never_declared_abandoned_while_it_could_be_running(
+        self,
+    ) -> None:
+        """`_ABANDONED_EXECUTION_SECONDS` is written out rather than imported --
+        ``streaq_runtime`` builds a broker at module scope and the approvals
+        service is on the API's import path. Held together here instead, because
+        a value below the job's own ceiling would write "could not confirm this
+        ran" over a command that is still running."""
+        from app.core.infrastructure.jobs.streaq_runtime import JOB_TIMEOUT_SECONDS
+        from app.modules.agent.services.conversation_approvals import (
+            _ABANDONED_EXECUTION_SECONDS,
+        )
+
+        assert _ABANDONED_EXECUTION_SECONDS > JOB_TIMEOUT_SECONDS
+
     def test_a_run_may_last_hours(self) -> None:
         """An agent host run is a person's real task, not a request.
 

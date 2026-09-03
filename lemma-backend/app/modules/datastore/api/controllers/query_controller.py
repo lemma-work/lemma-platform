@@ -43,7 +43,9 @@ _QUERY_MODE_DESCRIPTION = (
         "by default (pod admins included). Pass `mode=admin` to read every "
         "member's rows, which requires permission to administer each referenced "
         "RLS table. Only a single read-only statement is permitted; mutating "
-        "statements and cross-schema references are rejected."
+        "statements and cross-schema references are rejected. Results are "
+        "capped at the deployment's row limit: `total` is how many rows came "
+        "back, and `truncated` says whether more matched."
     ),
 )
 async def execute_query(
@@ -58,7 +60,7 @@ async def execute_query(
         description=_QUERY_MODE_DESCRIPTION,
     ),
 ) -> DatastoreQueryResponse:
-    rows, total, _truncated = await record_service.execute_readonly_query(
+    rows, total, truncated = await record_service.execute_readonly_query(
         pod_id=pod_id,
         query=data.query,
         user_id=user.id,
@@ -74,4 +76,8 @@ async def execute_query(
         # endpoint serves.
         items=jsonable_encoder(rows, custom_encoder={Decimal: float}),
         total=total,
+        # The repository computes this so a capped result cannot be mistaken
+        # for a complete one; dropping it here handed every SDK, CLI, app and
+        # agent reading through this endpoint a wrong answer with no signal.
+        truncated=truncated,
     )

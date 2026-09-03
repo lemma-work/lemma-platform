@@ -15,7 +15,7 @@ to prove the claim.
 from __future__ import annotations
 
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -1148,3 +1148,92 @@ async def test_delete_function_cleans_up_icon_and_the_function_becomes_unreachab
         follow_redirects=True,
     )
     assert run_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_input_that_does_not_match_the_declaration_is_refused_not_run(
+    authenticated_client, test_pod
+):
+    """PS-FUNC-001: refuse before executing, and say which part was wrong.
+
+    The failure mode this replaces is expensive and misleading: the mismatch
+    was only found inside the sandbox, so a mistyped field name created a run,
+    took a worker lease, usually paid a cold start, and answered 200 with a run
+    that had failed. Nothing may be created here.
+    """
+    pod_id = test_pod["id"]
+    func_name = f"strict_input_{uuid4().hex[:8]}"
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "declares value: int",
+            "code": typed_function_code(func_name, expression="data.value * 2"),
+        },
+    )
+
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/runs",
+        json={"input_data": {"valu": 10}},
+        follow_redirects=True,
+    )
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+    body = refused.json()
+    assert body["code"] == "FUNCTION_VALIDATION_ERROR"
+    assert "value" in body["message"]
+
+    runs = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}/runs")
+    assert runs.status_code == status.HTTP_200_OK, runs.text
+    assert runs.json()["items"] == [], "a refused call must not create a run"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_deleting_a_function_keeps_the_record_of_what_it_did(
+    authenticated_client, test_pod, db_session
+):
+    """PS-FUNC-004: stop it being runnable, keep the history of what it did.
+
+    ``function_runs.function_id`` used to cascade, so tidying up a pod erased
+    every input, output and log the function had ever produced. The rows now
+    outlive the definition holding everything they recorded.
+    """
+    from sqlalchemy import select
+
+    from app.modules.function.infrastructure.models import FunctionRunModel
+
+    pod_id = test_pod["id"]
+    func_name = f"delete_history_{uuid4().hex[:8]}"
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "runs once, then is deleted",
+            "code": typed_function_code(func_name, expression="data.value + 1"),
+        },
+    )
+    completed = await run_function(
+        authenticated_client, pod_id, func_name, {"value": 41}
+    )
+    run_id = UUID(completed["id"])
+
+    deleted = await authenticated_client.delete(f"/pods/{pod_id}/functions/{func_name}")
+    assert deleted.status_code == status.HTTP_200_OK, deleted.text
+
+    gone = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}")
+    assert gone.status_code == status.HTTP_404_NOT_FOUND, gone.text
+
+    surviving = (
+        await db_session.execute(
+            select(FunctionRunModel).where(FunctionRunModel.id == run_id)
+        )
+    ).scalar_one_or_none()
+    assert surviving is not None, "the delete took the run history with it"
+    assert surviving.function_id is None, "the run should be detached, not repointed"
+    assert surviving.output_data == {"result": 42}
+    assert surviving.status == "COMPLETED"

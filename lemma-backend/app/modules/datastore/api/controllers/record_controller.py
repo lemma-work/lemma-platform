@@ -21,6 +21,7 @@ from app.modules.datastore.api.record_query import (
     parse_record_sorts,
 )
 from app.modules.datastore.api.schemas.datastore_schemas import (
+    MAX_RECORD_PAGE_SIZE,
     BulkCreateRecordsRequest,
     BulkDeleteRecordsRequest,
     BulkUpdateRecordsRequest,
@@ -127,7 +128,15 @@ async def list_records(
     record_service: RecordServiceDep,
     user: CurrentUser,
     pod_ctx: PodContextDep,
-    limit: int = Query(default=20, ge=1, description="Max number of rows to return."),
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=MAX_RECORD_PAGE_SIZE,
+        description=(
+            "Max number of rows to return, up to "
+            f"{MAX_RECORD_PAGE_SIZE}. Page beyond that with `page_token`."
+        ),
+    ),
     offset: int = Query(
         default=0, ge=0, description="Row offset for direct pagination."
     ),

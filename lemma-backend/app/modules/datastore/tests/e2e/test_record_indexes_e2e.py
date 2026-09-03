@@ -1,7 +1,7 @@
 """Dynamic tables must be indexed for the way they are actually read.
 
 Pod tables were created with nothing but a primary key. That reads as a speed
-problem and is worse than one: ``reject_if_too_expensive`` plans every ad-hoc
+problem and is worse than one: ``guard_query_plan`` plans every ad-hoc
 query and refuses any whose estimated cost exceeds the ceiling, and with no
 index the planner costs a sequential scan — so past a certain size a
 reasonable query stops working rather than merely slowing down.

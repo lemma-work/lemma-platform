@@ -19,6 +19,9 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
+    _APPROVE_ONCE_REPLIES,
+    _APPROVE_SESSION_REPLIES,
+    _DENY_REPLIES,
     _classify_approval_reply,
 )
 
@@ -309,3 +312,47 @@ def test_the_failure_is_logged_where_production_can_see_it() -> None:
         ].level
         == "warning"
     )
+
+
+# --- one vocabulary, not two -----------------------------------------------
+
+
+async def test_every_reply_the_classifier_reads_reaches_the_classifier() -> None:
+    """The gate and the classifier have to agree on what an answer is.
+
+    ``_is_an_answer`` runs first and used to keep a shorter word list of its
+    own, so the phrases in the gap -- "go ahead", "sure", "proceed", "lgtm",
+    thumbs-up -- were reported as ``NOT_A_DECISION``. The caller then starts a
+    turn, and starting a turn supersedes the pause with an auto-DENY: the
+    person typed "go ahead" and the action was cancelled.
+    """
+    for phrase in sorted(
+        _APPROVE_ONCE_REPLIES | _APPROVE_SESSION_REPLIES | _DENY_REPLIES
+    ):
+        outcome, resolve = await _resume(phrase)
+        assert outcome is ResumeOutcome.CONSUMED, phrase
+        assert resolve.await_args.kwargs["decision"] is _classify_approval_reply(
+            phrase
+        ), phrase
+
+
+async def test_go_ahead_approves_rather_than_cancelling() -> None:
+    """The named symptom, on its own, because it is the one people type."""
+    outcome, resolve = await _resume("go ahead")
+
+    assert outcome is ResumeOutcome.CONSUMED
+    assert (
+        resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
+    )
+
+
+async def test_a_message_that_is_no_decision_still_falls_through() -> None:
+    """Widening the gate must not widen it to everything.
+
+    An approval has no free-form answer, so anything the classifier does not
+    recognise still has to reach the agent as the person's own words.
+    """
+    outcome, resolve = await _resume("actually, use the staging table instead")
+
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    resolve.assert_not_awaited()

@@ -252,3 +252,32 @@ def test_only_the_primary_lane_watches_for_signals():
     handlers = {lane: worker.handle_signals for lane, worker in LANE_WORKERS.items()}
     assert handlers[Lane.INTERACTIVE] is True
     assert [lane for lane, on in handlers.items() if on] == [Lane.INTERACTIVE]
+
+
+def test_one_already_registered_task_does_not_skip_the_rest(monkeypatch):
+    """The guard has to test that registration *finished*, not that it started.
+
+    It used to return early on `if TASK_LANES:` -- "somebody registered
+    something" standing in for "everything is registered". Any import that
+    reached a single `@streaq_task` before the API called this left the table
+    with one entry and made the call a no-op, which is the exact bug the
+    function's own docstring records: pod-bundle export, import and GitHub
+    publish enqueued to the wrong lane and silently did nothing.
+    """
+    imported: list[object] = []
+    monkeypatch.setattr(streaq_runtime, "_lanes_registered", False)
+    monkeypatch.setattr(
+        "app.core.registry.assembly.import_module_tasks",
+        lambda modules: imported.append(modules),
+    )
+    monkeypatch.setattr(
+        streaq_runtime, "TASK_LANES", {"some.task.registered.at.import": Lane.BULK}
+    )
+
+    streaq_runtime.ensure_task_lanes_registered()
+
+    assert len(imported) == 1
+
+    # And having finished, it does not do it again.
+    streaq_runtime.ensure_task_lanes_registered()
+    assert len(imported) == 1

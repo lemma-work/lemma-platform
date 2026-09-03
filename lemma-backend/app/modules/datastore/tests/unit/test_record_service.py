@@ -1108,16 +1108,29 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypa
     )
 
 
-async def test_bulk_delete_checks_permission_once_and_still_publishes_events():
+async def test_bulk_delete_checks_permission_once_and_still_publishes_events(
+    monkeypatch,
+):
     """Same preamble hoist as bulk update, and the events must still be flushed.
 
-    `_write_delete` stages a DELETE event per row but deliberately does not
+    The batch writer stages a DELETE event per row and deliberately does not
     dispatch, so the batch has to flush once at the end. Getting that wrong
     would publish nothing at all, which is worse than the slowness this fixes.
     """
     ctx = _events_enabled_context()
     user_id = uuid4()
     record_repository = AsyncMock()
+    batched: list[list] = []
+
+    async def _fake_bulk_delete(repository, ctx_arg, ids_arg, user_arg, **kwargs):
+        batched.append(list(ids_arg))
+        return len(ids_arg)
+
+    monkeypatch.setattr(
+        "app.modules.datastore.services.record_service.write_bulk_deletes",
+        _fake_bulk_delete,
+    )
+
     service = RecordService(record_repository=record_repository)
     authz = AsyncMock()
     authz.should_enforce_record_user_scope.return_value = False
@@ -1127,7 +1140,14 @@ async def test_bulk_delete_checks_permission_once_and_still_publishes_events():
     count = await service.bulk_delete_records(ctx, [uuid4() for _ in range(4)], user_id)
 
     assert count == 4
-    assert record_repository.delete_record.await_count == 4
+    assert len(batched) == 1, (
+        "four rows must be one transaction, not four -- delete_record opened a "
+        "session, set RLS, staged an event and committed for every row, so a "
+        "batch that failed halfway left the first half destroyed"
+    )
+    assert record_repository.delete_record.await_count == 0, (
+        "the per-row path must not be reachable from a bulk call"
+    )
     assert authz.require_record_write.await_count == 1
     assert authz.should_enforce_record_user_scope.await_count == 1
     assert service.events.dispatch.await_count == 1, (

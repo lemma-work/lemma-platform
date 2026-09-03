@@ -6,6 +6,7 @@ from typing import Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
 from app.modules.identity.contracts import (
+    OrganizationEntity,
     OrganizationMemberEntity,
 )
 from app.modules.pod.domain.pod_entities import (
@@ -80,6 +81,10 @@ class PodMemberRepositoryPort(Protocol):
 
     async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int: ...
 
+    async def roles_grant_permission(
+        self, pod_id: UUID, role_names: Sequence[str], permission_id: str
+    ) -> bool: ...
+
 
 class PodScheduleTeardownPort(Protocol):
     """What pod deletion needs from the schedule module, stated locally.
@@ -116,6 +121,11 @@ class PodJoinRequestRepositoryPort(Protocol):
 
 
 class OrganizationMembershipPort(Protocol):
+    #: The organization itself, for the one pod decision whose effect crosses
+    #: the organization boundary: a pod may not open itself wider than the
+    #: organization that holds it (see ``PodService.update_pod``).
+    async def get(self, organization_id: UUID) -> Optional[OrganizationEntity]: ...
+
     async def get_member(
         self, user_id: UUID, organization_id: UUID
     ) -> Optional[OrganizationMemberEntity]: ...
