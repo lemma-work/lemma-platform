@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-swallowed-errors lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -100,6 +100,7 @@ help:
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
+	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
 	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
@@ -392,6 +393,13 @@ lint-io-hygiene:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# In-subject test doubles (enforced in CI). A double in front of a collaborator
+# isolates the unit; one *inside* it certifies the half you did not write, so a
+# rename behind the patched name lands green in the test named after it.
+# Ratcheted against test-doubles-baseline.json — the number only goes down.
+lint-test-doubles:
+	uv run python scripts/check_test_doubles.py
 
 # e2e wait-pattern gate (enforced in CI). A test waiting for async state to
 # settle must go through waiters.eventually()/wait_for_status(), not a

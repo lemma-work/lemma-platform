@@ -1806,6 +1806,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ In-subject test doubles…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"

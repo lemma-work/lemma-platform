@@ -50,9 +50,15 @@ If `test_exporter.py` patches `exporter._build_manifest`, the exporter no longer
 runs. Inject the collaborator through the constructor or factory seam the code
 already has — and if there isn't one, that is the finding.
 
-*Check:* AST pass — for each `test_<x>.py`, flag `patch("…<x>.<symbol>")`
-*Today:* **206** sites in the backend, 10 in the CLI (of 2,231 backend patch
-sites across 849 targets) — ratchet
+*Check:* `make lint-test-doubles` — an AST pass over every `test_<x>.py` for a
+double installed on a target whose path contains `<x>`, in all three forms the
+codebase uses (`patch("a.b.c")`, `patch.object(module, "name")`, and
+`monkeypatch.setattr`, which is most of them)
+*Today:* **326** — 316 in the backend and 10 in the CLI, recorded per module in
+`lemma-backend/test-doubles-baseline.json` — ratchet, the number only goes down.
+The backend figure is higher than the 206 first reported because that survey
+read only the string form; `monkeypatch.setattr` is 2,052 of the 2,235 patch
+sites and installs a double in exactly the same place.
 
 ### TST-03 — a fake implements the port; it does not patch attributes on a real object
 

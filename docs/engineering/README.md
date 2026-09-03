@@ -67,9 +67,10 @@ make quality
 
 Runs in about 35 seconds and is the whole Python gate: formatting and ruff across
 the backend, the CLI, both SDKs, the stack, the bundle and the scenario suite;
-async safety; DB connection scope; I/O hygiene; swallowed errors; import budget;
-the critical typecheck; the architecture ratchet; the logging event catalog;
-OpenAPI freshness; module contracts; the test census; and scenario traceability.
+async safety; DB connection scope; I/O hygiene; swallowed errors; in-subject
+test doubles; import budget; the critical typecheck; the architecture ratchet;
+the logging event catalog; OpenAPI freshness; module contracts; the test census;
+and scenario traceability.
 
 CI runs this exact command — one job, one list. It is deliberately not
 path-filtered, because a skipped required check counts as a satisfied one.
