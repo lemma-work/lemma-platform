@@ -120,7 +120,7 @@ class EmailSender:
                 smtp_host=settings.smtp_host,
                 smtp_port=settings.smtp_port,
                 smtp_user=settings.smtp_user or "",
-                smtp_password=settings.smtp_password or "",
+                smtp_password=reveal_secret(settings.smtp_password) or "",
                 from_email=settings.smtp_from_email or "hello@updates.lemma.work",
                 from_name=settings.smtp_from_name,
                 use_tls=settings.smtp_use_tls,

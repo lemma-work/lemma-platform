@@ -14,7 +14,7 @@ from supertokens_python.recipe.thirdparty.provider import (
     ProviderClientConfig,
 )
 from supertokens_python.recipe import thirdparty
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.modules.identity.infrastructure.supertokens_auth.override_email_password import (
     override_emailpassword_functions,
 )
@@ -83,7 +83,7 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     clients=[
                         ProviderClientConfig(
                             client_id=settings.google_client_id,
-                            client_secret=settings.google_client_secret,
+                            client_secret=reveal_secret(settings.google_client_secret),
                         ),
                     ],
                 ),
@@ -104,7 +104,7 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     clients=[
                         ProviderClientConfig(
                             client_id=settings.microsoft_client_id,
-                            client_secret=settings.microsoft_client_secret,
+                            client_secret=reveal_secret(settings.microsoft_client_secret),
                             scope=["openid", "email", "profile"],
                         ),
                     ],
