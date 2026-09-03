@@ -43,9 +43,7 @@ from app.modules.connectors.domain.errors import (
     UnsupportedAuthProviderError,
 )
 from app.modules.connectors.domain.install_binding import resolve_external_ref
-from app.modules.connectors.services.auth.github_installation import (
-    bound_external_ref,
-)
+from app.modules.connectors.services.auth.github_installation import bound_external_ref
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
     AppOperationGatewayPort,
@@ -366,10 +364,8 @@ class ConnectorService:
                     capability.auth_scheme != AuthScheme.OAUTH2
                     or self.system_oauth_config.has_default_oauth_config(connector)
                 )
-                # Surface the runtime-resolved OAuth defaults so the read API
-                # matches what the connect flow will actually use. Resolved
-                # even when the capability stores its own, because a stored URL
-                # may still carry an env placeholder to fill.
+                # Resolved, not read, so the API matches the connect flow: a
+                # stored URL may still carry an env placeholder to fill.
                 resolved_oauth2_defaults = (
                     self.system_oauth_config.resolve_oauth2_defaults(connector)
                 )
@@ -1033,13 +1029,11 @@ class ConnectorService:
                 user_id, auth_config.id
             )
 
-        # Re-derived on every re-auth: a reconnect is how an account moves to a
-        # different workspace or installation, and a stale routing key would keep
-        # sending that account another tenant's events. The callback names it on
-        # a first GitHub App install and nowhere else, so a reconnect falls back
-        # to asking GitHub which installation the new token speaks for.
+        # Re-derived on every re-auth: a reconnect is how an account moves to
+        # another workspace or installation, and a stale key keeps sending it
+        # someone else's events. A GitHub App install names it on the callback
+        # and only then, so a reconnect asks GitHub which one the token is for.
         external_ref = await bound_external_ref(connector.id, credentials, redirect_uri)
-
         if account:
             account.credentials = credentials
             account.external_ref = external_ref

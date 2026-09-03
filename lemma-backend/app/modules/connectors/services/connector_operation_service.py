@@ -555,10 +555,7 @@ class ConnectorOperationService:
         if not operation:
             raise OperationNotFoundError(operation_name)
 
-        third_party_credentials = await self._resolve_execution_credentials(
-            account,
-            user_id,
-        )
+        credentials = await self._resolve_execution_credentials(account, user_id)
         return ResolvedConnectorExecution(
             connector_id=connector_id,
             operation_execution_name=operation.execution_name,
@@ -576,7 +573,7 @@ class ConnectorOperationService:
             execution=getattr(operation, "execution", None),
             operation_name=operation.name,
             input_schema=getattr(operation, "input_schema", None),
-            third_party_credentials=third_party_credentials,
+            third_party_credentials=credentials,
             payload=payload or {},
             account_id=getattr(account, "id", None),
             account_external_ref=getattr(account, "external_ref", None),

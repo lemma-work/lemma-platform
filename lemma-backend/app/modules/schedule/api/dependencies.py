@@ -14,7 +14,7 @@ from app.modules.schedule.services.webhook_schedule_matcher import (
 )
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.domain.interfaces import WebhookVerifier
-from app.modules.schedule.domain.webhook_source import WebhookSourceRegistry
+from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 
 
 def get_schedule_service(uow: UoWDep) -> ScheduleService:

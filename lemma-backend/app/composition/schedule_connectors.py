@@ -56,6 +56,7 @@ from app.modules.schedule.domain.errors import (
 from app.modules.schedule.domain.interfaces import (
     ExternalScheduleWriter,
     ProvisionedTrigger,
+    ScheduleConfig,
     WebhookVerifier,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
@@ -153,8 +154,8 @@ class ManagersFactory:
 
 
 def _schema_defaults(
-    trigger: ConnectorTriggerEntity, config: dict[str, Any] | None
-) -> dict[str, Any]:
+    trigger: ConnectorTriggerEntity, config: ScheduleConfig | None
+) -> ScheduleConfig:
     """A trigger's declared defaults, for the keys its author did not set.
 
     Without this a `default` in `config_schema` is decoration: the form prefills
@@ -180,7 +181,7 @@ def _schema_defaults(
 
 def _github_binding(
     trigger: ConnectorTriggerEntity, account: AccountEntity
-) -> dict[str, Any]:
+) -> ScheduleConfig:
     """The routing key for a GitHub trigger, taken from what is already known.
 
     Nothing here is something a person could sensibly type into a form. The
@@ -190,9 +191,9 @@ def _github_binding(
     wrong routes another organization's events at their pod.
     """
     if not account.external_ref:
-        from app.modules.connectors.services.auth.github_installation import install_url
+        from app.modules.connectors.contracts import github_install_url
 
-        where = install_url()
+        where = github_install_url()
         raise ScheduleValidationError(
             "This GitHub account is not bound to an App installation, so there "
             "is nothing to route events from. "
@@ -211,7 +212,9 @@ def _github_binding(
 
 # Connectors whose triggers need no remote subscription, only a routing key.
 # Absence from both this table and `ManagersFactory` is an error, not a shrug.
-_LOCAL_BINDERS: dict[str, Callable[[ConnectorTriggerEntity, AccountEntity], dict]] = {
+_LOCAL_BINDERS: dict[
+    str, Callable[[ConnectorTriggerEntity, AccountEntity], ScheduleConfig]
+] = {
     "github": _github_binding,
 }
 

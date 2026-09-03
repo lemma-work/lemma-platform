@@ -23,8 +23,8 @@ from collections.abc import Callable
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
-from app.modules.connectors.config import connector_settings
-from app.modules.schedule.domain.webhook_source import (
+from app.modules.connectors.contracts import connector_settings
+from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
     WebhookDelivery,
@@ -313,54 +313,31 @@ def _narrower(
 
 
 async def _retire_installation(installation_id: str, *, action: str) -> None:
-    """Mark the accounts bound to this installation, and stand its schedules down.
+    """Stand down what an uninstalled App leaves behind.
 
-    Marked rather than deleted, for the same reason the App cutover migration
-    marks them: four things reference an account without a foreign key to it, and
-    deleting the rows would silently break sandbox `git` and pod publishing.
-    Reconnecting repairs both in place.
-
-    The schedules keep their config and gain a reason, so someone looking at a
-    trigger that stopped can see why rather than finding it merely off.
+    Each module does its own half: `connectors` owns `accounts` and `schedule`
+    owns `schedules`, and neither table is this file's to write. What belongs
+    here is only knowing that a GitHub installation going away means both.
     """
-    from sqlalchemy import update
-
     from app.core.api.dependencies import get_uow_factory
     from app.core.authorization.scope import uow_scope
-    from app.modules.connectors.infrastructure.models.account import Account
-    from app.modules.schedule.infrastructure.models.schedule import Schedule
+    from app.modules.connectors.contracts import retire_accounts_for_tenant
+    from app.modules.schedule.contracts import deactivate_matching_schedules
 
     async with uow_scope(get_uow_factory()) as uow:
-        accounts = await uow.session.execute(
-            update(Account)
-            .where(
-                Account.connector_id == "github",
-                Account.external_ref == installation_id,
-                Account.status != "REAUTH_REQUIRED",
-            )
-            .values(status="REAUTH_REQUIRED")
+        accounts = await retire_accounts_for_tenant(
+            uow.session, connector_id="github", external_ref=installation_id
         )
-        schedules = await uow.session.execute(
-            update(Schedule)
-            .where(
-                Schedule.schedule_type == "WEBHOOK",
-                Schedule.is_active.is_(True),
-                Schedule.config.op("@>")(
-                    {"source": "github", "installation_id": installation_id}
-                ),
-            )
-            .values(
-                is_active=False,
-                config=Schedule.config.op("||")(
-                    {"deactivated_reason": f"github_installation_{action}"}
-                ),
-            )
+        schedules = await deactivate_matching_schedules(
+            uow.session,
+            criteria={"source": "github", "installation_id": installation_id},
+            reason=f"github_installation_{action}",
         )
         await uow.commit()
 
     logger.warning(
         "schedule.webhook_sources.github.installation_retired.degraded",
         action=action,
-        accounts=accounts.rowcount,
-        schedules=schedules.rowcount,
+        accounts=accounts,
+        schedules=schedules,
     )

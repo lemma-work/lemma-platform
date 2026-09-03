@@ -20,7 +20,7 @@ from app.composition.schedule_connectors import _github_binding
 from app.composition.webhook_sources.github import GitHubWebhookSource
 from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.errors import ScheduleValidationError
-from app.modules.schedule.domain.webhook_source import WebhookDelivery
+from app.modules.schedule.contracts.webhook_source import WebhookDelivery
 
 SECRET = "binding-test-secret"
 INSTALLATION_ID = 158040062

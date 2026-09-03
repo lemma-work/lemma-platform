@@ -11,7 +11,7 @@ from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
     WebhookSourceRegistryDep,
 )
-from app.modules.schedule.domain.webhook_source import (
+from app.modules.schedule.contracts.webhook_source import (
     WebhookDelivery,
     WebhookNotVerified,
 )
@@ -75,23 +75,29 @@ async def handle_webhook(
     )
     try:
         verified = await plugin.verify(delivery)
-    except WebhookNotVerified:
+    except Exception as exc:
+        # Anything at all: a plugin that raises has not verified the delivery,
+        # and saying that once here is why no plugin needs its own broad catch.
+        # The reason stays in the log -- told to the sender it is a hint at what
+        # to change in the next attempt.
+        if not isinstance(exc, WebhookNotVerified):
+            logger.warning(
+                "schedule.webhook_controller.source_verifier_raised.degraded",
+                source=source,
+                exc_info=True,
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid webhook signature",
         )
 
     # State the delivery changes about the source itself -- an App uninstalled,
-    # repositories removed from one. Never allowed to fail the delivery: it has
-    # already happened, and a non-2xx only makes the provider send it again.
-    try:
-        await plugin.observe(verified)
-    except Exception:
-        logger.warning(
-            "schedule.webhook_controller.source_observation_failed.degraded",
-            source=source,
-            exc_info=True,
-        )
+    # repositories removed from one. Deliberately not wrapped: retirement is
+    # idempotent, so letting a transient database failure surface as a 500 gets
+    # the delivery retried and applied, where swallowing it would leave the
+    # accounts and schedules standing with nothing to notice. For every other
+    # event this returns without touching anything and cannot fail.
+    await plugin.observe(verified)
 
     normalized = plugin.normalize(verified)
     if normalized is None:

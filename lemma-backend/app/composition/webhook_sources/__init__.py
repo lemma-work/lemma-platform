@@ -7,7 +7,7 @@ and `app/composition` is where a module is allowed to depend on another one.
 
 from __future__ import annotations
 
-from app.modules.schedule.domain.webhook_source import WebhookSourceRegistry
+from app.modules.schedule.contracts import WebhookSourceRegistry
 
 
 def default_webhook_sources() -> WebhookSourceRegistry:

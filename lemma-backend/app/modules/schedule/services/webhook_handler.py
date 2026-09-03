@@ -10,7 +10,7 @@ from app.modules.schedule.domain.interfaces import (
     ScheduleFilterTaskQueue,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity
-from app.modules.schedule.domain.webhook_source import NormalizedWebhook
+from app.modules.schedule.contracts.webhook_source import NormalizedWebhook
 from app.modules.schedule.infrastructure.adapters.filter_task_queue import (
     StreaqScheduleFilterTaskQueue,
 )

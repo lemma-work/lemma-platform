@@ -159,8 +159,7 @@ class ScheduleService:
                 provisioned = (
                     await self.external_schedule_writer.create_provider_trigger(created)
                 )
-                # A source that needs no remote subscription still supplies
-                # the routing key it can derive and the author cannot.
+                # A source needing no subscription still supplies a routing key.
                 if provisioned.apply_to(created.config):
                     updated = await self.schedule_repository.update(
                         created.id,

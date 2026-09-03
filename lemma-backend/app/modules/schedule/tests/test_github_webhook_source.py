@@ -18,7 +18,7 @@ from app.composition.webhook_sources.github import (
     source_event_id,
 )
 from app.modules.connectors.config import connector_settings
-from app.modules.schedule.domain.webhook_source import (
+from app.modules.schedule.contracts.webhook_source import (
     WebhookDelivery,
     WebhookNotVerified,
 )

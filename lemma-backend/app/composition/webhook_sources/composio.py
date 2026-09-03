@@ -9,16 +9,12 @@ would be indistinguishable from a regression in the tests that cover it.
 
 from __future__ import annotations
 
-from app.core.log.log import get_logger
-from app.modules.schedule.domain.webhook_source import (
+from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
     WebhookDelivery,
-    WebhookNotVerified,
     WebhookPayload,
 )
-
-logger = get_logger(__name__)
 
 
 class ComposioWebhookSource:
@@ -30,18 +26,12 @@ class ComposioWebhookSource:
         from app.composition.schedule_connectors import ComposioWebhookVerifier
 
         payload_text = delivery.raw_body.decode("utf-8", errors="replace")
-        try:
-            result = await ComposioWebhookVerifier().verify(
-                payload_text, dict(delivery.headers)
-            )
-        except Exception as exc:
-            # The reason is diagnostic only. Told to the sender it is a hint at
-            # what to fix in the next attempt.
-            logger.debug(
-                "schedule.webhook_sources.composio.verification_failed.diagnostic",
-                error_type=type(exc).__name__,
-            )
-            raise WebhookNotVerified from exc
+        # No try/except: a verifier that raises anything at all is a delivery
+        # that did not verify, and the controller says so once for every plugin
+        # rather than each writing the same broad catch.
+        result = await ComposioWebhookVerifier().verify(
+            payload_text, dict(delivery.headers)
+        )
         return VerifiedDelivery(delivery=delivery, payload=_reshape(result))
 
     async def observe(self, verified: VerifiedDelivery) -> None:

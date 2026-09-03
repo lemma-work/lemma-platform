@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
-from app.modules.schedule.domain.webhook_source import WebhookPayload
+from app.modules.schedule.contracts.webhook_source import WebhookPayload
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.core.log.log import get_logger
 
