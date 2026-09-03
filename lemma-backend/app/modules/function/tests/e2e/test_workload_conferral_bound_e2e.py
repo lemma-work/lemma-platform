@@ -4,8 +4,10 @@ A function runs on its own grants, so granting it a permission the granter does
 not hold is a way to do through the function what you may not do yourself. The
 agent route is the same rule, covered in the agent module.
 
-Marked ``workspace``: creating a function derives its schemas in a real sandbox,
-so this needs the workspace image.
+Marked ``workspace`` and taking ``configure_workspace_api_url``: creating a
+function derives its schemas in a real sandbox, so this needs both the image and
+the fixture that points the runtime at it — without the fixture the create fails
+with `WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to provision sandboxes`.
 
 The actor holds ``function.update`` through a custom role and deliberately does
 **not** hold ``datastore.table.delete``.
@@ -103,6 +105,7 @@ def _grants(table_name: str, permission_ids: list[str]) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_a_function_cannot_be_granted_what_the_granter_lacks(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
