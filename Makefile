@@ -38,7 +38,7 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint lint-clients quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint lint-clients lint-lockfiles quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -1700,6 +1700,32 @@ lint-clients:
 	@echo "→ Scenarios (ruff)…"
 	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
 
+# Every project whose uv.lock can go stale, which is every one that depends on a
+# sibling by path: change a dependency in `lemma-python` and eight other locks
+# are suddenly out of date. Two of these are the sandbox image templates, and
+# their Dockerfiles run `uv sync --locked` -- so a stale lock is not a warning
+# there, it fails the image build. That is a slow way to find out: it cost two
+# CI round trips before this gate existed, once for each template.
+#
+# `--check` resolves without writing, and the whole sweep is well under a second.
+LOCKED_PROJECTS = \
+	$(BACKEND_DIR) \
+	$(BACKEND_DIR)/lemma-connectors \
+	$(BACKEND_DIR)/sandbox-images/templates/function-python \
+	$(BACKEND_DIR)/sandbox-images/templates/workspace-python \
+	$(CLI_DIR) \
+	$(PYTHON_DIR) \
+	$(BUNDLE_DIR) \
+	$(STACK_DIR) \
+	$(SCENARIOS_DIR)
+
+lint-lockfiles:
+	@for project in $(LOCKED_PROJECTS); do \
+		(cd $$project && uv lock --check --quiet) \
+			|| { echo "  $$project/uv.lock is stale — run 'uv lock' there"; exit 1; }; \
+	done
+	@echo "9 lockfiles current."
+
 # ── Format ────────────────────────────────────────────────────────────────────
 #
 # Every first-party Python file is `ruff format` clean. Generated trees are
@@ -1768,6 +1794,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@echo "→ Ruff (CLI, SDK, stack, bundle, scenarios)…"
 	@$(MAKE) --no-print-directory lint-clients
+	@echo "→ Lockfiles…"
+	@$(MAKE) --no-print-directory lint-lockfiles
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
 	@echo "→ Connector package (ruff, excludes generated clients)…"
