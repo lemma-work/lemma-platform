@@ -17,8 +17,18 @@ from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 
 class SurfaceSetupReadMixin:
     async def get_surface_setup_by_name(
-        self, *, pod_id: UUID, name: str
+        self, *, pod_id: UUID, name: str, reveal_secrets: bool
     ) -> dict[str, Any]:
+        """The remaining setup work on this surface, for one reader.
+
+        ``reveal_secrets`` decides whether the org's own shared secrets appear
+        in the copy-able fields. ``SurfaceSetupActionField.secret`` is a
+        rendering hint, not an access control, and the WhatsApp verify token is
+        what re-points the org's webhook subscription — so it goes only to a
+        reader who could change the surface anyway, not to everyone holding
+        ``AGENT_READ`` on the pod. Required rather than defaulted: whether the
+        caller may see them is not a question a call site should be able to skip.
+        """
         surface = await self.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
         guide = self.get_platform_setup_guide(surface.surface_type.value)
         webhook_url = computed_webhook_url(surface)
@@ -41,7 +51,11 @@ class SurfaceSetupReadMixin:
                 if frontend_url
                 else None
             ),
-            whatsapp_verify_token=await self._whatsapp_verify_token_for_setup(surface),
+            whatsapp_verify_token=(
+                await self._whatsapp_verify_token_for_setup(surface)
+                if reveal_secrets
+                else None
+            ),
         )
         pending_consent = bool(
             admin_consent and admin_consent["required"] and not admin_consent["granted"]

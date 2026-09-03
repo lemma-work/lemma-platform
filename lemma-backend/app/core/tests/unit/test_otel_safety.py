@@ -19,7 +19,7 @@ from opentelemetry.trace import (
     TraceFlags,
 )
 
-from app.core.observability import telemetry
+from app.core.observability import otel_logging, telemetry
 from app.core.observability.span_sanitizer import (
     SanitizingSpanExporter,
     sanitize_http_route,
@@ -526,7 +526,7 @@ def test_otel_log_handler_constructs_only_bounded_records(monkeypatch) -> None:
         "emit",
         lambda _self, record: captured.append(record),
     )
-    handler = telemetry.SanitizingLoggingHandler(
+    handler = otel_logging.SanitizingLoggingHandler(
         logger_provider=LoggerProvider(),
     )
     original = logging.LogRecord(
@@ -562,7 +562,7 @@ def test_otel_log_handler_preserves_redacted_dependency_record_message(
         "emit",
         lambda _self, record: captured.append(record),
     )
-    handler = telemetry.SanitizingLoggingHandler(
+    handler = otel_logging.SanitizingLoggingHandler(
         logger_provider=LoggerProvider(),
     )
     original = logging.LogRecord(
@@ -592,3 +592,57 @@ def test_unknown_exporters_fail_closed(monkeypatch, value: str) -> None:
     monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
     with pytest.raises(ValueError, match="unsupported otel_logs_exporter"):
         telemetry._enabled_signals()
+
+
+def test_a_failed_provider_build_is_reported_and_leaves_telemetry_retryable(
+    monkeypatch, caplog
+) -> None:
+    """`LOG_LEVEL=INFO` drops DEBUG before formatting, so a DEBUG record here is
+    an operator who turned observability on, saw nothing arrive, and had no line
+    to start from — and `_telemetry_initialized = True` made the first attempt
+    the only one.
+
+    The endpoint is a malformed IPv6 collector address, which is what the gRPC
+    exporter actually refuses at construction: the failure is produced rather
+    than injected, so the path this covers is the real one.
+    """
+    configured = _settings(
+        otel_exporter_otlp_endpoint="http://[::1",
+        observability_enabled=True,
+        otel_sdk_disabled=False,
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
+    monkeypatch.setattr(telemetry, "_telemetry_initialized", False)
+    monkeypatch.setattr(telemetry, "_trace_provider", None)
+
+    with caplog.at_level("WARNING"):
+        telemetry.init_telemetry("lemma-test")
+
+    assert "observability.telemetry.setup_failed.degraded" in caplog.text
+    assert "ValueError" in caplog.text
+    assert telemetry._telemetry_initialized is False
+
+
+def test_a_provider_that_cannot_flush_at_shutdown_says_so(monkeypatch, caplog) -> None:
+    """A final flush that drops the last spans of a run is indistinguishable
+    afterwards from a run that produced none. Both halves used to be
+    ``except Exception: pass``."""
+
+    class _StuckProvider:
+        def force_flush(self, timeout_millis: int = 0) -> bool:
+            raise TimeoutError("collector did not answer")
+
+        def shutdown(self) -> None:
+            raise RuntimeError("already stopped")
+
+    monkeypatch.setattr(telemetry, "_trace_provider", _StuckProvider())
+    monkeypatch.setattr(telemetry, "_llm_trace_provider", None)
+    monkeypatch.setattr(telemetry, "_meter_provider", None)
+    monkeypatch.setattr(telemetry, "_logger_provider", None)
+
+    with caplog.at_level("WARNING"):
+        telemetry.shutdown_telemetry()
+
+    assert caplog.text.count("observability.telemetry.shutdown_step_failed") == 2
+    assert "TimeoutError" in caplog.text
+    assert "RuntimeError" in caplog.text

@@ -1,33 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
 import json
-import logging
 import os
 from pathlib import Path
 import re
 import socket
-import time
 import traceback
 from typing import Any
 
 from fastapi import FastAPI
-from opentelemetry._logs import set_logger_provider
 from opentelemetry import metrics, trace
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-    OTLPLogExporter as GrpcOTLPLogExporter,
-)
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
     OTLPMetricExporter as GrpcOTLPMetricExporter,
 )
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as GrpcOTLPSpanExporter,
-)
-from opentelemetry.exporter.otlp.proto.http._log_exporter import (
-    OTLPLogExporter as HttpOTLPLogExporter,
 )
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
     OTLPMetricExporter as HttpOTLPMetricExporter,
@@ -35,8 +26,6 @@ from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
     OTLPSpanExporter as HttpOTLPSpanExporter,
 )
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -44,6 +33,7 @@ from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import (
     AlwaysOffExemplarFilter,
 )
 from opentelemetry.sdk.metrics.view import View
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.sampling import (
@@ -64,7 +54,10 @@ from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.core.log.log import get_logger
-from app.core.redaction import redact_text
+from app.core.observability.otel_logging import (
+    quiet_otlp_export_logs,
+    setup_otel_logs,
+)
 from app.core.observability.span_sanitizer import (
     METRIC_ATTRIBUTE_KEYS,
     SanitizingSpanExporter,
@@ -474,22 +467,6 @@ def _build_metric_exporter(
     )
 
 
-def _build_log_exporter(
-    endpoint: str,
-    *,
-    protocol: str,
-    headers: dict[str, str] | None = None,
-):
-    normalized_protocol = _normalize_otlp_protocol(protocol)
-    if normalized_protocol == "http/protobuf":
-        return HttpOTLPLogExporter(endpoint=endpoint, headers=headers)
-    return GrpcOTLPLogExporter(
-        endpoint=endpoint,
-        headers=headers,
-        insecure=_endpoint_is_insecure(endpoint),
-    )
-
-
 def _is_llm_span(span: ReadableSpan) -> bool:
     kind = span.attributes.get(SpanAttributes.OPENINFERENCE_SPAN_KIND)
     return isinstance(kind, str) and kind in _PHOENIX_KINDS
@@ -757,100 +734,18 @@ def _setup_metrics(service_name: str) -> MeterProvider | None:
     return provider
 
 
-_SAFE_OTEL_LOG_FIELDS = frozenset(
-    {
-        "request_id",
-        "correlation_id",
-        "event_id",
-        "causation_id",
-        "job_id",
-        "event_type",
-        "consumer",
-        "task_name",
-        "job_attempt",
-        "attempt",
-        "outcome",
-        "duration_ms",
-        "incident_duration_ms",
-        "failure_count",
-        "count",
-        "method",
-        "route",
-        "status_code",
-        "latency_kind",
-        "error_type",
-        "error_code",
-        "error_stack_hash",
-        "retryable",
-    }
-)
-
-
-class SanitizingLoggingHandler(LoggingHandler):
-    """Translate only bounded structured fields into OTLP log records."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        candidate = record.msg if isinstance(record.msg, Mapping) else None
-        event = candidate.get("event") if isinstance(candidate, Mapping) else None
-        if isinstance(candidate, Mapping):
-            if not isinstance(event, str) or len(event) > 128:
-                event = "logging.contract.violation"
-        else:
-            try:
-                event = redact_text(record.getMessage())
-            except Exception:
-                event = "unrenderable log record"
-        safe_record = logging.LogRecord(
-            name=record.name,
-            level=record.levelno,
-            pathname="",
-            lineno=0,
-            msg=event[:512],
-            args=(),
-            exc_info=None,
-        )
-        source_fields: dict[str, Any] = {}
-        if isinstance(candidate, Mapping):
-            source_fields.update(candidate)
-        lemma_fields = getattr(record, "lemma_fields", None)
-        if isinstance(lemma_fields, Mapping):
-            source_fields.update(lemma_fields)
-        for key, value in source_fields.items():
-            if key not in _SAFE_OTEL_LOG_FIELDS:
-                continue
-            if isinstance(value, str):
-                setattr(safe_record, key, " ".join(value.splitlines())[:256])
-            elif isinstance(value, bool | int | float):
-                setattr(safe_record, key, value)
-        super().emit(safe_record)
-
-
 def _setup_logs(service_name: str) -> LoggerProvider | None:
-    global _logs_initialized
-    if _logs_initialized:
-        return _logger_provider
-
     if not _signal_enabled("logs"):
         return None
     logs_endpoint = _otlp_signal_endpoint("logs")
     if not logs_endpoint:
         return None
-    provider = LoggerProvider(resource=_build_resource(service_name))
-    provider.add_log_record_processor(
-        BatchLogRecordProcessor(
-            _build_log_exporter(
-                logs_endpoint,
-                protocol=_signal_protocol("logs"),
-                headers=_otlp_signal_headers("logs"),
-            )
-        )
+    return setup_otel_logs(
+        resource=_build_resource(service_name),
+        endpoint=logs_endpoint,
+        protocol=_signal_protocol("logs"),
+        headers=_otlp_signal_headers("logs"),
     )
-    set_logger_provider(provider)
-    logging.getLogger().addHandler(
-        SanitizingLoggingHandler(level=logging.NOTSET, logger_provider=provider)
-    )
-    _logs_initialized = True
-    return provider
 
 
 def _instrument_libraries() -> None:
@@ -884,59 +779,6 @@ def _instrument_libraries() -> None:
     AioHttpClientInstrumentor().instrument()
     HTTPXClientInstrumentor().instrument()
     _libraries_instrumented = True
-
-
-class _RateLimitedLogFilter(logging.Filter):
-    """Collapse repeated OTLP exporter failures to one line per interval.
-
-    The OTLP exporters log on every failed/retried export; when a collector is
-    down or not yet serving this floods the dev logs. We keep the first
-    occurrence of each distinct message, then suppress repeats for `interval`.
-    """
-
-    def __init__(self, interval_seconds: float = 60.0) -> None:
-        super().__init__()
-        self._interval = interval_seconds
-        self._last_emit: dict[str, float] = {}
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            message = record.getMessage()
-        except Exception:
-            return True
-        key = f"{record.name}:{message[:48]}"
-        now = time.monotonic()
-        last = self._last_emit.get(key)
-        if last is not None and (now - last) < self._interval:
-            return False
-        self._last_emit[key] = now
-        return True
-
-
-# OTLP exporter modules that emit the noisy "Transient error ... retrying" and
-# "Failed to export ..." lines when a collector is unreachable.
-_OTLP_EXPORTER_LOGGERS = (
-    "opentelemetry.exporter.otlp.proto.grpc.exporter",
-    "opentelemetry.exporter.otlp.proto.grpc._log_exporter",
-    "opentelemetry.exporter.otlp.proto.grpc.metric_exporter",
-    "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
-    "opentelemetry.exporter.otlp.proto.http.trace_exporter",
-    "opentelemetry.exporter.otlp.proto.http._log_exporter",
-    "opentelemetry.exporter.otlp.proto.http.metric_exporter",
-)
-
-_otlp_log_filter = _RateLimitedLogFilter()
-_otlp_logs_quieted = False
-
-
-def _quiet_otlp_export_logs() -> None:
-    """Rate-limit OTLP exporter failure logs so a down collector can't spam."""
-    global _otlp_logs_quieted
-    if _otlp_logs_quieted:
-        return
-    for name in _OTLP_EXPORTER_LOGGERS:
-        logging.getLogger(name).addFilter(_otlp_log_filter)
-    _otlp_logs_quieted = True
 
 
 def _validate_telemetry_config() -> None:
@@ -978,7 +820,7 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
     resolved_service_name = _resolve_service_name(service_name)
     _validate_telemetry_config()
     try:
-        _quiet_otlp_export_logs()
+        quiet_otlp_export_logs()
         if settings.observability_enabled:
             _trace_provider = _setup_tracing(resolved_service_name)
             _meter_provider = _setup_metrics(resolved_service_name)
@@ -987,10 +829,20 @@ def init_telemetry(service_name: str = "lemma-api") -> None:
         if _trace_provider is not None or _meter_provider is not None:
             _instrument_libraries()
     except Exception as exc:
-        logger.debug(
-            "observability.telemetry.observability_setup_continuing_without_otel.diagnostic",
+        # WARNING, not DEBUG. `_validate_telemetry_config` above is loud about a
+        # selector with no endpoint, but everything after it -- a provider that
+        # will not construct, an exporter the SDK refuses -- was a DEBUG record,
+        # which `LOG_LEVEL=INFO` drops before formatting. The operator turned
+        # observability on, saw nothing arrive, and had no line to start from,
+        # so the debugging started at the collector: the wrong end.
+        logger.warning(
+            "observability.telemetry.setup_failed.degraded",
             error_type=type(exc).__name__,
         )
+        # Left false deliberately: a process that failed to stand telemetry up
+        # has not initialized it, and saying otherwise makes the first attempt
+        # the only one.
+        return
     _telemetry_initialized = True
 
 
@@ -1013,12 +865,24 @@ def shutdown_telemetry(timeout_millis: int = 5_000) -> None:
             force_flush = getattr(provider, "force_flush", None)
             if callable(force_flush):
                 force_flush(timeout_millis=timeout_millis)
-        except Exception:
-            pass
+        except Exception as exc:
+            # A failed final flush is the last spans of a run going missing,
+            # which is indistinguishable afterwards from a run that produced
+            # none -- so it is worth a line even though nothing can be done
+            # about it here.
+            logger.warning(
+                "observability.telemetry.shutdown_step_failed.degraded",
+                step="force_flush",
+                error_type=type(exc).__name__,
+            )
         try:
             provider.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "observability.telemetry.shutdown_step_failed.degraded",
+                step="shutdown",
+                error_type=type(exc).__name__,
+            )
     _llm_trace_provider = None
     _trace_provider = None
     _meter_provider = None

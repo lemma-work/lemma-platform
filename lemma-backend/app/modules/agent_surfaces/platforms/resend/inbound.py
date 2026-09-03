@@ -11,6 +11,7 @@ it there is nothing to fetch with, and the agent sees an empty message.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from app.modules.agent_surfaces.platforms.common import payload_any
@@ -176,6 +177,36 @@ def normalize_resend_inbound(payload: dict) -> dict:
     }
 
 
+def resend_source_event_id(
+    normalized: Mapping[str, object], *, receiver: str
+) -> str | None:
+    """The durable identity of one inbound Resend delivery, or None.
+
+    Resend arrives by two routes, and a deployment can be running both: the
+    inbound webhook, and the poller a desktop worker uses when it has no public
+    URL. One Resend project serving several environments makes that the ordinary
+    state rather than a corner. The durable inbox only collapses the two into
+    one delivery if they mint the same id -- and they did not: the webhook took
+    ``message_id`` (the sender's own ``Message-ID``) through the generic
+    candidate list while the poller wrote ``resend:native:<email_id>``. What
+    stopped the second agent run was ``claim_message``, a Redis key with a
+    15-minute TTL, so PS-SURF-011's "across a restart" held for fifteen minutes
+    and only because a second mechanism happened to agree.
+
+    ``email_id`` is Resend's own handle for the message, which both routes
+    already carry and which the body fetch needs anyway. ``message_id`` is the
+    fallback rather than the first choice because the sender writes it.
+
+    ``receiver`` is the surface the mail was delivered for, as on every other
+    platform: the same mail reaching two surfaces is two deliveries.
+    """
+    for candidate in (normalized.get("email_id"), normalized.get("message_id")):
+        identifier = str(candidate or "").strip()
+        if identifier:
+            return f"resend:{receiver}:{identifier}"
+    return None
+
+
 __all__ = [
     "all_addresses",
     "normalize_attachments",
@@ -183,4 +214,5 @@ __all__ = [
     "header_map",
     "normalize_resend_inbound",
     "references_of",
+    "resend_source_event_id",
 ]

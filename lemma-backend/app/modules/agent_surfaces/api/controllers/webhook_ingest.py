@@ -35,6 +35,7 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 )
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound as _normalize_resend_inbound,
+    resend_source_event_id,
 )
 from app.modules.agent_surfaces.api.controllers.slack_webhook_verification import (
     slack_api_app_id,
@@ -230,7 +231,12 @@ async def _handle_resend_webhook(
     if surface is None:
         return {"message": "Ignored: no surface for address"}
 
-    source_event_id = _surface_source_event_id(
+    # Resend's own id rather than the generic candidate list, because the
+    # polling receiver has to be able to mint the same one for the same email
+    # and has no raw body to fall back on.
+    source_event_id = resend_source_event_id(
+        normalized, receiver=str(surface.id)
+    ) or _surface_source_event_id(
         "resend", normalized, raw_body, receiver=str(surface.id)
     )
     event = SurfaceWebhookReceivedEvent(

@@ -17,6 +17,10 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     handle_surface_webhook,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    resend_source_event_id,
+    normalize_resend_inbound,
+)
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 
 
@@ -321,3 +325,48 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
     assert event.source_event_id == f"whatsapp:{surface.id}:provider-event-1"
+
+
+def test_the_resend_webhook_and_the_resend_poller_mint_one_id_for_one_email():
+    """Both Resend paths must land on the same durable id for the same email.
+
+    A deployment can receive an email twice: Resend's inbound webhook fires, and
+    a worker running the poller lists the same message -- the ordinary state
+    when one Resend project serves several environments. The durable inbox only
+    collapses those into one delivery when the two ids match; when they did not,
+    what stopped the second agent run was ``claim_message``, a Redis key with a
+    15-minute TTL, so the guarantee PS-SURF-011 makes "across a restart" held
+    for fifteen minutes and only by accident.
+    """
+    surface_id = str(uuid4())
+    envelope = {
+        "type": "email.received",
+        "data": {
+            "email_id": "b1c2d3e4",
+            "message_id": "<sender-chosen@example.com>",
+            "to": ["pod@inbound.example.com"],
+            "from": "someone@example.com",
+        },
+    }
+    listed_row = {**envelope["data"], "id": envelope["data"]["email_id"]}
+
+    from_webhook = resend_source_event_id(
+        normalize_resend_inbound(envelope), receiver=surface_id
+    )
+    from_poller = resend_source_event_id(
+        normalize_resend_inbound(
+            {"data": {**listed_row, "email_id": listed_row["id"]}}
+        ),
+        receiver=surface_id,
+    )
+
+    assert from_webhook == from_poller == f"resend:{surface_id}:b1c2d3e4"
+
+
+def test_one_email_to_two_surfaces_is_two_deliveries():
+    """The receiver stays part of the id, as it is for every other platform."""
+    normalized = normalize_resend_inbound({"data": {"email_id": "b1c2d3e4"}})
+
+    assert resend_source_event_id(
+        normalized, receiver="surface-a"
+    ) != resend_source_event_id(normalized, receiver="surface-b")

@@ -111,6 +111,25 @@ def _attachments_from_parsed(parsed: ParsedInboundSurfaceEvent) -> list[dict[str
     return [item for item in raw if isinstance(item, dict)]
 
 
+def every_attachment_failed(
+    parsed: ParsedInboundSurfaceEvent, *, reason: str
+) -> AttachmentIngest:
+    """Report each announced attachment as one that never arrived.
+
+    For the failures that are not per-file: no adapter to download with, or the
+    ingest call coming apart as a whole. The caller cannot enumerate what was
+    lost -- the names live in the parsed event -- and an empty
+    :class:`AttachmentIngest` would tell the agent the message had no files on
+    it at all.
+    """
+    return AttachmentIngest(
+        failed=[
+            AttachmentFailure(name=_attachment_label(item), reason=reason)
+            for item in _attachments_from_parsed(parsed)
+        ]
+    )
+
+
 def _safe_file_name(
     name: str | None, mime: str | None = None, content: bytes | None = None
 ) -> str:
@@ -210,14 +229,8 @@ class SurfaceFileIngestService:
             # Nothing can be downloaded without one, and the person still
             # attached something — so this is every attachment failing, not
             # nothing to do.
-            return AttachmentIngest(
-                failed=[
-                    AttachmentFailure(
-                        name=_attachment_label(item),
-                        reason="this surface cannot receive files",
-                    )
-                    for item in attachments
-                ]
+            return every_attachment_failed(
+                parsed, reason="this surface cannot receive files"
             )
 
         # Three phases, and the middle one is the reason for the shape: an
