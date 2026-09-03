@@ -28,6 +28,10 @@ class ConnectorRepositoryPort(Protocol):
 
     async def update(self, entity: ConnectorEntity) -> ConnectorEntity: ...
 
+    async def titles_for(
+        self, connector_ids: Sequence[str]
+    ) -> dict[str, str | None]: ...
+
     async def list_active(
         self, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[ConnectorEntity], Optional[str]]: ...
@@ -166,6 +170,7 @@ class ConnectorOperationRepositoryPort(Protocol):
         connector_id: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
+        kind: Optional[str] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
 
     async def list_by_connector_kind(
@@ -175,6 +180,10 @@ class ConnectorOperationRepositoryPort(Protocol):
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
+
+    async def count_by_connector(
+        self, connector_id: str, kind: Optional[str] = None
+    ) -> int: ...
 
     async def get_by_connector_and_name(
         self, connector_id: str, operation_name: str

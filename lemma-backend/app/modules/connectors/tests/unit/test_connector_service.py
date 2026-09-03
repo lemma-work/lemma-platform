@@ -326,7 +326,9 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     assert result.kind is ConnectorKind.COMPOSIO
     assert result.config_source == AuthConfigSource.SYSTEM_DEFAULT
     auth_config_repo.create.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    # Two: one to hand the connection back before install validation and MCP
+    # negotiation go to the network, one to persist the install afterwards.
+    assert uow.commit.await_count == 2
 
 
 async def test_create_composio_auth_config_refuses_org_custom_credentials():
@@ -496,7 +498,8 @@ async def test_create_account_composio_api_key_connects_via_provider():
     assert account.credentials == stored
     auth_provider.connect_with_credentials.assert_awaited_once()
     account_repo.create.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    # Two: released before the provider connect, reopened to store the account.
+    assert uow.commit.await_count == 2
 
 
 async def test_create_account_enriches_identity_via_profile_operation():

@@ -146,6 +146,28 @@ class AccountNotFoundError(_ConnectorNotFoundBase):
         self.code = "ACCOUNT_NOT_FOUND"
 
 
+class OrganizationConnectorsNotFoundError(_ConnectorNotFoundBase):
+    """What a caller is told when they may not act in this organization.
+
+    404 rather than 403 on purpose: whether an organization exists, and whether
+    somebody is in it, are both things a stranger should not learn from a
+    refusal. But the noun has to be the one they named. This used to raise
+    `AccountNotFoundError(str(organization_id))`, so a member without the
+    editor role who tried to install a connector was told that an *account*
+    -- named with an organization's uuid, which they never referenced -- did
+    not exist.
+    """
+
+    def __init__(self, organization_id: str):
+        _ConnectorNotFoundBase.__init__(
+            self,
+            f"No connectors are available in organization '{organization_id}'. "
+            "You may not be a member of it, or the action may need an "
+            "organization owner or editor.",
+        )
+        self.code = "ORGANIZATION_CONNECTORS_NOT_FOUND"
+
+
 class CredentialsNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
         _ConnectorNotFoundBase.__init__(

@@ -103,7 +103,16 @@ class ConnectRequestInitiateSchema(BaseModel):
 
 
 class ConnectRequestResponseSchema(BaseSchema):
-    """Schema for connect request response."""
+    """Schema for connect request response.
+
+    `attributes` is deliberately absent. The row carries the live OAuth
+    `state`, the provider's own handle on the authorization, and the PKCE
+    verifier -- the three things that have to survive the redirect and the
+    three the caller has no use for. Returning them put the verifier and the
+    `state` into browser memory, client-side logs and any HAR capture, which is
+    the exposure PKCE exists to survive. The client needs `authorization_url`
+    and `id`.
+    """
 
     id: UUID
     user_id: UUID
@@ -112,7 +121,6 @@ class ConnectRequestResponseSchema(BaseSchema):
     connector_id: str
     authorization_url: Optional[str]
     status: str
-    attributes: Optional[Dict[str, Any]]
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -227,14 +235,51 @@ class AuthConfigUpdateSchema(BaseModel):
     )
 
 
+class OperationDiscoveryStatus(str, Enum):
+    """Whether a discovery attempt worked, was never made, or was refused."""
+
+    OK = "ok"
+    NOT_APPLICABLE = "not_applicable"
+    FAILED = "failed"
+
+
+class OperationDiscoverySchema(BaseModel):
+    """What re-reading an install's operation list actually did.
+
+    `operation_count` alone cannot say: a connector with no operations to
+    advertise, a kind whose operations are static, and a server that refused
+    the listing all report zero. They need different things from the reader --
+    nothing, nothing, and a retry once the server is reachable -- so the status
+    is the field to branch on and the count is detail.
+    """
+
+    status: OperationDiscoveryStatus
+    operation_count: int = Field(
+        default=0,
+        description="Operations stored for the install. Zero unless status is ok.",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Machine-readable cause when status is not ok: the connector error "
+            "code for a refused discovery, or why none was attempted."
+        ),
+    )
+
+
 class AuthConfigUpdateResponseSchema(BaseModel):
     auth_config: AuthConfigResponseSchema
     operations_discovered: int = Field(
         default=0,
         description=(
             "Operations re-discovered because the change altered where they "
-            "come from. Zero for a connector whose operations are static."
+            "come from. Zero for a connector whose operations are static, and "
+            "also zero when discovery was refused -- read "
+            "`operations_discovery.status` to tell those apart."
         ),
+    )
+    operations_discovery: OperationDiscoverySchema = Field(
+        description="Whether the re-discovery this change triggered succeeded."
     )
     accounts_marked_for_reauth: int = Field(
         default=0,
@@ -245,6 +290,18 @@ class AuthConfigUpdateResponseSchema(BaseModel):
             "place, so anything referencing it keeps working."
         ),
     )
+
+
+class AuthConfigOperationsRefreshResponseSchema(OperationDiscoverySchema):
+    """The result of the refresh endpoint, which is the recovery path.
+
+    It reports the outcome rather than only a count because it exists for the
+    case where discovery already failed once: answering `{"operation_count": 0}`
+    to a server that refused the listing again told the operator their retry
+    had worked.
+    """
+
+    auth_config_name: str
 
 
 class AuthConfigListResponseSchema(BaseModel):

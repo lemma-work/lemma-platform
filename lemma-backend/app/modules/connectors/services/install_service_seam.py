@@ -28,6 +28,7 @@ from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
+    OAuthRedirectUriBuilderPort,
 )
 
 
@@ -37,6 +38,7 @@ class InstallServiceSeam(Protocol):
     account_repository: AccountRepositoryPort
     auth_config_repository: Any
     auth_config_operation_repository: Any
+    redirect_uri_builder: OAuthRedirectUriBuilderPort
     uow: Any
 
     async def get_connector(self, connector_id: str) -> ConnectorEntity: ...

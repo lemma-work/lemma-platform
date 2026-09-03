@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Tuple
-from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -8,6 +7,10 @@ from authlib.integrations.httpx_client import AsyncOAuth2Client
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.domain.ports import OAuthRedirectUriBuilderPort
+from app.modules.connectors.infrastructure.adapters.oauth_redirect_uri_builder import (
+    OAuthRedirectUriBuilder,
+)
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
 from app.modules.connectors.services.helpers.helpers import get_atlassian_cloud_id
 from app.core.log.log import get_logger
@@ -24,9 +27,13 @@ class LemmaAuthProvider(AuthProviderInterface):
         self,
         oauth_session_factory: type[AsyncOAuth2Client] = AsyncOAuth2Client,
         cloud_id_resolver: CloudIdResolver = get_atlassian_cloud_id,
+        redirect_uri_builder: OAuthRedirectUriBuilderPort | None = None,
+        # ^ The same builder the authorization URL was made with. Defaulted
+        # rather than required so every construction site gets the fix.
     ):
         self._oauth_session_factory = oauth_session_factory
         self._cloud_id_resolver = cloud_id_resolver
+        self._redirect_uri_builder = redirect_uri_builder or OAuthRedirectUriBuilder()
 
     async def connect_with_credentials(
         self,
@@ -98,8 +105,18 @@ class LemmaAuthProvider(AuthProviderInterface):
             )
 
         oauth_config = install.oauth2
+        # The inbound URL is what authlib parses the code out of; it is not
+        # what `redirect_uri` at the token endpoint may be. That parameter has
+        # to be byte-identical to the one sent at authorize time, and this used
+        # to be derived from `str(request.url)` -- Starlette's reconstruction
+        # from the inbound scheme and Host header. Behind a proxy that
+        # terminates TLS without setting forwarded headers, or on an internal
+        # Host, or under a path prefix, the two disagree and every provider
+        # answers `redirect_uri_mismatch`, which the person sees as the generic
+        # "Unable to complete the OAuth flow." So both ends now come from one
+        # producer.
         authorization_response = redirect_uri
-        normalized_redirect_uri = self._normalize_redirect_uri(authorization_response)
+        normalized_redirect_uri = self._redirect_uri_builder.build()
 
         async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
@@ -121,10 +138,6 @@ class LemmaAuthProvider(AuthProviderInterface):
             )
 
         return await self._create_oauth_credentials(token_data, install)
-
-    def _normalize_redirect_uri(self, callback_url: str) -> str:
-        parsed = urlsplit(callback_url)
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
     async def refresh_credentials(
         self,

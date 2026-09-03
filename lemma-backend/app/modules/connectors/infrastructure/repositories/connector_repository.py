@@ -52,6 +52,24 @@ class ConnectorRepository(
         await self.session.flush()
         return instance.to_entity()
 
+    async def titles_for(self, connector_ids: Sequence[str]) -> dict[str, str | None]:
+        """The display titles for a set of connectors, in one query.
+
+        The connectors landing page needs a title beside every install and
+        every account it lists, and asked for them one `get()` at a time --
+        one round trip per distinct connector, on the page's single call.
+        Only the title is read, so the rest of the row (including the JSONB
+        capability list) is left in the database.
+        """
+        if not connector_ids:
+            return {}
+        stmt = select(Connector.id, Connector.title).where(
+            Connector.id.in_(set(connector_ids))
+        )
+        result = await self.session.execute(stmt)
+        found = {row.id: row.title for row in result}
+        return {connector_id: found.get(connector_id) for connector_id in connector_ids}
+
     async def list_active(
         self, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[ConnectorEntity], Optional[str]]:

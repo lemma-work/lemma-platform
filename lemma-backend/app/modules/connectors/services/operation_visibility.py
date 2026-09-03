@@ -52,6 +52,43 @@ async def list_operations_for_install(
     )
 
 
+async def count_operations_for_install(
+    *,
+    catalog_repository: Any,
+    install_repository: Any | None,
+    connector_id: str,
+    kind: str | None = None,
+    auth_config_id: UUID | None = None,
+) -> int:
+    """How many operations an install exposes, across both sources.
+
+    The two counts cannot simply be added: an install's own discovered
+    operation shadows a catalog one of the same name, exactly as it does in the
+    listing above. Discovered sets are one server's tool list while catalogs
+    are not, so the install side is listed and the catalog side counted, and
+    the overlap is subtracted.
+
+    A count, because the caller only wants the number -- "showing 10 of 340".
+    Producing it by listing every row with its JSONB schemas and taking `len()`
+    is a second full read of the largest table in the module, on the path the
+    agent's cross-install search fans out over every install in the org.
+    """
+    catalog_total = await catalog_repository.count_by_connector(connector_id, kind=kind)
+    if install_repository is None or auth_config_id is None:
+        return catalog_total
+    installed = list(await install_repository.list_by_auth_config(auth_config_id))
+    if not installed:
+        return catalog_total
+    catalog_names = {
+        str(operation.name).lower()
+        for operation in await catalog_repository.list_by_connector(
+            connector_id, kind=kind
+        )
+    }
+    shadowed = sum(1 for item in installed if str(item.name).lower() in catalog_names)
+    return catalog_total + len(installed) - shadowed
+
+
 async def merge_install_and_catalog_operations(
     *,
     repository: Any | None,
