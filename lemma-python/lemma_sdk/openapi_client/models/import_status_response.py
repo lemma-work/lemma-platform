@@ -15,6 +15,7 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.export_progress_response import ExportProgressResponse
     from ..models.import_plan_response import ImportPlanResponse
+    from ..models.partial_apply_response import PartialApplyResponse
 
 
 T = TypeVar("T", bound="ImportStatusResponse")
@@ -35,6 +36,8 @@ class ImportStatusResponse:
         current_step (int | None | Unset):
         error (None | str | Unset):
         error_code (None | str | Unset):
+        partial_apply (None | PartialApplyResponse | Unset): Set when the import stopped part-way and the pod was
+            already changed. Null on a clean success, and on a job that changed nothing.
         plan (ImportPlanResponse | None | Unset):
         progress (ExportProgressResponse | Unset):
         retryable (bool | Unset):  Default: False.
@@ -51,6 +54,7 @@ class ImportStatusResponse:
     current_step: int | None | Unset = UNSET
     error: None | str | Unset = UNSET
     error_code: None | str | Unset = UNSET
+    partial_apply: None | PartialApplyResponse | Unset = UNSET
     plan: ImportPlanResponse | None | Unset = UNSET
     progress: ExportProgressResponse | Unset = UNSET
     retryable: bool | Unset = False
@@ -59,6 +63,7 @@ class ImportStatusResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.import_plan_response import ImportPlanResponse
+        from ..models.partial_apply_response import PartialApplyResponse
 
         events_url = self.events_url
 
@@ -100,6 +105,14 @@ class ImportStatusResponse:
         else:
             error_code = self.error_code
 
+        partial_apply: dict[str, Any] | None | Unset
+        if isinstance(self.partial_apply, Unset):
+            partial_apply = UNSET
+        elif isinstance(self.partial_apply, PartialApplyResponse):
+            partial_apply = self.partial_apply.to_dict()
+        else:
+            partial_apply = self.partial_apply
+
         plan: dict[str, Any] | None | Unset
         if isinstance(self.plan, Unset):
             plan = UNSET
@@ -139,6 +152,8 @@ class ImportStatusResponse:
             field_dict["error"] = error
         if error_code is not UNSET:
             field_dict["error_code"] = error_code
+        if partial_apply is not UNSET:
+            field_dict["partial_apply"] = partial_apply
         if plan is not UNSET:
             field_dict["plan"] = plan
         if progress is not UNSET:
@@ -154,6 +169,7 @@ class ImportStatusResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.export_progress_response import ExportProgressResponse
         from ..models.import_plan_response import ImportPlanResponse
+        from ..models.partial_apply_response import PartialApplyResponse
 
         d = dict(src_dict)
         events_url = d.pop("events_url")
@@ -216,6 +232,23 @@ class ImportStatusResponse:
 
         error_code = _parse_error_code(d.pop("error_code", UNSET))
 
+        def _parse_partial_apply(data: object) -> None | PartialApplyResponse | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                partial_apply_type_0 = PartialApplyResponse.from_dict(data)
+
+                return partial_apply_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PartialApplyResponse | Unset, data)
+
+        partial_apply = _parse_partial_apply(d.pop("partial_apply", UNSET))
+
         def _parse_plan(data: object) -> ImportPlanResponse | None | Unset:
             if data is None:
                 return data
@@ -255,6 +288,7 @@ class ImportStatusResponse:
             current_step=current_step,
             error=error,
             error_code=error_code,
+            partial_apply=partial_apply,
             plan=plan,
             progress=progress,
             retryable=retryable,

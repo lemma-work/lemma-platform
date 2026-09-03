@@ -2986,6 +2986,42 @@
         "title": "AuthConfigListResponseSchema",
         "type": "object"
       },
+      "AuthConfigOperationsRefreshResponseSchema": {
+        "description": "The result of the refresh endpoint, which is the recovery path.\n\nIt reports the outcome rather than only a count because it exists for the\ncase where discovery already failed once: answering `{\"operation_count\": 0}`\nto a server that refused the listing again told the operator their retry\nhad worked.",
+        "properties": {
+          "auth_config_name": {
+            "title": "Auth Config Name",
+            "type": "string"
+          },
+          "operation_count": {
+            "default": 0,
+            "description": "Operations stored for the install. Zero unless status is ok.",
+            "title": "Operation Count",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable cause when status is not ok: the connector error code for a refused discovery, or why none was attempted.",
+            "title": "Reason"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OperationDiscoveryStatus"
+          }
+        },
+        "required": [
+          "status",
+          "auth_config_name"
+        ],
+        "title": "AuthConfigOperationsRefreshResponseSchema",
+        "type": "object"
+      },
       "AuthConfigResponseSchema": {
         "properties": {
           "config": {
@@ -3085,13 +3121,18 @@
           },
           "operations_discovered": {
             "default": 0,
-            "description": "Operations re-discovered because the change altered where they come from. Zero for a connector whose operations are static.",
+            "description": "Operations re-discovered because the change altered where they come from. Zero for a connector whose operations are static, and also zero when discovery was refused -- read `operations_discovery.status` to tell those apart.",
             "title": "Operations Discovered",
             "type": "integer"
+          },
+          "operations_discovery": {
+            "$ref": "#/components/schemas/OperationDiscoverySchema",
+            "description": "Whether the re-discovery this change triggered succeeded."
           }
         },
         "required": [
-          "auth_config"
+          "auth_config",
+          "operations_discovery"
         ],
         "title": "AuthConfigUpdateResponseSchema",
         "type": "object"
@@ -3580,20 +3621,8 @@
         "type": "object"
       },
       "ConnectRequestResponseSchema": {
-        "description": "Schema for connect request response.",
+        "description": "Schema for connect request response.\n\n`attributes` is deliberately absent. The row carries the live OAuth\n`state`, the provider's own handle on the authorization, and the PKCE\nverifier -- the three things that have to survive the redirect and the\nthree the caller has no use for. Returning them put the verifier and the\n`state` into browser memory, client-side logs and any HAR capture, which is\nthe exposure PKCE exists to survive. The client needs `authorization_url`\nand `id`.",
         "properties": {
-          "attributes": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attributes"
-          },
           "auth_config_id": {
             "format": "uuid",
             "title": "Auth Config Id",
@@ -3652,7 +3681,6 @@
           "connector_id",
           "authorization_url",
           "status",
-          "attributes",
           "created_at",
           "updated_at"
         ],
@@ -8368,6 +8396,17 @@
             "title": "Import Id",
             "type": "string"
           },
+          "partial_apply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartialApplyResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the import stopped part-way and the pod was already changed. Null on a clean success, and on a job that changed nothing."
+          },
           "plan": {
             "anyOf": [
               {
@@ -9445,19 +9484,28 @@
       "OperationDetailsBatchRequest": {
         "description": "Request multiple operation details in a single call.",
         "properties": {
+          "limit": {
+            "default": 100,
+            "description": "How many to return when `operation_names` is omitted. Ignored when names are given.",
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
           "operation_names": {
             "anyOf": [
               {
                 "items": {
                   "type": "string"
                 },
+                "maxItems": 1000,
                 "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Operation names to fetch. Omit or pass an empty list to return details for every operation in the connector.",
+            "description": "Operation names to fetch. Omit or pass an empty list to return details for the first `limit` operations in the connector; read `total_operations` on the response to see whether that was all of them.",
             "title": "Operation Names"
           }
         },
@@ -9483,6 +9531,12 @@
           "returned_count": {
             "description": "Number of operation details returned in this response.",
             "title": "Returned Count",
+            "type": "integer"
+          },
+          "total_operations": {
+            "default": 0,
+            "description": "Operations the connector exposes in total. Greater than `returned_count` means the unnamed request was capped.",
+            "title": "Total Operations",
             "type": "integer"
           }
         },
@@ -9541,6 +9595,47 @@
         ],
         "title": "OperationDiscoverResponse",
         "type": "object"
+      },
+      "OperationDiscoverySchema": {
+        "description": "What re-reading an install's operation list actually did.\n\n`operation_count` alone cannot say: a connector with no operations to\nadvertise, a kind whose operations are static, and a server that refused\nthe listing all report zero. They need different things from the reader --\nnothing, nothing, and a retry once the server is reachable -- so the status\nis the field to branch on and the count is detail.",
+        "properties": {
+          "operation_count": {
+            "default": 0,
+            "description": "Operations stored for the install. Zero unless status is ok.",
+            "title": "Operation Count",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable cause when status is not ok: the connector error code for a refused discovery, or why none was attempted.",
+            "title": "Reason"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OperationDiscoveryStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OperationDiscoverySchema",
+        "type": "object"
+      },
+      "OperationDiscoveryStatus": {
+        "description": "Whether a discovery attempt worked, was never made, or was refused.",
+        "enum": [
+          "ok",
+          "not_applicable",
+          "failed"
+        ],
+        "title": "OperationDiscoveryStatus",
+        "type": "string"
       },
       "OperationExecutionRequest": {
         "properties": {
@@ -10274,6 +10369,45 @@
           }
         },
         "title": "OrganizationUpdateRequest",
+        "type": "object"
+      },
+      "PartialApplyResponse": {
+        "description": "What a stopped import already wrote to the pod, and how to continue it.\n\nApply is not transactional: each step commits in its own unit of work, so an\nimport that fails or is cancelled part-way leaves the pod changed and there\nis no rollback. `committed_steps` says which steps landed, but a bare list\nof integers does not tell anyone that the pod was modified at all, nor that\nre-applying resumes instead of duplicating. This does.",
+        "properties": {
+          "resumable": {
+            "description": "Whether applying this import again continues it. False once the job reached a status apply no longer accepts, in which case the pod keeps what was already applied and the rest must be imported afresh.",
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "resume_from_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Index of the first step still to run. Applying this import again resumes here; steps already applied are not repeated.",
+            "title": "Resume From Step"
+          },
+          "steps_applied": {
+            "description": "Plan steps already applied to this pod. Not undone.",
+            "title": "Steps Applied",
+            "type": "integer"
+          },
+          "steps_total": {
+            "description": "Steps in the approved plan.",
+            "title": "Steps Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "steps_applied",
+          "steps_total",
+          "resumable"
+        ],
+        "title": "PartialApplyResponse",
         "type": "object"
       },
       "PlanStepResponse": {
@@ -20749,7 +20883,7 @@
     },
     "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh": {
       "post": {
-        "description": "Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.",
+        "description": "Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created. Answers 200 whether or not the server responded -- the install is deliberately kept either way -- so read `status`: `failed` means the server refused and the retry is still outstanding.",
         "operationId": "connector.auth_config.refresh_operations",
         "parameters": [
           {
@@ -20777,9 +20911,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Connector.Auth Config.Refresh Operations",
-                  "type": "object"
+                  "$ref": "#/components/schemas/AuthConfigOperationsRefreshResponseSchema"
                 }
               }
             },

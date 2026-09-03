@@ -13165,10 +13165,10 @@ var LemmaClient = (() => {
     }
     /**
      * Refresh Auth Config Operations
-     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created. Answers 200 whether or not the server responded -- the install is deliberately kept either way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
      * @param organizationId
      * @param authConfigName
-     * @returns any Successful Response
+     * @returns AuthConfigOperationsRefreshResponseSchema Successful Response
      * @throws ApiError
      */
     static connectorAuthConfigRefreshOperations(organizationId, authConfigName) {

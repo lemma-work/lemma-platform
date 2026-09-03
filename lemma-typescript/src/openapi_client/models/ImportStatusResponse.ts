@@ -5,6 +5,7 @@
 import type { ExportProgressResponse } from './ExportProgressResponse.js';
 import type { ImportPlanResponse } from './ImportPlanResponse.js';
 import type { ImportStatus } from './ImportStatus.js';
+import type { PartialApplyResponse } from './PartialApplyResponse.js';
 /**
  * Status of a durable pod import job.
  */
@@ -16,6 +17,10 @@ export type ImportStatusResponse = {
     error_code?: (string | null);
     events_url: string;
     import_id: string;
+    /**
+     * Set when the import stopped part-way and the pod was already changed. Null on a clean success, and on a job that changed nothing.
+     */
+    partial_apply?: (PartialApplyResponse | null);
     plan?: (ImportPlanResponse | null);
     pod_id: string;
     progress?: ExportProgressResponse;

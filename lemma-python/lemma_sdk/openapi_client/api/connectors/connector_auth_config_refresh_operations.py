@@ -7,8 +7,8 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations import (
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations,
+from ...models.auth_config_operations_refresh_response_schema import (
+    AuthConfigOperationsRefreshResponseSchema,
 )
 from ...models.error_response import ErrorResponse
 from ...types import Response
@@ -32,13 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> (
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-    | None
-):
+) -> AuthConfigOperationsRefreshResponseSchema | ErrorResponse | None:
     if response.status_code == 200:
-        response_200 = ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations.from_dict(
+        response_200 = AuthConfigOperationsRefreshResponseSchema.from_dict(
             response.json()
         )
 
@@ -57,10 +53,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-]:
+) -> Response[AuthConfigOperationsRefreshResponseSchema | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -74,15 +67,13 @@ def sync_detailed(
     auth_config_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-]:
+) -> Response[AuthConfigOperationsRefreshResponseSchema | ErrorResponse]:
     """Refresh Auth Config Operations
 
      Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after
     the upstream server changes its tools, or to retry a discovery that failed when the install was
-    created.
+    created. Answers 200 whether or not the server responded -- the install is deliberately kept either
+    way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
 
     Args:
         organization_id (UUID):
@@ -93,7 +84,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations | ErrorResponse]
+        Response[AuthConfigOperationsRefreshResponseSchema | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -113,16 +104,13 @@ def sync(
     auth_config_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> (
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-    | None
-):
+) -> AuthConfigOperationsRefreshResponseSchema | ErrorResponse | None:
     """Refresh Auth Config Operations
 
      Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after
     the upstream server changes its tools, or to retry a discovery that failed when the install was
-    created.
+    created. Answers 200 whether or not the server responded -- the install is deliberately kept either
+    way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
 
     Args:
         organization_id (UUID):
@@ -133,7 +121,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations | ErrorResponse
+        AuthConfigOperationsRefreshResponseSchema | ErrorResponse
     """
 
     return sync_detailed(
@@ -148,15 +136,13 @@ async def asyncio_detailed(
     auth_config_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-]:
+) -> Response[AuthConfigOperationsRefreshResponseSchema | ErrorResponse]:
     """Refresh Auth Config Operations
 
      Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after
     the upstream server changes its tools, or to retry a discovery that failed when the install was
-    created.
+    created. Answers 200 whether or not the server responded -- the install is deliberately kept either
+    way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
 
     Args:
         organization_id (UUID):
@@ -167,7 +153,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations | ErrorResponse]
+        Response[AuthConfigOperationsRefreshResponseSchema | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -185,16 +171,13 @@ async def asyncio(
     auth_config_name: str,
     *,
     client: AuthenticatedClient | Client,
-) -> (
-    ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
-    | ErrorResponse
-    | None
-):
+) -> AuthConfigOperationsRefreshResponseSchema | ErrorResponse | None:
     """Refresh Auth Config Operations
 
      Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after
     the upstream server changes its tools, or to retry a discovery that failed when the install was
-    created.
+    created. Answers 200 whether or not the server responded -- the install is deliberately kept either
+    way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
 
     Args:
         organization_id (UUID):
@@ -205,7 +188,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations | ErrorResponse
+        AuthConfigOperationsRefreshResponseSchema | ErrorResponse
     """
 
     return (
