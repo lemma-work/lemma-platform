@@ -161,6 +161,12 @@ went wrong.
 
 ## Uninstalling
 
+Nothing has to be subscribed for this. GitHub delivers `installation` events to
+an App whether or not they appear in its event list -- observed live:
+`installation.new_permissions_accepted` arrived twice while the App's `events`
+contained neither `installation` nor `installation_repositories`. The seven
+trigger events do have to be ticked; these do not.
+
 An `installation` delivery with `deleted` or `suspend` retires what the
 installation leaves behind: its accounts go to `REAUTH_REQUIRED` and its
 schedules are deactivated with `deactivated_reason` recorded in their config.
