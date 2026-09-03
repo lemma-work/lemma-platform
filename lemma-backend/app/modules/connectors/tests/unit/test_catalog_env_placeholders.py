@@ -87,3 +87,26 @@ def test_no_placeholder_hides_in_a_field_that_is_never_filled():
                 f"{app.get('name')}.{field} carries an env placeholder that "
                 "nothing substitutes."
             )
+
+
+def test_the_noisy_events_default_to_one_action():
+    """Three GitHub events fire per release, and one per workflow-run state.
+
+    Measured live: publishing a single release delivered `created`, `published`
+    and `released`, which without a default woke the agent three times for one
+    thing a person did once. A busy repository does the same for `workflow_run`,
+    once per run per state change.
+    """
+    github = next(a for a in _apps() if a["name"] == "github")
+    defaults = {
+        t["event_type"]: (t["config_schema"]["properties"].get("actions") or {}).get(
+            "default"
+        )
+        for t in github["triggers"]
+    }
+    assert defaults["release"] == ["published"]
+    assert defaults["workflow_run"] == ["completed"]
+    assert defaults["check_suite"] == ["completed"]
+    # The rest are single user actions, where every one is worth firing on.
+    for event in ("push", "pull_request", "issues", "issue_comment"):
+        assert defaults[event] is None, event

@@ -1111,7 +1111,7 @@
             "actions": {
               "type": "array",
               "title": "Actions",
-              "description": "Which release actions to fire on. Empty means all of them.",
+              "description": "Which release actions to fire on. Publishing one release sends three deliveries -- created, published and released -- so this defaults to published only; without it, making a single release wakes the agent three times. Measured against GitHub, not assumed.",
               "items": {
                 "type": "string",
                 "enum": [
@@ -1122,7 +1122,10 @@
                   "deleted",
                   "prereleased"
                 ]
-              }
+              },
+              "default": [
+                "published"
+              ]
             }
           }
         },
