@@ -692,3 +692,64 @@ async def test_resend_mailbox_is_minted_on_a_local_url_with_polling(
     assert len(surfaces) == 1
     assert surfaces[0].surface_type == "RESEND"
     assert surfaces[0].surface_identity_email.endswith("@ops.example.com")
+
+
+async def test_the_agent_is_only_told_about_asks_it_can_actually_answer(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """The prompt must not name a notification the domain will refuse.
+
+    Everything open in a conversation used to be rendered under "Open requests
+    for this person", ending in "Call `respond_to_notification`". An
+    informational notice delivered into the same thread was rendered exactly
+    like a question, so the agent answered it, and `respond()` raised
+    `NotificationTransitionError` -- which, before the toolset was wrapped,
+    ended the conversation. The two halves are fixed separately; this is the
+    half that stops the prompt asking for the impossible.
+    """
+    from sqlalchemy import text as sql_text
+
+    from app.composition.agent_notifications import (
+        open_notifications_for_conversation,
+    )
+
+    pod_id = test_pod["id"]
+    asking = await _notify(
+        authenticated_client,
+        pod_id,
+        recipient=fixed_test_user["email"],
+        title="Standup",
+    )
+    telling = await _notify(
+        authenticated_client,
+        pod_id,
+        recipient=fixed_test_user["email"],
+        title="Deploy finished",
+        expects_response=False,
+    )
+    assert telling["awaiting_response"] is False
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"title": "reply thread", "type": "CHAT"},
+    )
+    assert conversation.status_code == 201, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    # Delivery normally sets this; the surface pipeline is not what is under
+    # test here, so both rows are pointed at the thread directly.
+    await db_session.execute(
+        sql_text(
+            "UPDATE notifications SET delivery_conversation_id = :cid "
+            "WHERE id IN (:asking, :telling)"
+        ),
+        {"cid": conversation_id, "asking": asking["id"], "telling": telling["id"]},
+    )
+    await db_session.commit()
+
+    open_asks = await open_notifications_for_conversation(UUID(conversation_id))
+
+    assert [item["notification_id"] for item in open_asks] == [asking["id"]]
