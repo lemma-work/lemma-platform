@@ -98,7 +98,9 @@ def sync_detailed(
 ) -> Response[ErrorResponse | RecordUpdateResponseRecordUpdate]:
     """Update Record
 
-     Patch a record by primary key. Returns the updated record object (no envelope).
+     Patch a record by primary key. Returns the updated record object (no envelope). Pass
+    `expected_updated_at` to make the patch conditional on the row not having changed since it was read;
+    the request then answers 409 rather than overwriting another client's edit.
 
     Args:
         pod_id (UUID):
@@ -145,7 +147,9 @@ def sync(
 ) -> ErrorResponse | RecordUpdateResponseRecordUpdate | None:
     """Update Record
 
-     Patch a record by primary key. Returns the updated record object (no envelope).
+     Patch a record by primary key. Returns the updated record object (no envelope). Pass
+    `expected_updated_at` to make the patch conditional on the row not having changed since it was read;
+    the request then answers 409 rather than overwriting another client's edit.
 
     Args:
         pod_id (UUID):
@@ -187,7 +191,9 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | RecordUpdateResponseRecordUpdate]:
     """Update Record
 
-     Patch a record by primary key. Returns the updated record object (no envelope).
+     Patch a record by primary key. Returns the updated record object (no envelope). Pass
+    `expected_updated_at` to make the patch conditional on the row not having changed since it was read;
+    the request then answers 409 rather than overwriting another client's edit.
 
     Args:
         pod_id (UUID):
@@ -232,7 +238,9 @@ async def asyncio(
 ) -> ErrorResponse | RecordUpdateResponseRecordUpdate | None:
     """Update Record
 
-     Patch a record by primary key. Returns the updated record object (no envelope).
+     Patch a record by primary key. Returns the updated record object (no envelope). Pass
+    `expected_updated_at` to make the patch conditional on the row not having changed since it was read;
+    the request then answers 409 rather than overwriting another client's edit.
 
     Args:
         pod_id (UUID):

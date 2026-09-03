@@ -7,6 +7,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..models.search_method import SearchMethod
+from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.file_search_result_schema import FileSearchResultSchema
@@ -22,13 +23,19 @@ class FileSearchResponse:
         items (list[FileSearchResultSchema]):
         query (str):
         search_method (SearchMethod):
-        total (int):
+        total (int): Number of matches in `items`. This is what came back, not how many matches the pod holds: when
+            `truncated` is true the result was cut at `limit` and more exist.
+        truncated (bool | Unset): True when the result filled the requested `limit`, so there are likely further matches
+            this response does not show. Narrow the query or raise `limit` to see more. Reported because a capped result is
+            otherwise indistinguishable from a complete one — an agent reading `total` as the number of matching documents
+            states it to a person as fact. Default: False.
     """
 
     items: list[FileSearchResultSchema]
     query: str
     search_method: SearchMethod
     total: int
+    truncated: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,6 +50,8 @@ class FileSearchResponse:
 
         total = self.total
 
+        truncated = self.truncated
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -53,6 +62,8 @@ class FileSearchResponse:
                 "total": total,
             }
         )
+        if truncated is not UNSET:
+            field_dict["truncated"] = truncated
 
         return field_dict
 
@@ -74,11 +85,14 @@ class FileSearchResponse:
 
         total = d.pop("total")
 
+        truncated = d.pop("truncated", UNSET)
+
         file_search_response = cls(
             items=items,
             query=query,
             search_method=search_method,
             total=total,
+            truncated=truncated,
         )
 
         file_search_response.additional_properties = d
