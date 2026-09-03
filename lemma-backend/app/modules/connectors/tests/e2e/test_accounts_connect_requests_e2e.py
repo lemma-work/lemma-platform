@@ -7,10 +7,7 @@ import pytest
 from httpx import AsyncClient
 from starlette import status
 
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
@@ -54,9 +51,13 @@ async def _create_pod(owner_client, org_id: str, name: str) -> str:
 
 
 async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, str]:
+    """Headers for the pod's own assistant, shaped like the mint site's.
+
+    ``workload_id`` is the assistant's ``agents`` row id, which *is* its pod's.
+    """
     claims = build_delegation_claims(
         workload_type="agent",
-        workload_id=DEFAULT_POD_AGENT_ID,
+        workload_id=UUID(pod_id),
         workload_name=DEFAULT_POD_AGENT_NAME,
         pod_id=UUID(pod_id),
         session_id=f"connectors-authz-e2e-{uuid4().hex}",

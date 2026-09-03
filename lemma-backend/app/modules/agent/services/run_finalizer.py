@@ -19,6 +19,7 @@ from typing import Any, Awaitable
 from uuid import UUID
 
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
@@ -229,6 +230,9 @@ class RunFinalizer:
                 agent_run_id=run.agent_run_id,
                 workload_type="agent",
                 workload_id=run.agent_id,
+                is_pod_default_agent=is_pod_default_agent(
+                    run.agent_id, pod_id=run.pod_id
+                ),
             ),
             source_type="agent_run",
             source_id=str(run.agent_run_id),

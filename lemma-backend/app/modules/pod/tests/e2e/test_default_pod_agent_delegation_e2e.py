@@ -49,10 +49,18 @@ async def _create_test_pod(authenticated_client, fixed_test_org) -> str:
     return response.json()["id"]
 
 
-async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, str]:
+async def _default_pod_agent_headers(
+    *, user_id: str, pod_id: str, legacy_sentinel_id: bool = False
+) -> dict[str, str]:
+    """Headers for the pod's own assistant, shaped like the mint site's.
+
+    ``workload_id`` is the assistant's ``agents`` row id, which *is* its pod's.
+    ``legacy_sentinel_id`` mints the retired shape that signed tokens still
+    carry across a deploy.
+    """
     claims = build_delegation_claims(
         workload_type="agent",
-        workload_id=DEFAULT_POD_AGENT_ID,
+        workload_id=DEFAULT_POD_AGENT_ID if legacy_sentinel_id else UUID(pod_id),
         workload_name=DEFAULT_POD_AGENT_NAME,
         pod_id=UUID(pod_id),
         session_id=f"default-pod-agent-e2e-{uuid4().hex}",
