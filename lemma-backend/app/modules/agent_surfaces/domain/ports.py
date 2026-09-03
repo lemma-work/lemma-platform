@@ -416,7 +416,6 @@ class SurfaceEventDedupStorePort(Protocol):
         with the claim still held would make the delivery unrecoverable: every
         retry would see a duplicate and drop it.
         """
-        ...
 
 
 class SurfacePodMembershipPort(Protocol):

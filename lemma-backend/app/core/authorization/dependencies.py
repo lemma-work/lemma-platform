@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
 from app.core.authorization.pod_liveness import (
-    _OPERATIONS_A_DELETED_POD_STILL_ANSWERS,  # noqa: F401 - kept importable here
     _assert_pod_is_live,
     _refuse_a_deleted_pod,
 )
