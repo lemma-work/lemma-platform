@@ -191,8 +191,11 @@ neither, and both report green.
 Coverage floors live in `lemma-backend/coverage-baseline.json` — one per module
 per lane, recorded from measurement rather than chosen — and are enforced by
 `lemma-backend/scripts/check_coverage_thresholds.py` from `backend-coverage.yml`,
-a separate workflow that runs after Backend E2E finishes so it is not on the
-critical path of a PR. The two lanes answer different questions: **combined**
+a separate workflow that runs after Backend E2E finishes, so it is off the
+critical path of a PR while still gating the merge through the required
+`Backend coverage passed`. Like the other two, that is an aggregator, and it
+reports success when the run is correctly skipped — a failing Backend E2E is
+blocked by its own check rather than by a coverage run that can never happen. The two lanes answer different questions: **combined**
 (unit + e2e) is how well the code is covered at all, **e2e_union** is how much
 of a module a real request reaches.
 
