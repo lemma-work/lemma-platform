@@ -282,6 +282,61 @@ def test_normalize_schedule_payload_drops_the_source_orgs_provider_trigger():
     assert payload["connector_trigger_id"] == "jira_new_issue"
 
 
+def test_normalize_schedule_payload_drops_the_source_orgs_installation():
+    """For a GitHub App, `installation_id` *is* the tenant filter.
+
+    Webhook matching is containment against `{source, installation_id, event}`,
+    so a bundle that carried it gave the importer schedules wired to the
+    publisher's installation -- answering to the publisher's repositories, in
+    the importer's pod. Observed on a real round trip, where the bundle asked
+    for the account as a variable and baked the installation in beside it.
+
+    It needs no carrying: the importing pod's account provisions the trigger and
+    the installation is re-derived from that account.
+    """
+    schedule = {
+        "name": "on_pull_request",
+        "schedule_type": "WEBHOOK",
+        "connector_trigger_id": "github:http:pull_request",
+        "account_id": "${on_pull_request_account}",
+        "config": {
+            "source": "github",
+            "installation_id": "158040062",
+            "event": "pull_request",
+            "actions": ["opened"],
+        },
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {
+        "source": "github",
+        "event": "pull_request",
+        "actions": ["opened"],
+    }
+    # What the author chose survives; only the tenant does not.
+    assert payload["connector_trigger_id"] == "github:http:pull_request"
+    assert payload["account_id"] == "${on_pull_request_account}"
+
+
+def test_normalize_schedule_payload_drops_both_tenant_keys_at_once():
+    """A schedule can carry both, and one surviving is as bad as both."""
+    schedule = {
+        "name": "on_issue",
+        "schedule_type": "WEBHOOK",
+        "config": {
+            "source": "github",
+            "installation_id": "158040062",
+            "provider_trigger_id": "ti_abc123",
+            "event": "issues",
+        },
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {"source": "github", "event": "issues"}
+
+
 def test_normalize_schedule_payload_leaves_a_clean_config_alone():
     schedule = {
         "name": "nightly",
