@@ -10,15 +10,18 @@ avoid, and one we hit twice by hand.
     python create_github_app.py --name Lemma --base-url https://api.lemma.work \
         --org lemma-work
 
-Open the URL it prints, press the button, and it writes the private key to a
-file and prints the env block. The temporary code GitHub returns is single-use
-and expires in an hour; nothing is stored anywhere but the files named at the end.
+Open the URL it prints and press the button. The private key and the
+environment file are written next to each other, `0600` in a `0700` directory,
+and never printed: a client secret on stdout outlives the terminal it was
+printed to. The temporary code GitHub returns is single-use and expires in an
+hour, and nothing is stored anywhere but the two files it names.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import secrets
 import sys
@@ -65,6 +68,18 @@ def exchange(code: str) -> dict:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
+
+
+def _write_private(path: pathlib.Path, content: str) -> None:
+    """Write a credential so it is never briefly world-readable.
+
+    Created with the mode already restricted rather than chmod'ed afterwards:
+    between `write_text` and `chmod` the file exists at the umask default, and
+    on a shared machine that window is enough.
+    """
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w") as file:
+        file.write(content)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -170,20 +185,38 @@ def main() -> int:
         print(f"Failed: {_result['error']}", file=sys.stderr)
         return 1
 
-    out = pathlib.Path(args.out_dir).resolve()
+    out = pathlib.Path(args.out_dir).resolve() / _result["slug"]
     out.mkdir(parents=True, exist_ok=True)
-    pem_path = out / f"{_result['slug']}.private-key.pem"
-    pem_path.write_text(_result["pem"])
-    pem_path.chmod(0o600)
+    out.chmod(0o700)
+    pem_path = out / "private-key.pem"
+    env_path = out / "env"
+
+    # Written, never printed. A client secret and a webhook secret on stdout
+    # outlive the terminal: they land in scrollback, in shell history when
+    # somebody pipes this, and in a log file whenever it is run under `nohup` or
+    # in CI. That happened on the first real run of this script and the log had
+    # to be scrubbed by hand, which is the argument for the file.
+    _write_private(pem_path, _result["pem"])
+    _write_private(
+        env_path,
+        "\n".join(
+            [
+                f"CONNECTOR_GITHUB_CLIENT_ID={_result['client_id']}",
+                f"CONNECTOR_GITHUB_CLIENT_SECRET={_result['client_secret']}",
+                f"CONNECTOR_GITHUB_APP_SLUG={_result['slug']}",
+                f"CONNECTOR_GITHUB_APP_PRIVATE_KEY_PATH={pem_path}",
+                f"CONNECTOR_GITHUB_APP_WEBHOOK_SECRET={_result['webhook_secret']}",
+            ]
+        )
+        + "\n",
+    )
 
     print(f"\nCreated: {_result['html_url']}")
-    print(f"Private key: {pem_path}\n")
-    print("Put these in the environment's .env:\n")
-    print(f"CONNECTOR_GITHUB_CLIENT_ID={_result['client_id']}")
-    print(f"CONNECTOR_GITHUB_CLIENT_SECRET={_result['client_secret']}")
-    print(f"CONNECTOR_GITHUB_APP_SLUG={_result['slug']}")
-    print(f"CONNECTOR_GITHUB_APP_PRIVATE_KEY_PATH={pem_path}")
-    print(f"CONNECTOR_GITHUB_APP_WEBHOOK_SECRET={_result['webhook_secret']}")
+    print(f"  slug        : {_result['slug']}")
+    print(f"  private key : {pem_path}")
+    print(f"  environment : {env_path}")
+    print("\nBoth are 0600 and hold live credentials. Move them somewhere durable")
+    print("and load the environment file into the deployment; nothing is printed.")
     return 0
 
 

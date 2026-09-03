@@ -24,9 +24,14 @@ uv run python scripts/create_github_app.py --name Lemma --base-url https://api.l
 Open the URL it prints and press **Create GitHub App**. That click cannot be
 automated — GitHub gates App creation on a person, deliberately — but everything
 else is: the script fills in the two per-environment URLs, exchanges GitHub's
-temporary code, writes the private key to a file and prints the env block, so
-nobody types a callback URL into a form and gets it subtly wrong. We did exactly
-that twice by hand before this existed.
+temporary code, and writes the private key and an environment file — `0600` in a
+`0700` directory — so nobody types a callback URL into a form and gets it subtly
+wrong. We did exactly that twice by hand before this existed.
+
+Neither secret is printed. A client secret on stdout outlives the terminal: it
+lands in scrollback, in shell history when somebody pipes the command, and in a
+log file whenever it runs under `nohup` or in CI. Move the two files somewhere
+durable and load the environment file into the deployment.
 
 The two URLs it fills in, which are deliberately absent from the manifest
 because they differ per environment:
