@@ -78,15 +78,10 @@ async def check_assignee(
 ) -> None:
     if wait.assigned_pod_member_id is None or requester_user_id is None:
         return
-    from app.composition.workflow_pod import (
-        PodMemberRepository,
-    )
+    from app.modules.pod.contracts.members import pod_member_id
 
-    pod_member = await PodMemberRepository(uow).get_by_pod_and_user_id(
-        pod_id,
-        requester_user_id,
-    )
-    if pod_member is None or pod_member.id != wait.assigned_pod_member_id:
+    member_id = await pod_member_id(uow, pod_id, requester_user_id)
+    if member_id is None or member_id != wait.assigned_pod_member_id:
         raise WorkflowAccessDeniedError(
             "Workflow wait is assigned to another pod member"
         )
