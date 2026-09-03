@@ -54,6 +54,30 @@ def _error_body(
     }
 
 
+def _http_exception_code_and_message(exc: HTTPException) -> tuple[str, str]:
+    """The envelope's ``code`` and ``message`` for one ``HTTPException``.
+
+    ``DomainError`` carries a real code and this layer passes it through; an
+    ``HTTPException`` has only a status, so the code became ``HTTP_403`` and a
+    client matching on ``ACCOUNT_INACTIVE`` matched nothing. Several raisers had
+    already anticipated that and put the code in the detail as
+    ``{"code": ..., "message": ...}`` -- and nothing read it, so the dict was
+    ``str()``-ed whole into ``message`` and shipped as a Python literal with the
+    real code sitting inside a string no client parses.
+
+    Reading that convention here fixes every one of them at once. A plain string
+    detail keeps ``HTTP_<status>``, which is the honest answer: nobody named a
+    code, so there is none to report.
+    """
+    detail = exc.detail
+    if isinstance(detail, Mapping):
+        code = detail.get("code")
+        message = detail.get("message")
+        if isinstance(code, str) and isinstance(message, str):
+            return code, str(redact_value(message))
+    return f"HTTP_{exc.status_code}", str(redact_value(detail))
+
+
 def _record_request_failure(
     request: Request,
     *,
@@ -139,6 +163,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(request: Request, exc: HTTPException):
+        code, message = _http_exception_code_and_message(exc)
         record_exception_on_current_span(
             exc,
             attributes={"http.response.status_code": exc.status_code},
@@ -146,15 +171,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         _record_request_failure(
             request,
-            code=f"HTTP_{exc.status_code}",
+            code=code,
             error_type=type(exc).__name__,
             exception=exc if exc.status_code >= 500 else None,
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content=_error_body(
-                request, str(redact_value(exc.detail)), f"HTTP_{exc.status_code}"
-            ),
+            content=_error_body(request, message, code),
         )
 
     @app.exception_handler(Exception)

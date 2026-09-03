@@ -15,7 +15,7 @@ class BulkDeleteRecordsRequest:
     """Schema for bulk deleting records.
 
     Attributes:
-        record_ids (list[int | str | UUID]): Primary key values to delete.
+        record_ids (list[int | str | UUID]): Primary key values to delete. At most 1000 per request.
     """
 
     record_ids: list[int | str | UUID]

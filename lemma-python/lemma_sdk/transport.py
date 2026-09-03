@@ -19,9 +19,20 @@ from .openapi_client import AuthenticatedClient
 MISSING = object()
 
 # Conservative retry set: 429 is an explicit back-off, and 502/503/504 are
-# gateway errors where the request usually never reached the handler. 500 is
+# gateway errors where the request may never have reached the handler. 500 is
 # excluded (it may indicate a partial side effect).
 _RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+
+# 429 is refused by the rate limiter before the handler runs, so replaying it
+# cannot repeat a side effect whatever the method. A gateway error carries no
+# such promise -- a 504 usually means the handler is still running -- so those
+# are retried only for methods that can be replayed safely.
+_ALWAYS_RETRYABLE_STATUS = frozenset({429})
+
+# GET/HEAD/OPTIONS only. PUT and DELETE are idempotent by HTTP semantics, but
+# replaying one that in fact succeeded turns a success into a 404 or a lost
+# update, which reads as a worse failure than the gateway error it replaced.
+_REPLAYABLE_METHODS = frozenset({"get", "head", "options"})
 
 
 # Callers that are something more specific than "a program using the SDK" say
@@ -70,7 +81,13 @@ class LemmaTransport:
             verify_ssl=verify_ssl,
             headers={"X-Lemma-Client": _client_header()},
         )
+        self._timeout = timeout
         self._max_retries = max(0, max_retries)
+
+    @property
+    def timeout(self) -> float:
+        """The configured per-request timeout, in seconds."""
+        return self._timeout
 
     def close(self) -> None:
         if getattr(self.generated, "_client", None) is not None:
@@ -106,23 +123,90 @@ class LemmaTransport:
 
             status_code = int(response.status_code)
             headers = getattr(response, "headers", {}) or {}
-            if status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
+            # Short-circuit order matters: reading the verb rebuilds the
+            # request, so it only happens on the rare path where a retry is
+            # otherwise on the table.
+            if (
+                status_code in _RETRYABLE_STATUS
+                and attempt < self._max_retries
+                and _should_retry(
+                    status_code, _endpoint_method(endpoint, *path_args, **kwargs)
+                )
+            ):
                 time.sleep(_retry_delay(attempt, headers.get("retry-after")))
                 attempt += 1
                 continue
             if status_code >= 400:
-                raise self._error_from_response(
+                raise self.error_from_response(
                     status_code, response.parsed, response.content, headers
                 )
             return response.parsed
 
-    def _error_from_response(
+    def stream(
+        self,
+        endpoint: Any,
+        *path_args: Any,
+        read_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Open a generated endpoint as a stream, without buffering the body.
+
+        Returns the live ``httpx.Response`` for the caller to iterate and close;
+        an error status is drained and raised as the same typed error every
+        other call raises.
+
+        ``read_timeout`` is the deadline between two reads, and defaults to none
+        because the caller is usually reading Server-Sent Events. A download,
+        whose bytes arrive continuously, should pass ``transport.timeout`` so a
+        dead connection is not waited on forever.
+
+        Never retried. A streaming endpoint here either starts an agent or
+        workflow run -- where a replay would start a second one -- or is a
+        download whose partial body the caller already holds.
+        """
+        request_kwargs = endpoint._get_kwargs(*path_args, **kwargs)
+        client = self.generated.get_httpx_client()
+        request = client.build_request(
+            **request_kwargs, timeout=self._stream_timeout(read_timeout)
+        )
+        try:
+            response = client.send(request, stream=True)
+        except httpx.TimeoutException as exc:
+            raise LemmaTimeoutError(str(exc) or "Request timed out") from exc
+        except httpx.TransportError as exc:
+            raise LemmaConnectionError(str(exc) or "Network request failed") from exc
+
+        if response.status_code >= 400:
+            content = response.read()
+            response.close()
+            raise self.error_from_response(
+                response.status_code, None, content, response.headers
+            )
+        return response
+
+    def _stream_timeout(self, read_timeout: float | None) -> httpx.Timeout:
+        """Connect/write/pool keep the configured timeout; read is the caller's.
+
+        An SSE stream is paced by the server -- the gap between two events is an
+        agent thinking, not a stalled socket -- so a read deadline would cut
+        every run longer than it short, which is what the buffered path did.
+        """
+        return httpx.Timeout(self._timeout, read=read_timeout)
+
+    def error_from_response(
         self,
         status_code: int,
         parsed: Any | None,
         content: bytes | bytearray | str | None,
         headers: Any | None = None,
     ) -> LemmaAPIError:
+        """Map a failed response onto the SDK's typed error hierarchy.
+
+        Public so the few facades that call httpx directly raise the same
+        subclasses (and carry the same `code` / `details` / `X-Request-Id`) as
+        every typed call, instead of a bare LemmaAPIError no `except
+        LemmaNotFoundError` can catch.
+        """
         payload = _to_plain(parsed) if parsed is not None else _parse_content(content)
         message = "Request failed"
         code = None
@@ -168,8 +252,10 @@ class LemmaTransport:
     ) -> Any:
         """Raw authenticated request escape hatch (base_url + auth applied).
 
-        Retries and error mapping match the typed resources. Returns parsed JSON
-        when the response is JSON, otherwise the response text.
+        Retries and error mapping match the typed resources -- which means a
+        gateway error is only replayed for a method that can be replayed
+        safely. Returns parsed JSON when the response is JSON, otherwise the
+        response text.
         """
         client = self.generated.get_httpx_client()
         kwargs: dict[str, Any] = {}
@@ -192,18 +278,47 @@ class LemmaTransport:
                 ) from exc
 
             status_code = response.status_code
-            if status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
+            if _should_retry(status_code, method) and attempt < self._max_retries:
                 time.sleep(_retry_delay(attempt, response.headers.get("retry-after")))
                 attempt += 1
                 continue
             if status_code >= 400:
-                raise self._error_from_response(
+                raise self.error_from_response(
                     status_code, None, response.content, response.headers
                 )
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
                 return response.json()
             return response.text
+
+
+def _endpoint_method(endpoint: Any, *path_args: Any, **kwargs: Any) -> str | None:
+    """The HTTP verb a generated endpoint issues, or None when it cannot be read.
+
+    Every generated module builds its request through ``_get_kwargs``, whose
+    result carries the verb; the retry loop calls it once per attempt anyway, so
+    asking it again on the attempt that failed costs no more than the attempt
+    did. ``None`` means "assume not replayable", which only ever costs a retry.
+    """
+    build = getattr(endpoint, "_get_kwargs", None)
+    if build is None:
+        return None
+    method = build(*path_args, **kwargs).get("method")
+    return method if isinstance(method, str) else None
+
+
+def _should_retry(status_code: int, method: str | None) -> bool:
+    """Whether a failed request may be sent again.
+
+    Retrying a write the server is still processing is how one
+    ``records.create`` becomes two rows, so a gateway error is replayed only for
+    a method that carries no side effect.
+    """
+    if status_code not in _RETRYABLE_STATUS:
+        return False
+    if status_code in _ALWAYS_RETRYABLE_STATUS:
+        return True
+    return method is not None and method.lower() in _REPLAYABLE_METHODS
 
 
 def _retry_after_seconds(value: Any) -> float | None:

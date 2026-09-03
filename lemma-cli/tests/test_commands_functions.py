@@ -151,7 +151,7 @@ def test_functions_delete_requires_yes_noninteractive(monkeypatch):
     result = runner.invoke(app, ["functions", "delete", "adder", "--pod", "pod-1"])
 
     assert result.exit_code != 0
-    assert "--yes" in result.stdout or "non-interactive" in result.stdout
+    assert "--yes" in result.stderr or "non-interactive" in result.stderr
 
 
 def test_functions_runs_list_dispatches_api(monkeypatch):

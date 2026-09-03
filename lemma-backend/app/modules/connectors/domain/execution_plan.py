@@ -37,6 +37,8 @@ class ResolvedConnectorExecution:
     #: it speaks for. Read in the resolve phase because it lives on the row;
     #: used in the execute phase, which holds no connection to read it with.
     account_external_ref: str | None = None
+    #: Who the caller asked to present as; "user" unless it said otherwise.
+    act_as: str = "user"
     account_user_id: UUID | None = None
     organization_id: UUID | None = None
     #: Who asked for this operation. Distinct from ``account_user_id``, which is

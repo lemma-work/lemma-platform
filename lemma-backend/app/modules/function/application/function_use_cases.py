@@ -42,9 +42,11 @@ from app.modules.function.domain.errors import (
 from app.modules.function.domain.ports import FunctionExecutionPort
 from app.modules.function.domain.ports import FunctionRunQueuePort
 from app.modules.function.domain.types import JsonObject
+from app.modules.function.services.execution_preflight import (
+    LegacyFunctionRevisionRequired,
+)
 from app.modules.function.services.function_service import (
     FunctionService,
-    LegacyFunctionRevisionRequired,
     ResolvedExecution,
     parse_python_packages,
 )

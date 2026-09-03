@@ -214,6 +214,9 @@ async def test_remove_member_owner_path_emits_event_and_deletes_entity(
         role=OrganizationRole.ORG_MEMBER,
     )
     pod_member_repository_mock.delete_entity.return_value = True
+    # The removed member is a POD_EDITOR: their roles do not administer the pod,
+    # so the last-administrator guard has nothing to weigh.
+    pod_member_repository_mock.roles_grant_permission.return_value = False
 
     pod_member_repository_mock.get_by_pod_and_id.return_value = member
 
@@ -291,6 +294,7 @@ async def test_remove_member_revokes_authorization():
     pod_member_repo = AsyncMock()
     pod_member_repo.get_by_pod_and_id.return_value = member
     pod_member_repo.delete_entity.return_value = True
+    pod_member_repo.roles_grant_permission.return_value = False
     pod_repo = AsyncMock()
     pod_repo.get.return_value = pod
     org_repo = AsyncMock()

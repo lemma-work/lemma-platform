@@ -466,6 +466,7 @@ class ConnectorOperationService:
         payload: dict[str, Any],
         actor: Context | None = None,
         account_id: UUID | None = None,
+        act_as: str = "user",
     ) -> ResolvedConnectorExecution:
         auth_config, connector_id, _kind = await self._resolve_auth_config_context(
             user_id=user_id,
@@ -480,8 +481,8 @@ class ConnectorOperationService:
             actor=actor,
             account_id=account_id,
             auth_config_id=auth_config.id,
-            # Already loaded by name above; re-reading it by id was a wasted
-            # round trip on every execution.
+            act_as=act_as,
+            # Loaded by name above; re-reading it by id was a wasted round trip.
             auth_config=auth_config,
         )
 
@@ -496,6 +497,7 @@ class ConnectorOperationService:
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
         auth_config: Any | None = None,
+        act_as: str = "user",
     ) -> ResolvedConnectorExecution:
         kind: str | None = None
         if auth_config_id is not None:
@@ -531,9 +533,8 @@ class ConnectorOperationService:
                 if auth_config is not None:
                     kind = auth_config.kind.value
 
-        # An install's own discovered operation wins over a catalog one of the
-        # same name: for mcp/openapi the catalog has nothing to offer, and where
-        # both exist the install describes the server actually being called.
+        # An install's discovered operation wins over a catalog one of the same
+        # name: the install describes the server actually being called.
         operation = None
         if auth_config_id is not None and self.auth_config_operation_repository:
             operation = (
@@ -577,6 +578,7 @@ class ConnectorOperationService:
             payload=payload or {},
             account_id=getattr(account, "id", None),
             account_external_ref=getattr(account, "external_ref", None),
+            act_as=act_as,
             account_user_id=getattr(account, "user_id", None),
             acting_user_id=user_id,
             organization_id=getattr(account, "organization_id", None),

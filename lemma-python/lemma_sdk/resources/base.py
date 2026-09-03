@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+import httpx
+
 from ..errors import LemmaConfigError
 from ..transport import MISSING, LemmaTransport
 
@@ -37,6 +39,18 @@ class Resource:
             body=body,
             body_model=body_model,
             **kwargs,
+        )
+
+    def _stream(
+        self,
+        endpoint: Any,
+        *path_args: Any,
+        read_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Open a streaming endpoint. The caller owns closing the response."""
+        return self._transport.stream(
+            endpoint, *path_args, read_timeout=read_timeout, **kwargs
         )
 
 

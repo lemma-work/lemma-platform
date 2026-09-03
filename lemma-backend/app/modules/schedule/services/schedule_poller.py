@@ -81,8 +81,15 @@ async def poll_due_schedules_once(
             # Same transaction: a row backfilled here is claimable on the next
             # tick, and one that is already due is claimed below without waiting
             # for one.
-            await backfill_missing_cursors(uow.session, now=moment, limit=limit)
-            claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
+            # `uow` as well as its session: retiring a schedule stages a
+            # `ScheduleDeactivated` so the owner is told why, in the same
+            # transaction that deactivates it.
+            await backfill_missing_cursors(
+                uow.session, now=moment, limit=limit, uow=uow
+            )
+            claimed = await claim_due_schedules(
+                uow.session, now=moment, limit=limit, uow=uow
+            )
             timers: list[ClaimedTimer] = []
             for claim_timers in timer_claimers:
                 timers.extend(await claim_timers(uow.session, now=moment, limit=limit))

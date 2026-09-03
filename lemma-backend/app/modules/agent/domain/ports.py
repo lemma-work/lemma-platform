@@ -294,6 +294,14 @@ class ConversationRepository(Protocol):
         approval_id: str,
     ) -> bool: ...
 
+    async def approval_execution_claim_expired(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+        stale_after_seconds: int,
+    ) -> bool: ...
+
     async def get_approval_decision(
         self,
         *,
@@ -328,5 +336,21 @@ class ConversationRepository(Protocol):
         agent_run_id: UUID,
         pausing_tool_names: Sequence[str],
     ) -> list[str]: ...
+
+    async def pausing_calls_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[Message]: ...
+
+    async def pausing_calls_awaiting_a_decision(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[Message]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...

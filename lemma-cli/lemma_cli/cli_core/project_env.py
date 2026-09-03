@@ -87,10 +87,12 @@ def _config_active_server(config_file: Path | None) -> str | None:
     return str(value) if isinstance(value, str) and value else None
 
 
-def _apply(values: dict[str, str], info: dict[str, Any]) -> None:
+def _apply(values: dict[str, str], info: dict[str, Any], *, skip: set[str]) -> None:
     """Apply ``LEMMA_*`` keys via setdefault (real process env always wins)."""
     for key, value in values.items():
         if not key.startswith(LEMMA_PREFIX):
+            continue
+        if key in skip:
             continue
         if key in os.environ:
             continue
@@ -113,8 +115,8 @@ def load_project_env(
     base + ``.lemma.<server>.env[.local]`` low->high and apply with setdefault.
 
     Returns ``{project_dir, server, files, applied, token_in_committed_file,
-    skipped_reason}`` for ``config show`` (``project_dir`` is None when no anchor was
-    found — a no-op).
+    token_file, skipped_reason}`` for ``config show`` (``project_dir`` is None when no
+    anchor was found — a no-op).
     """
     info: dict[str, Any] = {
         "project_dir": None,
@@ -122,6 +124,7 @@ def load_project_env(
         "files": [],
         "applied": [],
         "token_in_committed_file": False,
+        "token_file": None,
         "skipped_reason": None,
     }
     project_dir = find_project_dir(start)
@@ -130,7 +133,9 @@ def load_project_env(
     info["project_dir"] = str(project_dir)
 
     committed_base = read_env_file(project_dir / LEMMA_ENV_NAME)
-    info["token_in_committed_file"] = "LEMMA_TOKEN" in committed_base
+    if "LEMMA_TOKEN" in committed_base:
+        info["token_in_committed_file"] = True
+        info["token_file"] = LEMMA_ENV_NAME
 
     # A real LEMMA_TOKEN already in the environment means an env-driven context
     # (e.g. a workspace sandbox, which injects token + pod and has no config.json). The project
@@ -141,9 +146,10 @@ def load_project_env(
         return info
 
     # Base layer (shared): .lemma.env then .lemma.env.local (later wins).
+    base_local = read_env_file(project_dir / f"{LEMMA_ENV_NAME}.local")
     base: dict[str, str] = {}
     base.update(committed_base)
-    base.update(read_env_file(project_dir / f"{LEMMA_ENV_NAME}.local"))
+    base.update(base_local)
 
     # Resolve the active server (mirrors build_state's precedence).
     server = normalize_server_name(
@@ -169,7 +175,32 @@ def load_project_env(
         if (project_dir / name).is_file():
             info["files"].append(name)
 
-    _apply(merged, info)
+    # Whichever layer supplies the winning LEMMA_TOKEN decides whether it is
+    # applied at all. A token in a *committed* file is never applied: these files
+    # are documented as safe to commit and are written by `lemma init`, so a
+    # token in one is a mistake (or someone else's). Applying it flipped the
+    # whole CLI onto the read-only `env` server, after which `lemma auth login`
+    # refused with "Unset LEMMA_TOKEN" — a variable the user never set and had no
+    # way to find. The gitignored `.local` variants are the user's own machine,
+    # so a token there is still honoured.
+    committed = (LEMMA_ENV_NAME, _server_env_name(server))
+    token_source: str | None = None
+    for name, layer in (
+        (LEMMA_ENV_NAME, committed_base),
+        (f"{LEMMA_ENV_NAME}.local", base_local),
+        (_server_env_name(server), server_env),
+        (f"{_server_env_name(server)}.local", server_local),
+    ):
+        if "LEMMA_TOKEN" in layer:
+            token_source = name
+    info["token_in_committed_file"] = token_source in committed
+    info["token_file"] = token_source
+
+    _apply(
+        merged,
+        info,
+        skip={"LEMMA_TOKEN"} if info["token_in_committed_file"] else set(),
+    )
     return info
 
 

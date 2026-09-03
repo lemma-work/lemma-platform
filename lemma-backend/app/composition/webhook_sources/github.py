@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
-from app.modules.connectors.contracts import connector_settings
+from app.modules.connectors.contracts.github import connector_settings
 from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
@@ -321,8 +321,12 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
     """
     from app.core.api.dependencies import get_uow_factory
     from app.core.authorization.scope import uow_scope
-    from app.modules.connectors.contracts import retire_accounts_for_tenant
-    from app.modules.schedule.contracts import deactivate_matching_schedules
+    from app.modules.connectors.contracts.retirement import (
+        retire_accounts_for_tenant,
+    )
+    from app.modules.schedule.contracts.retirement import (
+        deactivate_matching_schedules,
+    )
 
     async with uow_scope(get_uow_factory()) as uow:
         accounts = await retire_accounts_for_tenant(

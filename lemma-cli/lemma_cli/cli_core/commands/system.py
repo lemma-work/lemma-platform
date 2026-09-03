@@ -5,7 +5,7 @@ from typing import Any
 
 import typer
 
-from lemma_sdk.auth import LoginTimeoutError, run_login_flow
+from lemma_sdk.auth import LoginTimeoutError, fetch_cli_auth_info, run_login_flow
 from lemma_sdk.config import (
     DEFAULT_SERVER_NAME,
     ENV_SERVER_NAME,
@@ -39,6 +39,7 @@ from ..io import list_items
 from ..select import item_label, select_from_items
 from ..state import (
     clear_auth,
+    err_console,
     fail,
     refresh_auth_session,
     resolved_auth_urls,
@@ -100,6 +101,13 @@ def telemetry_on(ctx: typer.Context) -> None:
     emit(state_from_ctx(ctx), telemetry_status())
 
 
+#: How long browser login waits for the callback, in seconds. Deliberately not
+#: the global ``--timeout`` (60s, sized for one HTTP request): a first login is a
+#: person reading email, completing SSO and typing a 2FA code, and borrowing the
+#: HTTP knob gave them a minute and no way to discover the flag that extends it.
+LOGIN_WAIT_SECONDS = 300.0
+
+
 @auth_app.command("login")
 def login(
     ctx: typer.Context,
@@ -108,20 +116,45 @@ def login(
         "--init/--no-init",
         help="Select default org and pod after login.",
     ),
+    wait: float = typer.Option(
+        LOGIN_WAIT_SECONDS,
+        "--wait",
+        min=1.0,
+        help="Seconds to wait for the browser to complete the login.",
+    ),
 ) -> None:
     """Log in via the browser and store the session."""
+    from ..state import env_token_hint
+
     state = state_from_ctx(ctx)
     if state.server_read_only:
         fail(
-            "The env server is read-only. Unset LEMMA_TOKEN before running browser login."
+            f"The env server is read-only. Unset LEMMA_TOKEN{env_token_hint(state)} "
+            "before running browser login."
         )
+    auth_url = ""
     try:
         base_url, auth_url = resolved_auth_urls(state)
+        # Reach the server on the *HTTP* timeout before handing the browser the
+        # long one: run_login_flow fetches /auth/cli/info with whatever timeout it
+        # is given, so an unreachable server would otherwise hang for the whole
+        # login wait instead of failing in seconds. Resolving the auth URL here
+        # also lets us name it before the CLI blocks.
+        info = fetch_cli_auth_info(
+            base_url=base_url,
+            verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
+            timeout=state.timeout,
+        )
+        auth_url = auth_url or str(info.get("auth_frontend_url") or "")
+        err_console.print(
+            f"[dim]Opening {auth_url} in your browser to sign in. "
+            f"Waiting up to {int(wait)}s — Ctrl-C to cancel.[/dim]"
+        )
         result = run_login_flow(
             base_url=base_url,
             auth_url=auth_url,
             verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
-            timeout=state.timeout,
+            timeout=wait,
         )
         session = dict(result.session)
         session["auth_url"] = auth_url
@@ -141,7 +174,12 @@ def login(
         )
         if init_defaults:
             _run_init_flow(ctx, prompt=True)
-    except (LoginTimeoutError, ValueError, OSError) as exc:
+    except LoginTimeoutError as exc:
+        fail(
+            f"{exc} Finish signing in at {auth_url}, then re-run "
+            "`lemma auth login` — `--wait <seconds>` allows longer."
+        )
+    except (ValueError, OSError) as exc:
         fail(str(exc))
 
 
@@ -203,15 +241,25 @@ def print_token(
         fail(str(exc))
         return
 
-    if refresh or _access_token_expired(token):
+    expired = _access_token_expired(token)
+    if refresh or expired:
         # refresh_auth_session is a no-op for env-server / explicit-token modes and
         # only acts when a stored refresh token is present, so this is safe to call
-        # unconditionally. Keep the existing token if the refresh attempt fails.
+        # unconditionally.
         try:
             if refresh_auth_session(state):
                 token = resolve_token(state.token, state.config, use_env=use_env)
-        except Exception:
-            pass
+        except Exception as exc:
+            # A token we already know is expired must not be handed out: the
+            # consumer (an app dev server seeding localStorage) would get a 401
+            # somewhere else entirely, with nothing pointing back here. A failed
+            # refresh of a *valid* token is harmless, so only the expired case
+            # is fatal.
+            if expired:
+                fail(
+                    f"Access token expired and the refresh failed: {exc}\n"
+                    "Run `lemma auth login`."
+                )
 
     typer.echo(token)
 
@@ -251,12 +299,27 @@ def _render_config(payload: dict[str, Any]) -> None:
     if auth.get("email"):
         console.print(f"[dim]user[/dim]     {auth['email']}")
     # `load_project_env` returns a summary dict even when it found nothing, so
-    # key off the path rather than the dict's truthiness — otherwise a pod with
-    # no project file reports "env file None".
-    env_path = project_env.get("path") if isinstance(project_env, dict) else None
-    if env_path:
+    # key off the project directory rather than the dict's truthiness — otherwise
+    # a pod with no project file reports "env file None". The key is
+    # `project_dir` + `files`, not `path`: reading a key the loader has never
+    # returned is why this line said "(none found)" over two loaded files.
+    if not isinstance(project_env, dict):
+        project_env = {}
+    project_dir = project_env.get("project_dir")
+    if project_dir:
+        files = ", ".join(project_env.get("files") or []) or "(none)"
         applied = ", ".join(project_env.get("applied") or []) or "(nothing)"
-        console.print(f"[dim]env file[/dim] {env_path} -> applied {applied}")
+        console.print(f"[dim]env dir[/dim]  {project_dir}")
+        console.print(f"[dim]env file[/dim] {files}")
+        console.print(f"[dim]env applied[/dim] {applied}")
+        if project_env.get("skipped_reason"):
+            console.print(f"[dim]env skipped[/dim] {project_env['skipped_reason']}")
+        if project_env.get("token_in_committed_file"):
+            console.print(
+                f"[yellow]env token[/yellow] LEMMA_TOKEN in "
+                f"{project_env.get('token_file')} was ignored (committed file) — "
+                "move it to the gitignored .local variant or run `lemma auth login`."
+            )
     else:
         console.print("[dim]env file[/dim] (none found)")
     overrides = {
@@ -616,26 +679,19 @@ def server_init(
 
 
 def _fetch_server_api_version(state) -> tuple[str | None, str | None]:  # type: ignore[no-untyped-def]
-    """Return (server_api_version, error). Reads info.version from /openapi.json."""
-    import json
-    import ssl
-    import urllib.request
+    """Return (server_api_version, error). Reads info.version from /openapi.json.
+
+    The fetch itself lives in ``cli_core/update.py`` because the background
+    update check needs the same number and must not depend on a ``CliState``.
+    """
+    from ..update import fetch_server_api_version
 
     base_url, _auth_url = resolved_auth_urls(state)
-    url = base_url.rstrip("/") + "/openapi.json"
-    context = None
-    if not resolve_verify_ssl(state.no_verify_ssl):
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    try:
-        with urllib.request.urlopen(
-            url, timeout=state.timeout, context=context
-        ) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return str(data.get("info", {}).get("version") or "") or None, None
-    except Exception as exc:  # network/parse errors are diagnostics, not fatal
-        return None, str(exc)
+    return fetch_server_api_version(
+        base_url,
+        verify_ssl=resolve_verify_ssl(state.no_verify_ssl),
+        timeout=state.timeout,
+    )
 
 
 def run_feedback(
@@ -765,6 +821,36 @@ def run_doctor(ctx: typer.Context) -> None:
         )
     elif installs:
         console.print(f"[green]✓ single install[/green] {installs[0]}")
+
+
+def run_update(ctx: typer.Context, *, version: str | None) -> None:
+    """Upgrade this lemma CLI in place.
+
+    Every refusal names the command to run by hand, because the failure modes
+    here are environmental — no uv, a source checkout, a read-only image layer —
+    and none of them is something the user can fix by re-running this.
+    """
+    from ..state import console
+    from ..update import run_upgrade
+
+    state = state_from_ctx(ctx)
+    result = run_upgrade(version)
+    if not result["ok"]:
+        manual = result.get("manual_command")
+        fail(
+            f"could not upgrade: {result['error']}"
+            + (f"\nRun it yourself: {manual}" if manual else "")
+        )
+    emit(state, result)
+    if state.output == "json":
+        return
+    if result.get("action") == "already_current":
+        console.print(f"[dim]already on {result['current']}; nothing to do.[/dim]")
+    else:
+        console.print(
+            "[dim]Bundled skills are versioned with the CLI — re-run [/dim]"
+            "[bold]lemma skills install[/bold][dim] to refresh them.[/dim]"
+        )
 
 
 def _ensure_root_config(state) -> dict[str, Any]:  # type: ignore[no-untyped-def]

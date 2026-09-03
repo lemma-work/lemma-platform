@@ -30,10 +30,10 @@ from app.modules.function.domain.errors import (
     FunctionRunQueueUnavailable,
     FunctionValidationError,
 )
-from app.modules.function.services.function_service import ResolvedExecution
-from app.modules.function.services.function_service import (
+from app.modules.function.services.execution_preflight import (
     LegacyFunctionRevisionRequired,
 )
+from app.modules.function.services.function_service import ResolvedExecution
 
 pytestmark = pytest.mark.asyncio
 

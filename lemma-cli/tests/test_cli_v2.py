@@ -1314,6 +1314,80 @@ def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
     assert "default reply" in result.stdout
 
 
+def test_chat_treats_a_quoted_question_as_the_message_not_an_agent(monkeypatch):
+    """`lemma chat "what can you do in this pod?"` is the README's own example.
+
+    A lone positional used to be the agent name unconditionally, so the whole
+    question became an agent nobody has and the CLI opened an interactive
+    session against it instead of asking the default pod agent.
+    """
+    captured: dict[str, object] = {}
+
+    class FakeConversations:
+        def create(self, pod_id, payload):
+            captured["create"] = (pod_id, payload)
+            return {"id": "conversation-1"}
+
+        def send_message(self, pod_id, conversation_id, *, content, stream):
+            captured["send"] = (pod_id, conversation_id, content, stream)
+
+            class Response:
+                def iter_lines(self, decode_unicode=True):
+                    yield 'data: {"type":"token","data":"a lot"}'
+                    yield ""
+
+                def close(self):
+                    return None
+
+            return Response()
+
+    fake_client = SimpleNamespace(conversations=FakeConversations())
+    monkeypatch.setattr(
+        conversations,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        ),
+    )
+
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "chat", "what can you do in this pod?"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["create"] == ("pod-1", {"agent_name": None, "title": None})
+    assert captured["send"] == (
+        "pod-1",
+        "conversation-1",
+        "what can you do in this pod?",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "args,agent,message,expected",
+    [
+        # A one-word positional is still an agent name, opening interactive chat.
+        (["triage"], None, None, ("triage", None)),
+        # Quoted prose is the message; the default pod agent answers it.
+        (["what can you do?"], None, None, (None, "what can you do?")),
+        # AGENT then MESSAGE keeps working.
+        (["triage", "hello there"], None, None, ("triage", "hello there")),
+        # Unquoted words after an agent still join into one message.
+        (["triage", "hello", "there"], None, None, ("triage", "hello there")),
+        # An explicit --agent makes every positional part of the message.
+        (["how are you"], "triage", None, ("triage", "how are you")),
+        # An explicit --message wins over a message-shaped positional.
+        (["what can you do?"], None, "hi", (None, "hi")),
+    ],
+)
+def test_parse_chat_args(args, agent, message, expected):
+    from lemma_cli.cli_core.app import _parse_chat_args
+
+    assert _parse_chat_args(args, agent, message) == expected
+
+
 def test_conversation_stream_attaches_to_sse(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -2536,7 +2610,8 @@ def test_apps_init_rejects_non_empty_directory(tmp_path):
     assert result.exit_code == 1
     # Normalize whitespace: Rich wraps at the (narrow) non-TTY console width, so a
     # long tmp path can split "not empty" across a line break in CI.
-    assert "not empty" in " ".join(result.stdout.split())
+    # stderr, not stdout: fail() is a diagnostic, so --json output stays parseable.
+    assert "not empty" in " ".join(result.stderr.split())
 
 
 def test_apps_init_rejects_registry_scaffolding(tmp_path):
@@ -2557,7 +2632,7 @@ def test_apps_init_rejects_registry_scaffolding(tmp_path):
 
     assert result.exit_code == 1
     assert (
-        "registry scaffolding is no longer part of `lemma apps init`" in result.stdout
+        "registry scaffolding is no longer part of `lemma apps init`" in result.stderr
     )
 
 
@@ -2949,8 +3024,11 @@ def test_destructive_commands_require_yes(monkeypatch, tmp_path, module, args):
     config_args = ["--config-file", str(tmp_path / "config.json")]
 
     refused = runner.invoke(app, config_args + args)
-    assert refused.exit_code == 1, refused.stdout
-    assert "--yes" in refused.stdout
+    assert refused.exit_code == 1, refused.output
+    # The refusal is a diagnostic and belongs on stderr, so a --json caller
+    # can still parse stdout on failure.
+    assert "--yes" in refused.stderr
+    assert refused.stdout == ""
     assert not calls
 
     accepted = runner.invoke(app, config_args + args + ["--yes"])
@@ -3422,7 +3500,7 @@ def test_agents_create_missing_field_message(monkeypatch):
         app, ["--pod", "pod-1", "agents", "create", "--data", '{"name": "x"}']
     )
     assert result.exit_code != 0
-    assert "Missing required field: instruction." in result.stdout
+    assert "Missing required field: instruction." in result.stderr
 
 
 def test_pod_create_with_starter_scaffolds_before_api(monkeypatch, tmp_path):

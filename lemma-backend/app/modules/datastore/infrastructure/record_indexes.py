@@ -1,7 +1,7 @@
 """The index a pod table needs to be listable at all.
 
 Dynamic tables were created with nothing but their primary key. That reads as
-a performance problem and is worse than one: ``_reject_if_too_expensive`` runs
+a performance problem and is worse than one: ``guard_query_plan`` runs
 ``EXPLAIN`` and refuses any query whose planned cost exceeds
 ``datastore_query_max_cost``, and with no index the planner costs a sequential
 scan — so past a certain row count ``query.execute`` stops working rather than

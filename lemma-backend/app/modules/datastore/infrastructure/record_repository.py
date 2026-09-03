@@ -26,7 +26,10 @@ from app.modules.datastore.infrastructure.record_errors import (
 from app.modules.datastore.infrastructure.record_filter_sql import (
     build_filter_predicate,
 )
-from app.modules.datastore.infrastructure.record_page import rows_and_total
+from app.modules.datastore.infrastructure.record_page import (
+    order_by_clause,
+    rows_and_total,
+)
 from app.modules.datastore.infrastructure.record_update_sql import (
     build_assignments,
     build_update_statement,
@@ -41,7 +44,7 @@ from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identi
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.infrastructure.record_indexes import ensure_listing_index_for
 from app.modules.datastore.infrastructure.record_query_cost import (
-    reject_if_too_expensive,
+    guard_query_plan,
 )
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
@@ -339,7 +342,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 # Set after the RLS-context GUCs above, which the policies read.
                 await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
 
-                await reject_if_too_expensive(session, query)
+                await guard_query_plan(session, query, schema_name=schema_name)
 
                 # Stream via a server-side cursor and pull at most max_rows + 1 so a
                 # runaway result set never fully materializes in memory; the extra
@@ -417,20 +420,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             count_sql += where_sql
             list_sql += where_sql
 
-        if sorts:
-            clauses: list[str] = []
-            for field, direction in sorts:
-                self._sanitize_identifier(field)
-                order_dir = "DESC" if direction.lower() == "desc" else "ASC"
-                clauses.append(f'"{field}" {order_dir}')
-            list_sql += " ORDER BY " + ", ".join(clauses)
-        else:
-            # pk breaks the tie; `created_at` alone can repeat/drop rows.
-            list_sql += (
-                f' ORDER BY "created_at" DESC, "{ctx.primary_key_column}" DESC'
-                if any(c.name == "created_at" for c in ctx.columns)
-                else f' ORDER BY "{ctx.primary_key_column}" DESC'
-            )
+        list_sql += " ORDER BY " + order_by_clause(ctx, sorts)
 
         list_sql += " LIMIT :limit OFFSET :offset"
         params["limit"] = limit + 1  # +1: `rows_and_total` skips the COUNT

@@ -140,3 +140,148 @@ def test_refresh_auth_session_skips_when_explicit_token(tmp_path):
     # With an explicit token, no refresh should be attempted.
     result = state_mod.refresh_auth_session(state)
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# auth login — say where you are sending them, and give them time to get there
+# ---------------------------------------------------------------------------
+
+
+def _login_runner():
+    from typer.testing import CliRunner
+
+    return CliRunner()
+
+
+_SESSION = {"access_token": "at", "refresh_token": "rt", "email": "a@b.c"}
+
+
+def _flow_result(login_url="https://auth.example.com/cli/login?state=x"):
+    from lemma_sdk.auth import LoginFlowResult
+
+    return LoginFlowResult(
+        session=dict(_SESSION), login_url=login_url, browser_opened=True
+    )
+
+
+def _auth_url() -> str:
+    """The auth URL `login` will actually use. A configured auth_url wins over
+    whatever /auth/cli/info reports, and a fresh config gets the shipped default."""
+    from lemma_sdk.config import DEFAULT_AUTH_URL
+
+    return DEFAULT_AUTH_URL
+
+
+def test_login_announces_the_auth_url_before_it_blocks(monkeypatch, tmp_path):
+    """The CLI used to open a browser and go silent. On a headless box, over
+    SSH, or in a container it printed nothing at all and then timed out."""
+    from lemma_cli.cli_core.app import app
+    from lemma_cli.cli_core.commands import system as system_mod
+
+    order: list[str] = []
+    monkeypatch.setattr(system_mod, "fetch_cli_auth_info", lambda **kw: {})
+
+    def fake_flow(**kwargs):
+        order.append(f"flow(timeout={kwargs['timeout']})")
+        return _flow_result()
+
+    monkeypatch.setattr(system_mod, "run_login_flow", fake_flow)
+
+    result = _login_runner().invoke(
+        app,
+        ["--config-file", str(tmp_path / "c.json"), "auth", "login", "--no-init"],
+    )
+
+    assert result.exit_code == 0, result.output
+    announced = " ".join(result.stderr.split())
+    assert _auth_url() in announced
+    assert "300s" in announced
+    # 300s, not the 60s HTTP --timeout: a first login is email + SSO + 2FA.
+    assert order == [f"flow(timeout={system_mod.LOGIN_WAIT_SECONDS})"]
+
+
+def test_login_wait_is_separate_from_the_http_timeout(monkeypatch, tmp_path):
+    from lemma_cli.cli_core.app import app
+    from lemma_cli.cli_core.commands import system as system_mod
+
+    seen: dict[str, float] = {}
+
+    def fake_info(**kwargs):
+        seen["info_timeout"] = kwargs["timeout"]
+        return {}
+
+    def fake_flow(**kwargs):
+        seen["flow_timeout"] = kwargs["timeout"]
+        return _flow_result()
+
+    monkeypatch.setattr(system_mod, "fetch_cli_auth_info", fake_info)
+    monkeypatch.setattr(system_mod, "run_login_flow", fake_flow)
+
+    result = _login_runner().invoke(
+        app,
+        [
+            "--config-file",
+            str(tmp_path / "c.json"),
+            "--timeout",
+            "5",
+            "auth",
+            "login",
+            "--no-init",
+            "--wait",
+            "120",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The reachability probe keeps the short HTTP budget so an unreachable
+    # server fails in seconds instead of hanging for the whole login wait.
+    assert seen["info_timeout"] == 5.0
+    assert seen["flow_timeout"] == 120.0
+
+
+def test_login_timeout_message_names_the_flag_and_the_url(monkeypatch, tmp_path):
+    from lemma_sdk.auth import LoginTimeoutError
+
+    from lemma_cli.cli_core.app import app
+    from lemma_cli.cli_core.commands import system as system_mod
+
+    monkeypatch.setattr(system_mod, "fetch_cli_auth_info", lambda **kw: {})
+
+    def timed_out(**kwargs):
+        raise LoginTimeoutError(
+            "Timed out waiting for browser login after 300 seconds."
+        )
+
+    monkeypatch.setattr(system_mod, "run_login_flow", timed_out)
+
+    result = _login_runner().invoke(
+        app, ["--config-file", str(tmp_path / "c.json"), "auth", "login"]
+    )
+
+    assert result.exit_code == 1, result.output
+    flat = " ".join(result.stderr.split())
+    assert "--wait" in flat
+    assert _auth_url() in flat
+
+
+def test_login_fails_fast_when_the_server_is_unreachable(monkeypatch, tmp_path):
+    """The probe runs before the long wait exactly so this does not take 300s."""
+    from lemma_cli.cli_core.app import app
+    from lemma_cli.cli_core.commands import system as system_mod
+
+    def unreachable(**kwargs):
+        raise ValueError("Unable to load CLI auth info from https://api.lemma.work")
+
+    monkeypatch.setattr(system_mod, "fetch_cli_auth_info", unreachable)
+    monkeypatch.setattr(
+        system_mod,
+        "run_login_flow",
+        lambda **kw: pytest.fail("must not block on an unreachable server"),
+    )
+
+    result = _login_runner().invoke(
+        app, ["--config-file", str(tmp_path / "c.json"), "auth", "login"]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Unable to load CLI auth info" in " ".join(result.stderr.split())

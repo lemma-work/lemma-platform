@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
@@ -2074,3 +2075,75 @@ async def test_matcher_skips_invalid_or_empty_operations(
         pod_id=UUID(pod_id), table_name="corrupt_records", operation="INSERT"
     )
     assert matched == []
+
+
+@pytest.mark.asyncio
+async def test_a_zoned_cron_is_armed_at_the_right_utc_instant(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+):
+    """ "09:00 daily in New York" has to reach the poller as the right instant.
+
+    The API takes wall clock and a zone; the poller only ever sees
+    `next_fire_at`, a UTC instant. That translation is the whole promise, and
+    nothing between the two is observable on the wire, so this reads the column
+    the poller reads.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="zoned-cron",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        workflow_name=workflow["name"],
+        config={"cron": "0 9 * * *", "timezone": "America/New_York"},
+    )
+    assert schedule["config"]["timezone"] == "America/New_York"
+
+    row = await db_session.get(Schedule, UUID(schedule["id"]))
+    assert row is not None, "the schedule API returned an id with no row behind it"
+    armed = row.next_fire_at
+    assert armed is not None, "a zoned cron schedule was created without a cursor"
+    if armed.tzinfo is None:
+        armed = armed.replace(tzinfo=timezone.utc)
+    local = armed.astimezone(ZoneInfo("America/New_York"))
+    assert (local.hour, local.minute) == (9, 0), (
+        f"armed at {armed.isoformat()}, which is {local.isoformat()} in New York"
+    )
+    # Not 09:00Z, which is what an unzoned schedule would have produced. The
+    # offset is -5 or -4 depending on the season, so assert it is one of those
+    # rather than pinning a date the test would age out of.
+    assert armed.hour in (13, 14)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_timezone_is_refused_at_create(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """A zone the host cannot resolve must be a 422, not a schedule that never fires."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="bad-zone",
+    )
+    rejected = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        workflow_name=workflow["name"],
+        # Miscased: `ZoneInfo` would resolve this on a case-insensitive
+        # filesystem and fail in the container, so it has to be refused here.
+        config={"cron": "0 9 * * *", "timezone": "america/new_york"},
+        expected_status=422,
+    )
+    assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
+    assert "Unknown time zone" in rejected["message"]

@@ -5,7 +5,11 @@ import shlex
 from typing import TYPE_CHECKING, Any
 
 from lemma_sdk.config import resolve_base_url
-from lemma_sdk.errors import LemmaAPIError
+from lemma_sdk.errors import (
+    LemmaAPIError,
+    LemmaNotFoundError,
+    LemmaPermissionError,
+)
 
 from .io import list_items
 from .state import CliState, console, fail, humanize_error, update_config
@@ -161,12 +165,19 @@ def render_session_selection(
 def resolve_org(client: Lemma, selector: str) -> dict[str, Any]:
     try:
         return client.orgs.get(selector).to_dict()
-    except Exception:
+    except LemmaNotFoundError, LemmaPermissionError:
+        # Only "it is not there / not yours" falls through to the slug scan. A
+        # bare `except Exception` here turned an expired session, a 500 and a
+        # dropped connection into "Organization not found", which sends the user
+        # hunting for a typo that does not exist. Everything else propagates to
+        # run_with_client, which names the status.
         pass
     for org in list_items(client.orgs.list(limit=200)):
         if selector in {str(org.get("id")), str(org.get("slug")), str(org.get("name"))}:
             return org
     fail(f"Organization not found: {selector}")
+    # fail() is NoReturn, but ruff's RET503 cannot see that; this line is for
+    # the linter, not the reader.
     raise AssertionError("unreachable")
 
 
@@ -175,8 +186,8 @@ def resolve_pod(
 ) -> dict[str, Any]:
     try:
         return client.pods.get(selector).to_dict()
-    except Exception:
-        pass
+    except LemmaNotFoundError, LemmaPermissionError:
+        pass  # see resolve_org: only "not there / not yours" scans by slug
     from lemma_sdk import Lemma
 
     org_id = org or selected_org(state, required=False)
@@ -199,7 +210,7 @@ def resolve_pod(
         if selector in {str(pod.get("id")), str(pod.get("slug")), str(pod.get("name"))}:
             return pod
     fail(pod_lookup_error(selector, state))
-    raise AssertionError("unreachable")
+    raise AssertionError("unreachable")  # see resolve_org: RET503 only
 
 
 def pod_lookup_error(pod_id: str, state: CliState, exc: Exception | None = None) -> str:
@@ -246,4 +257,4 @@ def org_for(client: Lemma, state: CliState, explicit: str | None = None) -> str:
         "No organization selected. Pass --org, set LEMMA_ORG_ID, or target a pod "
         "whose org can be resolved."
     )
-    raise AssertionError("unreachable")
+    raise AssertionError("unreachable")  # see resolve_org: RET503 only

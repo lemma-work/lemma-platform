@@ -416,9 +416,16 @@ class SchemaManager:
         self._sanitize_identifier(column_name)
         try:
             async with self._engine.begin() as conn:
+                # IF EXISTS so the metadata stays authoritative: the column is
+                # already gone from the declared schema by the time this runs,
+                # and `TableService.remove_column` refuses a column the
+                # metadata does not list — so the only way here with no
+                # physical column is a table whose metadata over-reports, which
+                # is exactly the state this call has to be able to clear.
                 await conn.execute(
                     text(
-                        f'ALTER TABLE "{schema_name}"."{table_name}" DROP COLUMN "{column_name}"'
+                        f'ALTER TABLE "{schema_name}"."{table_name}" '
+                        f'DROP COLUMN IF EXISTS "{column_name}"'
                     )
                 )
         except DBAPIError as exc:

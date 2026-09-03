@@ -82,6 +82,7 @@ class KindDispatcher:
         credentials: dict[str, Any],
         config: dict[str, Any],
         account_external_ref: str | None = None,
+        act_as: str = "user",
     ) -> ExecutionRequest:
         return ExecutionRequest(
             connector_id=connector_id,
@@ -92,6 +93,7 @@ class KindDispatcher:
             config=config or {},
             deadline_seconds=self.timeout_for(kind),
             account_external_ref=account_external_ref,
+            act_as="app" if act_as == "app" else "user",
         )
 
     async def execute(self, request: ExecutionRequest) -> Any:

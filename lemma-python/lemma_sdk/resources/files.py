@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from copy import copy
 from io import BytesIO
 import mimetypes
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
 
 from ..errors import LemmaNotFoundError
 from ..openapi_client.api.files import (
@@ -148,7 +149,16 @@ class PodFiles(BoundResource):
         )
 
     def update(self, path: str, request: Update) -> FileDetailResponse:
-        return self._call(file_update, self._pod_uuid(), body=request)
+        """Update the file or folder at ``path``.
+
+        ``path`` names what to act on and wins over ``Update.path``, which is
+        the same field on the wire. The argument used to be discarded, so a
+        request whose two paths disagreed acted on the one buried in the body
+        while the call site read as if it acted on the argument.
+        """
+        body = copy(request)
+        body.path = path
+        return self._call(file_update, self._pod_uuid(), body=body)
 
     def move(self, path: str, new_path: str) -> FileDetailResponse:
         """Move or rename a file or folder."""
@@ -189,7 +199,7 @@ class PodFiles(BoundResource):
             files={"data": (name, BytesIO(content.encode("utf-8")))},
         )
         if response.status_code >= 400:
-            raise self._transport._error_from_response(
+            raise self._transport.error_from_response(
                 response.status_code, None, response.content
             )
         return FileDetailResponse.from_dict(response.json())
@@ -267,8 +277,37 @@ class PodFiles(BoundResource):
         )
 
     def download(self, path: str) -> bytes:
+        """Read the whole file into memory.
+
+        Convenient for small files; use :meth:`download_stream` or
+        :meth:`download_to` for anything large, which never hold more than one
+        chunk.
+        """
         result = self._call(file_download, self._pod_uuid(), path=path)
         return result.payload.getvalue()
+
+    def download_stream(
+        self, path: str, *, chunk_size: int = 1024 * 1024
+    ) -> Iterator[bytes]:
+        """Yield the file's bytes in chunks, without buffering the whole file.
+
+        A pod is where document corpora live, so a download inside a function
+        sandbox is exactly where holding the whole file in memory runs the
+        sandbox out of it. The caller must exhaust or close the iterator.
+        """
+        response = self._stream(
+            file_download,
+            self._pod_uuid(),
+            path=path,
+            # Unlike an event stream, a download's bytes arrive continuously, so
+            # a gap this long means the connection is gone, not that the server
+            # is thinking.
+            read_timeout=self._transport.timeout,
+        )
+        try:
+            yield from response.iter_bytes(chunk_size)
+        finally:
+            response.close()
 
     def list_children(self, path: str) -> FileChildrenResponse:
         """List a document's derived child files (converted markdown, extracted
@@ -346,8 +385,11 @@ class PodFiles(BoundResource):
         return self._call(file_markdown_detach, self._pod_uuid(), path=path)
 
     def download_to(self, path: str, local_path: str | Path) -> Path:
+        """Save the pod file to ``local_path``, a chunk at a time."""
         target = Path(local_path)
-        target.write_bytes(self.download(path))
+        with target.open("wb") as handle:
+            for chunk in self.download_stream(path):
+                handle.write(chunk)
         return target
 
     def download_markdown_to(
@@ -445,7 +487,7 @@ class PodFiles(BoundResource):
             files={"data": (filename, file)},
         )
         if response.status_code >= 400:
-            raise self._transport._error_from_response(
+            raise self._transport.error_from_response(
                 response.status_code, None, response.content
             )
         return FileDetailResponse.from_dict(response.json())

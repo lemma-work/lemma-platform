@@ -26,6 +26,7 @@ from app.modules.test_support.e2e_authz import (
     item_names,
     signup_user,
 )
+from app.modules.workflow.api.workflow_run_controller import MAX_RUN_PAGE_SIZE
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.events import handlers as wf_handlers
@@ -1843,3 +1844,103 @@ async def test_workflow_list_and_access_respects_pod_roles(
         "workflow.read",
         "workflow.update",
     }
+
+
+@pytest.mark.asyncio
+async def test_an_assignment_on_a_restricted_workflow_still_reaches_the_inbox(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+    db_session,
+):
+    """PS-FLOW-012: list exactly the waits assigned to them, across the pod.
+
+    The queue used to be built with one `get_run(..., ctx=ctx)` per wait, and
+    that call *raises* on denial rather than returning None. So one assignment
+    on a RESTRICTED workflow the person cannot otherwise read failed the whole
+    request and emptied their approval queue -- including the assignments they
+    could see. Being asked for input is itself the grant to see what you were
+    asked about.
+    """
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org["id"], "restricted-inbox"
+    )
+    reviewer = await _add_reviewer_to_pod(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        index=0,
+    )
+    reviewer_member_id = await _pod_member_id(
+        db_session,
+        pod_id=pod_id,
+        organization_member_id=reviewer["organization_member_id"],
+    )
+
+    name = f"restricted-review-{uuid4().hex[:6]}"
+    create = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows",
+        json={"name": name, "start": {"type": "MANUAL"}, "visibility": "RESTRICTED"},
+    )
+    assert create.status_code == status.HTTP_201_CREATED, create.text
+    workflow_name = create.json()["name"]
+    graph = await authenticated_client.put(
+        f"/pods/{pod_id}/workflows/{workflow_name}/graph",
+        json={
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "approve",
+                    "type": "FORM",
+                    "label": "Approve",
+                    "config": {
+                        "assignee_pod_member_id": reviewer_member_id,
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"approved": {"type": "boolean"}},
+                            "required": ["approved"],
+                        },
+                    },
+                },
+                {"id": "end", "type": "END", "label": "Done"},
+            ],
+            "edges": [{"id": "e1", "source": "approve", "target": "end"}],
+        },
+    )
+    assert graph.status_code == status.HTTP_200_OK, graph.text
+
+    run = await _create_run(authenticated_client, pod_id, workflow_name)
+    assert run["status"] == "WAITING"
+
+    # The reviewer genuinely cannot read the workflow itself...
+    denied = await async_client.get(
+        f"/pods/{pod_id}/workflows/{workflow_name}",
+        headers={"Authorization": f"Bearer {reviewer['token']}"},
+    )
+    assert denied.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ), denied.text
+
+    # ...and still sees the thing they were personally asked to answer.
+    items = await _assigned_waits(async_client, pod_id, reviewer["token"])
+    assert [item["run"]["id"] for item in items] == [run["id"]]
+    assert items[0]["wait"]["node_id"] == "approve"
+
+
+@pytest.mark.asyncio
+async def test_the_waiting_inbox_clamps_an_absurd_limit(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Uncapped, the echoed limit told a client asking for 100000 it got it."""
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org["id"], "inbox-limit"
+    )
+    response = await authenticated_client.get(
+        f"/pods/{pod_id}/workflow-runs/waiting/assigned-to-me",
+        params={"limit": 100000},
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["limit"] == MAX_RUN_PAGE_SIZE

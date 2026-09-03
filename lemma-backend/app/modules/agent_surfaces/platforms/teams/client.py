@@ -19,6 +19,7 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
 from app.core.observability.dependency_incident import DependencyIncident
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 
 logger = get_logger(__name__)
 _token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
@@ -234,3 +235,31 @@ async def resolve_graph_team_id(
         )
         return None
     return aad_group_id
+
+
+def classify_teams_error(exc: Exception) -> DeliveryClassification:
+    """Transient for 429 / 5xx / network errors; permanent for other 4xx.
+
+    The Bot Framework Connector is posted to with raw ``aiohttp``, so a
+    throttled reply arrives as ``ClientResponseError`` from
+    ``raise_for_status()``. Same classification as the other three platforms.
+    """
+    if isinstance(exc, aiohttp.ClientResponseError):
+        if exc.status == 429 or exc.status >= 500:
+            return DeliveryClassification.TRANSIENT
+        return DeliveryClassification.PERMANENT
+    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
+        return DeliveryClassification.TRANSIENT
+    return DeliveryClassification.PERMANENT
+
+
+def teams_retry_after(exc: Exception) -> float | None:
+    """Seconds the Bot Framework asked us to wait, from ``Retry-After``."""
+    if not isinstance(exc, aiohttp.ClientResponseError):
+        return None
+    raw = (exc.headers or {}).get("Retry-After")
+    try:
+        seconds = float(raw)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return None
+    return seconds if seconds > 0 else None

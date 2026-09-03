@@ -58,7 +58,7 @@ def _clear_dotenv_cache():
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", lambda: {})
+    monkeypatch.setattr(env_system_oauth_config, "_dotenv_values", dict)
     monkeypatch.setenv("CONNECTOR_GITHUB_CLIENT_ID", "Iv1.abc")
     monkeypatch.setenv("CONNECTOR_GITHUB_CLIENT_SECRET", "shh")
     return monkeypatch

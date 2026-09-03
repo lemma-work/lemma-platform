@@ -9,9 +9,10 @@ repository that the approval reconciliation path uses on its own.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.modules.agent.domain.entities import (
@@ -107,6 +108,31 @@ class ConversationApprovalQueriesMixin:
         )
         return result.scalar_one_or_none() is not None
 
+    async def approval_execution_claim_expired(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+        stale_after_seconds: int,
+    ) -> bool:
+        """Whether this approval's execution claim is old enough to be dead.
+
+        Read against the database's clock for the same reason the claim is
+        written with it: a claim compared against a server whose clock has
+        drifted is not a claim. ``False`` for an unclaimed approval -- there is
+        nothing abandoned about a claim nobody took.
+        """
+        result = await self.session.execute(
+            select(AgentApprovalDecisionModel.id).where(
+                AgentApprovalDecisionModel.conversation_id == conversation_id,
+                AgentApprovalDecisionModel.approval_id == approval_id,
+                AgentApprovalDecisionModel.execution_claimed_at.is_not(None),
+                AgentApprovalDecisionModel.execution_claimed_at
+                < func.now() - timedelta(seconds=stale_after_seconds),
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def get_approval_decision(
         self,
         *,
@@ -195,20 +221,6 @@ class ConversationApprovalQueriesMixin:
         calls could fall outside the window entirely, which is a wrong answer
         rather than a slow one.
         """
-        returns = (
-            select(MessageModel.tool_call_id)
-            .where(
-                MessageModel.conversation_id == conversation_id,
-                MessageModel.kind == MessageKind.TOOL_RETURN.value,
-                MessageModel.tool_call_id.is_not(None),
-            )
-            .scalar_subquery()
-        )
-        decisions = (
-            select(AgentApprovalDecisionModel.approval_id)
-            .where(AgentApprovalDecisionModel.conversation_id == conversation_id)
-            .scalar_subquery()
-        )
         result = await self.session.execute(
             select(MessageModel.tool_call_id)
             .where(
@@ -217,12 +229,112 @@ class ConversationApprovalQueriesMixin:
                 MessageModel.kind == MessageKind.TOOL_CALL.value,
                 MessageModel.tool_name.in_(list(pausing_tool_names)),
                 MessageModel.tool_call_id.is_not(None),
-                MessageModel.tool_call_id.not_in(returns),
-                MessageModel.tool_call_id.not_in(decisions),
+                MessageModel.tool_call_id.not_in(
+                    self._returned_call_ids(conversation_id)
+                ),
+                MessageModel.tool_call_id.not_in(
+                    self._decided_call_ids(conversation_id)
+                ),
             )
             .order_by(MessageModel.sequence)
         )
         return list(result.scalars())
+
+    def _pausing_calls_stmt(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        answered: Select[tuple[str | None]],
+        limit: int | None,
+    ) -> Select[tuple[MessageModel]]:
+        """Pausing calls in one conversation that ``answered`` does not cover."""
+        stmt = (
+            select(MessageModel)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_name.in_(list(pausing_tool_names)),
+                MessageModel.tool_call_id.is_not(None),
+                MessageModel.tool_call_id.not_in(answered),
+            )
+            .order_by(MessageModel.sequence)
+        )
+        return stmt if limit is None else stmt.limit(limit)
+
+    def _returned_call_ids(self, conversation_id: UUID) -> Select[tuple[str | None]]:
+        return (
+            select(MessageModel.tool_call_id)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.kind == MessageKind.TOOL_RETURN.value,
+                MessageModel.tool_call_id.is_not(None),
+            )
+            .scalar_subquery()
+        )
+
+    def _decided_call_ids(self, conversation_id: UUID) -> Select[tuple[str | None]]:
+        return (
+            select(AgentApprovalDecisionModel.approval_id)
+            .where(AgentApprovalDecisionModel.conversation_id == conversation_id)
+            .scalar_subquery()
+        )
+
+    async def pausing_calls_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[MessageEntity]:
+        """Pausing calls whose synthesized tool RETURN has not landed yet.
+
+        Deliberately blind to the decision row: an approved tool executes
+        asynchronously, and the card stays visible until its return is durable
+        so a repeated click can re-enqueue a reconciliation the worker died
+        during. The decision-aware question is
+        :meth:`pausing_calls_awaiting_a_decision`, and the two really are
+        different -- reading one for the other reopens the bug each guards.
+
+        In SQL for the reason ``unresolved_pausing_call_ids`` is: this used to be
+        a scan of the newest 500 messages filtered in Python, and past that
+        window a pending approval simply vanished from the list.
+        """
+        result = await self.session.execute(
+            self._pausing_calls_stmt(
+                conversation_id=conversation_id,
+                pausing_tool_names=pausing_tool_names,
+                answered=self._returned_call_ids(conversation_id),
+                limit=limit,
+            )
+        )
+        return [row.to_entity() for row in result.scalars()]
+
+    async def pausing_calls_awaiting_a_decision(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[MessageEntity]:
+        """Pausing calls nobody has decided yet, oldest first.
+
+        A decision is what unblocks a pause, so this is the question behind
+        "what is this conversation waiting on": which pause a typed reply routes
+        to, and which one a new message supersedes. Both used to answer it from
+        the newest 500 messages, which past that window reported a conversation
+        as waiting on nothing -- so the card disappeared, the reply had nowhere
+        to go, and the pause was never superseded either.
+        """
+        result = await self.session.execute(
+            self._pausing_calls_stmt(
+                conversation_id=conversation_id,
+                pausing_tool_names=pausing_tool_names,
+                answered=self._decided_call_ids(conversation_id),
+                limit=limit,
+            )
+        )
+        return [row.to_entity() for row in result.scalars()]
 
     async def list_resolved_approval_ids(
         self,

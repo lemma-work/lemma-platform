@@ -116,8 +116,26 @@ def state_from_ctx(ctx: typer.Context) -> CliState:
 
 
 def fail(message: str, *, code: int = 1) -> NoReturn:
-    console.print(f"[red]{message}[/red]")
+    # err_console, not console: this is the single funnel for every runtime
+    # error in the CLI, so printing it on stdout put a non-JSON line into the
+    # stream `--output json` promises is parseable — every `| jq` and every
+    # agent driving the CLI broke on exactly the failures it needed to read.
+    err_console.print(f"[red]{message}[/red]")
     raise typer.Exit(code=code)
+
+
+def env_token_hint(state: CliState) -> str:
+    """Where the LEMMA_TOKEN we are running on came from, as a trailing clause.
+
+    Returns ``" (set in <file>)"`` when a project env file supplied it, else the
+    empty string. "Unset LEMMA_TOKEN" is only advice a user can act on if they
+    can find the variable, and a project ``.lemma.<server>.env.local`` sets it
+    for the process without it ever appearing in their shell.
+    """
+    info = state.project_env or {}
+    if "LEMMA_TOKEN" not in (info.get("applied") or []):
+        return ""
+    return f" (set in {info.get('project_dir')}/{info.get('token_file')})"
 
 
 def _extract_field_errors(details: Any) -> list[str]:
@@ -302,7 +320,8 @@ def update_config(
 def clear_auth(state: CliState) -> None:
     if state.server_read_only:
         fail(
-            "The env server is read-only. Unset LEMMA_TOKEN or select a stored server with --server."
+            f"The env server is read-only. Unset LEMMA_TOKEN{env_token_hint(state)} "
+            "or select a stored server with --server."
         )
     state.config = clear_auth_session(state.config)
     if state.root_config is not None:

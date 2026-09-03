@@ -6,18 +6,27 @@ setting anyone maintains: every operation already carries `github_token_kind`,
 generated from GitHub's own `x-github.enabledForGitHubApps`. So the answer comes
 from GitHub, and stays right when GitHub changes its mind.
 
-- `user_only` -- the fourteen routes an installation token cannot reach at all
-  (`/user/...`, gists). Always the person's token.
-- `installation_ok` -- everything else. The App's token when the install knows
-  its installation, the person's when it does not.
+Two questions, not one, and conflating them was a bug this caught late:
 
-That fallback is what makes this safe to deploy before everyone has reconnected:
-an install still carrying only a user token keeps working exactly as it did,
-and gains the App identity the moment it has an installation id.
+**What the caller should be** is `request.act_as`, and it defaults to "user".
+An agent's operations ask for "app" so a schedule outlives the person who set it
+up. Pod publish, pod import and anything else that says nothing keep acting as
+the person -- which is what makes the published repository's commits carry their
+name rather than a bot's, and what keeps import able to read a repository the
+App was never installed on.
 
-Note what does *not* consult this: the sandbox's `git`/`gh` and pod publishing
-resolve their credential directly from the account, deliberately, because work
-in someone's checkout should carry their name rather than the App's.
+**What the App is permitted to do** is `github_token_kind`, generated from
+GitHub's own `x-github.enabledForGitHubApps`. Fourteen routes (`/user/...`,
+gists) an installation token cannot reach at all, so even a caller asking for
+"app" gets the person's token there.
+
+So the App's token is used only when the caller asked for it, the route allows
+it, and the account knows its installation. Anything else is the person's token
+-- including an install nobody has reconnected yet, which keeps working exactly
+as it did and gains the App identity the moment it has an installation id.
+
+The sandbox's `git`/`gh` never reaches here at all: it resolves its credential
+straight from the account, for the same reason.
 """
 
 from __future__ import annotations
@@ -32,10 +41,17 @@ from app.modules.connectors.services.auth.github_app import (
 logger = get_logger(__name__)
 
 _USER_ONLY = "user_only"
+_AS_APP = "app"
 
 
 class GitHubCredentialPresenter:
     async def present(self, request: ExecutionRequest) -> dict[str, object]:
+        if request.act_as != _AS_APP:
+            # The caller did not ask to be the app. Publishing a pod, importing
+            # one, or any path that has not thought about it: acting as the
+            # person is both the safe answer and the one they had before.
+            return request.credentials
+
         token_kind = (request.operation.execution or {}).get("github_token_kind")
         if token_kind == _USER_ONLY:
             return request.credentials

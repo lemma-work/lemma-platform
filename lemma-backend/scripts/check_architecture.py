@@ -29,6 +29,14 @@ ALLOWED_PUBLIC_SURFACES = {"contracts"}
 CORE_MODULE_IMPORT_EXEMPT = {"app/core/registry/installed.py"}
 MAX_FILE_LINES = 600
 MAX_COMPLEXITY = 15
+# Generated files are exempt from the size rule. `event_catalog.py` is one line
+# per logging event, emitted by scripts/generate_logging_event_catalogs.py, and
+# it was already 128 lines over the limit -- so adding a single `logger.info`
+# anywhere in the backend grew a baselined count and failed this gate on a file
+# nobody wrote. Splitting it is not available either: the generator owns the
+# whole file. The size rule exists to keep hand-written files readable, and this
+# one is not read, it is regenerated.
+GENERATED_FILES = {"app/core/log/event_catalog.py"}
 
 
 def _python_files() -> list[Path]:
@@ -202,25 +210,6 @@ class _FunctionMetrics(ast.NodeVisitor):
     visit_AsyncFunctionDef = _visit_function
 
 
-def _is_generated(text: str) -> bool:
-    """Whether a file says a generator wrote it rather than a person.
-
-    The size rule asks you to extract something, and there is nothing to
-    extract from a generated registry. `app/core/log/event_catalog.py` is one
-    line per logged event, emitted by `generate_logging_event_catalogs.py`,
-    and it sat at exactly its own baseline -- so every change that added a log
-    event, which the logging contract *requires* to be registered there, failed
-    this gate, and the only available remedy was deleting somebody else's
-    diagnostics. A rule whose remedy does not exist measures nothing.
-
-    Deliberately the size metric only. Complexity, broad catches and untyped
-    escapes in generated output still count: they say something about the
-    generator, which is code a person does write.
-    """
-    marker = text.lstrip()
-    return marker.startswith(('"""Generated', "# Generated"))
-
-
 def snapshot() -> dict[str, Any]:
     forbidden: dict[str, int] = defaultdict(int)
     dependency_graph: dict[str, set[str]] = defaultdict(set)
@@ -236,7 +225,7 @@ def snapshot() -> dict[str, Any]:
         source = _source_module(path)
         text = path.read_text(encoding="utf-8")
         line_count = len(text.splitlines())
-        if line_count > MAX_FILE_LINES and not _is_generated(text):
+        if line_count > MAX_FILE_LINES and relative not in GENERATED_FILES:
             oversized[relative] = line_count
 
         tree = ast.parse(text, filename=str(path))

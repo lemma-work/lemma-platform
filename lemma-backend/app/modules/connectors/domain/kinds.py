@@ -13,7 +13,7 @@ session-bound.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable, Literal
 from uuid import UUID
 
 from app.modules.connectors.domain.auth_config import AuthConfigSource
@@ -44,6 +44,15 @@ class ResolvedInstall:
 #: download a file -- and it is not narrowed until an operation's output schema
 #: is applied further out. Named rather than written as a bare `Any` at each
 #: site so the reason is stated once and reads as a decision.
+#: Who a connector call presents as. `github_token_kind` says what a GitHub App
+#: is *permitted* to do; this says what the caller *should be*, and they are not
+#: the same question. An agent's operations act as the app so a schedule
+#: outlives the person who set it up; pod publish, pod import and the sandbox's
+#: `git`/`gh` act as the person, so the work is attributed to whoever owns the
+#: repository. Defaulting to "user" keeps every caller that says nothing on the
+#: behaviour it had before there was an app to be.
+ActingIdentity = Literal["user", "app"]
+
 ExecutionResult = Any
 
 
@@ -65,6 +74,8 @@ class ExecutionRequest:
     #: reading this from the install config would hand one org's token to the
     #: other. Generic here; what it means is the presenter's business.
     account_external_ref: str | None = None
+    #: Who this call should present as. See `ActingIdentity`.
+    act_as: ActingIdentity = "user"
 
 
 @dataclass(frozen=True, slots=True)

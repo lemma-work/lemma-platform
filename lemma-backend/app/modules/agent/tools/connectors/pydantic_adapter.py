@@ -241,6 +241,11 @@ async def run_connector_operation(
                 payload=payload,
                 actor=services.ctx,
                 account_id=account_id,
+                # An agent acts as the app where the provider allows it, so a
+                # schedule keeps working after the person who set it up leaves.
+                # Everything else -- pod publish and import in particular --
+                # says nothing here and stays the person.
+                act_as="app",
             )
 
         # Phase 2: the provider call, holding no connection. The REST path has

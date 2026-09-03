@@ -155,3 +155,108 @@ def test_conversations_stop_dispatches_api(monkeypatch):
 
     assert result.exit_code == 0, result.stdout
     assert captured.get("id") == "conv-1"
+
+
+# ---------------------------------------------------------------------------
+# 6. conversations approve
+# ---------------------------------------------------------------------------
+
+
+class ApprovingConversations(FakeConversations):
+    """Two pending approvals, and a record of what was resolved."""
+
+    def __init__(self, *, failing: set[str] | None = None) -> None:
+        self.resolved: list[tuple[str, str]] = []
+        self.failing = failing or set()
+
+    def approvals(self, conversation_id):
+        return {
+            "items": [
+                {"id": "ap-1", "tool_name": "send_email", "tool_args": {"to": "x@y.z"}},
+                {"id": "ap-2", "tool_name": "write_file"},
+            ]
+        }
+
+    def resolve_approval(self, conversation_id, approval_id, request):
+        if approval_id in self.failing:
+            from lemma_sdk.errors import LemmaAPIError
+
+            raise LemmaAPIError(status_code=409, message="already resolved")
+        self.resolved.append((approval_id, request.decision))
+        return {"id": approval_id}
+
+
+def test_approve_all_refuses_without_yes_and_resolves_nothing(monkeypatch):
+    """A bare `lemma conversation approve` authorises every gated call queued on
+    the conversation — mail, file writes, connector operations. CONVENTIONS.md
+    requires confirm_destructive on any irreversible command, and this one had
+    neither a confirmation nor a preview."""
+    fake_convs = ApprovingConversations()
+    monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
+
+    result = runner.invoke(app, ["conversation", "approve", "-c", "conv-1"])
+
+    assert result.exit_code == 1, result.output
+    assert fake_convs.resolved == []
+    flat = " ".join(result.stderr.split())
+    assert "--yes" in flat
+    # The preview names what would have been approved.
+    assert "send_email" in flat
+    assert "write_file" in flat
+
+
+def test_approve_all_with_yes_resolves_every_pending(monkeypatch):
+    fake_convs = ApprovingConversations()
+    monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
+
+    result = runner.invoke(
+        app, ["--json", "conversation", "approve", "-c", "conv-1", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_convs.resolved == [
+        ("ap-1", "APPROVE_ONCE"),
+        ("ap-2", "APPROVE_ONCE"),
+    ]
+    assert json.loads(result.stdout)["resolved"] == ["ap-1", "ap-2"]
+
+
+def test_approve_one_by_id_needs_no_confirmation(monkeypatch):
+    fake_convs = ApprovingConversations()
+    monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
+
+    result = runner.invoke(
+        app, ["--json", "conversation", "approve", "ap-1", "-c", "conv-1"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_convs.resolved == [("ap-1", "APPROVE_ONCE")]
+
+
+def test_approve_reports_which_approvals_went_through_when_one_fails(monkeypatch):
+    """Without per-approval handling the command failed on the second of two and
+    never said the first had already been authorised."""
+    fake_convs = ApprovingConversations(failing={"ap-2"})
+    monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(fake_convs))
+
+    result = runner.invoke(
+        app, ["--json", "conversation", "approve", "-c", "conv-1", "--yes"]
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] == ["ap-1"]
+    assert payload["failed"][0]["id"] == "ap-2"
+
+
+def test_approve_with_nothing_pending_is_a_no_op(monkeypatch):
+    class Empty(FakeConversations):
+        def approvals(self, conversation_id):
+            return {"items": []}
+
+    monkeypatch.setattr(conversations, "run_with_client", _make_fake_run(Empty()))
+
+    result = runner.invoke(app, ["--json", "conversation", "approve", "-c", "conv-1"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["resolved"] == []

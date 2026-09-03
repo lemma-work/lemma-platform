@@ -20,6 +20,7 @@ from uuid import UUID
 
 
 from app.core.authorization.delegation import is_pod_default_agent
+from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
@@ -80,6 +81,15 @@ def run_failure_message(exc: BaseException) -> str:
             "sent was lost — send another message, or press Retry to pick up "
             "where it stopped."
         )
+    if isinstance(exc, DomainError):
+        # A DomainError's message is already the sentence we would want to
+        # write. `model_not_configured` names the environment variable to set;
+        # `runtime_profile_archived` names the model that went away and where to
+        # pick another. Both were authored to be read by the person whose run
+        # just failed, and the generic line below replaced them with an
+        # instruction to check "the agent runtime configuration" -- while the
+        # server was holding the answer to which part of it.
+        return exc.message
     if not isinstance(exc, Exception):
         return "Agent run was interrupted (timeout or shutdown)"
     return "Agent run failed. Please check the agent runtime configuration."

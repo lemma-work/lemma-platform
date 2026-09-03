@@ -58,12 +58,18 @@ lemma chat "what can you do in this pod?"
 ### Your laptop
 
 Download Lemma Desktop, choose **Local**, and select **Install local services**.
-Lemma owns the local runtime, and the CLI discovers it automatically.
+Lemma owns the local runtime and picks its own ports, so one bootstrap command
+reads them back out of Desktop and registers them with the CLI as the `local`
+server.
 
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
+Run this after Desktop's local setup has finished once:
+
 ```bash
 uv tool install lemma-terminal
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only          # registers Desktop's endpoints as the local server
 lemma servers select local
 lemma auth login
 lemma skills install
@@ -74,6 +80,21 @@ Then open the generated `support-ops/` directory in the coding agent you already
 use and describe the system you want. Full Desktop, Agent Host, and provider
 setup lives in [Install in depth](#install-in-depth) and
 [docs/installation.md](docs/installation.md).
+
+Use `uv tool install`, not `pip`. `lemma-terminal` needs Python 3.14, and
+`uv tool install` provisions that interpreter itself, so whatever `python3` is
+on your machine does not matter. `pip install lemma-terminal` on an older
+interpreter does not fail — it quietly resolves back to `0.6.2`, the last
+release that allowed 3.11, and installs a CLI several minors behind the server.
+`lemma --version` reports what you actually have.
+
+**If a command did not do what it says here:**
+
+| Symptom | What to do |
+| --- | --- |
+| `Server not found: local` | Desktop's local setup has not run, or the bootstrap above was skipped. Run it, then `lemma servers show` to confirm which server is active. |
+| Agents unavailable, or chat answers with a provider error | No AI provider has validated yet. **Local Control Center → AI Providers**; Ollama or LM Studio if you have no API key. |
+| Something works in the app but not in the CLI, or the other way round | `lemma doctor` — it diagnoses client/server version skew and duplicate installs. |
 
 ## One of it, however many of you
 
@@ -235,8 +256,8 @@ Any agent operates a pod directly through the CLI:
 ```bash
 lemma table list                 # inspect the data model
 lemma record update tickets tkt_418 --data '{"status": "closed"}'
-lemma agent run classifier --input '{"ticket_id": "..."}'
-lemma workflow start refund-review   # pauses at human approval steps
+lemma agent run classifier "classify ticket tkt_418"   # agents take a message; lemma function run takes JSON
+lemma workflow run refund-review     # returns as soon as it reaches a human approval step
 lemma chat "what's left in the queue?"
 ```
 
@@ -294,9 +315,12 @@ Apple silicon, and drag Lemma to Applications before opening it. The small
 installer downloads digest-verified runtime components on first use; this release
 publishes the online package, and offline packages follow later.
 
-Windows 11 23H2+ on x86-64 builds and is signed every release. It is
-experimental, and available through
-[docs/installation.md](docs/installation.md).
+There is no published Windows installer. Windows 11 23H2+ on x86-64 is built and
+signed every release, but the installer stays a workflow artifact rather than a
+release asset: attaching it would be an offer of support we cannot make until
+the Windows paths have been tested end to end. Getting it takes a GitHub account
+and the Actions UI — steps in [installing on
+Windows](docs/installation.md#windows-installation-experimental).
 
 Choose **Local**, select **Install local services**, and create the local owner
 inside the app. Lemma owns its lightweight VZ/WSL2 runtime and installs
@@ -305,16 +329,23 @@ profile and optional integrations in **Local Control Center**.
 
 On first installation Lemma chooses a private high-port pair and keeps it stable
 across restarts. **Local Control Center → Diagnostics** shows the exact
-workspace, API, built-app, and OAuth callback URLs. The CLI discovers the same
-endpoints from Desktop automatically. See the complete [local installation and
-operations guide](docs/installation.md).
+workspace, API, built-app, and OAuth callback URLs. See the complete [local
+installation and operations guide](docs/installation.md).
 
-The optional stack-control bootstrap registers the `local` server for the CLI:
+The CLI ships knowing one server, `lemma-cloud`. Because Desktop's ports are
+chosen per installation, the `local` server is written from what Desktop
+actually allocated rather than assumed. The stack-control bootstrap installs
+`lemma-stack` and does that in one step:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
   bash -s -- --cli-only
 ```
+
+`--cli-only` is what registers `local`; without it, `install.sh` starts the
+Docker/Podman compatibility install instead, which Desktop users do not want.
+Run it after Desktop's local setup has completed once — it reads the endpoints
+from the running installation, so it fails if there is nothing to read.
 
 ### Agent Host
 
@@ -341,7 +372,8 @@ skills and authors pods today; pod-dispatched runs arrive with its ACP support.
 ### A provider for server-run agents and conversations
 
 Use **Local Control Center → AI Providers**, or apply the same transactional
-configuration through `lemma-stack`:
+configuration through `lemma-stack` (the stack-control CLI, installed by the
+bootstrap above — it is not on PyPI):
 
 ```bash
 lemma-stack config set ai.protocol=openai_compat ai.base_url=http://127.0.0.1:11434/v1 ai.default_model=qwen3
@@ -349,8 +381,13 @@ lemma-stack config set ai.protocol=openai_compat ai.base_url=http://127.0.0.1:11
 
 Secrets are stored in Keychain or Credential Manager, model access is validated
 before activation, and a failed change rolls back. See
-[configuration](docs/installation.md#configure-the-system-ai-profile) for hosted
+[configuration](docs/installation.md#configure-an-ai-provider) for hosted
 providers, integrations, and agent surfaces.
+
+No API key? Point it at a model on your own machine instead: start Ollama or
+LM Studio and press **Ollama** or **LM Studio** in **Local Control Center → AI
+Providers**. Server-run agents stay unavailable, with the reason shown, until
+some provider validates.
 
 ## Repo layout
 
@@ -366,7 +403,7 @@ providers, integrations, and agent surfaces.
 | `lemma-skills/` | Built-in agent skills | Apache-2.0 |
 | `lemma-pod-bundle/` | `lemma-pod-bundle`, the pod bundle format, shared by the CLI and the backend | Apache-2.0 |
 | `docs/` | Installation, configuration, architecture, and security documentation | n/a |
-| `install.sh` | One-line bootstrap installer | n/a |
+| `install.sh` | Bootstrap for `lemma-stack`. `--cli-only` registers Desktop as the CLI's `local` server; with no flags it runs the Docker/Podman compatibility install | n/a |
 
 Everything is a normal directory in one repo.
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together.

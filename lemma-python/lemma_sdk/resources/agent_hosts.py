@@ -21,21 +21,20 @@ from .base import Resource
 class AgentHosts(Resource):
     """Machines paired to run local coding agents for this user."""
 
-    def create_pairing(
-        self,
-        *,
-        display_name: str,
-        organization_id: str | UUID | None = None,
-    ) -> AgentHostPairingCreated:
+    def create_pairing(self, *, display_name: str) -> AgentHostPairingCreated:
         """Mint a short-lived pairing code.
 
         The code is returned once and is consumed by the Agent Host to obtain
         its own scoped credential.
+
+        There is no organization argument: a paired machine belongs to the user,
+        not to a workspace. Sharing it happens later, by giving a runtime profile
+        ORGANIZATION scope.
         """
-        body = AgentHostPairingCreate(display_name=display_name)
-        if organization_id is not None:
-            body.organization_id = UUID(str(organization_id))
-        return self._call(agent_host_pairing_create, body=body)
+        return self._call(
+            agent_host_pairing_create,
+            body=AgentHostPairingCreate(display_name=display_name),
+        )
 
     def list(self) -> AgentHostListResponse:
         return self._call(agent_host_list)

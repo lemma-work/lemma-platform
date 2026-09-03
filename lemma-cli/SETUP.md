@@ -84,7 +84,7 @@ Most pod workflows then use the selected org and pod automatically:
 
 ```bash
 lemma agents list
-lemma files list /pod
+lemma files ls /pod
 lemma tables list
 lemma chat
 ```
@@ -103,7 +103,7 @@ token, and default org/pod/conversation values.
 ```bash
 lemma servers list
 lemma servers show
-lemma servers select cloud
+lemma servers select lemma-cloud
 lemma servers create staging --base-url https://api.example.com --auth-url https://example.com/auth
 ```
 
@@ -163,7 +163,11 @@ lemma --server lemma-cloud apps deploy # uses .lemma.lemma-cloud.env
   `No pod bound for server '<server>'` hint.
 - **Don't commit tokens.** Auth comes from your stored login (`lemma auth login`);
   `LEMMA_TOKEN` is a workspace-sandbox concept. A real `LEMMA_TOKEN` in the environment makes
-  the CLI ignore the project files entirely.
+  the CLI ignore the project files entirely. A `LEMMA_TOKEN` in a *committed*
+  file (`.lemma.env` / `.lemma.<server>.env`) is **never applied** — the CLI warns
+  and names the file, because applying it would silently switch every command onto
+  the read-only `env` server under someone else's identity. The gitignored `.local`
+  variants are your own machine and are still honoured.
 - `lemma config show` reports the resolved server and which files were applied.
 
 ## Terminal UI

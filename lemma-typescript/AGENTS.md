@@ -16,11 +16,11 @@ Guide for AI agents building desks and features with the Lemma SDK.
 - `docs/hooks-guide.md` — Business-facing hook recipes and decision guide
 - `examples/` — reserved for runnable example apps (none checked in yet)
 - `registry/` — Shadcn registry component source
-- `registry.json` — Registry manifest (20 canonical blocks)
+- `registry.json` — Registry manifest (19 canonical blocks plus the shared `lemma-ui` primitive layer)
 
 ## Registry blocks
 
-The shadcn registry ships **20 canonical blocks**. All surviving blocks accept `appearance`, `density`, and `radius` props where applicable for cross-cutting visual control.
+The shadcn registry ships **19 canonical blocks** on top of the shared `lemma-ui` primitive layer. All surviving blocks accept `appearance`, `density`, and `radius` props where applicable for cross-cutting visual control.
 
 ### Core operator blocks
 - **lemma-records-view** — Canonical records workspace with grid, list, grouped, kanban, and linear views, `triage`/`issues`/`crm`/`docs` presets, inline editing, detail routing/sheets, and schema-aware create flows.
@@ -55,7 +55,18 @@ The shadcn registry ships **20 canonical blocks**. All surviving blocks accept `
 npm run build
 ```
 
-This runs `tsc` then bundles the browser client. There are no tests currently.
+This runs `tsc` then bundles the browser client.
+
+## Tests
+
+```bash
+npx vitest run
+npx tsc -p tsconfig.json --noEmit
+```
+
+Tests live in `src/__tests__/`. Note that `tsconfig.json` excludes them from the
+typecheck, so a type-level assertion written in a test file is never checked —
+put those in source.
 
 ## Import conventions
 
@@ -69,6 +80,31 @@ import { useRecords, useRecordForm, useReferencingRecords, useAssistantControlle
 
 Never import from individual hook files directly. Always use the barrel exports.
 
+## Configuration
+
+`new LemmaClient(overrides)` resolves each setting from the first source that
+has it, highest first:
+
+1. the `overrides` object you pass
+2. `window.__LEMMA_CONFIG__`, injected by the host that serves a pod app
+3. the environment
+4. the public defaults (`https://api.lemma.work`, `https://lemma.work/auth`)
+
+Environment names, each also readable as `VITE_LEMMA_*` (Vite) or
+`REACT_APP_LEMMA_*` (CRA/webpack):
+
+| Variable | Sets | Notes |
+| --- | --- | --- |
+| `LEMMA_BASE_URL` | `apiUrl` | The same name the CLI and the Python SDK use. |
+| `LEMMA_API_URL` | `apiUrl` | Deprecated alias for `LEMMA_BASE_URL`; warns once. |
+| `LEMMA_AUTH_URL` | `authUrl` | |
+| `LEMMA_POD_ID` | `podId` | |
+| `LEMMA_TOKEN` | `token` | Server-side only. Never read from `window.__LEMMA_CONFIG__` — a token in page config is a token in the page. |
+
+A server-side caller (no `window`) that configures no API URL is warned once
+before the public default is used, so a script pointed nowhere says so rather
+than quietly reaching production.
+
 ## Hook selection guide
 
 When building a desk, choose hooks based on what the UI needs:
@@ -76,7 +112,7 @@ When building a desk, choose hooks based on what the UI needs:
 **Fetching data:**
 - List of records → `useRecords`
 - Single record → `useRecord`
-- Table schema → `useTable`, `useTables`
+- Table schema → `useTables`
 - Record schema fields → `useRecordSchema`
 - Records from a referencing table → `useReferencingRecords({ table, foreignKey, recordId })`
 - Records with FK-related data joined → `useRelatedRecords`
@@ -109,10 +145,9 @@ When building a desk, choose hooks based on what the UI needs:
 - Assistant controller → `useAssistantController`
 - Assistant session → `useAssistantSession`
 - Assistant runtime → `useAssistantRuntime`
-- Single assistant run → `useAssistantRun`
-- Conversations → `useConversations`, `useConversation`, `useConversationMessages`
-- Agent run → `useAgentRun`
-- Agent run history → `useAgentRuns`
+- Conversation list → `useConversations`
+- Messages in one conversation → `useConversationMessages`
+- One-shot agent run with its output → `useAgentTask`
 - Agent input schema → `useAgentInputSchema`
 
 **Files:**
@@ -132,9 +167,6 @@ When building a desk, choose hooks based on what the UI needs:
 - Pod access → `usePodAccess`
 - Gate the app → `AuthGuard`
 - Read auth state → `useAuth`
-
-**Task/session:**
-- Task session (streaming) → `useTaskSession`
 
 ## Function-aware mutations
 

@@ -9110,23 +9110,50 @@ var LemmaClient = (() => {
   });
 
   // src/config.ts
+  var DEFAULT_API_URL = "https://api.lemma.work";
+  var DEFAULT_AUTH_URL = "https://lemma.work/auth";
   function fromEnv(key) {
     var _a, _b, _c;
     try {
       const meta = void 0;
       if (meta) {
-        return (_b = (_a = meta[`VITE_LEMMA_${key}`]) != null ? _a : meta[`REACT_APP_LEMMA_${key}`]) != null ? _b : meta[`LEMMA_${key}`];
+        const value = (_b = (_a = meta[`VITE_LEMMA_${key}`]) != null ? _a : meta[`REACT_APP_LEMMA_${key}`]) != null ? _b : meta[`LEMMA_${key}`];
+        if (value) {
+          return value;
+        }
       }
     } catch {
     }
     try {
       const env = (_c = globalThis.process) == null ? void 0 : _c.env;
       if (env) {
-        return env[`LEMMA_${key}`];
+        return env[`LEMMA_${key}`] || void 0;
       }
     } catch {
     }
     return void 0;
+  }
+  var warned = /* @__PURE__ */ new Set();
+  function warnOnce(key, message) {
+    if (warned.has(key)) {
+      return;
+    }
+    warned.add(key);
+    console.warn(`lemma-sdk: ${message}`);
+  }
+  function apiUrlFromEnv() {
+    const baseUrl = fromEnv("BASE_URL");
+    if (baseUrl) {
+      return baseUrl;
+    }
+    const legacy = fromEnv("API_URL");
+    if (legacy) {
+      warnOnce(
+        "API_URL",
+        "LEMMA_API_URL is deprecated; rename it to LEMMA_BASE_URL, the name the CLI and the Python SDK use."
+      );
+    }
+    return legacy;
   }
   function windowConfig() {
     if (typeof window !== "undefined" && window.__LEMMA_CONFIG__) {
@@ -9135,22 +9162,29 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const win = windowConfig();
-    const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
-    const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
-    const podId = (_h = (_g = overrides.podId) != null ? _g : win.podId) != null ? _h : fromEnv("POD_ID");
-    const token = (_i = overrides.token) != null ? _i : fromEnv("TOKEN");
+    const configuredApiUrl = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : apiUrlFromEnv();
+    if (!configuredApiUrl && typeof window === "undefined") {
+      warnOnce(
+        "BASE_URL",
+        `no API URL configured, using ${DEFAULT_API_URL}. Set LEMMA_BASE_URL or pass apiUrl to point elsewhere.`
+      );
+    }
+    const apiUrl = configuredApiUrl != null ? configuredApiUrl : DEFAULT_API_URL;
+    const authUrl = (_e = (_d = (_c = overrides.authUrl) != null ? _c : win.authUrl) != null ? _d : fromEnv("AUTH_URL")) != null ? _e : DEFAULT_AUTH_URL;
+    const podId = (_g = (_f = overrides.podId) != null ? _f : win.podId) != null ? _g : fromEnv("POD_ID");
+    const token = (_h = overrides.token) != null ? _h : fromEnv("TOKEN");
     return {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
       token,
-      app: (_j = overrides.app) != null ? _j : win.app,
-      timeoutMs: (_k = overrides.timeoutMs) != null ? _k : win.timeoutMs,
-      maxRetries: (_l = overrides.maxRetries) != null ? _l : win.maxRetries,
-      client: (_m = overrides.client) != null ? _m : win.client,
-      appId: (_n = overrides.appId) != null ? _n : win.appId
+      app: (_i = overrides.app) != null ? _i : win.app,
+      timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
+      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
+      client: (_l = overrides.client) != null ? _l : win.client,
+      appId: (_m = overrides.appId) != null ? _m : win.appId
     };
   }
 
@@ -9844,6 +9878,21 @@ var LemmaClient = (() => {
     return Math.min(Math.max(baseMs, delay), maxMs);
   }
   var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 502, 503, 504]);
+  var ALWAYS_RETRYABLE_STATUS = /* @__PURE__ */ new Set([429]);
+  var REPLAYABLE_METHODS = /* @__PURE__ */ new Set([
+    "GET",
+    "HEAD",
+    "OPTIONS"
+  ]);
+  function isRetryableRequest(status, method) {
+    if (!RETRYABLE_STATUS.has(status)) {
+      return false;
+    }
+    if (ALWAYS_RETRYABLE_STATUS.has(status)) {
+      return true;
+    }
+    return method !== void 0 && REPLAYABLE_METHODS.has(method.toUpperCase());
+  }
   function serverRetryAfterMs(retryAfter) {
     if (!retryAfter) {
       return null;
@@ -9865,8 +9914,8 @@ var LemmaClient = (() => {
     const half = delayMs / 2;
     return Math.round(half + random() * half);
   }
-  function retryDelayForStatus(status, attempt, maxRetries, retryAfterHeader, random = Math.random) {
-    if (!RETRYABLE_STATUS.has(status) || attempt >= maxRetries) {
+  function retryDelayForStatus(status, method, attempt, maxRetries, retryAfterHeader, random = Math.random) {
+    if (!isRetryableRequest(status, method) || attempt >= maxRetries) {
       return null;
     }
     const serverMs = serverRetryAfterMs(retryAfterHeader);
@@ -10114,6 +10163,7 @@ var LemmaClient = (() => {
         }
         const retryDelay = retryDelayForStatus(
           response.status,
+          method,
           attempt,
           this.maxRetries,
           response.headers.get("retry-after")
@@ -10361,6 +10411,7 @@ var LemmaClient = (() => {
       };
     }
     async request(operation) {
+      var _a;
       this.configure();
       for (let attempt = 0; ; attempt++) {
         try {
@@ -10370,7 +10421,13 @@ var LemmaClient = (() => {
             if (error.status === 401) {
               this.auth.markUnauthenticated();
             }
-            const retryDelay = retryDelayForStatus(error.status, attempt, this.maxRetries, null);
+            const retryDelay = retryDelayForStatus(
+              error.status,
+              (_a = error.request) == null ? void 0 : _a.method,
+              attempt,
+              this.maxRetries,
+              null
+            );
             if (retryDelay !== null) {
               await sleep(retryDelay);
               continue;
@@ -15432,7 +15489,7 @@ var LemmaClient = (() => {
      * List table records with token pagination only. Use the datastore query endpoint for joins, aggregates, or custom read-only SQL.
      * @param podId
      * @param tableName
-     * @param limit Max number of rows to return.
+     * @param limit Max number of rows to return, up to 1000. Page beyond that with `page_token`.
      * @param offset Row offset for direct pagination.
      * @param filter Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={"field":"amount","op":"gt","value":100}` and `filter={"field":"status","op":"eq","value":"OPEN"}`.
      * @param sort Optional repeated JSON sort clauses. Each `sort` value must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`. Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column sorting in priority order. Example: `sort={"field":"created_at","direction":"desc"}`.
@@ -16832,7 +16889,7 @@ var LemmaClient = (() => {
   var QueryService = class {
     /**
      * Execute Query
-     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected.
+     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.
      * @param podId
      * @param requestBody
      * @param mode Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.

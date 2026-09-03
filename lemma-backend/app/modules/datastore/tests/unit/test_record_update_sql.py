@@ -11,6 +11,10 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
+import pytest
+
+from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.infrastructure.record_page import order_by_clause
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,
@@ -189,3 +193,44 @@ def test_build_bulk_statements_covers_every_record_once():
     ] == statements
     total = sum(len(params) // len(ordered_keys) for _sql, params in statements)
     assert total == len(records), "a bulk write would have written a subset"
+
+
+class TestListingOrderIsAlwaysTotal:
+    """`PS-DATA-011`: paging an unchanging table returns every record once.
+
+    Offset paging is only defined over a total order. Sorting by a column whose
+    values repeat leaves the order among equal rows to the planner, which is
+    free to place a row on two consecutive pages or on neither. The default
+    sort has always appended the primary key for this reason; an explicit sort
+    was passed through exactly as the caller wrote it.
+    """
+
+    def test_an_explicit_sort_gets_the_primary_key_as_a_tiebreak(self):
+        clause = order_by_clause(_context("status"), [("status", "asc")])
+
+        assert clause == '"status" ASC, "id" ASC'
+
+    def test_the_tiebreak_follows_the_last_clause_s_direction(self):
+        clause = order_by_clause(
+            _context("status", "amount"), [("status", "asc"), ("amount", "desc")]
+        )
+
+        assert clause == '"status" ASC, "amount" DESC, "id" DESC'
+
+    def test_a_sort_that_is_already_unique_is_left_alone(self):
+        clause = order_by_clause(_context("status"), [("id", "desc")])
+
+        assert clause == '"id" DESC'
+
+    def test_the_default_sort_keeps_the_tiebreak_it_always_had(self):
+        assert (
+            order_by_clause(_context("created_at"), None)
+            == '"created_at" DESC, "id" DESC'
+        )
+
+    def test_a_table_without_created_at_orders_by_its_primary_key(self):
+        assert order_by_clause(_context("status"), None) == '"id" DESC'
+
+    def test_a_sort_column_is_still_validated_as_an_identifier(self):
+        with pytest.raises(DatastoreValidationError):
+            order_by_clause(_context("status"), [('status" DESC, (SELECT 1)', "asc")])

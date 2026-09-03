@@ -188,6 +188,22 @@ async def ensure_stream_groups(redis_client, stream: str) -> int:
     return created
 
 
+#: How many stream/group names one log record names before it stops listing.
+#: The whole topology is a couple of dozen pairs; a record that named every one
+#: of them would be cut at the field bound anyway, so the cut is made here
+#: where the count can be carried alongside it.
+_MAX_NAMED_GROUPS = 12
+
+
+def _describe(pairs: list[tuple[str, str]]) -> str:
+    """``stream/group`` names for a log record, bounded and ordered."""
+    listed = [f"{stream}/{group}" for stream, group in sorted(pairs)]
+    if len(listed) > _MAX_NAMED_GROUPS:
+        remaining = len(listed) - _MAX_NAMED_GROUPS
+        listed = [*listed[:_MAX_NAMED_GROUPS], f"(+{remaining} more)"]
+    return ", ".join(listed)
+
+
 async def ensure_consumer_groups(
     redis_client, *, warn_on_create: bool = True, only_stream: str | None = None
 ) -> int:
@@ -198,72 +214,85 @@ async def ensure_consumer_groups(
     1. **Startup race.** Multiple subscribers can share one stream (e.g. both the
        workflow and surface subscribers consume ``schedule_events``). At
        ``broker.start`` FastStream races to create each group, and a subscriber
-       that issues XREADGROUP before its group exists gets NOGROUP and *stops
-       permanently* ("restart the application to recreate the group") — the
-       reconcile loop cannot revive a stopped subscriber. Calling this once
-       before ``broker.start`` pre-creates every group so no subscriber races.
-       Pass ``warn_on_create=False`` there: creating a group on a fresh (or
-       flushed) Redis is expected, not an anomaly.
+       that issues XREADGROUP before its group exists gets NOGROUP, which ends
+       its consume task; FastStream's supervisor restarts that task at once and
+       with no backoff, so the subscriber spins on NOGROUP until the group is
+       back. Calling this once before ``broker.start`` pre-creates every group
+       so no subscriber races. Pass ``warn_on_create=False`` there: creating a
+       group on a fresh (or flushed) Redis is expected, not an anomaly.
     2. **Mid-run loss.** If a group is later lost — Redis flush, failover to an
        un-replicated replica, key eviction, or stream trim — recreating it on a
-       short interval lets a retrying subscriber resume without a restart.
+       short interval lets the retrying subscriber's next attempt succeed
+       without a restart.
 
     Groups are created at ``$`` (new messages only): after a data-loss event the
     old entries are gone anyway, and this avoids reprocessing a whole surviving
     stream. Never raises — group plumbing must not crash the worker.
+
+    Case 2 is reported at WARNING and an ensure failure at ERROR. Both used to
+    be ``logger.debug``, which ``LOG_LEVEL=INFO`` drops before formatting, so
+    the one accident that stops delivery on a self-host left an empty log. They
+    are rare by construction — a group is created once per stream per Redis
+    lifetime — so this is not a volume trade, and the whole pass reports once
+    rather than once per group so a Redis outage cannot turn a tick into a
+    burst.
     """
-    created = 0
-    for stream, group in registered_stream_groups():
-        if only_stream is not None and stream != only_stream:
-            continue
-        try:
-            await redis_client.xgroup_create(
-                name=stream, groupname=group, id="$", mkstream=True
-            )
-            created += 1
-            if warn_on_create:
-                logger.debug(
-                    "infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic"
-                )
-            else:
-                logger.debug(
-                    "infrastructure.stream_subscriber.created_redis_consumer_group.observed"
-                )
-        except Exception as exc:  # BUSYGROUP (already exists) is the happy path
-            if "BUSYGROUP" not in str(exc):
-                logger.debug(
-                    "infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic",
-                    error_type=type(exc).__name__,
-                )
-    return created
+    pairs = [
+        (stream, group)
+        for stream, group in registered_stream_groups()
+        if only_stream is None or stream == only_stream
+    ]
+    return await _ensure_groups(redis_client, pairs, warn_on_create=warn_on_create)
 
 
-async def ensure_named_groups(
-    redis_client, stream: str, groups, *, warn_on_create: bool = False
+async def _ensure_groups(
+    redis_client, pairs: list[tuple[str, str]], *, warn_on_create: bool
 ) -> int:
-    """Idempotently create explicitly-named consumer groups on a stream.
-
-    Unlike ``ensure_consumer_groups`` (which reads the per-process subscriber
-    registry), this takes the group names directly — so a PUBLISHER process that
-    never imports the consuming subscribers (the scheduler pod, the API pod) can
-    still guarantee a consumer's group exists before XADD. Created at ``$`` /
-    mkstream; BUSYGROUP keeps the existing group and its position. Never raises.
-    """
-    created = 0
-    for group in groups:
+    created: list[tuple[str, str]] = []
+    failed: list[tuple[str, str]] = []
+    first_failure: Exception | None = None
+    for stream, group in pairs:
         try:
             await redis_client.xgroup_create(
                 name=stream, groupname=group, id="$", mkstream=True
             )
-            created += 1
-            if warn_on_create:
-                logger.debug(
-                    "infrastructure.stream_subscriber.recreated_missing_redis_consumer_group.diagnostic"
-                )
+            created.append((stream, group))
         except Exception as exc:  # BUSYGROUP (already exists) is the happy path
-            if "BUSYGROUP" not in str(exc):
-                logger.debug(
-                    "infrastructure.stream_subscriber.ensuring_consumer_group.diagnostic",
-                    error_type=type(exc).__name__,
-                )
-    return created
+            if "BUSYGROUP" in str(exc):
+                continue
+            failed.append((stream, group))
+            if first_failure is None:
+                first_failure = exc
+    if created and warn_on_create:
+        # A group that had to be *re*created was gone, and while it was gone its
+        # subscribers consumed nothing. Naming the groups is the point: it says
+        # which streams stopped being delivered.
+        logger.warning(
+            "infrastructure.stream_subscriber.recreated_missing_consumer_groups.degraded",
+            group_count=len(created),
+            groups=_describe(created),
+        )
+    elif created:
+        logger.debug(
+            "infrastructure.stream_subscriber.created_consumer_groups.observed",
+            group_count=len(created),
+            groups=_describe(created),
+        )
+    if first_failure is not None:
+        # Reported once for the pass, with the first exception's traceback: the
+        # rest of a failing pass is the same Redis saying the same thing, and a
+        # type name without a traceback is an error nobody can act on. Spelled
+        # as a triple because the record is emitted after the handler has
+        # exited, where `exc_info=True` has nothing left to read.
+        logger.error(
+            "infrastructure.stream_subscriber.consumer_group_ensure.failed",
+            group_count=len(failed),
+            groups=_describe(failed),
+            error_type=type(first_failure).__name__,
+            exc_info=(
+                type(first_failure),
+                first_failure,
+                first_failure.__traceback__,
+            ),
+        )
+    return len(created)

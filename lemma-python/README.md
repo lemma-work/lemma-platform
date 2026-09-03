@@ -10,7 +10,7 @@ token). The CLI and TUI live in the sibling `lemma-cli` package.
 
 - package name: `lemma-sdk`
 - import root: `lemma_sdk`
-- Python `>=3.11` ([`uv`](https://docs.astral.sh/uv/) recommended)
+- Python `>=3.14,<3.15` ([`uv`](https://docs.astral.sh/uv/) recommended)
 
 > **Reading the source.** In a Lemma sandbox the full SDK source is available at
 > `/sdk/lemma-python` (and the TypeScript SDK at `/sdk/lemma-typescript`). When you
@@ -19,10 +19,41 @@ token). The CLI and TUI live in the sibling `lemma-cli` package.
 
 ## Install
 
+The published package is `lemma-sdk`, not `lemma-python` — that is the directory
+it is built from.
+
+```bash
+uv add lemma-sdk            # or: pip install lemma-sdk
+```
+
+From a checkout, for working on the SDK itself:
+
 ```bash
 uv pip install .            # or: uv pip install --editable .
 python -c "from lemma_sdk import Pod, Lemma; print(Pod, Lemma)"
 ```
+
+**This package requires Python 3.14** (`requires-python = ">=3.14,<3.15"`), which
+is not what `python3` is on current distributions or on macOS. Check before you
+install, because the failure is quiet: on an older interpreter neither `pip` nor
+`uv` errors — the resolver walks back to `0.6.2`, the last release that allowed
+3.11, and installs that instead. You get an SDK two minors behind the API you
+are calling and nothing says so. Confirm what you actually got with
+`python -c "import importlib.metadata as m; print(m.version('lemma-sdk'))"`.
+
+`uv` will provision 3.14 for you:
+
+```bash
+uv venv --python 3.14 && uv pip install lemma-sdk   # standalone environment
+```
+
+In a uv project, put `requires-python = ">=3.14"` in your `pyproject.toml`
+before `uv add lemma-sdk`; otherwise the project's own floor is what makes the
+resolver reach for the old release.
+
+The `lemma` CLI is unaffected by any of this: `uv tool install lemma-terminal`
+provisions its own interpreter, so the CLI works whatever `python3` on your
+machine happens to be.
 
 ## Two entry points
 

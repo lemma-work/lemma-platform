@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from pydantic import HttpUrl, SecretStr
 
 from app.core.config import reveal_secret, settings
+from app.core.domain.errors import DomainError
 from app.modules.agent.services.context_budget import (
     catalog_metadata_for,
 )
@@ -97,16 +98,21 @@ def _build_system_openai_catalog(
     raw_model_names = (
         os.getenv("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
     )
-    model_names = (
-        _csv_setting(raw_model_names)
-        if require_models
-        else _csv_setting_or_empty(raw_model_names)
-    )
+    model_names = _csv_setting_or_empty(raw_model_names)
     default_model_name = (
         os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
     ).strip()
+    # Folded in before the emptiness check, not after it: a deployment that
+    # names only a default model has named a model, and the error below offers
+    # that setting as a way out, so it has to actually be one.
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
+    if require_models and not model_names:
+        raise _no_models_configured(
+            credential_setting="LEMMA_OPENAI_API_KEY",
+            names_setting="LEMMA_OPENAI_MODEL_NAMES",
+            default_setting="LEMMA_OPENAI_DEFAULT_MODEL",
+        )
     vision_model_names = _openai_compat_vision_model_names()
     catalog = [
         RuntimeModelCatalogEntry(
@@ -206,7 +212,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     )
     if not api_key:
         return None
-    model_names = _csv_setting(
+    model_names = _csv_setting_or_empty(
         os.getenv("LEMMA_ANTHROPIC_MODEL_NAMES") or settings.lemma_anthropic_model_names
     )
     default_model_name = (
@@ -215,6 +221,12 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     ).strip()
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
+    if not model_names:
+        raise _no_models_configured(
+            credential_setting="LEMMA_ANTHROPIC_API_KEY",
+            names_setting="LEMMA_ANTHROPIC_MODEL_NAMES",
+            default_setting="LEMMA_ANTHROPIC_DEFAULT_MODEL",
+        )
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
         scope=RuntimeProfileScope.SYSTEM,
@@ -263,11 +275,27 @@ def _env_or_setting(env_name: str, setting_value: SecretStr | str | None) -> str
     return normalized or None
 
 
-def _csv_setting(value: str) -> list[str]:
-    model_names = _csv_setting_or_empty(value)
-    if not model_names:
-        raise RuntimeError("Lemma system model profile requires at least one model")
-    return model_names
+def _no_models_configured(
+    *,
+    credential_setting: str,
+    names_setting: str,
+    default_setting: str,
+) -> DomainError:
+    """The error for "credentials present, catalog empty".
+
+    A bare `RuntimeError` here used to reach the `agent.runtime.profiles.list`
+    route as a 500 -- on the one page an operator opens to work out why nothing
+    runs. A `DomainError` carries text written to be read: it names the setting
+    that is empty, so the most likely half-configuration of a fresh self-host (a
+    key and no model list) explains itself instead of 500ing.
+    """
+    return DomainError(
+        f"{credential_setting} is set but no models are configured for the "
+        f"Lemma system model provider. Set {names_setting} to a "
+        f"comma-separated list of model names, or set {default_setting}.",
+        code="model_names_not_configured",
+        status_code=503,
+    )
 
 
 def _csv_setting_or_empty(value: str) -> list[str]:

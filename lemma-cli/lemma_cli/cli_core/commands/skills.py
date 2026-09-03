@@ -25,7 +25,7 @@ from ..skills_bundle import (
     bundled_skill_map,
     iter_bundled_skills,
 )
-from ..state import console, fail, state_from_ctx
+from ..state import console, err_console, fail, state_from_ctx
 
 app = typer.Typer(
     help="Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor)."
@@ -286,6 +286,12 @@ def uninstall_skills(
     dir: Path | None = typer.Option(
         None, "--dir", help="Remove from an arbitrary directory."
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be removed, remove nothing."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
 ) -> None:
     """Remove previously installed bundled skills from a coding agent."""
     state = state_from_ctx(ctx)
@@ -299,6 +305,22 @@ def uninstall_skills(
             )
     destinations = _resolve_destinations(target=target, scope=scope, dir=dir)
 
+    present = [
+        dest_dir / name
+        for _label, dest_dir in destinations
+        if dest_dir is not None
+        for name in wanted
+        if (dest_dir / name / "SKILL.md").is_file()
+    ]
+    # This deletes directories in the user's *other* tool's config, and a bare
+    # `lemma skills uninstall` means every bundled skill in every detected
+    # agent. `install` already confirms and has --dry-run; the destructive half
+    # of the pair had neither.
+    if present and not dry_run and not yes:
+        for path in present:
+            err_console.print(f"  [dim]{path}[/dim]")
+        confirm_destructive(f"Delete {len(present)} skill director(ies)?", yes)
+
     rows: list[dict[str, object]] = []
     for dest_label, dest_dir in destinations:
         if dest_dir is None:
@@ -307,14 +329,18 @@ def uninstall_skills(
         for name in wanted:
             target_dir = dest_dir / name
             removed = (target_dir / "SKILL.md").is_file()
-            if removed:
+            if removed and not dry_run:
                 _remove_existing(target_dir)
+            if removed:
+                action = "would remove" if dry_run else "removed"
+            else:
+                action = "not present"
             rows.append(
                 {
                     "skill": name,
                     "target": dest_label,
                     "path": str(target_dir),
-                    "action": "removed" if removed else "not present",
+                    "action": action,
                 }
             )
     emit(state, {"items": rows})

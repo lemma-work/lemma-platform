@@ -86,6 +86,40 @@ describe("HttpClient.request retry loop", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not replay a write on a gateway error", async () => {
+    // A 504 usually means the handler is still running, so replaying the POST
+    // is how one records.create becomes two rows.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 504 }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { auth } = fakeAuth();
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 2 });
+
+    await expect(client.request("POST", "/x")).rejects.toMatchObject({
+      statusCode: 504,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries a write on 429, which never reached the handler", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { auth } = fakeAuth();
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 2 });
+    const promise = client.request<{ ok: boolean }>("POST", "/x");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(promise).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("honors Retry-After (seconds) before retrying", async () => {
     vi.useFakeTimers();
     const fetchMock = vi

@@ -70,3 +70,30 @@ def test_frames_are_routed_by_conversation_not_by_run() -> None:
     assert conversation_channel(conversation_id) == (
         f"agent:conversation:{conversation_id}"
     )
+
+
+class TestAChannelOutageIsVisible:
+    """Every token, message and terminal frame a watching client sees goes
+    through `publish_conversation_event`. When the channel is down the symptom
+    is "the agent never answers" while runs complete normally in the database --
+    and at `logger.debug` production (LOG_LEVEL=INFO) had nothing at all to
+    distinguish that from a quiet day."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_publish_failures_are_reported_once(self, caplog) -> None:
+        from app.modules.agent.services import realtime
+
+        class _DeadChannel:
+            async def publish(self, _channel, _payload) -> None:
+                raise ConnectionError("redis is gone")
+
+        realtime._publish_incident.record_success()
+        with caplog.at_level("WARNING"):
+            for _ in range(5):
+                await realtime.publish_conversation_event(
+                    uuid4(), {"type": "token"}, channel_service=_DeadChannel()
+                )
+
+        assert caplog.text.count("dependency.degraded") == 1, caplog.text
+        assert "agent.realtime.publish" in caplog.text
+        realtime._publish_incident.record_success()

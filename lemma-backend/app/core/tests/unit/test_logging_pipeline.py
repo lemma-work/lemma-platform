@@ -13,6 +13,7 @@ import pytest
 import structlog
 
 import app.core.log.log as logmod
+from app.core.log import contract as log_contract
 from app.core.log.log import (
     LoggingContractError,
     get_dependency_logger,
@@ -142,8 +143,16 @@ def test_unregistered_event_and_field_fail_in_explicit_local_strict_mode(
     assert captured_stdout() == []
 
 
-def test_production_emits_one_bounded_contract_violation(monkeypatch) -> None:
-    monkeypatch.setattr(logmod, "_contract_violation_emitted", False)
+def test_production_reports_each_offending_event_once(monkeypatch) -> None:
+    """Once per offender, not once per process.
+
+    This used to latch on a single boolean: after the first violation, every
+    later violating record -- any event, for the life of the process -- was
+    dropped whole, error records included. An event missing from the catalog
+    then did not lose its fields, it disappeared, and the one record that was
+    emitted did not say which event it was about.
+    """
+    monkeypatch.setattr(log_contract, "reported_violations", set())
     setup_logging("production", service_name="lemma-test", json_logs=True)
     buffer = io.StringIO()
     handler = _processor_formatter_handler()
@@ -153,19 +162,25 @@ def test_production_emits_one_bounded_contract_violation(monkeypatch) -> None:
         logger = get_logger("app.demo")
         logger.info("not.registered", payload="CANARY")
         logger.info("also.not.registered", payload="SECOND-CANARY")
+        # A repeat of the first says nothing new.
+        logger.info("not.registered", payload="THIRD-CANARY")
     finally:
         handler.stream = original_stream
     records = [json.loads(line) for line in buffer.getvalue().splitlines() if line]
-    assert len(records) == 1
-    assert records[0]["event"] == "logging.contract.violation"
-    assert records[0]["contract_violation"] == "unregistered_event"
-    assert "CANARY" not in json.dumps(records[0])
+    assert [record["offending_event"] for record in records] == [
+        "not.registered",
+        "also.not.registered",
+    ]
+    assert {record["contract_violation"] for record in records} == {
+        "unregistered_event"
+    }
+    assert "CANARY" not in json.dumps(records)
 
 
 def test_deployed_development_contract_violation_is_fail_safe(monkeypatch) -> None:
     monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
     monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
-    monkeypatch.setattr(logmod, "_contract_violation_emitted", False)
+    monkeypatch.setattr(log_contract, "reported_violations", set())
     setup_logging("development", service_name="lemma-test", json_logs=True)
     buffer = io.StringIO()
     handler = _processor_formatter_handler()

@@ -24,12 +24,18 @@ pytestmark = pytest.mark.asyncio
 USER_TOKEN = {"access_token": "gho_the_person", "token_type": "Bearer"}
 
 
-def _request(token_kind: str | None, *, installation: str | None = "158040062"):
+def _request(
+    token_kind: str | None,
+    *,
+    installation: str | None = "158040062",
+    act_as: str = "app",
+    name: str = "issues_create",
+):
     return ExecutionRequest(
         connector_id="github",
         kind=ConnectorKind.HTTP,
         operation=ResolvedOperation(
-            name="issues_create",
+            name=name,
             execution={"github_token_kind": token_kind} if token_kind else {},
         ),
         payload={},
@@ -39,6 +45,10 @@ def _request(token_kind: str | None, *, installation: str | None = "158040062"):
         # The account's binding, not the install's -- an App installed on two
         # organizations gives their accounts different installations.
         account_external_ref=installation,
+        # Most of these ask to be the app, because that is the case
+        # `github_token_kind` exists to answer. The default is "user"; see
+        # `TestWhoTheCallerIs`.
+        act_as=act_as,
     )
 
 
@@ -187,3 +197,45 @@ async def test_the_installation_comes_from_the_account_not_the_install(monkeypat
     assert (await presenter.present(first))["access_token"] == "ghs_for_111"
     assert (await presenter.present(second))["access_token"] == "ghs_for_222"
     assert minted_for == ["111", "222"]
+
+
+class TestWhoTheCallerIs:
+    """Two questions, not one -- and conflating them was a real bug.
+
+    `github_token_kind` says what a GitHub App is *permitted* to do. It says
+    nothing about whether a given caller *should be* the app. Pod publish writes
+    through `git_create_blob`/`git_create_tree`/`git_create_commit`/
+    `git_update_ref`, and every one of those is `installation_ok` -- so keying
+    only on the operation silently republished everybody's pods as commits
+    authored by a bot, and made import unable to read a repository the App was
+    never installed on.
+    """
+
+    async def test_a_caller_that_says_nothing_stays_the_person(self, monkeypatch):
+        monkeypatch.setattr(github_presenter, "installation_token", _explodes())
+
+        presented = await GitHubCredentialPresenter().present(
+            _request("installation_ok", act_as="user")
+        )
+
+        assert presented == USER_TOKEN
+
+    async def test_the_default_is_the_person(self):
+        """Not merely reachable -- the default a caller gets by omission."""
+        request = _request("installation_ok")
+        assert type(request).__dataclass_fields__["act_as"].default == "user"
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["git_create_blob", "git_create_tree", "git_create_commit", "git_update_ref"],
+    )
+    async def test_pod_publish_writes_as_the_person(self, monkeypatch, operation):
+        """Named individually because these four are the commit's authorship.
+
+        All four are `installation_ok`, so nothing about the operation stops
+        the app from making them -- only the caller not having asked to be it.
+        """
+        monkeypatch.setattr(github_presenter, "installation_token", _explodes())
+        request = _request("installation_ok", act_as="user", name=operation)
+
+        assert await GitHubCredentialPresenter().present(request) == USER_TOKEN

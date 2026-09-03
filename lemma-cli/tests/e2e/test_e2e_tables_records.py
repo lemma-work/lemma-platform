@@ -64,7 +64,7 @@ def test_tables_get(backend_server, test_user, pod_id):
         token=test_user["token"],
         pod=pod_id,
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output
     assert "products" in result.stdout
 
 

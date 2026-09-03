@@ -131,7 +131,8 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         table_name (str):
-        limit (int | Unset): Max number of rows to return. Default: 20.
+        limit (int | Unset): Max number of rows to return, up to 1000. Page beyond that with
+            `page_token`. Default: 20.
         offset (int | Unset): Row offset for direct pagination. Default: 0.
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
@@ -197,7 +198,8 @@ def sync(
     Args:
         pod_id (UUID):
         table_name (str):
-        limit (int | Unset): Max number of rows to return. Default: 20.
+        limit (int | Unset): Max number of rows to return, up to 1000. Page beyond that with
+            `page_token`. Default: 20.
         offset (int | Unset): Row offset for direct pagination. Default: 0.
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
@@ -258,7 +260,8 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         table_name (str):
-        limit (int | Unset): Max number of rows to return. Default: 20.
+        limit (int | Unset): Max number of rows to return, up to 1000. Page beyond that with
+            `page_token`. Default: 20.
         offset (int | Unset): Row offset for direct pagination. Default: 0.
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape
@@ -322,7 +325,8 @@ async def asyncio(
     Args:
         pod_id (UUID):
         table_name (str):
-        limit (int | Unset): Max number of rows to return. Default: 20.
+        limit (int | Unset): Max number of rows to return, up to 1000. Page beyond that with
+            `page_token`. Default: 20.
         offset (int | Unset): Row offset for direct pagination. Default: 0.
         filter_ (list[str] | None | Unset): Optional repeated JSON filters for advanced
             comparisons. Each `filter` value must be a JSON object with shape

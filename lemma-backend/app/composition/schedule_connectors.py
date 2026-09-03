@@ -191,7 +191,7 @@ def _github_binding(
     wrong routes another organization's events at their pod.
     """
     if not account.external_ref:
-        from app.modules.connectors.contracts import github_install_url
+        from app.modules.connectors.contracts.github import github_install_url
 
         where = github_install_url()
         raise ScheduleValidationError(

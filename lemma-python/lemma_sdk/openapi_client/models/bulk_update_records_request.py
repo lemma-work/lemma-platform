@@ -21,7 +21,7 @@ class BulkUpdateRecordsRequest:
 
     Attributes:
         records (list[BulkUpdateRecordsRequestRecordsItem]): List of record updates. Each item must include the table
-            primary key field.
+            primary key field. At most 1000 per request.
     """
 
     records: list[BulkUpdateRecordsRequestRecordsItem]

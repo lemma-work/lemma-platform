@@ -7,6 +7,7 @@ import pytest
 
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.identity.domain.organization_entities import (
+    OrganizationJoinPolicy,
     OrganizationMemberEntity,
     OrganizationRole,
 )
@@ -399,16 +400,103 @@ async def test_update_pod_merges_config_field_wise(
 
     ctx = AsyncMock()  # ctx.require is an awaitable no-op
 
-    # Update only join_policy — default_profile_id must be preserved.
+    # Update only join_policy — default_profile_id must be preserved. ORG_MEMBERS
+    # rather than PUBLIC: opening a pod to every Lemma account is bounded by the
+    # organization's own policy, which is a different rule than this merge.
+    result = await pod_service.update_pod(
+        pod.id,
+        PodUpdateEntity(config=PodConfig(join_policy=PodJoinPolicy.ORG_MEMBERS)),
+        uuid4(),
+        ctx=ctx,
+    )
+
+    assert result.config.join_policy == PodJoinPolicy.ORG_MEMBERS
+    assert result.config.default_profile_id == "profile-1"
+
+
+@pytest.mark.asyncio
+async def test_changing_the_join_policy_needs_member_management(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+):
+    """`pod.update` is not enough: deciding who may join is membership
+    management, and `PUT /pods/{id}` merges the config field-wise."""
+    pod = PodEntity(
+        name="Test Pod",
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        config=PodConfig(join_policy=PodJoinPolicy.INVITE_ONLY),
+    )
+    pod_repository_mock.get.return_value = pod
+    pod_repository_mock.update.side_effect = lambda entity: entity
+
+    required: list[str] = []
+
+    async def _require(permission_id: str, resource=None) -> None:
+        required.append(permission_id)
+
+    ctx = AsyncMock()
+    ctx.require.side_effect = _require
+
+    await pod_service.update_pod(
+        pod.id,
+        PodUpdateEntity(config=PodConfig(join_policy=PodJoinPolicy.ORG_MEMBERS)),
+        uuid4(),
+        ctx=ctx,
+    )
+    assert required == ["pod.update", "pod.member.manage"]
+
+    # An unchanged policy asks for nothing extra — renaming a pod is not
+    # membership management just because the config blob travelled with it.
+    required.clear()
+    await pod_service.update_pod(
+        pod.id,
+        PodUpdateEntity(config=PodConfig(join_policy=PodJoinPolicy.INVITE_ONLY)),
+        uuid4(),
+        ctx=ctx,
+    )
+    assert required == ["pod.update"]
+
+
+@pytest.mark.asyncio
+async def test_a_pod_cannot_open_wider_than_its_organization(
+    pod_service: PodService,
+    pod_repository_mock: AsyncMock,
+    organization_repository_mock: AsyncMock,
+):
+    """PUBLIC mints an org membership for anyone who joins, so it is bounded by
+    the organization's own join policy (PS-POD-010)."""
+    pod = PodEntity(
+        name="Test Pod",
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        config=PodConfig(join_policy=PodJoinPolicy.INVITE_ONLY),
+    )
+    pod_repository_mock.get.return_value = pod
+    pod_repository_mock.update.side_effect = lambda entity: entity
+    ctx = AsyncMock()
+
+    organization_repository_mock.get.return_value = SimpleNamespace(
+        join_policy=OrganizationJoinPolicy.INVITE_ONLY
+    )
+    with pytest.raises(PodAccessDeniedError):
+        await pod_service.update_pod(
+            pod.id,
+            PodUpdateEntity(config=PodConfig(join_policy=PodJoinPolicy.PUBLIC)),
+            uuid4(),
+            ctx=ctx,
+        )
+
+    organization_repository_mock.get.return_value = SimpleNamespace(
+        join_policy=OrganizationJoinPolicy.PUBLIC
+    )
     result = await pod_service.update_pod(
         pod.id,
         PodUpdateEntity(config=PodConfig(join_policy=PodJoinPolicy.PUBLIC)),
         uuid4(),
         ctx=ctx,
     )
-
     assert result.config.join_policy == PodJoinPolicy.PUBLIC
-    assert result.config.default_profile_id == "profile-1"
 
 
 @pytest.mark.asyncio

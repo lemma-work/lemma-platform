@@ -47,26 +47,6 @@ class ResumeOutcome(StrEnum):
     FAILED = "FAILED"
 
 
-_APPROVAL_WORDS = {
-    "approve",
-    "yes",
-    "y",
-    "ok",
-    "okay",
-    "confirm",
-    "run",
-    "allow",
-    "go",
-    "deny",
-    "no",
-    "n",
-    "reject",
-    "decline",
-    "cancel",
-    "stop",
-}
-
-
 def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
     """Is this text unmistakably the answer, rather than a new request?
 
@@ -76,15 +56,21 @@ def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
     whatever the platform can render.
 
     Deliberately narrow. `_parse_ask_user_reply` falls back to the raw text as a
-    free-form answer and `_parse_approval_decision` reads anything unrecognised
-    as a denial; either would call *every* message an answer, which is the thing
-    being fixed. Only a recognised option, index or decision word counts here.
+    free-form answer, which would call *every* message an answer — the thing
+    being fixed. Only a recognised option, index or decision counts here.
+
+    An approval asks `_classify_approval_reply` itself rather than keeping a
+    second, shorter word list. Two vocabularies meant the 52 phrases the
+    classifier knew and the gate did not — "go ahead", "sure", "proceed",
+    "lgtm", 👍 — were reported as no answer at all, and the turn the caller then
+    starts supersedes the pause with an auto-DENY. The person typed "go ahead"
+    and the action was cancelled.
     """
     stripped = text.strip()
     if not stripped:
         return False
     if str(pending.get("kind") or "") == "request_approval":
-        return stripped.lower() in _APPROVAL_WORDS
+        return _classify_approval_reply(stripped) is not None
     raw_request = _ask_user_request_dict(pending.get("tool_args"))
     if raw_request is None:
         return False

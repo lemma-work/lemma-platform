@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -46,12 +47,21 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
+    get_surface_event_dedup_store,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
+)
+from app.modules.agent_surfaces.services.surface_inbound import (
+    release_ingress_claim,
 )
 from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 router = RedisRouter()
 
@@ -113,6 +123,38 @@ async def handle_surface_webhook(
     await inbox.process("agent-surfaces.webhook", received, process)
 
 
+async def _release_claim_for_retry(
+    context: AgentSurfaceContext,
+    *,
+    event: SurfaceWebhookReceivedEvent,
+) -> None:
+    """Say the delivery reached no job, then hand its claim back.
+
+    Said first, because it is true whether or not the release then works, and
+    because ``error`` is the point: a message somebody sent has not been
+    answered. The only record before was the duplicate line inside preparation,
+    at ``debug``, which ``LOG_LEVEL=INFO`` drops -- so a message lost this way
+    left no trace anywhere.
+
+    Called from a ``finally``, so the exception being propagated is still the
+    current one and ``exc_info`` carries the reason the enqueue failed.
+    """
+    surface_id = context.surface_id
+    logger.error(
+        "agent_surfaces.handlers.surface_message_not_enqueued.failed",
+        source=event.source,
+        surface_id=str(surface_id) if surface_id else None,
+        # LOG014 reads "not inside an `except`" as "no exception to attach".
+        # This runs while one is unwinding through a `finally`, where
+        # `sys.exc_info()` is still the failure being propagated -- and that
+        # traceback is the whole reason an operator can act on this line.
+        exc_info=True,  # noqa: LOG014
+    )
+    await release_ingress_claim(
+        context, event_dedup_store=get_surface_event_dedup_store()
+    )
+
+
 async def _process_surface_webhook(
     event: SurfaceWebhookReceivedEvent,
     fs_logger: Logger,
@@ -163,19 +205,34 @@ async def _process_surface_webhook(
     for index, context in contexts:
         if not context:
             continue
-        await job_queue.enqueue(
-            "process_surface_message",
-            payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-                mode="json"
-            ),
-            # The first part keeps the bare id, so the dedup key for an ordinary
-            # single-message delivery is byte-identical to what it was.
-            _job_id=(
-                f"surface-event:{event.event_id}"
-                if index == 0
-                else f"surface-event:{event.event_id}:{index}"
-            ),
-        )
+        # `prepare_ingress` spent the delivery claim above, and the work that
+        # claim guards is this enqueue. Losing the enqueue -- a Redis blip, a
+        # worker restart, a cancellation -- while still holding the claim makes
+        # the inbox's retry a no-op: the replay re-enters preparation, is told
+        # the message is a duplicate, and drops it for good. `finally` rather
+        # than `except` so cancellation counts too, since `CancelledError` is
+        # not an `Exception`. The deterministic `_job_id` already makes a double
+        # enqueue harmless, so handing the claim back costs nothing.
+        enqueued = False
+        try:
+            await job_queue.enqueue(
+                "process_surface_message",
+                payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+                    mode="json"
+                ),
+                # The first part keeps the bare id, so the dedup key for an
+                # ordinary single-message delivery is byte-identical to what it
+                # was.
+                _job_id=(
+                    f"surface-event:{event.event_id}"
+                    if index == 0
+                    else f"surface-event:{event.event_id}:{index}"
+                ),
+            )
+            enqueued = True
+        finally:
+            if not enqueued:
+                await _release_claim_for_retry(context, event=event)
 
 
 @reliable_redis_stream_subscriber(

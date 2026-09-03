@@ -2486,6 +2486,57 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
 
 
 @pytest.mark.asyncio
+async def test_a_server_key_without_model_names_still_lists_and_names_the_setting(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    monkeypatch,
+):
+    """The most likely half-configuration of a fresh self-host explains itself.
+
+    Setting ``LEMMA_OPENAI_API_KEY`` and nothing else used to raise a bare
+    ``RuntimeError`` out of the configuration reader, through ``system_profiles``
+    and into ``agent.runtime.profiles.list`` -- a 500 on the exact page an
+    operator opens to find out what is wrong. The listing now degrades, and the
+    error a run raises names the setting that is empty.
+    """
+    del e2e_settings
+    from app.core.config import settings
+    from app.core.domain.errors import DomainError
+    from app.modules.agent.services import runtime_system_profiles
+    from app.modules.agent.services.runtime_profile_service import (
+        AgentRuntimeProfileService,
+    )
+
+    # Hermetic: the profile builder reloads the local ``.env`` and prefers
+    # ``os.getenv`` over ``settings``, either of which would put a model list
+    # back. Neutralize the reload and clear the env so the settings below win.
+    monkeypatch.setattr(runtime_system_profiles, "_load_runtime_env", lambda: None)
+    monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
+    monkeypatch.setattr(settings, "lemma_openai_api_key", "key-without-models")
+    monkeypatch.setattr(settings, "lemma_openai_model_names", "")
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "")
+
+    listed = await authenticated_client.get(
+        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+    )
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    assert "system:lemma" not in {item["id"] for item in listed.json()["items"]}
+
+    with pytest.raises(DomainError) as raised:
+        await AgentRuntimeProfileService().resolve(
+            runtime=None,
+            organization_id=UUID(fixed_test_org["id"]),
+            user_id=uuid4(),
+        )
+    assert raised.value.code == "model_names_not_configured"
+    assert "LEMMA_OPENAI_MODEL_NAMES" in raised.value.message
+
+
+@pytest.mark.asyncio
 async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
     authenticated_client,
     fixed_test_org,
@@ -2526,6 +2577,12 @@ async def test_archived_runtime_profile_fails_a_pinned_agent_run_safely(
     )
     assert events[-1]["type"] == "error", events
     assert json.dumps(events).find(_RUNTIME_SECRET) == -1
+    # The message `resolve()` composed says which model went away and where to
+    # pick another. It used to be replaced with "check the agent runtime
+    # configuration", which is the one thing the server already knew the answer
+    # to.
+    assert runtime["name"] in str(events[-1]["data"]), events[-1]
+    assert "Models settings" in str(events[-1]["data"]), events[-1]
 
     durable = await authenticated_client.get(
         f"/pods/{pod['id']}/conversations/{conversation_id}"

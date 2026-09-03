@@ -23,11 +23,13 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.identity.domain.errors import (
+    IdentityAccessDeniedError,
     IdentityConflictError,
     IdentityValidationError,
     OrganizationConflictError,
 )
 from app.modules.identity.domain.organization_entities import (
+    can_grant_org_role,
     OrganizationMemberEntity,
     OrganizationRole,
 )
@@ -74,6 +76,24 @@ async def resolve_pod_grant(
             "inviting organization"
         )
     return PodGrant(pod_id=pod_id, pod_role=pod_role or DEFAULT_POD_ROLE)
+
+
+def refuse_unconferrable_org_role(
+    inviter: OrganizationMemberEntity, offered: OrganizationRole
+) -> None:
+    """Refuse an invitation offering a role its author may not confer.
+
+    The bound belongs on the invitation because that is where the role is
+    chosen -- the same place ``approve_join_request`` applies it. It was absent,
+    and acceptance happened to mask that by assigning ORG_MEMBER whatever the
+    invitation said. Now that acceptance honours the invited role (PS-ONB-020),
+    an unbounded invite would be an editor's route to minting an owner.
+    """
+    if can_grant_org_role(inviter.role, offered):
+        return
+    raise IdentityAccessDeniedError(
+        "Only owners can invite someone as an owner or editor"
+    )
 
 
 async def refuse_if_last_owner(

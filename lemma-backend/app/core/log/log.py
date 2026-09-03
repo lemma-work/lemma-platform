@@ -16,6 +16,13 @@ from uuid import UUID
 from opentelemetry import trace
 import structlog
 
+from app.core.log.contract import (
+    CONTRACT_METADATA_FIELDS as _CONTRACT_METADATA_FIELDS,
+    LoggingContractError,
+    STABLE_EVENT_RE as _STABLE_EVENT_RE,
+    strict_logging_contract_enabled as _strict_logging_contract_enabled,
+    violation_offender,
+)
 from app.core.log.event_catalog import EVENT_CATALOG
 from app.core.redaction import redact_event_dict
 from app.core.request_context import current_observability_context
@@ -23,42 +30,12 @@ from app.core.request_context import current_observability_context
 
 _logging_context: dict[str, Any] = {}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_STABLE_EVENT_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _RELEASE_SHA_UNKNOWN = "unknown"
 _CONSOLE_HANDLER_MARKER = "_lemma_json_console_handler"
 _APP_RECORD_MARKER = "_lemma_app_owned"
 _release_warning_emitted: set[str] = set()
-_contract_violation_emitted = False
-_configured_log_level = logging.INFO
 
-_CONTRACT_METADATA_FIELDS = {
-    "causation_id",
-    "consumer",
-    "correlation_id",
-    "deployment.environment",
-    "dropped_field_count",
-    "dropped_fields",
-    "error_frames",
-    "error_message",
-    "error_stack_hash",
-    "error_traceback",
-    "error_type",
-    "event",
-    "event_id",
-    "event_type",
-    "job_attempt",
-    "job_id",
-    "level",
-    "logger",
-    "release.sha",
-    "request_id",
-    "service.name",
-    "service.version",
-    "span_id",
-    "task_name",
-    "timestamp",
-    "trace_id",
-}
+_configured_log_level = logging.INFO
 
 _FOREIGN_LOGGER_PREFIXES = frozenset(
     {
@@ -238,23 +215,6 @@ def _renderable(value: object) -> str:
 
 class ReleaseIdentityError(RuntimeError):
     """Raised when a production process cannot identify its deployed source."""
-
-
-class LoggingContractError(ValueError):
-    """Raised when local code violates the exact structured-log contract."""
-
-
-def _strict_logging_contract_enabled() -> bool:
-    configured = os.getenv("LEMMA_LOGGING_CONTRACT_STRICT")
-    if configured is None:
-        configured = os.getenv("LOGGING_CONTRACT_STRICT")
-    enabled = (configured or "").strip().lower() in {"1", "true", "yes", "on"}
-    raw_environment = (
-        (os.getenv("LEMMA_ENVIRONMENT") or os.getenv("ENVIRONMENT") or "local")
-        .strip()
-        .lower()
-    )
-    return enabled and raw_environment in {"local", "test", "testing"}
 
 
 class Logger(Protocol):
@@ -534,7 +494,6 @@ def _bound_fields(event_dict: dict[str, Any]) -> dict[str, Any]:
 
 def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     """Drop unsafe/unbounded values before they can reach stdout or OTLP."""
-    global _contract_violation_emitted
     app_owned = bool(event_dict.pop(_APP_RECORD_MARKER, False))
     event = event_dict.get("event")
     violation: str | None = None
@@ -570,9 +529,9 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
     if violation is not None:
         if _strict_logging_contract_enabled():
             raise LoggingContractError(violation)
-        if _contract_violation_emitted:
+        offender = violation_offender(event, violation)
+        if offender is None:
             raise structlog.DropEvent
-        _contract_violation_emitted = True
         safe = {
             key: value
             for key, value in event_dict.items()
@@ -583,6 +542,9 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
         event_dict["event"] = "logging.contract.violation"
         event_dict["level"] = "error"
         event_dict["contract_violation"] = violation
+        # Which event broke the contract. Without it the record says only that
+        # *something* did, and finding the call site means reading the diff.
+        event_dict["offending_event"] = offender
 
     return _bound_fields(event_dict)
 

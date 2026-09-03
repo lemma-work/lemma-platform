@@ -47,6 +47,9 @@ from app.core.observability.telemetry import (
     instrument_fastapi_app,
     shutdown_telemetry,
 )
+from app.core.observability.dependency_incident import DependencyIncident
+from app.core.observability.worker_liveness import worker_readiness_state
+from app.sandbox_health import record_sandbox_probe, sandbox_capability
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
@@ -179,6 +182,9 @@ async def lifespan(app: FastAPI):
             )
         )
         initialize_supertokens()
+        # Prove the sandbox fabric is usable before a user's first tool call
+        # rather than after it. Off the loop because it stats a socket path.
+        await run_blocking(record_sandbox_probe, limiter="cpu_bound")
         # Build the OpenAPI document now rather than on whichever request first
         # asks for it. `custom_openapi` caches correctly, but the first call
         # costs ~3.35s of pydantic model-graph construction on the event loop —
@@ -662,7 +668,22 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # /st requests are deliberately skipped here.
     app.add_middleware(AuthAbuseMiddleware, auth_paths_only=True)
 
-    # CORS
+    # Transport-level guard, and the ceiling on how much body the abuse
+    # middleware below it can be made to buffer -- so it is registered after
+    # that one, which puts it outside it.
+    #
+    # Registered *before* CORS, which puts it inside: `add_middleware` prepends,
+    # so the last registration is outermost. This middleware writes its own 413
+    # rather than raising, and a response that never passes through
+    # `CORSMiddleware` carries no `Access-Control-Allow-Origin` -- which the
+    # browser reports to the page as a CORS failure, withholding the status and
+    # the body, so an oversized upload was indistinguishable from a broken
+    # origin and the `max_bytes` in the envelope reached nobody.
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+    )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=get_allowed_cors_origins(),
@@ -704,13 +725,6 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
 
-    # Transport-level guard. Added before RequestIdMiddleware so the latter
-    # remains outermost and stamps 413 responses with the correlation id.
-    app.add_middleware(
-        RequestBodyLimitMiddleware,
-        max_bytes=settings.max_request_body_bytes,
-    )
-
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).
     app.add_middleware(RequestIdMiddleware)
@@ -741,47 +755,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         }
         return JSONResponse(payload, status_code=200 if healthy else 503)
 
-    #: How stale the worker heartbeat may be before readiness calls it stalled.
-    #:
-    #: The watchdog refreshes it every `loop_lag_watchdog_interval_seconds`
-    #: (0.5s by default), so a minute is roughly two orders of magnitude of
-    #: headroom -- generous enough that a busy machine or a long GC pause is
-    #: never mistaken for a dead worker, and short enough that a person does
-    #: not sit in front of a spinner for hours, which is what happened.
-    WORKER_HEARTBEAT_MAX_AGE_SECONDS = 60.0
-
-    def _embedded_worker_state() -> str | None:
-        """Whether this process's own worker is still ticking, or None.
-
-        None where the question does not apply: an API process that runs no
-        worker (the cloud topology, where the worker is its own deployment)
-        must not report itself unready because it has no heartbeat to read.
-        Only the single-process desktop build sets `embedded_worker`.
-
-        The gap this closes is one a desktop install sat in for hours. The
-        heartbeat file exists so a Kubernetes liveness probe can restart a
-        wedged worker -- and on desktop nothing read it. `/health/ready`
-        answered 200 on the strength of the database and Redis while the
-        worker had been dead since a lifespan teardown two hours earlier, so
-        locald's health gate saw a healthy backend, never restarted it, and
-        every agent run queued behind a worker that was not there. The UI
-        showed "thinking" and no log said otherwise.
-
-        A missing file is not a stalled worker: it is a process that has not
-        written one yet, which is every start before the first tick.
-        """
-        if not getattr(app.state, "embedded_worker", False):
-            return None
-        path = settings.worker_heartbeat_path
-        if not path:
-            return None
-        try:
-            with open(path, encoding="utf-8") as handle:
-                written = float(handle.read().strip())
-        except OSError, ValueError:
-            return None
-        age = time.time() - written
-        return "ok" if age <= WORKER_HEARTBEAT_MAX_AGE_SECONDS else "stalled"
+    #: One degraded/recovered pair per dependency instead of a record per
+    #: probe. Threshold 1: readiness is asked constantly, so the first failure
+    #: is already the transition worth reporting.
+    _readiness_incidents = {
+        name: DependencyIncident(name, logger=logger, degradation_threshold=1)
+        for name in ("db", "redis")
+    }
 
     # Readiness: bounded, concurrent checks for dependencies required to serve
     # new work. Each check has ~1 s; the whole endpoint has a ~2 s deadline.
@@ -794,39 +774,55 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         from sqlalchemy import text
 
         async def _db_ok() -> bool:
-            try:
-                engine = get_engine()
-                async with engine.connect() as conn:
-                    await conn.execute(text("SELECT 1"))
-                return True
-            except Exception:
-                return False
+            engine = get_engine()
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return True
 
-        async def _redis_ok() -> bool:
-            try:
-                return await channel_service.ping()
-            except Exception:
-                return False
+        async def _probe(name: str, check) -> bool:
+            """One bounded dependency check that says why it failed, once.
 
-        async def _with_timeout(coro, seconds: float) -> bool:
+            This used to be three silent `except Exception: return False`. The
+            endpoint then reported `"db": "down"` with no reason anywhere --
+            and a prober asks every few seconds, so the obvious repair, a
+            record per attempt, is a wall of identical lines during exactly the
+            outage someone is trying to read. `DependencyIncident` emits one
+            degraded record when it starts failing and one when it recovers.
+            """
+            incident = _readiness_incidents[name]
             try:
-                return await _asyncio.wait_for(coro, timeout=seconds)
-            except Exception:
+                healthy = bool(await _asyncio.wait_for(check(), timeout=1.0))
+            except Exception as exc:
+                incident.record_failure(error_type=type(exc).__name__)
                 return False
+            if healthy:
+                incident.record_success()
+            else:
+                incident.record_failure(error_type="unavailable")
+            return healthy
 
         # Run dependency checks concurrently; each is individually bounded and
-        # the pair is bounded by the overall gather timeout.
-        db_task = redis_task = None
+        # the set is bounded by the overall gather timeout.
+        db_task = redis_task = worker_task = None
         try:
-            db_task = create_inherited_task(_with_timeout(_db_ok(), 1.0))
-            redis_task = create_inherited_task(_with_timeout(_redis_ok(), 1.0))
-            db_ok, redis_ok = await _asyncio.wait_for(
-                _asyncio.gather(db_task, redis_task), timeout=2.0
+            db_task = create_inherited_task(_probe("db", _db_ok))
+            redis_task = create_inherited_task(_probe("redis", channel_service.ping))
+            worker_task = create_inherited_task(
+                worker_readiness_state(
+                    embedded=getattr(app.state, "embedded_worker", False)
+                )
+            )
+            db_ok, redis_ok, worker_state = await _asyncio.wait_for(
+                _asyncio.gather(db_task, redis_task, worker_task), timeout=2.0
             )
         except Exception:
-            db_ok, redis_ok = False, False
+            # Readiness itself failing to run is not "the database is down";
+            # it answers 503 either way, so the log is the only place the
+            # difference can be seen.
+            logger.error("app.health_ready.probe_failed.failed", exc_info=True)
+            db_ok, redis_ok, worker_state = False, False, None
         finally:
-            for t in (db_task, redis_task):
+            for t in (db_task, redis_task, worker_task):
                 if t is not None and not t.done():
                     t.cancel()
 
@@ -834,7 +830,10 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
             "db": "ok" if db_ok else "down",
             "redis": "ok" if redis_ok else "down",
         }
-        worker_state = _embedded_worker_state()
+        # `False` is `_with_timeout`'s answer for a check that did not finish;
+        # for the worker that is "we could not ask", which is not a verdict.
+        if worker_state is False:
+            worker_state = None
         if worker_state is not None:
             components["worker"] = worker_state
         ready = bool(db_ok) and bool(redis_ok) and worker_state != "stalled"
@@ -863,6 +862,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 }
             },
         }
+        payload["capabilities"]["sandbox"] = sandbox_capability()
         if settings.lemma_local_ai_ready is not None:
             payload["capabilities"]["ai_profile"] = {
                 "status": "ready" if settings.lemma_local_ai_ready else "needs_setup",

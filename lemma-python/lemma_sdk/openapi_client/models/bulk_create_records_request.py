@@ -22,7 +22,8 @@ class BulkCreateRecordsRequest:
     """Schema for bulk creating records.
 
     Attributes:
-        records (list[BulkCreateRecordsRequestRecordsItem]): List of record payload objects to insert.
+        records (list[BulkCreateRecordsRequestRecordsItem]): List of record payload objects to insert. At most 1000 per
+            request.
         upsert (bool | Unset): When true, insert records and update existing rows that conflict on the table primary
             key. Default: False.
     """

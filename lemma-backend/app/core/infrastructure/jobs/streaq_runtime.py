@@ -34,6 +34,10 @@ from app.core.infrastructure.db.session import (
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.events.consumer_groups import (
+    consumer_group_reconcile_loop,
+    ensure_consumer_groups_once,
+)
 from app.core.infrastructure.events.message_bus import (
     close_message_bus,
     get_message_bus,
@@ -103,6 +107,11 @@ _SECONDARY_LANE_STARTUP_TIMEOUT_SECONDS = 120.0
 #: The enqueue side reads this to route a job to the correct queue, so callers
 #: never name a queue and a task can be re-laned in exactly one place.
 TASK_LANES: dict[str, Lane] = {}
+
+#: Whether ``ensure_task_lanes_registered`` has run to completion. A separate
+#: flag rather than a truthiness test on ``TASK_LANES``, which answers a
+#: different question -- see that function.
+_lanes_registered = False
 
 _primary_lane_context: AppWorkerContext | None = None
 _primary_lane_ready = asyncio.Event()
@@ -220,15 +229,19 @@ def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -
     enqueued only from the API, so all three were silently doing nothing.
 
     Registration is import-for-side-effect and touches no I/O, so the publisher
-    can do it on demand. Skipped when the table is already populated: the worker
-    registers at import scope and must not register a second time.
+    can do it on demand. Skipped once it has finished, so the worker -- which
+    registers at import scope -- does not do it a second time. The flag records
+    exactly that: the guard used to be `if TASK_LANES:`, "somebody registered
+    something", which any import reaching a single task ahead of this call
+    turned into "skip every module" -- reproducing the bug above.
 
     ``modules`` is the composed module list — lemma-cloud installs more than
     OSS, and a cloud-only task missing from this table lands back on the exact
     bug above. Callers with no module list (the lazy fallback on the enqueue
     path) get the OSS set.
     """
-    if TASK_LANES:
+    global _lanes_registered
+    if _lanes_registered:
         return
     # Deferred: the registry imports the modules that import this one.
     from app.core.registry.assembly import import_module_tasks
@@ -238,6 +251,7 @@ def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -
     from app.core.infrastructure.events import tasks as _core_tasks  # noqa: F401
 
     import_module_tasks(OSS_MODULES if modules is None else modules)
+    _lanes_registered = True
 
 
 def lane_for_task(task_name: str) -> Lane:
@@ -410,60 +424,15 @@ async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> N
             timeout_seconds=_SHUTDOWN_STEP_TIMEOUT_SECONDS,
         )
     except Exception:  # pragma: no cover
-        logger.debug(
-            "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+        # The step raised rather than stalled. Swallowed so the remaining
+        # closers still run -- that is the whole point of this helper -- but
+        # not silently: a closer that has been failing at every shutdown is
+        # exactly the kind of thing that goes unnoticed for months.
+        logger.warning(
+            "infrastructure.streaq_runtime.worker_shutdown_step_failed.degraded",
+            step=name,
+            exc_info=True,
         )
-
-
-async def _ensure_consumer_groups_once() -> None:
-    """Create every registered Redis consumer group once, before broker start.
-
-    Closes the broker-start race where a subscriber polls a not-yet-created
-    group, gets NOGROUP, and stops permanently. Idempotent (BUSYGROUP is a
-    no-op) and never raises — group plumbing must not block worker startup.
-    """
-    from app.core.infrastructure.events.stream_subscriber import (
-        ensure_consumer_groups,
-        registered_stream_groups,
-    )
-
-    # FastStream and streaq speak raw bytes, so this shares the
-    # decode_responses=False pool rather than the application one.
-    client = get_redis(decode_responses=False, blocking=True)
-    try:
-        len(registered_stream_groups())
-        await ensure_consumer_groups(client, warn_on_create=False)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug(
-            "infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic"
-        )
-
-
-async def _consumer_group_reconcile_loop() -> None:
-    """Periodically re-ensure Redis consumer groups exist.
-
-    Self-heals the FastStream supervisor retry-storm: if a consumer group is lost
-    (flush / failover / eviction / trim), the subscriber's consume loop spins on
-    NOGROUP forever. Recreating the group lets the next retry succeed and the
-    subscriber resume — no manual restart. Cheap (one Redis connection, a handful
-    of idempotent XGROUP CREATE calls per tick).
-    """
-    from app.core.infrastructure.events.config import event_transport_settings
-    from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
-
-    interval = event_transport_settings.consumer_group_reconcile_interval_seconds
-    client = get_redis(decode_responses=False, blocking=True)
-    try:
-        while True:
-            try:
-                await ensure_consumer_groups(client)
-            except Exception:  # pragma: no cover - defensive
-                logger.debug(
-                    "infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic"
-                )
-            await asyncio.sleep(interval)
-    finally:
-        await client.aclose()
 
 
 # Low-rate structured heartbeat for remote absence detection. At 5 min this is
@@ -522,10 +491,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,
-    # and any subscriber that polls before its group exists gets NOGROUP and
-    # stops permanently — the reconcile loop cannot revive a stopped subscriber.
-    # Pre-creating closes that race so every subscriber attaches to a live group.
-    await _ensure_consumer_groups_once()
+    # and any subscriber that polls before its group exists gets NOGROUP, which
+    # kills its consume task and costs a supervisor restart per attempt until
+    # the group is back. Pre-creating closes that race so every subscriber
+    # attaches to a live group instead of spinning through it.
+    await ensure_consumer_groups_once()
     await broker.start()
     await channel_service.connect()
     job_queue = get_streaq_job_queue()
@@ -547,7 +517,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
 
     if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
         reconcile_task = create_background_task(
-            _consumer_group_reconcile_loop(), name="consumer-group-reconcile"
+            consumer_group_reconcile_loop(), name="consumer-group-reconcile"
         )
 
     # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
@@ -561,6 +531,16 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             heartbeat_path=settings.worker_heartbeat_path or None,
         ),
         name="worker-loop-lag-watchdog",
+    )
+    # The same signal, somewhere the API can read it. The heartbeat file above
+    # only answers for a probe on this filesystem, which in every topology but
+    # the single-process desktop build is not where `/health/ready` is served --
+    # so the API answered 200 with the worker dead. Runs on this loop, so a
+    # wedged worker stops refreshing it exactly as it stops writing the file.
+    from app.core.observability.worker_liveness import worker_liveness_loop
+
+    liveness_task = create_background_task(
+        worker_liveness_loop(get_redis()), name="worker-liveness"
     )
     # Resident-memory floor. The worker is the longer-lived of the two processes
     # and the one whose growth has nowhere to surface, having no HTTP endpoint
@@ -650,6 +630,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         for background_task in (
             reconcile_task,
             watchdog_task,
+            liveness_task,
             memory_task,
             heartbeat_task,
             stream_snapshot_task,

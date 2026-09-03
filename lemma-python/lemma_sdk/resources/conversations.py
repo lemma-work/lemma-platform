@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from ..openapi_client.api.agent_conversations import (
     agent_conversation_approval_list,
     agent_conversation_approval_resolve,
@@ -136,13 +138,20 @@ class PodConversations(BoundResource):
         *,
         metadata: Metadata | None = None,
     ) -> None:
-        return self._call(
-            agent_conversation_message_send,
-            self._pod_uuid(),
-            as_uuid(conversation_id),
-            body=compact({"content": content, "metadata": metadata}),
-            body_model=SendMessageRequest,
-        )
+        """Send a message and return once the run it starts has finished.
+
+        The endpoint answers with a Server-Sent Events stream that stays open
+        for the whole run, so this drains the events and discards them; how long
+        an agent thinks is the server's business, not a client deadline. Use
+        :meth:`send_stream` to read the events as they arrive, or :meth:`append`
+        to post the message and return without waiting.
+        """
+        response = self.send_stream(conversation_id, content, metadata=metadata)
+        try:
+            for _ in response.iter_bytes():
+                pass
+        finally:
+            response.close()
 
     def append(
         self,
@@ -171,40 +180,30 @@ class PodConversations(BoundResource):
         content: str,
         *,
         metadata: Metadata | None = None,
-    ):
-        body = SendMessageRequest.from_dict(
-            compact({"content": content, "metadata": metadata})
-        )
-        kwargs = agent_conversation_message_send._get_kwargs(
+    ) -> httpx.Response:
+        """Send a message and return the live SSE response for the run.
+
+        The caller iterates the frames and calls ``close()``. Not retried on a
+        gateway error: a replay would start a second run.
+        """
+        return self._stream(
+            agent_conversation_message_send,
             self._pod_uuid(),
             as_uuid(conversation_id),
-            body=body,
+            body=SendMessageRequest.from_dict(
+                compact({"content": content, "metadata": metadata})
+            ),
         )
-        httpx_client = self.generated.get_httpx_client()
-        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
-        if response.status_code >= 400:
-            content_bytes = response.read()
-            response.close()
-            raise self._transport._error_from_response(
-                response.status_code, None, content_bytes
-            )
-        return response
 
-    def stream(self, conversation_id: str, *, agent_run_id: str | None = None):
-        kwargs = agent_conversation_stream._get_kwargs(
+    def stream(
+        self, conversation_id: str, *, agent_run_id: str | None = None
+    ) -> httpx.Response:
+        return self._stream(
+            agent_conversation_stream,
             self._pod_uuid(),
             as_uuid(conversation_id),
             agent_run_id=as_uuid(agent_run_id) if agent_run_id else UNSET,
         )
-        httpx_client = self.generated.get_httpx_client()
-        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
-        if response.status_code >= 400:
-            content_bytes = response.read()
-            response.close()
-            raise self._transport._error_from_response(
-                response.status_code, None, content_bytes
-            )
-        return response
 
     def retry(self, conversation_id: str) -> AgentRunStartResponse:
         return self._call(
@@ -213,7 +212,7 @@ class PodConversations(BoundResource):
             as_uuid(conversation_id),
         )
 
-    def retry_stream(self, conversation_id: str):
+    def retry_stream(self, conversation_id: str) -> httpx.Response:
         result = self.retry(conversation_id)
         return self.stream(conversation_id, agent_run_id=str(result.agent_run_id))
 
