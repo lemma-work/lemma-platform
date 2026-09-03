@@ -6,8 +6,13 @@ build/
 .ruff_cache/
 *.egg-info/
 .DS_Store
+# `.env` and `.env.<anything>`, and also `<anything>.env` -- the last was not
+# covered, so a file named `prod.env` or `old.env` sat untracked in the tree
+# where one `git add -A` would have committed it. Gitleaks scans commits rather
+# than the working tree, so a rule added afterwards never clears the finding.
 .env
 .env.*
+*.env
 !.env.example
 
 # Local runtime data (object storage, generated files, model caches)
