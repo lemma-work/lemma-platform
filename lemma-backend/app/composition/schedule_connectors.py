@@ -152,6 +152,32 @@ class ManagersFactory:
         return None
 
 
+def _schema_defaults(
+    trigger: ConnectorTriggerEntity, config: dict[str, Any] | None
+) -> dict[str, Any]:
+    """A trigger's declared defaults, for the keys its author did not set.
+
+    Without this a `default` in `config_schema` is decoration: the form prefills
+    it, and a schedule created through the API or the CLI with an empty config
+    gets nothing. That difference is not academic -- `workflow_run` defaults to
+    completed runs because a busy repository emits one delivery per run per
+    state change, so the API path would wake an agent three times for one CI
+    run while the UI path woke it once.
+
+    Only absent keys are filled. An author who wrote `actions: []` meant it.
+    """
+    schema = getattr(trigger, "config_schema", None) or {}
+    properties = schema.get("properties") or {}
+    if not isinstance(properties, dict):
+        return {}
+    present = config or {}
+    return {
+        name: spec["default"]
+        for name, spec in properties.items()
+        if isinstance(spec, dict) and "default" in spec and name not in present
+    }
+
+
 def _github_binding(
     trigger: ConnectorTriggerEntity, account: AccountEntity
 ) -> dict[str, Any]:
@@ -296,7 +322,11 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
                     "local routing key is defined, so the schedule would never "
                     "fire."
                 )
-            return ProvisionedTrigger(bound_config=binder(trigger, account))
+            bound = {
+                **_schema_defaults(trigger, schedule.config),
+                **binder(trigger, account),
+            }
+            return ProvisionedTrigger(bound_config=bound)
         provider_id = await manager.create_schedule(
             account=account,
             app_trigger=trigger,

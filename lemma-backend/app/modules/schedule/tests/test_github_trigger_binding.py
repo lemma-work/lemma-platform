@@ -106,3 +106,49 @@ async def test_an_unbound_account_is_refused_rather_than_silently_unroutable():
             trigger=SimpleNamespace(event_type="push", connector_id="github"),
             account=SimpleNamespace(external_ref=None),
         )
+
+
+class TestDeclaredDefaults:
+    """A `default` in a trigger's `config_schema` has to apply server-side.
+
+    Otherwise it is decoration: the form prefills it and an API- or CLI-created
+    schedule gets nothing. `workflow_run` is why that matters -- a busy
+    repository emits one delivery per run per state change, so the API path
+    would wake an agent three times for one CI run while the UI path woke it
+    once.
+    """
+
+    @staticmethod
+    def _trigger(properties: dict) -> SimpleNamespace:
+        return SimpleNamespace(
+            event_type="workflow_run",
+            connector_id="github",
+            config_schema={"type": "object", "properties": properties},
+        )
+
+    def test_a_default_fills_a_key_the_author_left_out(self):
+        from app.composition.schedule_connectors import _schema_defaults
+
+        trigger = self._trigger({"actions": {"default": ["completed"]}})
+        assert _schema_defaults(trigger, {}) == {"actions": ["completed"]}
+        assert _schema_defaults(trigger, None) == {"actions": ["completed"]}
+
+    def test_what_the_author_wrote_is_never_overwritten(self):
+        from app.composition.schedule_connectors import _schema_defaults
+
+        trigger = self._trigger({"actions": {"default": ["completed"]}})
+        assert _schema_defaults(trigger, {"actions": ["requested"]}) == {}
+        # An empty list is a decision, not an absence.
+        assert _schema_defaults(trigger, {"actions": []}) == {}
+
+    def test_a_property_with_no_default_stays_absent(self):
+        from app.composition.schedule_connectors import _schema_defaults
+
+        trigger = self._trigger({"repository_id": {"type": "integer"}})
+        assert _schema_defaults(trigger, {}) == {}
+
+    def test_a_trigger_with_no_schema_contributes_nothing(self):
+        from app.composition.schedule_connectors import _schema_defaults
+
+        assert _schema_defaults(SimpleNamespace(config_schema=None), {}) == {}
+        assert _schema_defaults(SimpleNamespace(config_schema={}), {}) == {}

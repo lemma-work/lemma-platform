@@ -87,6 +87,16 @@ now distinguishable, which they were not:
   schedule could never fire. Slack's three triggers were inert for years for
   exactly that reason.
 
+### Declared defaults
+
+A trigger's `config_schema` may declare a `default`, and it is applied when the
+schedule is created for any key the author left out. Without that it would be
+decoration: the form prefills it, and a schedule created through the API or the
+CLI with an empty config gets nothing. `workflow_run` is the case that shows
+why — GitHub delivers `requested`, `in_progress` and `completed` for one CI run,
+so the API path would wake an agent three times where the UI path woke it once.
+An author who wrote `actions: []` meant it, and is not overridden.
+
 ## Trigger and run flow
 
 ```mermaid
