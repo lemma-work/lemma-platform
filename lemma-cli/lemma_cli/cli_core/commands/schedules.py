@@ -249,6 +249,27 @@ def create_schedule(
 def update_schedule(
     ctx: typer.Context,
     schedule: str = typer.Argument(...),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        help=(
+            "Retarget at a pod agent, by name. Pass POD_DEFAULT for the pod's "
+            "default assistant; that target requires --instruction."
+        ),
+    ),
+    workflow: str | None = typer.Option(
+        None, "--workflow", help="Retarget at a workflow, by name."
+    ),
+    instruction: str | None = typer.Option(
+        None,
+        "--instruction",
+        help=(
+            "What the target should do when this fires. Required with "
+            "--agent POD_DEFAULT. Unlike --filter, which decides whether to "
+            "fire at all, this directs the work afterwards."
+        ),
+    ),
+    filter_instruction: str | None = typer.Option(None, "--filter"),
     json_payload: str | None = typer.Option(
         None, "--data", "-d", help="Raw JSON payload."
     ),
@@ -257,13 +278,26 @@ def update_schedule(
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Update a schedule from a JSON payload."""
-    payload = read_json(json_payload, file, required=True)
+    """Update a schedule."""
+    extra = read_json(json_payload, file, required=False)
+    flags = {
+        "agent_name": agent,
+        "workflow_name": workflow,
+        "instruction": instruction,
+        "filter_instruction": filter_instruction,
+    }
+    payload = {**extra, **{k: v for k, v in flags.items() if v is not None}}
+    if not payload:
+        fail("Nothing to update. Pass a flag, or --data/--file with a payload.")
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).schedules.update(
-            schedule, UpdateScheduleRequest.from_dict(payload)
+            schedule,
+            # `build_request`, not `from_dict`: the generated model drops every
+            # key it does not declare, so a hand-written payload naming the
+            # wrong field was applied as an empty update and reported success.
+            build_request(UpdateScheduleRequest, payload, context="schedule"),
         ),
     )
     if result is not None:

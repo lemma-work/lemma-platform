@@ -11,7 +11,7 @@ from lemma_sdk.openapi_client.models.auth_config_create_schema import (
 
 from ..confirm import confirm_destructive
 from ..io import emit, list_items, to_plain
-from ..payload import read_json
+from ..payload import build_request, read_json
 from ..state import console, run_with_client, state_from_ctx
 from ..context import org_for
 
@@ -446,7 +446,7 @@ def create_account(
         lambda client, s: (
             client.connectors.accounts.create(
                 auth_config or auth_config_id or "",
-                AccountCreateSchema.from_dict(request_data),
+                build_request(AccountCreateSchema, request_data, context="account"),
             )
             if hasattr(client.connectors, "accounts")
             else client.connectors.create_account(
