@@ -56,6 +56,7 @@ from app.core.authorization.permissions import (
     equivalent_permission_ids,
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
+from app.core.authorization.workload_authority import authorize_delegated_workload
 from app.core.authorization.resource_names import resolve_resource_id_by_name
 from app.modules.datastore.infrastructure.models.datastore_models import (
     DatastoreFile,
@@ -785,10 +786,18 @@ class AuthorizationDataService:
             pod_id=pod_id,
             role_ids=user_ctx.role_ids | workload_ctx.role_ids,
             role_names=user_ctx.role_names | workload_ctx.role_names,
+            # The INVOKING PERSON's permissions, deliberately not unioned with
+            # the workload's role permissions. Together with the two
+            # ``invoker_*`` fields below this is the person's half of the
+            # intersection PS-ACCESS-020 promises, and
+            # ``workload_authority`` reads all three as one set. A
+            # union here would silently raise the ceiling.
             permission_ids=user_ctx.permission_ids,
             principal_refs=user_ctx.principal_refs | workload_ctx.principal_refs,
             grant_principal_sets=grant_principal_sets,
             workload_principal_refs=workload_ctx.principal_refs,
+            invoker_principal_refs=user_ctx.principal_refs,
+            invoker_role_names=user_ctx.role_names,
             delegated_by_user_id=user_id,
             delegation_scope=delegation_scope or frozenset(),
             delegation_session_id=delegation_session_id,
@@ -1188,8 +1197,8 @@ class Authorizer:
         # within its pinned pod: it may exercise any pod-scoped action the user
         # holds here, while org-scoped actions and other pods are denied at this
         # layer and must go through the user-approval-gated tools instead. Named
-        # agent/function workloads are not user-equivalent and keep the stricter
-        # grant-based path in _authorize_delegated_workload below.
+        # agent/function workloads are not user-equivalent and take the
+        # stricter intersection path in ``workload_authority`` below.
         clamp_to_pod = (
             ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
             and ctx.is_user_equivalent
@@ -1248,7 +1257,8 @@ class Authorizer:
             ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
             and ctx.workload_principal_refs
         ):
-            return await self._authorize_delegated_workload(
+            return await authorize_delegated_workload(
+                self,
                 ctx,
                 permission_id,
                 hydrated,
@@ -1339,6 +1349,11 @@ class Authorizer:
         headless path). Applies to the default pod agent and named workloads
         alike, and is called before the owner / org-owner / function-self
         shortcuts so those cannot bypass it.
+
+        ``None`` here is only a pass through *this* gate: a named workload then
+        still has to clear the invoker ceiling in ``workload_authority``, so an
+        approval unlocks a destructive action without conferring authority the
+        approving person does not have.
         """
         if (
             ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD
@@ -1360,143 +1375,6 @@ class Authorizer:
                 return None
         return AuthorizationDecision(
             False, "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL", permission_id, resource
-        )
-
-    async def _authorize_delegated_workload(
-        self,
-        ctx: Context,
-        permission_id: str,
-        resource: ResourceRef,
-    ) -> AuthorizationDecision:
-        """Grant-first evaluation for named delegated workloads.
-
-        A named delegated workload may perform exactly the actions for which
-        the workload itself holds an explicit resource grant — inside its own
-        pod and delegation scope. The invoking user's identity is consulted
-        only for owner checks (PERSONAL resources) and org-scoped resources
-        (workload grants are pod rows, so those fall back to the user's
-        capability); data-layer scoping (RLS, ``/me``) also resolves to the
-        invoking user. The default pod agent is the opposite: it mirrors the
-        invoking user's pod permissions and never reaches this method. Who can
-        *trigger* a workload is governed by ``agent.execute`` /
-        ``function.execute`` grants on the workload itself.
-
-        DESTRUCTIVE_ACTIONS are the carve-out: with no explicit grant they
-        deny with DESTRUCTIVE_ACTION_REQUIRES_APPROVAL unless the user
-        recorded a session approval (APPROVE_FOR_SESSION) for the action type.
-        """
-        if ctx.delegation_scope and not (
-            equivalent_permission_ids(permission_id) & ctx.delegation_scope
-        ):
-            # Implication-expanded so a {function.execute} scope also covers
-            # the implied function.read a run needs.
-            return AuthorizationDecision(
-                False,
-                "DELEGATION_SCOPE_VIOLATION",
-                permission_id,
-                resource,
-            )
-        if resource.pod_id is not None and resource.pod_id != ctx.pod_id:
-            return AuthorizationDecision(
-                False, "POD_SCOPE_MISMATCH", permission_id, resource
-            )
-        if resource.organization_id is not None and resource.pod_id is None:
-            # Workload grants are pod rows; org-scoped resources fall back to
-            # the invoking user's role capability.
-            if not ctx.has_permission(permission_id):
-                return AuthorizationDecision(
-                    False,
-                    "INSUFFICIENT_PERMISSION",
-                    permission_id,
-                    resource,
-                )
-            if resource.organization_id != ctx.organization_id:
-                return AuthorizationDecision(
-                    False,
-                    "ORG_SCOPE_MISMATCH",
-                    permission_id,
-                    resource,
-                )
-            return AuthorizationDecision(True, "ORG_VISIBLE", permission_id, resource)
-
-        visibility = resource.visibility or ResourceVisibility.POD
-        if (
-            visibility == ResourceVisibility.PERSONAL
-            and resource.owner_user_id != ctx.user_id
-        ):
-            # Privacy trumps grants: nothing grants a workload access to
-            # another user's PERSONAL resource.
-            return AuthorizationDecision(
-                False,
-                "PERSONAL_RESOURCE_DENIED",
-                permission_id,
-                resource,
-            )
-
-        workload_grant_ids = await self._matching_grant_ids_for_principal_sets(
-            ctx,
-            permission_id,
-            resource,
-            (ctx.workload_principal_refs,),
-        )
-        if not workload_grant_ids:
-            # A session approval (APPROVE_FOR_SESSION) stands in as an ephemeral
-            # grant for anything the user chose to approve for the session.
-            # (Destructive actions are already gated earlier in ``authorize``;
-            # by the time an ungranted destructive action reaches here it must
-            # carry an approval — but check generically so any approved action
-            # is honored.)
-            if await _session_approval(
-                ctx,
-                session_id=ctx.delegation_session_id,
-                workload_actor_id=ctx.actor_id,
-                permission_id=permission_id,
-            ):
-                return AuthorizationDecision(
-                    True, "SESSION_APPROVAL", permission_id, resource
-                )
-            return AuthorizationDecision(
-                False,
-                "MISSING_WORKLOAD_RESOURCE_GRANT",
-                permission_id,
-                resource,
-                resource_name=await self._describe_resource(resource),
-            )
-
-        if visibility == ResourceVisibility.PUBLIC:
-            return AuthorizationDecision(
-                True,
-                "PUBLIC_RESOURCE",
-                permission_id,
-                resource,
-                matched_grant_ids=tuple(workload_grant_ids),
-            )
-        if resource.owner_user_id is not None and resource.owner_user_id == ctx.user_id:
-            return AuthorizationDecision(
-                True,
-                "RESOURCE_OWNER",
-                permission_id,
-                resource,
-                matched_grant_ids=tuple(workload_grant_ids),
-            )
-        if visibility == ResourceVisibility.POD:
-            return AuthorizationDecision(
-                True,
-                "POD_VISIBLE",
-                permission_id,
-                resource,
-                matched_grant_ids=tuple(workload_grant_ids),
-            )
-        if visibility == ResourceVisibility.RESTRICTED:
-            return AuthorizationDecision(
-                True,
-                "WORKLOAD_RESOURCE_GRANT",
-                permission_id,
-                resource,
-                matched_grant_ids=tuple(workload_grant_ids),
-            )
-        return AuthorizationDecision(
-            False, "UNSUPPORTED_VISIBILITY", permission_id, resource
         )
 
     @staticmethod
@@ -1601,8 +1479,14 @@ class Authorizer:
             ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
             and ctx.workload_principal_refs
         ):
-            # Grant-first: listings must match _authorize_delegated_workload,
-            # which consults the workload's grants alone. Also collapses the
+            # The workload's own grants: the FIRST half of the intersection
+            # ``workload_authority`` applies. The second half — could
+            # the invoking person reach it themselves — is not expressible as a
+            # grant query, because their access also comes from role
+            # permissions, ownership and visibility. So this narrows to what
+            # the workload was granted and nothing more; a caller listing for a
+            # delegated workload must still authorize each id it shows, which
+            # is where the person's ceiling is applied. Also collapses the
             # per-principal-group query loop to a single query here.
             principal_sets = (ctx.workload_principal_refs,)
         if not principal_sets or any(not group for group in principal_sets):

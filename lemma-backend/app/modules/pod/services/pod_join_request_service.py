@@ -182,6 +182,17 @@ class PodJoinRequestService:
         auto-join (``None`` otherwise), so the caller can sync org-level
         authorization for the new member.
         """
+        # A caller who belongs to nothing here still gets a real answer -- 404
+        # only when the pod is absent -- and that is the promise, not an
+        # oversight. PS-POD-020 has an invite-only pod "refuse every self-join
+        # and point the person at requesting access instead", which cannot be
+        # said to someone the route pretends not to recognise, and PS-POD-021
+        # has their request recorded as pending for an admin to decide. Both
+        # describe a person who was told a pod exists and has no other way in.
+        # Answering 404 to a non-member would honour PS-ACCESS-031's
+        # non-disclosure at the cost of both, leaving the only route into a pod
+        # open exclusively to people already inside it. Reviewed and kept: do
+        # not "harden" this into a 404.
         pod = await self.pod_repository.get(pod_id)
         if not pod:
             raise PodNotFoundError()
