@@ -43,7 +43,7 @@ Issues = "https://github.com/lemma-work/lemma-platform/issues"
 # Lift this bound for lemma-backend, lemma-cli and lemma-python together.
 [dependency-groups]
 dev = [
-  "ruff>=0.14.8,<0.16",
+  "ruff>=0.14.8,<0.17",
   "pytest>=8.3.0",
   # tests/test_function_runtime_context.py is an async test, and the property it
   # proves -- that per-invocation credentials do not leak between concurrent
