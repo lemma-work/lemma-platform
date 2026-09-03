@@ -107,7 +107,7 @@ def apply_surface_history_window(
     if not metadata.get("surface_platform"):
         return runs
 
-    from app.composition.agent_surface_runtime import surface_history_limits
+    from app.modules.agent_surfaces.contracts.platforms import surface_history_limits
 
     max_messages, window_hours = surface_history_limits()
 

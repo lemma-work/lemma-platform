@@ -192,11 +192,14 @@ def build_agent_instructions(
         # Per-platform surface guidance for remote harnesses (which have no
         # capability layer). The in-process LEMMA harness passes
         # include_toolset_prompts=False and gets this from SurfacePlatformCapability
-        # instead, so this never double-injects. Lazy import avoids an
-        # agent -> agent_surfaces module-load cycle.
+        # instead, so this never double-injects. Imported where it is used so the
+        # prompt layer, which every run loads, does not carry the platform tables
+        # a surface run needs.
         surface_platform = getattr(ctx, "surface_platform", None)
         if surface_platform:
-            from app.composition.agent_surface_runtime import platform_agent_guidance
+            from app.modules.agent_surfaces.contracts.platforms import (
+                platform_agent_guidance,
+            )
 
             fragment = platform_agent_guidance(surface_platform)
             if fragment:

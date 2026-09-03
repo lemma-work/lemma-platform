@@ -540,11 +540,11 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
     if not isinstance(attachments, list) or not attachments:
         return []
     try:
-        from app.composition.agent_surface_runtime import render_attachment_context
+        from app.modules.agent_surfaces.contracts import platforms as surfaces
     except ImportError:
         return [f"Attachments: {len(attachments)}"]
     try:
-        attachment_block, hint = render_attachment_context(
+        attachment_block, hint = surfaces.render_attachment_context(
             attachments, platform=str(platform or "external").upper()
         )
     except Exception:
@@ -560,10 +560,10 @@ def _email_reply_block(platform: object) -> str | None:
     if not platform:
         return None
     try:
-        from app.composition.agent_surface_runtime import email_reply_instruction
+        from app.modules.agent_surfaces.contracts import platforms as surfaces
     except ImportError:
         return None
-    return email_reply_instruction(str(platform)) or None
+    return surfaces.email_reply_instruction(str(platform)) or None
 
 
 def _metadata_state_text(state: object) -> str:

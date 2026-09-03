@@ -171,9 +171,9 @@ def test_bounded_history_selects_what_the_full_load_selected() -> None:
 
 def test_bounded_history_matches_on_surface_conversations(monkeypatch) -> None:
     """The surface budget counts messages, so it must count unloaded ones too."""
-    import app.composition.agent_surface_runtime as surface_runtime
+    import app.modules.agent_surfaces.contracts.platforms as surface_contract
 
-    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (40, 24))
+    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (40, 24))
     runner = _runner()
     conversation = _surface_conversation()
     for index, runs in enumerate(_shapes()):
@@ -196,9 +196,9 @@ def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) 
     because the trimmed list is short, the elision branch never runs and no
     notice is emitted. Silent loss, which is the part that matters.
     """
-    import app.composition.agent_surface_runtime as surface_runtime
+    import app.modules.agent_surfaces.contracts.platforms as surface_contract
 
-    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (0, 24))
+    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (0, 24))
     conversation_id = uuid4()
     now = datetime.now(timezone.utc)
 
