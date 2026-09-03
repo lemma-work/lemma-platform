@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from lemma_cli.cli_core import telemetry
+from lemma_sdk import config
 from lemma_sdk.config import load_config, save_config
 
 
@@ -79,11 +80,9 @@ def test_the_write_takes_the_config_lock(config_path, monkeypatch):
     correct way to be written."""
     import contextlib
 
-    import lemma_sdk.config as sdk_config
-
     _with_session(config_path)
     locked: list[Path] = []
-    real_lock = sdk_config.config_lock
+    real_lock = config.config_lock
 
     @contextlib.contextmanager
     def spy(path):
@@ -91,7 +90,7 @@ def test_the_write_takes_the_config_lock(config_path, monkeypatch):
         with real_lock(path):
             yield
 
-    monkeypatch.setattr(sdk_config, "config_lock", spy)
+    monkeypatch.setattr(config, "config_lock", spy)
 
     telemetry.set_enabled(False)
 

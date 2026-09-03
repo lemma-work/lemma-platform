@@ -20,6 +20,8 @@ import socket
 from uuid import UUID, uuid4
 
 import pytest
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 import pytest_asyncio
 
 from app.modules.connectors.domain.auth_config import AuthConfigSource
@@ -148,14 +150,24 @@ async def installed_connector(
 
 @pytest.fixture
 def agent_deps(installed_connector, connector_test_pod):
+    """The pod's own assistant, as `run_context_builder` builds it.
+
+    Addressed by its ``agents`` row id, which is its pod's, and carrying the
+    flag every builder of this context sets. The named-agent cases below build
+    their own context with a real agent id instead.
+    """
     from app.modules.agent.tools.context import BaseAgentContext
 
     _install, org_id, user_id = installed_connector
+    pod_id = UUID(str(connector_test_pod["id"]))
     return BaseAgentContext(
         user_id=user_id,
         org_id=org_id,
-        pod_id=UUID(str(connector_test_pod["id"])),
+        pod_id=pod_id,
         conversation_id=uuid4(),
+        workload_id=pod_id,
+        agent_name=DEFAULT_POD_AGENT_NAME,
+        is_pod_default_agent=True,
     )
 
 
@@ -301,6 +313,9 @@ class TestTheAgentCanUseATenantConnector:
             org_id=uuid4(),
             pod_id=agent_deps.pod_id,
             conversation_id=uuid4(),
+            workload_id=agent_deps.pod_id,
+            agent_name=DEFAULT_POD_AGENT_NAME,
+            is_pod_default_agent=True,
         )
         result = await list_connectors(_run_context(stranger))
         assert "error" in result

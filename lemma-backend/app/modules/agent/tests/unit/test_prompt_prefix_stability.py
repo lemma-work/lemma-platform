@@ -115,5 +115,5 @@ class TestAnthropicCachesToolDefinitionsToo:
         routing so the turn lands on the replica holding it."""
         settings = self._settings(RuntimeProfileProtocol.OPENAI_COMPATIBLE)
 
-        assert "openai_prompt_cache_key" in settings
+        assert "openai_user" in settings
         assert "anthropic_cache_instructions" not in settings

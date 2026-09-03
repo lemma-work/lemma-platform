@@ -223,9 +223,7 @@ def _cascade_leaves_the_assistant_alone(cursor) -> None:
     # had already happened, removed along with the thing that would happen next.
     # It is SET NULL now, so the row survives naming nobody; the fire path
     # dead-letters it and pauses it rather than failing forever in silence.
-    cursor.execute(
-        "SELECT agent_id FROM schedules WHERE id = %s", (NAMED_SCHEDULE,)
-    )
+    cursor.execute("SELECT agent_id FROM schedules WHERE id = %s", (NAMED_SCHEDULE,))
     assert cursor.fetchone() == (None,), (
         "the schedule outlives the agent it named, holding no agent, so its "
         "history is not deleted with its target"

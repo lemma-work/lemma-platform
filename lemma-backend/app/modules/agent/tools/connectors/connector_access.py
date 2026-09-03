@@ -20,23 +20,12 @@ from typing import AsyncIterator
 
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.composition.authorization import create_authorization_service
 from app.modules.agent.tools.context import BaseAgentContext
-
-
-def _is_default_pod_agent(deps: BaseAgentContext) -> bool:
-    """The pod default assistant runs with the user's own permissions."""
-    return deps.workload_id in (None, DEFAULT_POD_AGENT_ID) or deps.agent_name in (
-        None,
-        DEFAULT_POD_AGENT_NAME,
-    )
 
 
 async def build_delegated_context(
@@ -55,7 +44,7 @@ async def build_delegated_context(
         principal_type="AGENT",
         principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
         pod_id=deps.pod_id,
-        is_default_pod_agent=_is_default_pod_agent(deps),
+        is_default_pod_agent=deps.is_pod_default_agent,
         delegation_actor_name=deps.agent_name,
         delegation_session_id=str(deps.conversation_id),
     )

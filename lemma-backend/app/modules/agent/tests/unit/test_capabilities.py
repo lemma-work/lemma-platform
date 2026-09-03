@@ -85,10 +85,34 @@ def test_prompt_caching_keys_on_conversation_id():
     ).get_model_settings()
     affinity = str(conversation_id)
     assert settings["openai_user"] == affinity
-    assert settings["openai_prompt_cache_key"] == affinity
+    # `prompt_cache_key` is OpenAI-only and a strict compat shim 400s on it
+    # (Google's rejects the whole request), so the generic path sends only the
+    # baseline `user` lever.
+    assert "openai_prompt_cache_key" not in settings
     # Provider-specific headers (e.g. x-session-affinity for Fireworks) are
     # added by subclasses registered via configure_caching_capability().
     assert "extra_headers" not in settings
+
+
+def test_openai_compatible_settings_stay_inside_the_baseline_schema():
+    """A strict compat shim 400s on a field it does not know.
+
+    `OPENAI_COMPATIBLE` is a claim about a wire format, not about who is
+    answering — Google's OpenAI-compatible endpoint, Fireworks, OpenRouter and
+    OpenAI itself all arrive down this one protocol. Google's parses strictly:
+    an unknown key fails the whole request rather than being ignored, so
+    sending `prompt_cache_key` (an OpenAI-only addition) returned
+
+        400 Invalid JSON payload received.
+        Unknown name "prompt_cache_key": Cannot find field.
+
+    on every turn of every Gemini conversation. Anything outside the baseline
+    Chat Completions schema belongs in a provider subclass registered through
+    `configure_caching_capability()`, never on the generic path.
+    """
+    settings = PromptCachingCapability(conversation_id=uuid4()).get_model_settings()
+
+    assert set(settings) == {"openai_user"}
 
 
 def test_agent_has_toolset_detects_todo():
@@ -263,12 +287,12 @@ async def test_caching_capability_uses_the_lever_its_protocol_understands():
         return caching.get_model_settings()
 
     openai_settings = await settings_for(RuntimeProfileProtocol.OPENAI_COMPATIBLE)
-    assert "openai_prompt_cache_key" in openai_settings
+    assert "openai_user" in openai_settings
     assert "anthropic_cache_instructions" not in openai_settings
 
     anthropic_settings = await settings_for(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
     assert anthropic_settings["anthropic_cache_instructions"] == "5m"
-    assert "openai_prompt_cache_key" not in anthropic_settings
+    assert "openai_user" not in anthropic_settings
 
 
 class _FakeRepo:

@@ -63,7 +63,7 @@ class _FakeEngineDown:
 
 
 def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 200
@@ -88,7 +88,7 @@ def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
     Kubernetes liveness probe reads to restart a wedged worker. Nothing on
     desktop read it.
     """
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     heartbeat = tmp_path / "worker_heartbeat"
@@ -119,7 +119,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     unready for the absence. Nor may a process that has simply not written its
     first heartbeat yet -- which is every start before the first tick.
     """
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
@@ -138,7 +138,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
 
 
 def test_ready_echoes_runtime_instance_id(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.settings, "lemma_runtime_instance_id", "launch-123")
 
@@ -235,7 +235,7 @@ def test_capability_health_withholds_security_posture_in_production(
 
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 503
@@ -246,7 +246,7 @@ def test_ready_returns_503_when_db_down(client, monkeypatch):
 
 
 def test_ready_returns_503_when_redis_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=False))
     r = client.get("/health/ready")
     assert r.status_code == 503
@@ -284,7 +284,7 @@ def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
     """
     from app.core.observability.worker_liveness import WORKER_SEEN_KEY
 
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     # A worker was here; nothing is answering now.
@@ -305,7 +305,7 @@ def test_ready_is_ready_when_a_separate_worker_process_is_ticking(client, monkey
         WORKER_SEEN_KEY,
     )
 
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     _worker_redis(monkeypatch, WORKER_ALIVE_KEY, WORKER_SEEN_KEY)
@@ -357,7 +357,7 @@ def test_a_provider_that_can_be_built_reports_ready(monkeypatch):
     monkeypatch.setattr(workspace_settings, "provider", "e2b")
     monkeypatch.setattr(
         "app.modules.workspace.services.provider_factory.build_provider",
-        lambda: object(),
+        object,
     )
 
     assert probe_sandbox_provider()["status"] == "ready"
@@ -372,7 +372,7 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
     """
     import logging
 
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineDown())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     with caplog.at_level(logging.DEBUG):
@@ -389,7 +389,7 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
 
     # And the recovery is reported too, so the incident has an end.
     caplog.clear()
-    monkeypatch.setattr(appmod, "get_engine", lambda: _FakeEngineOk())
+    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
     with caplog.at_level(logging.DEBUG):
         assert client.get("/health/ready").status_code == 200
     assert [

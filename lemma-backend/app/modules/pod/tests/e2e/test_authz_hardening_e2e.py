@@ -13,10 +13,7 @@ import pytest
 from httpx import AsyncClient
 from starlette import status
 
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
@@ -46,9 +43,13 @@ async def _create_pod(owner_client: AsyncClient, org_id: str, name: str) -> str:
 
 
 async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, str]:
+    """Headers for the pod's own assistant, shaped like the mint site's.
+
+    ``workload_id`` is the assistant's ``agents`` row id, which *is* its pod's.
+    """
     claims = build_delegation_claims(
         workload_type="agent",
-        workload_id=DEFAULT_POD_AGENT_ID,
+        workload_id=UUID(pod_id),
         workload_name=DEFAULT_POD_AGENT_NAME,
         pod_id=UUID(pod_id),
         session_id=f"authz-hardening-e2e-{uuid4().hex}",

@@ -60,12 +60,6 @@ class SubAgentService:
 
     # -- context helpers ----------------------------------------------------
 
-    def _is_default(self, deps) -> bool:
-        return deps.workload_id in (None, DEFAULT_POD_AGENT_ID) or deps.agent_name in (
-            None,
-            DEFAULT_POD_AGENT_NAME,
-        )
-
     def _conversation_service(self, uow) -> ConversationService:
         return ConversationService(
             uow=uow,
@@ -82,7 +76,7 @@ class SubAgentService:
             principal_type="AGENT",
             principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
             pod_id=deps.pod_id,
-            is_default_pod_agent=self._is_default(deps),
+            is_default_pod_agent=deps.is_pod_default_agent,
             delegation_actor_name=deps.agent_name,
             # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
             delegation_session_id=str(deps.conversation_id),
@@ -111,10 +105,10 @@ class SubAgentService:
         # grant check. `is_self` is derived from server-side deps, never from a
         # model-supplied *other* name, so a named other agent stays grant-gated.
         is_self = agent_name is None or (
-            not self._is_default(deps) and agent_name == deps.agent_name
+            not deps.is_pod_default_agent and agent_name == deps.agent_name
         )
         target_name = (
-            (None if self._is_default(deps) else deps.agent_name)
+            (None if deps.is_pod_default_agent else deps.agent_name)
             if is_self
             else agent_name
         )

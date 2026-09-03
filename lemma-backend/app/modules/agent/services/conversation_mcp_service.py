@@ -24,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
@@ -339,16 +340,20 @@ class ConversationMCPService:
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
                 agent_name=agent.name if agent is not None else None,
-                # The named agent, not a default. `workload_id` is the principal
+                # All three, exactly as `services/run_context_builder` sets
+                # them for the in-process harness. `workload_id` is the principal
                 # `pod_data_access` builds its delegated context from, and left
                 # unset it means "the pod default assistant" -- which runs with
                 # the invoking *user's* pod permissions rather than this agent's
-                # grants. So every Agent Host tool call authorized wider than the
-                # agent it belonged to. The in-process harness has always set it
-                # (`services/run_context_builder`); this path is the one that
-                # rebuilt the context by hand and lost it.
+                # grants, so every Agent Host tool call authorized wider than the
+                # agent it belonged to. `is_pod_default_agent` is the separate
+                # question of whether this *is* the assistant, which is now
+                # answered by the row's kind rather than by a sentinel id.
                 workload_type="agent",
                 workload_id=agent.id if agent is not None else None,
+                is_pod_default_agent=(
+                    agent is None or agent.kind is AgentKind.POD_DEFAULT
+                ),
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
                 runtime_profile=runtime_profile,
                 # The runner computes these for the in-process harness, and this

@@ -41,7 +41,6 @@ class DatastoreTableRepositoryPort(Protocol):
         ordering rule on ``TableService`` for why the metadata goes first, and
         why that needs a commit the request's own boundary cannot supply.
         """
-        ...
 
     async def create(self, entity: DatastoreTableEntity) -> DatastoreTableEntity: ...
 
