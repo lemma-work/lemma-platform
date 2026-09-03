@@ -12,12 +12,12 @@ from ..payload import read_json
 from ..sdk import pod_client
 from ..state import run_with_client, state_from_ctx
 
-app = typer.Typer(
-    help="Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook."
-)
-
-# Single source for the platform help shown on every platform argument.
+# Single source for the platform help shown on every platform argument, and for
+# the group's own help — spelling the list twice is how it came to advertise
+# Gmail and Outlook long after they stopped being surfaces and became connectors.
 _PLATFORM_HELP = ", ".join(SURFACE_PLATFORMS) + "."
+
+app = typer.Typer(help=f"Agent surface commands for {_PLATFORM_HELP}")
 
 
 @app.command("init")

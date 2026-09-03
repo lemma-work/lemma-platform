@@ -297,6 +297,19 @@ def _surface_platform_from_payload(payload: dict[str, Any], resource_name: str) 
     return str(payload.get("platform") or resource_name).upper()
 
 
+def _surface_name_from_payload(payload: dict[str, Any], resource_name: str) -> str:
+    """The surface's pod-unique name, resolved the way the server-side applier
+    resolves it: the payload's own name, else the lowercased platform.
+
+    Surfaces are keyed by this name, not by platform — a pod may run two Slack
+    surfaces. The bundle directory name is deliberately not a fallback, so that
+    importing a bundle through the CLI lands the same surfaces as importing the
+    same bundle through the API.
+    """
+    name = str(payload.get("name") or "").strip()
+    return (name or _surface_platform_from_payload(payload, resource_name)).lower()
+
+
 # Server-owned app fields, stripped on export and again on import (see
 # _FUNCTION_SERVER_FIELDS for why both). `url` is derived from the deployment and
 # is not a create/update field.

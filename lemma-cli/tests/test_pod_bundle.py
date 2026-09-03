@@ -1904,7 +1904,7 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
     assert pod_data["variables"]["slack_account"]["connector_kind"] == "composio"
 
 
-def test_import_pod_bundle_upserts_surfaces_by_platform(tmp_path: Path):
+def test_import_pod_bundle_upserts_surfaces_by_name(tmp_path: Path):
     surfaces_root = tmp_path / "surfaces"
     slack_dir = surfaces_root / "slack"
     slack_dir.mkdir(parents=True)
@@ -1966,23 +1966,133 @@ def test_import_pod_bundle_upserts_surfaces_by_platform(tmp_path: Path):
         "created:telegram",
         "updated:slack",
     ]
+    # Addressed by the pod-unique surface name; the platform rides in the body
+    # because it is not the key.
     assert upserted == [
         (
             "pod_123",
-            "SLACK",
+            "slack",
             {
                 "default_agent_name": "triage-agent",
                 "credential_mode": "CUSTOM",
                 "is_enabled": True,
                 "config": {"identity": {"allowed_domains": ["example.com"]}},
+                "platform": "SLACK",
             },
         ),
         (
             "pod_123",
-            "TELEGRAM",
-            {"default_agent_name": "inbox-agent", "is_enabled": False},
+            "telegram",
+            {
+                "default_agent_name": "inbox-agent",
+                "is_enabled": False,
+                "platform": "TELEGRAM",
+            },
         ),
     ]
+
+
+def _surface_item(name: str, agent: str) -> dict[str, object]:
+    return {
+        "id": f"surface_{name}",
+        "pod_id": "pod_123",
+        "platform": "SLACK",
+        "name": name,
+        "agent_name": agent,
+        "is_enabled": True,
+    }
+
+
+def test_export_pod_bundle_keeps_every_surface_of_one_platform(tmp_path: Path):
+    """A pod may run two Slack surfaces; both have to leave in the bundle.
+
+    Export used to dedupe on platform, so the second Slack surface was dropped
+    without a warning and the bundle silently described a pod that did not
+    exist.
+    """
+    client = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}),
+        surfaces=SimpleNamespace(
+            list=lambda pod_id, limit=100: {
+                "items": [
+                    _surface_item("support", "triage-agent"),
+                    _surface_item("sales", "deals-agent"),
+                ]
+            }
+        ),
+    )
+
+    result = export_pod_bundle(
+        client, pod_id="pod_123", output_dir=tmp_path, include={"surfaces"}
+    )
+
+    assert result["counts"]["surfaces"] == 2
+    surfaces_root = tmp_path / "demo-pod" / "surfaces"
+    assert sorted(d.name for d in surfaces_root.iterdir()) == ["sales", "support"]
+    for name, agent in (("support", "triage-agent"), ("sales", "deals-agent")):
+        payload = json.loads(
+            (surfaces_root / name / f"{name}.json").read_text(encoding="utf-8")
+        )
+        assert payload["name"] == name
+        assert payload["platform"] == "SLACK"
+        assert payload["default_agent_name"] == agent
+
+
+def test_import_pod_bundle_does_not_collapse_two_surfaces_of_one_platform(
+    tmp_path: Path,
+):
+    """The mirror of the export case, and the reason the key matters.
+
+    Keyed on platform, the second Slack surface was reported as an update of
+    the first and overwrote it — one surface where the bundle asked for two.
+    """
+    surfaces_root = tmp_path / "surfaces"
+    for name, agent in (("support", "triage-agent"), ("sales", "deals-agent")):
+        resource_dir = surfaces_root / name
+        resource_dir.mkdir(parents=True)
+        (resource_dir / f"{name}.json").write_text(
+            json.dumps(
+                {"name": name, "platform": "SLACK", "default_agent_name": agent}
+            ),
+            encoding="utf-8",
+        )
+
+    upserted: list[tuple[str, dict[str, object]]] = []
+    client = FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(
+            # The pod already runs the first of the two.
+            list=lambda pod_id, limit=100: {
+                "items": [_surface_item("support", "triage-agent")]
+            },
+            upsert=lambda pod_id, name, payload: (
+                upserted.append((name, _plain(payload)))
+                or {"id": f"surface_{name}", "name": name}
+            ),
+        ),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=surfaces_root)
+
+    assert result["ok"] is True
+    assert sorted(result["summary"]["surfaces"]) == [
+        "created:sales",
+        "updated:support",
+    ]
+    assert [name for name, _ in upserted] == ["sales", "support"]
+    assert {name: body["default_agent_name"] for name, body in upserted} == {
+        "support": "triage-agent",
+        "sales": "deals-agent",
+    }
 
 
 def test_import_pod_bundle_rejects_unknown_surface_platform(tmp_path: Path):
