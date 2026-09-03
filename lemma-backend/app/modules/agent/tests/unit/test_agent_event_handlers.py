@@ -422,7 +422,9 @@ class TestApprovalReconciliationJob:
             ),
         )
         monkeypatch.setattr(handlers, "AgentRepository", lambda uow: None)
-        monkeypatch.setattr(handlers, "create_authorization_service", lambda uow: None)
+        monkeypatch.setattr(
+            handlers, "create_authorization_data_service", lambda uow: None
+        )
         monkeypatch.setattr(handlers, "build_usage_service", lambda uow: None)
 
         class _Service:

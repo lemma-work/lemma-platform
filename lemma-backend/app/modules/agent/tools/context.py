@@ -21,7 +21,7 @@ from app.modules.agent.services.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
 )
-from app.composition.agent_workspace import WorkspaceFileManager
+from app.modules.workspace.contracts.tooling import WorkspaceFileManager
 
 
 class BaseAgentContext(AgentContext):

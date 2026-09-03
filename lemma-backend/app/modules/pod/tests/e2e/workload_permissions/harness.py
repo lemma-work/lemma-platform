@@ -290,12 +290,10 @@ def build_account_resolution_service(db_session):
     from app.modules.connectors.services.account_resolution_service import (
         AccountResolutionService,
     )
-    from app.modules.pod.services.authorization_factory import (
-        create_authorization_service,
-    )
+    from app.core.authorization.factory import create_authorization_data_service
 
     uow = SqlAlchemyUnitOfWork(db_session)
     return AccountResolutionService(
         account_repository=AccountRepository(uow, encryption=get_secret_cipher()),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
     )

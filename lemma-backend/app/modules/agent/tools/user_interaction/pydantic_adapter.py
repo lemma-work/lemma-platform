@@ -22,7 +22,7 @@ from app.modules.agent.tools.user_interaction.models import (
     validate_display_payload,
 )
 from app.core.widget_html_validation import validate_widget_html
-from app.composition.agent_workspace import WorkspaceSandboxService
+from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 
 
 async def display_resource(

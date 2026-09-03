@@ -48,7 +48,7 @@ from app.modules.function.api.dependencies import (
     FunctionResourceEditorDep,
     FunctionResourceViewerDep,
 )
-from app.composition.function_workspace import (
+from app.modules.workspace.contracts.tooling import (
     invalidate_function_workspace_env_cache,
 )
 

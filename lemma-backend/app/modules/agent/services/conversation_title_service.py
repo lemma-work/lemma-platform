@@ -44,11 +44,11 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.composition.agent_usage import (
+from app.modules.usage.contracts.execution import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
 )
-from app.composition.agent_usage import UsageExecutionContext
+from app.modules.usage.contracts.execution import UsageExecutionContext
 
 logger = get_logger(__name__)
 

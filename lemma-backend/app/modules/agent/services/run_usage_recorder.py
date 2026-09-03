@@ -7,11 +7,8 @@ one implementation instead of duplicating reserve/record/release plumbing.
 from __future__ import annotations
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.agent_usage import (
-    UsageReservation,
-    UsageService,
-    build_usage_service,
-)
+from app.modules.usage.contracts import UsageReservation
+from app.modules.usage.contracts.execution import UsageService, build_usage_service
 from app.modules.agent.services.run_phase_spans import run_phase
 
 
