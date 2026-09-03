@@ -104,7 +104,9 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     clients=[
                         ProviderClientConfig(
                             client_id=settings.microsoft_client_id,
-                            client_secret=reveal_secret(settings.microsoft_client_secret),
+                            client_secret=reveal_secret(
+                                settings.microsoft_client_secret
+                            ),
                             scope=["openid", "email", "profile"],
                         ),
                     ],
