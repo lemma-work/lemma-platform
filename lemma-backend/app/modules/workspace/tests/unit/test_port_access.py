@@ -15,11 +15,11 @@ KEY = b"k" * 32
 
 
 def _grant(**overrides) -> PortGrant:
-    defaults = dict(
-        sandbox_id=uuid4(),
-        port=4848,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
-    )
+    defaults = {
+        "sandbox_id": uuid4(),
+        "port": 4848,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+    }
     defaults.update(overrides)
     return PortGrant(**defaults)  # type: ignore[arg-type]
 

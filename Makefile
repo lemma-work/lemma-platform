@@ -38,7 +38,7 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint lint-clients quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -373,7 +373,7 @@ help:
 	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
 	@echo "  Gates (what CI blocks on)"
-	@echo "    make pre-push           the fast subset — run this on every push"
+	@echo "    make pre-push           alias for quality — run this on every push"
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
 	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
@@ -1672,25 +1672,33 @@ lint:
 	@# noticing: the backend line was the one line here that could fail, and
 	@# `make quality` -- the documented gate -- calls the scoped target below.
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
-	@echo "→ CLI (ruff)…"
-	@cd $(CLI_DIR) && uv run ruff check . --quiet
-	@echo "→ Python SDK (ruff)…"
-	@cd $(PYTHON_DIR) && uv run ruff check . --quiet
-	@# These three carry a `[tool.ruff]` section that nothing enforced: the
-	@# stack and the bundle are already formatted by `make format`, and the
-	@# scenarios suite was in no lint target at all.
-	@echo "→ Stack (ruff)…"
-	@cd $(STACK_DIR) && $(RUFF) check . --quiet
-	@echo "→ Pod bundle (ruff)…"
-	@cd $(BUNDLE_DIR) && $(RUFF) check . --quiet
-	@echo "→ Scenarios (ruff)…"
-	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
+	@$(MAKE) --no-print-directory lint-clients
 	@echo "→ Frontend (eslint)…"
 	@if [ -d $(FRONTEND_DIR)/node_modules ]; then \
 		cd $(FRONTEND_DIR) && npm run lint --silent; \
 	else \
 		echo "  skipped: run 'npm ci' in $(FRONTEND_DIR) first"; \
 	fi
+
+# Every first-party Python package except the backend, which has its own gates.
+# Extracted from `lint` so that `quality` -- the documented pre-PR command and
+# the one CI runs -- covers them too. It did not: four of these were linted by
+# `make lint`, which no CI job called, so a finding in the CLI or the scenario
+# suite reached main unnoticed.
+# All five run the same pinned ruff rather than each project's own venv: linting
+# needs no imports, so a venv per package bought nothing and made this the only
+# gate that could not run on a clean checkout without syncing three projects.
+lint-clients:
+	@echo "→ CLI (ruff)…"
+	@cd $(CLI_DIR) && $(RUFF) check . --quiet
+	@echo "→ Python SDK (ruff)…"
+	@cd $(PYTHON_DIR) && $(RUFF) check . --quiet
+	@echo "→ Stack (ruff)…"
+	@cd $(STACK_DIR) && $(RUFF) check . --quiet
+	@echo "→ Pod bundle (ruff)…"
+	@cd $(BUNDLE_DIR) && $(RUFF) check . --quiet
+	@echo "→ Scenarios (ruff)…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
 
 # ── Format ────────────────────────────────────────────────────────────────────
 #
@@ -1758,6 +1766,8 @@ quality:
 	@$(MAKE) --no-print-directory format-check
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+	@echo "→ Ruff (CLI, SDK, stack, bundle, scenarios)…"
+	@$(MAKE) --no-print-directory lint-clients
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
 	@echo "→ Connector package (ruff, excludes generated clients)…"
@@ -1808,16 +1818,12 @@ architecture:
 # The tight loop before pushing: the gates that catch the most per second.
 # `quality` is the full pre-PR pass, but two of its steps import the whole app
 # (~16s each), which is too slow to run on every save.
-pre-push:
-	@echo "→ Ruff…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
-	@echo "→ Async-safety…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
-	@echo "→ Critical domain types…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
-	@echo "→ Architecture ratchet + route inventory…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
-	@echo "✓ pre-push checks pass — run 'make quality' before opening the PR"
+# A third list of gates, kept as a "fast subset" of `quality` — which is how it
+# came to omit format-check, the swallowed-errors gate and everything covering
+# the CLI and the SDKs, and to tell you that you had passed when CI would not
+# agree. `quality` is ~35s in total, so the subset was buying seconds and
+# costing a category of surprise. One list.
+pre-push: quality
 
 # CodeQL, the same suites CI runs. Reports only what this branch changed;
 # `codeql-all` reports the repository's full backlog.
@@ -1845,13 +1851,19 @@ codeql-all:
 # Skipped rather than failed when the dependencies are not installed. A backend
 # contributor who has never run `npm ci` should not have `make check` break on
 # them; CI is the gate, this is the shortcut.
+# Missing dependencies are a refusal, not a pass. This used to print "skipped"
+# and exit 0, which meant `make check` -- documented as "quality plus the
+# frontend plus CodeQL" -- reported success on a machine where not one frontend
+# gate had run, and said so in a line that scrolled past.
 quality-frontend:
 	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
-		echo "→ Frontend gates skipped — run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR) to include them"; \
-	else \
-		echo "→ Frontend lint, types, design audit, education anchors…"; \
-		cd $(FRONTEND_DIR) && npm run --silent check; \
+		echo "make: *** cannot run the frontend gates: node_modules is missing."; \
+		echo "    run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR),"; \
+		echo "    or run 'make quality' if your change is Python-only."; \
+		exit 1; \
 	fi
+	@echo "→ Frontend lint, types, design audit, education anchors…"
+	@cd $(FRONTEND_DIR) && npm run --silent check
 
 # Everything a PR is judged on, short of the test suites themselves.
 check: quality quality-frontend codeql

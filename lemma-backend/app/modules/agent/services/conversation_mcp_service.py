@@ -24,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
@@ -312,6 +313,9 @@ class ConversationMCPService:
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
                 agent_name=agent.name if agent is not None else None,
+                is_pod_default_agent=(
+                    agent is None or agent.kind is AgentKind.POD_DEFAULT
+                ),
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
                 runtime_profile=runtime_profile,
                 # The runner computes these for the in-process harness, and this

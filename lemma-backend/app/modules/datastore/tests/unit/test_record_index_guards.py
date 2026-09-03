@@ -27,7 +27,7 @@ class _RecordingConn:
 
     async def execute(self, statement, *args, **kwargs):
         self.statements.append(str(statement))
-        return None
+        return
 
 
 class _RecordingEngine:

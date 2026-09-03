@@ -48,8 +48,7 @@ def _short_db_message(raw: str) -> str:
     # message``. The leading class name is a driver internal this module exists
     # to keep out of user-facing errors, so strip it from any message that still
     # carries it (e.g. an asyncpg error with no dedicated branch above).
-    line = re.sub(r"^<class '[^']*'>:\s*", "", line)
-    return line
+    return re.sub(r"^<class '[^']*'>:\s*", "", line)
 
 
 def _extract_column_from_constraint(

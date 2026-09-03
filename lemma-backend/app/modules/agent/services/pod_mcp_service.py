@@ -20,6 +20,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.authorization.delegation import (
     WorkloadPrincipalType,
+    is_pod_default_agent,
     parse_delegation_claims,
 )
 from app.core.config import settings
@@ -155,6 +156,7 @@ class PodMCPService:
             workload_type="agent" if workload_id is not None else None,
             workload_id=workload_id,
             agent_name=agent_name,
+            is_pod_default_agent=is_pod_default_agent(workload_id, pod_id=pod_id),
             # There is no run here, and so no runtime profile to ask -- this
             # bridge serves an MCP client holding a pod token, not a Lemma agent
             # run. DIRECT rather than the UNAVAILABLE default, because MCP has a

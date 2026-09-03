@@ -27,7 +27,7 @@ class ValueConverter:
         ]
         for fmt in formats:
             try:
-                return datetime.strptime(value, fmt)
+                return datetime.strptime(value, fmt)  # noqa: DTZ007
             except ValueError:
                 continue
         raise ValueError(f"Invalid datetime format: {value}")
@@ -39,7 +39,7 @@ class ValueConverter:
         except ValueError:
             pass
         try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime.strptime(value, "%Y-%m-%d").date()  # noqa: DTZ007
         except ValueError:
             raise ValueError(f"Invalid date format: {value}")
 
@@ -55,7 +55,7 @@ class ValueConverter:
             if isinstance(value, str):
                 return ValueConverter.parse_datetime(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to datetime")
-        elif col_type == DatastoreDataType.DATE:
+        if col_type == DatastoreDataType.DATE:
             if isinstance(value, date):
                 return value
             if isinstance(value, datetime):
@@ -63,25 +63,25 @@ class ValueConverter:
             if isinstance(value, str):
                 return ValueConverter.parse_date(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to date")
-        elif col_type in {DatastoreDataType.UUID, DatastoreDataType.USER}:
+        if col_type in {DatastoreDataType.UUID, DatastoreDataType.USER}:
             if isinstance(value, UUID):
                 return value
             if isinstance(value, str):
                 return UUID(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to UUID")
-        elif col_type in {DatastoreDataType.INTEGER, DatastoreDataType.SERIAL}:
+        if col_type in {DatastoreDataType.INTEGER, DatastoreDataType.SERIAL}:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
             if isinstance(value, str):
                 return int(value)
             raise ValueError("Cannot convert to integer")
-        elif col_type == DatastoreDataType.FLOAT:
+        if col_type == DatastoreDataType.FLOAT:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return float(value)
             if isinstance(value, str):
                 return float(value)
             raise ValueError("Cannot convert to float")
-        elif col_type == DatastoreDataType.BOOLEAN:
+        if col_type == DatastoreDataType.BOOLEAN:
             if isinstance(value, bool):
                 return value
             if isinstance(value, str):

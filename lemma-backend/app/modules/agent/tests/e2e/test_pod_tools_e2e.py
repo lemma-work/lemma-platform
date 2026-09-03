@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
@@ -124,14 +125,24 @@ async def _grant(authenticated_client, pod_id, agent_name, table_name) -> None:
 
 
 def _run_ctx(*, user_id, pod_id, workload_id, agent_name):
+    """A run context shaped like ``run_context_builder`` builds one.
+
+    The assistant is addressed by its ``agents`` row id, which is its pod's, so
+    callers pass ``workload_id=pod_id`` for it and a real agent id otherwise --
+    and ``is_pod_default_agent`` follows from that rather than from the name.
+    """
+    resolved_workload_id = UUID(workload_id) if workload_id is not None else None
     return SimpleNamespace(
         deps=BaseAgentContext(
             user_id=UUID(user_id),
             pod_id=UUID(pod_id),
             conversation_id=uuid4(),
             workload_type="agent" if workload_id is not None else None,
-            workload_id=UUID(workload_id) if workload_id is not None else None,
+            workload_id=resolved_workload_id,
             agent_name=agent_name,
+            is_pod_default_agent=is_pod_default_agent(
+                resolved_workload_id, pod_id=UUID(pod_id)
+            ),
         )
     )
 
@@ -188,9 +199,10 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
         user_id=UUID(fixed_test_user["id"]),
         pod_id=UUID(pod_id),
         conversation_id=uuid4(),
-        workload_type=None,
-        workload_id=None,
+        workload_type="agent",
+        workload_id=UUID(pod_id),
         agent_name="pod_default",
+        is_pod_default_agent=True,
         vision_mode=AgentVisionMode.DIRECT,
     )
     tool_return = await view_image_internal(
@@ -260,7 +272,7 @@ async def test_pod_get_records_in_operator_matches_any_of_a_list(
     ctx = _run_ctx(
         user_id=fixed_test_user["id"],
         pod_id=pod_id,
-        workload_id=None,
+        workload_id=pod_id,
         agent_name="pod_default",
     )
     for title in ("alpha", "beta", "gamma"):
@@ -296,7 +308,7 @@ async def test_pod_tables_describe_surfaces_enum_options(
     ctx = _run_ctx(
         user_id=fixed_test_user["id"],
         pod_id=pod_id,
-        workload_id=None,
+        workload_id=pod_id,
         agent_name="pod_default",
     )
 
@@ -320,7 +332,7 @@ async def test_pod_file_tools_report_me_alias_paths(
     ctx = _run_ctx(
         user_id=fixed_test_user["id"],
         pod_id=pod_id,
-        workload_id=None,
+        workload_id=pod_id,
         agent_name="pod_default",
     )
 
@@ -358,7 +370,7 @@ async def test_pod_default_agent_creates_and_lists_records_with_user_permissions
     ctx = _run_ctx(
         user_id=fixed_test_user["id"],
         pod_id=pod_id,
-        workload_id=None,
+        workload_id=pod_id,
         agent_name="pod_default",
     )
 
@@ -391,7 +403,7 @@ async def test_pod_write_record_rejects_empty_data_and_writes_no_row(
     ctx = _run_ctx(
         user_id=fixed_test_user["id"],
         pod_id=pod_id,
-        workload_id=None,
+        workload_id=pod_id,
         agent_name="pod_default",
     )
 

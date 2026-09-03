@@ -63,11 +63,10 @@ def parse_email_identity(
             display_name=str(parsed_name or display_name or "").strip() or None,
         )
 
-    fallback_identity = ParsedEmailIdentity(
+    return ParsedEmailIdentity(
         email=normalize_email_address(_read_email_address(fallback_email)),
         display_name=display_name,
     )
-    return fallback_identity
 
 
 def email_thread_root(

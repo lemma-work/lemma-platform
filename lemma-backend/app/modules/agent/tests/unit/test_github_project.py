@@ -254,7 +254,7 @@ async def test_a_project_conversation_checks_out_before_any_tool_call(
     async def _checkout(ctx, session):
         del ctx, session
         calls.append("checkout")
-        return None
+        return
 
     monkeypatch.setattr(github_project, "ensure_github_credentials", _creds)
     monkeypatch.setattr(github_project, "ensure_project_checkout", _checkout)

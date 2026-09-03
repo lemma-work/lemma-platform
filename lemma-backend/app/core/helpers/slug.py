@@ -32,5 +32,4 @@ def normalize_resource_name(name: str) -> str:
 def normalize_public_slug(value: str) -> str:
     """Normalize a public DNS-safe slug."""
     normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
-    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
-    return normalized
+    return re.sub(r"-{2,}", "-", normalized).strip("-")

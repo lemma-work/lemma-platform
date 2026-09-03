@@ -209,6 +209,6 @@ class TestTwoOrganizationsOnOneConnector:
         rows = await db_session.execute(
             select(AuthConfigOperation.organization_id, AuthConfigOperation.name)
         )
-        by_name = dict((name, org) for org, name in rows.all())
+        by_name = {name: org for org, name in rows.all()}
         assert by_name["acme_only_tool"] == mine.organization_id
         assert by_name["other_only_tool"] == theirs.organization_id

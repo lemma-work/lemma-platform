@@ -92,16 +92,16 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
 
 
 def _spec(sandbox_id, *, epoch: int = 1, **overrides) -> ProviderCreateSpec:
-    defaults = dict(
-        sandbox_id=sandbox_id,
-        kind=SandboxKind.WORKSPACE,
-        epoch=epoch,
-        name=naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
-        image="",
-        profile_name="workspace",
-        profile_digest="sha256:" + "a" * 64,
-        deadline_at=_deadline(),
-    )
+    defaults = {
+        "sandbox_id": sandbox_id,
+        "kind": SandboxKind.WORKSPACE,
+        "epoch": epoch,
+        "name": naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
+        "image": "",
+        "profile_name": "workspace",
+        "profile_digest": "sha256:" + "a" * 64,
+        "deadline_at": _deadline(),
+    }
     defaults.update(overrides)
     return ProviderCreateSpec(**defaults)  # type: ignore[arg-type]
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -81,7 +81,7 @@ class AppFileManager:
             "name": path.split("/")[-1],
             "path": path,
             "size": size,
-            "last_modified": datetime.now().isoformat(),
+            "last_modified": datetime.now(UTC).isoformat(),
         }
 
     async def delete_file(self, path: str) -> None:

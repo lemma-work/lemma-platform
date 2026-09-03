@@ -20,25 +20,25 @@ from lemma_cli.cli_core.app_scaffold import (
 
 
 def _options(target: Path, **overrides) -> AppScaffoldOptions:
-    base = dict(
-        target_dir=target,
-        name="my-app",
-        pod_id="pod_123",
-        api_url="http://127.0.0.1:8710",
-        auth_url="http://127.0.0.1:3710/auth",
-        title="My App",
-        navigation="sidebar",
-        agent_name=None,
-        chat_mode="right-sidebar",
-        members=False,
-        search_config=None,
-        theme_toggle=True,
-        install=False,
-        registry=False,
-        style_preset="soft",
-        template_source=BUNDLED_TEMPLATE_SOURCE,
-        sdk_path=None,
-    )
+    base = {
+        "target_dir": target,
+        "name": "my-app",
+        "pod_id": "pod_123",
+        "api_url": "http://127.0.0.1:8710",
+        "auth_url": "http://127.0.0.1:3710/auth",
+        "title": "My App",
+        "navigation": "sidebar",
+        "agent_name": None,
+        "chat_mode": "right-sidebar",
+        "members": False,
+        "search_config": None,
+        "theme_toggle": True,
+        "install": False,
+        "registry": False,
+        "style_preset": "soft",
+        "template_source": BUNDLED_TEMPLATE_SOURCE,
+        "sdk_path": None,
+    }
     base.update(overrides)
     return AppScaffoldOptions(**base)
 

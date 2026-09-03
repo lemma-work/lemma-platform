@@ -42,6 +42,11 @@ wrong interpreter does not fail with "module not found", it reports a
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — setup, architecture rules, and what a
   pull request needs.
+- **[docs/engineering/](docs/engineering/README.md)** — the standard the code is
+  held to: [design and abstraction](docs/engineering/design.md),
+  [types](docs/engineering/types.md), [test design](docs/engineering/tests.md).
+  Every rule carries an id, the check that enforces it, and whether it is a hard
+  failure or a ratchet.
 - **[docs/product/](docs/product/README.md)** — what the product promises, in
   product language, with stable ids. **It is normative:** it says what the
   product is *meant* to do, not what the code currently does.

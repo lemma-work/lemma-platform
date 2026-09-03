@@ -260,4 +260,4 @@ async def delete_schedule(
     )
 
     await service.delete_schedule(schedule_id)
-    return None
+    return

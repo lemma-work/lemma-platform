@@ -248,22 +248,20 @@ class ConversationRunQueriesMixin:
         if not runs:
             return []
 
-        digests = dict(
-            (
-                (row[0], (row[1], row[2]))
-                for row in (
-                    await self.session.execute(
-                        select(
-                            MessageModel.agent_run_id,
-                            func.count(),
-                            func.max(MessageModel.created_at),
-                        )
-                        .where(MessageModel.agent_run_id.in_([run.id for run in runs]))
-                        .group_by(MessageModel.agent_run_id)
+        digests = {
+            row[0]: (row[1], row[2])
+            for row in (
+                await self.session.execute(
+                    select(
+                        MessageModel.agent_run_id,
+                        func.count(),
+                        func.max(MessageModel.created_at),
                     )
-                ).all()
-            )
-        )
+                    .where(MessageModel.agent_run_id.in_([run.id for run in runs]))
+                    .group_by(MessageModel.agent_run_id)
+                )
+            ).all()
+        }
 
         entities: list[AgentRunEntity] = []
         for run in runs:

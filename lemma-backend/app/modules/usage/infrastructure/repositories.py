@@ -163,18 +163,18 @@ class UsageRepository(UsageRepositoryPort):
         rows — one per profile, model and kind actually used — so the cost now
         tracks how many distinct things were used, not how often.
         """
-        filters = dict(
-            organization_id=organization_id,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            profile_id=profile_id,
-            profile_scope=profile_scope,
-            model_name=model_name,
-            usage_kind=usage_kind,
-            source_type=source_type,
-            status=status,
-        )
+        filters = {
+            "organization_id": organization_id,
+            "pod_id": pod_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "profile_id": profile_id,
+            "profile_scope": profile_scope,
+            "model_name": model_name,
+            "usage_kind": usage_kind,
+            "source_type": source_type,
+            "status": status,
+        }
         summary = UsageSummary(
             organization_id=organization_id,
             pod_id=pod_id,

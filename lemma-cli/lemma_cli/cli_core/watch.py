@@ -153,7 +153,7 @@ def _handle_message(state: CliState, raw: object, cursor: str | None) -> str | N
     if frame.get("type") == "ready":
         cursor = frame.get("since") or cursor
         if state.output == "json":
-            print(json.dumps(frame, default=str))
+            print(json.dumps(frame, default=str))  # noqa: T201 — parseable stdout
         else:
             _err.print(f"[dim]● streaming (since={cursor})[/dim]")
         return cursor
@@ -165,7 +165,7 @@ def _handle_message(state: CliState, raw: object, cursor: str | None) -> str | N
 
 def _render_frame(state: CliState, frame: dict) -> None:
     if state.output == "json":
-        print(json.dumps(frame, default=str))
+        print(json.dumps(frame, default=str))  # noqa: T201 — parseable stdout
         return
     operation = str(frame.get("operation") or "")
     style = _OP_STYLE.get(operation, "white")

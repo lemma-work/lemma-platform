@@ -139,7 +139,7 @@ class SurfaceChromeMixin:
     ):
         """Parse an event about the app itself. Default: not a lifecycle event."""
         del payload, headers
-        return None
+        return
 
     # The in-chat set-up flow. Only Slack drives configuration from inside the
     # chat app today, but `SurfaceConfigurationMixin` calls all of these on

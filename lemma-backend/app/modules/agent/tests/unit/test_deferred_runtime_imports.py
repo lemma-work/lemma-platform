@@ -44,7 +44,7 @@ def _resolved_stub(capabilities):
     return SimpleNamespace(
         model=SimpleNamespace(capabilities=capabilities),
         credentials=None,
-        public_snapshot=lambda: {},
+        public_snapshot=dict,
     )
 
 
@@ -174,7 +174,7 @@ class TestVisionModelResolution:
         monkeypatch.setenv("VISION_MODEL", "unlisted-model")
         sentinel = object()
         resolved_without_entry = SimpleNamespace(
-            model=None, credentials=None, public_snapshot=lambda: {}
+            model=None, credentials=None, public_snapshot=dict
         )
 
         with (

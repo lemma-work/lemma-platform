@@ -183,7 +183,7 @@ def _body_lines(plan: SurfacePlan) -> list[str]:
     if len(rendered) <= _MAX_RENDERED_ITEMS:
         return rendered
     keep_from = len(rendered) - _MAX_RENDERED_ITEMS
-    hidden = [item for item in plan.items[:keep_from]]
+    hidden = list(plan.items[:keep_from])
     summary = f"{_DONE_MARK} {len(hidden)} earlier steps"
     if any(not item.done for item in hidden):
         summary = f"…{len(hidden)} earlier steps"

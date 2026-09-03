@@ -75,7 +75,7 @@ class FakeUowFactory:
 def _patch_auth(monkeypatch):
     async def _noop(self, *, pod_id, user_id, action):
         del pod_id, user_id, action
-        return None
+        return
 
     monkeypatch.setattr(PublishUseCases, "_authorize", _noop)
 
