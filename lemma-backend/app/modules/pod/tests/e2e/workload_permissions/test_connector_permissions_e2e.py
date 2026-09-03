@@ -8,7 +8,9 @@ goes through — across the modes that matter:
 * **plain user** resolves their OWN account with no grant; resolving another
   user's account is rejected;
 * **named workload** (agent) must hold ``connector.use`` to resolve any account,
-  and ``connector_account.use`` to resolve ANOTHER user's account;
+  and ``connector_account.use`` to resolve ANOTHER user's account — and the
+  person invoking it must be able to use that account themselves, since a
+  workload's authority is its grants intersected with theirs;
 * **default pod agent** ("user-resolved") bypasses the capability grant and
   resolves the invoking user's own account directly.
 
@@ -216,10 +218,15 @@ async def test_named_workload_with_connector_use_resolves_own_account(
 async def test_named_workload_other_account_requires_workload_grant(
     authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session
 ):
-    """Grant-first: pinning ANOTHER user's (shared) account needs grants on the
-    WORKLOAD alone — connector.use plus connector_account.use — and is then
-    invoker-independent. The invoking user needs no matching grant. This is the
-    shared-sender pattern (one team account pinned on a workload).
+    """Pinning ANOTHER user's (shared) account needs connector.use plus
+    connector_account.use on the WORKLOAD — the shared-sender pattern, one team
+    account pinned on a workload.
+
+    Both grants are necessary and, for this invoker, sufficient: the pod owner
+    driving the workload can reach the account themselves, so the invoker half
+    of the intersection is satisfied and only the grants are in question. Whose
+    ceiling this is gets pinned by the POD_VIEWER case below — without it this
+    test would keep passing while reading like proof that grants alone decide.
     """
     env = await _setup(
         authenticated_client, fixed_test_org, fixed_test_user, db_session
@@ -266,9 +273,7 @@ async def test_named_workload_other_account_requires_workload_grant(
     with pytest.raises(ConnectorAccessDeniedError):
         await _resolve_other()
 
-    # (2) Workload ALSO granted connector_account.use -> resolves, even though the
-    #     invoking user holds no grant on the account. The workload's grants are
-    #     standalone authority (grant-first).
+    # (2) Workload ALSO granted connector_account.use -> resolves.
     await replace_workload_grants(
         authenticated_client,
         env["pod_id"],
@@ -278,6 +283,79 @@ async def test_named_workload_other_account_requires_workload_grant(
     )
     account = await _resolve_other()
     assert str(account.id) == other_account_id
+
+
+@pytest.mark.asyncio
+async def test_shared_account_is_refused_to_an_invoker_who_cannot_use_it(
+    authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session
+):
+    """The same workload, the same grants, a different person driving it.
+
+    A shared account pinned on a workload is a credential, and letting anyone
+    who may run the workload send through it would make the workload a way to
+    borrow a colleague's identity. So the grants above are a ceiling on the
+    workload, not a promotion for its invoker: a POD_VIEWER who cannot reach
+    the account gets DELEGATION_EXCEEDS_INVOKER, and the person who wants to
+    send through it needs their own access to it.
+    """
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
+    owner_of_account = await signup_user(async_client, "conn-shared-owner")
+    shared_account_id = await seed_account(
+        db_session,
+        user_id=owner_of_account["id"],
+        organization_id=fixed_test_org["id"],
+        auth_config_id=env["auth_config_id"],
+        connector_id=env["connector_id"],
+    )
+
+    viewer = await signup_user(async_client, "conn-shared-viewer")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=viewer,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=env["pod_id"],
+        organization_member_id=org_member["id"],
+        role="POD_VIEWER",
+        roles=["POD_VIEWER"],
+    )
+
+    name = f"conn_agent_{uuid4().hex[:8]}"
+    agent = await create_agent(authenticated_client, env["pod_id"], name)
+    await replace_workload_grants(
+        authenticated_client,
+        env["pod_id"],
+        AGENT,
+        name,
+        [_connector_grant(env["connector_id"]), _account_grant(shared_account_id)],
+    )
+    svc = build_account_resolution_service(db_session)
+
+    with pytest.raises(ConnectorAccessDeniedError) as refusal:
+        await svc.resolve_account(
+            user_id=UUID(viewer["id"]),
+            connector_id=env["connector_id"],
+            auth_actor=await build_workload_ctx(
+                db_session,
+                user_id=viewer["id"],
+                workload_type=AGENT,
+                workload_id=agent["id"],
+                pod_id=env["pod_id"],
+                workload_name=name,
+            ),
+            account_id=UUID(shared_account_id),
+        )
+
+    # The remedy is to raise the person's access, not the workload's grants,
+    # so the refusal has to be able to say so.
+    assert refusal.value.details["reason_code"] == "DELEGATION_EXCEEDS_INVOKER", (
+        f"refused for the wrong reason: {refusal.value.details}"
+    )
 
 
 # --------------------------------------------------------------------------- #

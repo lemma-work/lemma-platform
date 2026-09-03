@@ -6,17 +6,23 @@ Resolution rule:
   early-return below handles it.
 - **Default pod agent**: mirrors the invoking user, so it resolves to the
   user's own account for the connector.
-- **Named workload with a pinned (shared) account id**: authority comes from
-  the workload's grants alone — ``connector.use`` on the connector plus
-  ``connector_account.use`` on the pinned account — and is therefore
-  invoker-independent. This is what makes a shared-sender setup (e.g. one
-  team Gmail account pinned on a function) work for every pod member.
+- **Named workload with a pinned (shared) account id**: the workload needs
+  ``connector.use`` on the connector plus ``connector_account.use`` on the
+  pinned account — and, because a workload's authority is its grants
+  intersected with the invoking person's (PS-ACCESS-020,
+  ``core/authorization/workload_authority.py``), the person driving it must be
+  able to use that account too. A shared-sender setup — one team Gmail pinned
+  on a function — therefore works for a pod member once they hold the account,
+  and refuses with ``DELEGATION_EXCEEDS_INVOKER`` for someone who does not.
+  Reaching a colleague's credential is exactly what the workload must not
+  launder. A run with no invoking person (see "headless runs" there) is
+  authorized on the workload's grants alone.
 
 Connector-account *visibility* is derived (RESTRICTED iff any grant row
-exists); for human actors that still means "non-owners need a user-level
-grant". For workloads the derived visibility is inert: the grant-first
-evaluation in ``_authorize_delegated_workload`` consults the workload's own
-grants for every visibility.
+exists), and non-owners need a user-level grant. Pinning an account on a
+workload creates a grant row and so makes the account RESTRICTED: the members
+who are meant to send through it need their own ``connector_account.use``
+grant, not only the workload's.
 """
 
 from uuid import UUID
@@ -269,12 +275,17 @@ class AccountResolutionService:
         try:
             await auth_actor.require(action, resource)
         except Exception as exc:
+            # The two halves of the intersection fail for opposite reasons and
+            # are fixed in opposite places -- grant the workload, or raise the
+            # access of the person running it -- so say which one gave way
+            # rather than sending everyone to look at the workload's grants.
+            reason_code = str(getattr(exc, "code", "ACCESS_DENIED"))
             raise ConnectorAccessDeniedError(
-                "Delegated workload is not authorized",
-                details={
-                    "reason_code": getattr(exc, "code", "ACCESS_DENIED"),
-                    "action": str(action),
-                },
+                "The person running this workload is not allowed to use this "
+                "connector account themselves"
+                if reason_code == "DELEGATION_EXCEEDS_INVOKER"
+                else "Delegated workload is not authorized",
+                details={"reason_code": reason_code, "action": str(action)},
             ) from exc
 
     async def resolve_account(
