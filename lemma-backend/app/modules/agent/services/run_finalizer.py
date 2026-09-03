@@ -76,10 +76,16 @@ def run_failure_message(exc: BaseException) -> str:
             "or the plan limit can be raised."
         )
     if is_retryable_stream_error(exc):
+        # No mention of Retry. `ConversationRetryService.retry_failed_run`
+        # accepts a failed run only while it holds nothing but user messages,
+        # and a dropped stream is by definition a run that had already been
+        # talking -- so the button this sentence used to name is both refused
+        # (409) and, since `last_run_retryable` asks the same question, not
+        # offered. Advice that names a control the reader cannot use is worse
+        # than no advice.
         return (
             "The connection to the model provider kept dropping. Nothing you "
-            "sent was lost — send another message, or press Retry to pick up "
-            "where it stopped."
+            "sent was lost — send another message to pick up where it stopped."
         )
     if isinstance(exc, DomainError):
         # A DomainError's message is already the sentence we would want to

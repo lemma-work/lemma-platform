@@ -6,11 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
-from app.core.authorization.dependencies import require_action
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
-from app.core.api.dependencies import CurrentUser
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.dependencies import (
@@ -42,6 +40,7 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_own_account,
     require_surface_agent_action,
     resolve_surface_config,
+    surface_setup_for_reader,
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
@@ -496,9 +495,8 @@ async def send_surface_message(
     """Proactively send a message to a pod member on this surface.
 
     Powers notifications from functions/workflows. Reuses the member's existing
-    thread on the surface (bots can't cold-DM), so a 404 means the member has no
-    reachable conversation here yet.
-    """
+    thread (bots can't cold-DM), and a 404 carries the reason it could not be
+    reached, in the vocabulary the notification API uses."""
     surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     await require_surface_agent_action(
         ctx=ctx,
@@ -506,16 +504,13 @@ async def send_surface_message(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_UPDATE,
     )
-    sent = await ingress.send_to_member(
+    undeliverable = await ingress.send_to_member(
         surface=surface,
         user_id=request.user_id,
         message=request.message,
     )
-    if not sent:
-        raise HTTPException(
-            status_code=404,
-            detail="Member has no reachable conversation on this surface.",
-        )
+    if undeliverable is not None:
+        raise HTTPException(status_code=404, detail=undeliverable)
     del user
     return SurfaceSendResponse(sent=True)
 
@@ -530,13 +525,17 @@ async def get_surface_setup(
     pod_id: UUID,
     surface_name: str,
     user: CurrentUser,
+    ctx: PodContextDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSetupResponse:
     """Live setup state for an existing surface: static platform checklist plus
-    webhook URL and admin-consent status. For the pre-creation checklist (before
-    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``."""
+    webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+    own shared secrets in it are not. For the pre-creation checklist (before any
+    surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``."""
     del user
-    setup = await service.get_surface_setup_by_name(pod_id=pod_id, name=surface_name)
+    setup = await surface_setup_for_reader(
+        service=service, ctx=ctx, pod_id=pod_id, surface_name=surface_name
+    )
     return SurfaceSetupResponse.model_validate(setup)
 
 

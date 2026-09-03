@@ -58,7 +58,7 @@ def _response_text(exc: Exception) -> str | None:
         return None
 
 
-def _upstream_message(exc: Exception) -> str | None:
+def upstream_message(exc: Exception) -> str | None:
     """What the provider said, passed through.
 
     Only *our* internals are hidden. A provider's own error is the thing that
@@ -83,7 +83,18 @@ def _upstream_message(exc: Exception) -> str | None:
         # text stays here. That is the whole distinction: a provider's error
         # explains the failure, ours would only leak how we are built.
         return None
-    if not text.strip():
+    return redacted_upstream_text(text)
+
+
+def redacted_upstream_text(text: str | None) -> str | None:
+    """Provider text as it may leave the system: redacted, then bounded.
+
+    Shared with the vendored-package gateway, which reaches its own decision
+    about *whether* an exception carries the provider's answer -- its clients
+    do not attach a status code -- but must scrub and cap it the same way when
+    it does.
+    """
+    if not text or not text.strip():
         return None
     redacted = redact_text(text.strip())
     if len(redacted) > _UPSTREAM_MESSAGE_LIMIT:
@@ -96,7 +107,7 @@ def _upstream_details(exc: Exception) -> dict[str, Any]:
     status_code = _upstream_status(exc)
     if isinstance(status_code, int):
         details["upstream_status"] = status_code
-    message = _upstream_message(exc)
+    message = upstream_message(exc)
     if message:
         details["upstream_message"] = message
     code = getattr(exc, "code", None)

@@ -15,6 +15,7 @@ from app.modules.agent.api.controllers.shared import (
     conversation_channel,
     encode_stream_chunk,
     iter_subscription,
+    with_keepalive,
 )
 from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.errors import (
@@ -59,8 +60,21 @@ async def start_and_stream_run(
         raise
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        # First frame, before anything the run publishes: a message sent while a
+        # run was already working joins that run, and the only route that told
+        # anyone so was `agent.conversation.message.append`. On the chat path a
+        # person watched an apparently unanswered message instead
+        # (`PS-AGENT-015`). `TurnCoordinator.start` already decided this; it was
+        # only ever thrown away here.
+        yield encode_stream_chunk(
+            event_type="status",
+            data={"started_new_run": result.started_new_run},
+            agent_run_id=result.agent_run_id,
+        )
         try:
-            async for chunk in iter_subscription(iterator, result.agent_run_id):
+            async for chunk in with_keepalive(
+                iter_subscription(iterator, result.agent_run_id)
+            ):
                 yield chunk
         except Exception:
             logger.error(

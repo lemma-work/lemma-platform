@@ -53,10 +53,11 @@ sequenceDiagram
 ```
 
 Pod deletion is a soft delete followed by events consumed by dependent modules
-to clean up schedules and surfaces. Resource authorization is grant-first for
-named workloads; the default pod agent mirrors its invoking user's rights.
-Destructive operations additionally require standing authority or a session
-approval.
+to clean up schedules and surfaces. A named workload's authority is its own
+grants intersected with the invoking user's, so it can never reach past the
+person who ran it; the default pod agent holds no grants and mirrors its
+invoking user's rights exactly. Destructive operations additionally require
+standing authority or a session approval.
 
 ## Dependencies
 

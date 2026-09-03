@@ -538,15 +538,20 @@ class AgentSurfaceEntity(AggregateRoot):
         if not event.mentioned_agent:
             return False
         if self.surface_type is SurfacePlatform.SLACK:
-            # Slack fires app_mention for any @mention in the channel; make sure
-            # it was THIS bot that was mentioned.
-            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
+            # Slack delivers `app_mention` only to the app that was mentioned,
+            # so the event type is itself the answer.
+            if event.metadata.get("event_type") == "app_mention":
+                return True
+            # A plain `message` reaches here whenever *anyone* was @-mentioned,
+            # because that is all the parser can tell. So it needs this
+            # surface's own bot id among them — and fails closed when there is
+            # no bot id to compare, which a surface created through the
+            # bundle/CLI path has not recorded. That case used to be read as
+            # "allow": the agent then answered every channel message in which
+            # two colleagues mentioned each other.
             bot_user_id = self.surface_identity_id
-            return (
-                not bot_user_id
-                or not mentioned_user_ids
-                or bot_user_id in mentioned_user_ids
-            )
+            mentioned_user_ids = set(event.metadata.get("mentioned_user_ids") or [])
+            return bool(bot_user_id) and bot_user_id in mentioned_user_ids
         return True
 
 

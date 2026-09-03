@@ -38,6 +38,10 @@ class UserRepositoryPort(Protocol):
 
     async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]: ...
 
+    async def get_live_id_by_telegram_lower(
+        self, username_lower: str
+    ) -> Optional[UUID]: ...
+
 
 class UserCachePort(Protocol):
     async def get(self, user_id: UUID) -> Optional[UserEntity]: ...

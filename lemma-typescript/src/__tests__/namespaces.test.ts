@@ -189,3 +189,56 @@ describe("RecordsNamespace.bulk", () => {
     });
   });
 });
+
+describe("RecordsNamespace.listAll", () => {
+  /** Answers recordList with fixed-size pages, the way the API does. */
+  function pagedRecordList(rows: Record<string, unknown>[], pageSize: number) {
+    return vi.spyOn(RecordsService, "recordList").mockImplementation(
+      ((
+        _podId: string,
+        _table: string,
+        _limit?: number,
+        _offset?: number,
+        _filters?: string[],
+        _sort?: string[],
+        pageToken?: string,
+      ) => {
+        const start = pageToken ? Number(pageToken) : 0;
+        const next = start + pageSize;
+        return Promise.resolve({
+          items: rows.slice(start, next),
+          limit: pageSize,
+          next_page_token: next < rows.length ? String(next) : null,
+        });
+      }) as never,
+    );
+  }
+
+  it("pages to exhaustion, so a complete read is not a prefix", async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => ({ id: `rec-${index}` }));
+    const spy = pagedRecordList(rows, 3);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await expect(records.listAll("tickets", { pageSize: 3 })).resolves.toEqual(rows);
+
+    // 3 + 3 + 1: the last page carries no token and ends the walk.
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it("re-sends the filter on every page", async () => {
+    const rows = Array.from({ length: 4 }, (_, index) => ({ id: `rec-${index}` }));
+    const spy = pagedRecordList(rows, 2);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await records.listAll("tickets", {
+      pageSize: 2,
+      filters: [{ field: "status", op: "eq", value: "open" }],
+    });
+
+    // A predicate dropped after page one would silently widen the result set.
+    expect(spy).toHaveBeenCalledTimes(2);
+    for (const call of spy.mock.calls) {
+      expect(call[4]).toEqual(['{"field":"status","op":"eq","value":"open"}']);
+    }
+  });
+});

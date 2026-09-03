@@ -30,6 +30,9 @@ from app.modules.datastore.domain.ports import (
     DatastoreSchemaPort,
     DatastoreTableRepositoryPort,
 )
+from app.modules.datastore.infrastructure.sql_identifiers import (
+    ensure_identifier_fits,
+)
 from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.table_context import TableHydration
 
@@ -89,6 +92,12 @@ class TableService:
         ctx: Context,
     ) -> DatastoreTableEntity:
         ensure_table_name_available(table_name)
+        # Before the metadata row, not after: the 409 the truncation produces
+        # names a table the caller cannot find, and by then a row exists.
+        ensure_identifier_fits(table_name, kind="Table name")
+        ensure_identifier_fits(primary_key_column, kind="Column name")
+        for declared in columns:
+            ensure_identifier_fits(declared.name, kind="Column name")
         entity_data: dict = {
             "pod_id": pod_id,
             "table_name": table_name,
@@ -387,6 +396,7 @@ class TableService:
         column: ColumnSchema,
         ctx: Context,
     ) -> DatastoreTableEntity:
+        ensure_identifier_fits(column.name, kind="Column name")
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
             pod_id,

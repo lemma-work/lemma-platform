@@ -8,6 +8,9 @@ outbound half: nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.surface_member_send import (
+    SurfaceMemberSendMixin,
+)
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
 )
@@ -90,59 +93,7 @@ def _approval_plan(
     )
 
 
-class SurfaceEgressMixin(SurfaceEgressTargetMixin):
-    async def send_to_member(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        user_id: UUID,
-        message: str,
-    ) -> bool:
-        """Proactively send a message to a pod member on a specific surface.
-
-        Powers ``surface.send`` (notifications from functions/workflows, or an
-        agent reaching a specific member). Reuses the member's existing thread on
-        the surface — bots can't cold-DM, so the member must have interacted
-        before; returns ``False`` when no reachable thread exists.
-        """
-        if not surface.is_active:
-            return False
-        # Members of this surface's pod only, and FAIL CLOSED: this was once
-        # `if self.pod_membership_port is not None`, which skipped the check
-        # entirely when mis-wired — turning a wiring bug into "any user id can be
-        # messaged". Not running the check is not the same as passing it.
-        if self.pod_membership_port is None:
-            logger.error(
-                "agent_surfaces.ingress_service.send_to_member_no_membership_port.failed",
-                surface_id=str(surface.id),
-            )
-            return False
-        if surface.pod_id not in set(
-            await self.pod_membership_port.get_user_pod_ids(user_id)
-        ):
-            return False
-        external_user_repository = getattr(self, "external_user_repository", None)
-        if external_user_repository is None:
-            return False
-        # Every identity they hold on this platform, not just the most recently
-        # seen one: Slack ids are per workspace and Teams ids per tenant, so
-        # taking one made a pod's second workspace unreachable. The surface's own
-        # tenant narrows the list, permissively where none was ever recorded.
-        identities = await external_user_repository.list_by_resolved_users(
-            platform=surface.surface_type.value, resolved_user_ids=[user_id]
-        )
-        for ext in identities:
-            if not ext.external_user_id or not surface.matches_tenant(ext.tenant_id):
-                continue
-            link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
-                surface_id=surface.id, external_user_id=ext.external_user_id
-            )
-            if link is not None:
-                return await self.send_agent_message_for_conversation(
-                    conversation_id=link.conversation_id, message=message
-                )
-        return False
-
+class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
     async def open_cold_email_thread(
         self,
         *,

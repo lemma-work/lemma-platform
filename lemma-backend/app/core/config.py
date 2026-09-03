@@ -335,12 +335,14 @@ class Settings(BaseSettings):
     worker_shutdown_grace_period_seconds: int = Field(
         default=10,
         description=(
-            "Seconds the streaq worker waits for in-flight tasks to finish on "
-            "SIGTERM/SIGINT before forcing cancellation (streaq grace_period). "
-            "Gives an interrupted agent run time to finalize its status in the "
-            "DB before the engine is disposed, avoiding runs stuck in RUNNING. "
-            "Keep below the orchestrator's termination grace period (e.g. "
-            "Kubernetes terminationGracePeriodSeconds, default 30s)."
+            "Seconds the streaq worker waits for in-flight tasks on SIGTERM "
+            "(streaq grace_period). It stops claiming new work the moment it "
+            "sees the signal, so this is the drain window, not a delay before "
+            "one: enough for an interrupted agent run to finalize its status "
+            "rather than stick in RUNNING. Keep below the orchestrator's "
+            "termination grace period (Kubernetes defaults to 30s) — past that "
+            "the platform SIGKILLs regardless. A longer task is not saved by a "
+            "bigger number here; the job heartbeat recovers it in ~90s."
         ),
     )
     worker_queue_name: str = Field(
@@ -564,7 +566,7 @@ class Settings(BaseSettings):
         default=None,
         description="SearXNG instance URL used when WEB_SEARCH_PROVIDER=searxng.",
     )
-    brave_search_api_key: Optional[str] = Field(
+    brave_search_api_key: Optional[SecretStr] = Field(
         default=None,
         description="Brave Search API key used when WEB_SEARCH_PROVIDER=brave.",
     )
@@ -628,13 +630,13 @@ class Settings(BaseSettings):
     google_client_id: Optional[str] = Field(
         default=None, description="Google OAuth Client ID"
     )
-    google_client_secret: Optional[str] = Field(
+    google_client_secret: Optional[SecretStr] = Field(
         default=None, description="Google OAuth Client Secret"
     )
     microsoft_client_id: Optional[str] = Field(
         default=None, description="Microsoft OAuth Client ID"
     )
-    microsoft_client_secret: Optional[str] = Field(
+    microsoft_client_secret: Optional[SecretStr] = Field(
         default=None, description="Microsoft OAuth Client Secret"
     )
 
@@ -663,7 +665,7 @@ class Settings(BaseSettings):
             "unless a GCP KMS key or Secret Manager secret is configured."
         ),
     )
-    secret_encryption_key: Optional[str] = Field(
+    secret_encryption_key: Optional[SecretStr] = Field(
         default=None,
         description=(
             "Primary Fernet key (urlsafe base64) for the static provider. Falls "
@@ -698,7 +700,9 @@ class Settings(BaseSettings):
     smtp_host: str = Field(default="smtp.gmail.com", description="SMTP server hostname")
     smtp_port: int = Field(default=587, description="SMTP server port")
     smtp_user: Optional[str] = Field(default=None, description="SMTP username")
-    smtp_password: Optional[str] = Field(default=None, description="SMTP password")
+    smtp_password: Optional[SecretStr] = Field(
+        default=None, description="SMTP password"
+    )
     smtp_from_email: Optional[str] = Field(
         default=None, description="From email address"
     )
@@ -1688,10 +1692,6 @@ class Settings(BaseSettings):
                 self.microsoft_client_secret,
             ]
         )
-
-    def is_teams_bot_configured(self) -> bool:
-        """Check if the Teams bot credentials are configured."""
-        return bool(self.microsoft_bot_app_id and self.microsoft_bot_app_password)
 
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""

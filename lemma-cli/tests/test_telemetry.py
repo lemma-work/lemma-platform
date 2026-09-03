@@ -123,3 +123,64 @@ def test_status_reports_the_config_path(config_path):
 
     assert status["config_path"] == str(config_path)
     assert json.loads(config_path.read_text())["active_server"] == "lemma-cloud"
+
+
+# --- first-run notice -----------------------------------------------------
+
+
+@pytest.fixture
+def reporting(monkeypatch) -> list[dict]:
+    """A CLI built with an ingestion key compiled in — the only case that sends
+    anything. Delivery is captured rather than performed."""
+    monkeypatch.setenv(telemetry.TELEMETRY_KEY_ENV, "phc-test-key")
+    sent: list[dict] = []
+    monkeypatch.setattr(telemetry, "_post", sent.append)
+    return sent
+
+
+def test_the_first_reported_command_says_what_is_being_sent(
+    config_path, reporting, capsys
+):
+    """Telemetry that starts arriving without the user having been told is the
+    version that becomes a public complaint. The notice is printed once, on the
+    first invocation that would actually report, and names the opt-out."""
+    _with_session(config_path)
+
+    telemetry.record_command("pods", exit_status="ok")
+
+    err = " ".join(capsys.readouterr().err.split())
+    assert "lemma telemetry off" in err
+    assert "anonymous" in err.lower()
+    assert len(reporting) == 1
+
+
+def test_the_notice_is_printed_once_not_on_every_command(
+    config_path, reporting, capsys
+):
+    _with_session(config_path)
+
+    telemetry.record_command("pods", exit_status="ok")
+    capsys.readouterr()
+    telemetry.record_command("agents", exit_status="ok")
+
+    assert capsys.readouterr().err == ""
+
+
+def test_nothing_is_printed_when_nothing_is_being_sent(config_path, capsys):
+    """No ingestion key compiled in — the case for every self-hosted and locally
+    built CLI — means no reporting, so there is nothing to disclose."""
+    _with_session(config_path)
+
+    telemetry.record_command("pods", exit_status="ok")
+
+    assert capsys.readouterr().err == ""
+
+
+def test_opting_out_stops_the_notice_too(config_path, reporting, capsys):
+    _with_session(config_path)
+    telemetry.set_enabled(False)
+
+    telemetry.record_command("pods", exit_status="ok")
+
+    assert capsys.readouterr().err == ""
+    assert reporting == []

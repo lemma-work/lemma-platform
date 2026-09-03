@@ -20,7 +20,7 @@ export type CreateTableRequest = {
      */
     enable_rls?: boolean;
     /**
-     * Table name. Use alphanumeric and underscore only. Names prefixed with `reserved_` are system-managed and should not be user-created.
+     * Table name. Use alphanumeric and underscore only, at most 63 bytes — PostgreSQL truncates longer names and two that share that prefix would become one table. Names prefixed with `reserved_` are system-managed and should not be user-created.
      */
     name: string;
     /**

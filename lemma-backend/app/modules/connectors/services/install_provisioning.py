@@ -13,6 +13,8 @@ checked against anything.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -101,6 +103,44 @@ async def validate_install_config(
     )
 
 
+class DiscoveryStatus(StrEnum):
+    """Which of the three things a discovery attempt actually did.
+
+    All three used to be the integer ``0``, and the refresh endpoint rendered
+    them identically as HTTP 200 ``{"operation_count": 0}``. An admin whose MCP
+    server was down at install time clicked refresh -- the documented recovery
+    path -- and could not tell "this connector advertises no operations" from
+    "your server refused me again".
+    """
+
+    OK = "ok"
+    NOT_APPLICABLE = "not_applicable"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class DiscoveryOutcome:
+    """What a discovery attempt did, and why, when it did nothing."""
+
+    status: DiscoveryStatus
+    operation_count: int = 0
+    #: The domain error's code when the attempt failed, or the reason it was
+    #: never made. Machine-readable; the human sentence is the caller's job.
+    reason: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.status is DiscoveryStatus.FAILED
+
+
+_NOT_APPLICABLE_NO_STORE = DiscoveryOutcome(
+    DiscoveryStatus.NOT_APPLICABLE, reason="operations_are_not_stored_here"
+)
+_NOT_APPLICABLE_NO_DISCOVERY = DiscoveryOutcome(
+    DiscoveryStatus.NOT_APPLICABLE, reason="kind_has_no_discovery"
+)
+
+
 async def discover_install_operations(
     auth_config: AuthConfigEntity,
     connector: ConnectorEntity,
@@ -108,16 +148,17 @@ async def discover_install_operations(
     repository: Any,
     uow: Any,
     credentials: dict[str, Any] | None = None,
-) -> int:
+) -> DiscoveryOutcome:
     """Populate an install's operations, if its kind discovers them.
 
     Runs after the install is committed, so a discovery failure leaves a usable
     (if empty) install rather than rolling back the connection the user just
-    made. Failures are logged, never raised -- the operator's recovery path is
-    the refresh endpoint, which is why that exists.
+    made. Failures are reported in the return value and never raised -- the
+    operator's recovery path is the refresh endpoint, which is why that exists,
+    and which has to be able to say whether it worked.
     """
     if repository is None:
-        return 0
+        return _NOT_APPLICABLE_NO_STORE
 
     from app.modules.connectors.domain.kinds import ResolvedInstall
     from app.modules.connectors.services.discovery.base import assign_unique_names
@@ -125,7 +166,7 @@ async def discover_install_operations(
 
     registry = _registry()
     if registry.get(auth_config.kind).discoverer is None:
-        return 0
+        return _NOT_APPLICABLE_NO_DISCOVERY
 
     install = ResolvedInstall(
         connector_id=auth_config.connector_id,
@@ -136,6 +177,10 @@ async def discover_install_operations(
         config_source=auth_config.config_source,
         spec=connector.spec_for(auth_config.kind),
     )
+    # Discovery is an HTTP call to a server the tenant named, and resolving the
+    # credential above was the last database work: hand the connection back
+    # rather than hold it for the round trip. See `docs/development.md`.
+    await uow.commit()
     try:
         found = await KindDispatcher(registry).discover(install, credentials)
     except ConnectorDomainError as exc:
@@ -144,7 +189,7 @@ async def discover_install_operations(
             auth_config_id=auth_config.id,
             error_type=type(exc).__name__,
         )
-        return 0
+        return DiscoveryOutcome(DiscoveryStatus.FAILED, reason=exc.code)
 
     # Names are disambiguated before storage: two tools whose names normalize
     # alike would otherwise collide on the unique index and abort the whole
@@ -167,7 +212,7 @@ async def discover_install_operations(
         ],
     )
     await uow.commit()
-    return len(found)
+    return DiscoveryOutcome(DiscoveryStatus.OK, operation_count=len(found))
 
 
 async def refresh_install_operations(
@@ -176,12 +221,15 @@ async def refresh_install_operations(
     user_id: UUID,
     organization_id: UUID,
     auth_config_name: str,
-) -> int:
+) -> DiscoveryOutcome:
     """Re-run discovery for an existing install.
 
     The recovery path. Without it, a discovery that failed when the install was
     created could only be fixed by deleting the install -- and accounts cascade
-    from it, so that would disconnect every user who had connected.
+    from it, so that would disconnect every user who had connected. It returns
+    the outcome rather than a count so the endpoint can say which of the three
+    things happened; reporting a refused server as `0` made the recovery path
+    claim success on the failure it exists to recover from.
     """
     auth_config = await service.get_auth_config_by_name(
         user_id=user_id,

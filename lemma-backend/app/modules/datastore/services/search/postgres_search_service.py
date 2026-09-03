@@ -175,8 +175,14 @@ class PostgresSearchService:
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
             except Exception:
-                logger.debug(
-                    "datastore.postgres_search_service.could_not_drop_legacy_index.observed"
+                # A legacy index left behind is a waste of write throughput and
+                # disk in that pod, and nothing else will ever notice: this runs
+                # once per process per schema, so it is not a volume risk.
+                logger.warning(
+                    "datastore.postgres_search_service.legacy_index_drop.degraded",
+                    schema_name=self.schema_name,
+                    index_name=legacy,
+                    exc_info=True,
                 )
         try:
             async with self.engine.begin() as conn:
@@ -196,9 +202,16 @@ class PostgresSearchService:
                 "does not exist" in lower_msg or "not installed" in lower_msg
             )
             if not extension_missing:
-                logger.debug(
-                    "datastore.postgres_search_service.create_halfvec_vector_index_s.diagnostic",
-                    error_type=type(exc).__name__,
+                # Warning, and named: production runs at LOG_LEVEL=INFO, so at
+                # debug a pod whose vector index never built left no trace at
+                # all. Search keeps working by sequential scan and simply gets
+                # slower as the pod grows -- until `guard_query_plan`'s cost
+                # ceiling starts refusing unrelated queries in the same schema,
+                # which is the point somebody finally investigates.
+                logger.warning(
+                    "datastore.postgres_search_service.vector_index_build.degraded",
+                    schema_name=self.schema_name,
+                    exc_info=True,
                 )
 
     async def index_file_chunks(

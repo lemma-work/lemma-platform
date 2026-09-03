@@ -13,19 +13,22 @@ numbers**, scoped by folder. Data files (CSV/images/…) are stored but not inde
 
 ```tsx
 import { useUploadFile } from "lemma-sdk/react";
-const { upload, isUploading } = useUploadFile({ client, podId: client.podId });
-await upload({ path: "/knowledge", file });   // a File/Blob; indexing starts automatically
+const { upload, isSubmitting, uploadedFile, error } = useUploadFile({ client, podId: client.podId });
+// the Blob is the FIRST argument; the folder key is `directoryPath`, not `path`
+await upload(file, { directoryPath: "/knowledge" });   // indexing starts automatically
+// other options: name, parentId, description, searchEnabled (false to skip indexing)
 ```
 
 ## Scoped search
 
 ```tsx
 import { useFileSearch } from "lemma-sdk/react";
-const { results } = useFileSearch({
+const { results, totalResults, isLoading } = useFileSearch({
   client, podId: client.podId,
   query: "refund policy",
   scopePath: "/knowledge/billing",   // SUBTREE by default: folder + everything under it
-  method: "HYBRID",                  // or VECTOR | TEXT
+  searchMethod: "HYBRID",            // or VECTOR | TEXT  (the key is searchMethod)
+  // scopeMode: "DIRECT",            // immediate children only
 });
 // each result: { path, content, score, page_number, page_end } → deep-link to the page
 ```
@@ -34,12 +37,25 @@ const { results } = useFileSearch({
 
 ```tsx
 import { useFilePreview } from "lemma-sdk/react";
-const { markdown, pageCount } = useFilePreview({ client, podId: client.podId, path: "/knowledge/report.pdf" });
+// mode="rendered" (the default) returns the converted markdown as `content` —
+// the server does not render HTML, so render the markdown yourself.
+const { content, isLoading } = useFilePreview({
+  client, podId: client.podId, path: "/knowledge/report.pdf",
+});
 
-// render a specific rendered page as an image (a child artifact of the document):
+// one named child artifact instead (a figure, a rendered page):
+const page = useFilePreview({
+  client, podId: client.podId, path: "/knowledge/report.pdf",
+  mode: "artifact", artifact: "pages/page_0003.jpg",
+});   // → { content, blob, ... }
+
+// ...or just mint a URL and put it in an <img>:
 const { url } = await client.files.getUrl("/knowledge/report.pdf/pages/page_0003.jpg");
 // <img src={url} alt="page 3" />
 ```
+
+There is no page count on the hook — count `<!-- PAGE n -->` markers in `content`, or
+list the child artifacts.
 
 For agents/CLI (not the app), the same page image is what **view-image** reads
 directly — `lemma file child /knowledge/report.pdf/pages/page_0003.jpg page3.jpg`

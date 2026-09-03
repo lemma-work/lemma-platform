@@ -13,7 +13,18 @@ one is covered before it is written.
 
 from __future__ import annotations
 
-from app.modules.connectors.api.auth_config_controller import _redact_config
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
+
+from app.modules.connectors.api.auth_config_controller import (
+    _redact_config,
+    get_auth_config,
+    list_auth_configs,
+)
+from app.modules.connectors.domain.auth_config import (
+    AuthConfigEntity,
+    AuthConfigSource,
+)
 
 MASK = "********"
 
@@ -46,14 +57,32 @@ def test_a_pasted_token_is_masked():
     assert _redact_config({"bearer_token": "sk-live-1"})["bearer_token"] == MASK
 
 
-def test_a_credential_hidden_in_a_header_is_masked():
-    """`extra_headers` is free-form, so a tenant can put their key anywhere in
-    it. Recursion is what covers a shape nobody declared."""
+def test_every_header_value_is_masked_whatever_the_header_is_called():
+    """`extra_headers` and `default_headers` are the two maps whose *keys* the
+    tenant chooses -- both are documented as "anything the server needs beyond
+    the token below". `Authorization` matches the sensitive-key set, but
+    `X-Auth`, `X-Signature-Key` and `Cookie2` do not and are the same thing, so
+    over these two maps a key-name rule can never be complete. The values are
+    masked by position instead; the names stay, so an operator can still see
+    which headers an install sends."""
     out = _redact_config(
-        {"extra_headers": {"Authorization": "Bearer zzz", "X-Trace": "keep"}}
+        {
+            "extra_headers": {"Authorization": "Bearer zzz", "X-Signature-Key": "shh"},
+            "default_headers": {"X-Auth": "hunter2"},
+        }
     )
-    assert out["extra_headers"]["Authorization"] == MASK
-    assert out["extra_headers"]["X-Trace"] == "keep"
+    assert out["extra_headers"] == {
+        "Authorization": MASK,
+        "X-Signature-Key": MASK,
+    }
+    assert out["default_headers"] == {"X-Auth": MASK}
+
+
+def test_an_unset_header_is_not_reported_as_set():
+    """Same rule as an empty client secret: masking a blank would tell the
+    reader a value is configured when none is."""
+    out = _redact_config({"extra_headers": {"X-Env": "", "X-Trace": None}})
+    assert out["extra_headers"] == {"X-Env": "", "X-Trace": None}
 
 
 def test_an_endpoint_is_a_location_not_a_credential():
@@ -97,3 +126,73 @@ def test_a_list_of_configs_is_walked():
 
 def test_none_stays_none():
     assert _redact_config(None) is None
+
+
+class TestOnlyAManagerSeesTheConfig:
+    """Masking secrets by key name cannot be the only control over a map whose
+    key names the tenant chooses, so the read is levelled with the write.
+
+    Which installs exist, and whether they are healthy, stays visible to every
+    member -- that is what the connectors page is for. The configuration is
+    not: for the mcp/http/sql kinds it is entirely tenant-written, and creating
+    it already requires owner or editor.
+    """
+
+    @staticmethod
+    def _install() -> AuthConfigEntity:
+        return AuthConfigEntity(
+            id=uuid4(),
+            organization_id=uuid4(),
+            connector_id="mcp",
+            provider="LEMMA",
+            config_source=AuthConfigSource.SYSTEM_DEFAULT,
+            name="an-install",
+            config={
+                "server_url": "https://internal.example/mcp",
+                "extra_headers": {"X-Auth": "hunter2"},
+            },
+        )
+
+    @staticmethod
+    def _service(*, may_read: bool) -> AsyncMock:
+        install = TestOnlyAManagerSeesTheConfig._install()
+        return AsyncMock(
+            list_auth_configs=AsyncMock(return_value=([install], None)),
+            get_auth_config_by_name=AsyncMock(return_value=install),
+            may_read_install_config=AsyncMock(return_value=may_read),
+        )
+
+    async def test_a_manager_still_sees_it(self):
+        response = await get_auth_config(
+            user=Mock(id=uuid4()),
+            organization_id=uuid4(),
+            auth_config_name="an-install",
+            connector_service=self._service(may_read=True),
+        )
+
+        assert response.config is not None
+        assert response.config["server_url"] == "https://internal.example/mcp"
+        assert response.config["extra_headers"] == {"X-Auth": MASK}
+
+    async def test_a_plain_member_sees_the_install_but_not_its_config(self):
+        response = await get_auth_config(
+            user=Mock(id=uuid4()),
+            organization_id=uuid4(),
+            auth_config_name="an-install",
+            connector_service=self._service(may_read=False),
+        )
+
+        assert response.name == "an-install"
+        assert response.status, "which installs exist stays visible"
+        assert response.config is None
+
+    async def test_the_list_applies_the_same_rule(self):
+        listing = await list_auth_configs(
+            user=Mock(id=uuid4()),
+            organization_id=uuid4(),
+            connector_service=self._service(may_read=False),
+            limit=100,
+            page_token=None,
+        )
+
+        assert [item.config for item in listing.items] == [None]

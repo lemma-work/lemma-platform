@@ -349,6 +349,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         *,
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
+        expected_updated_at: datetime | None = None,
     ): ...
 
     async def delete_record(

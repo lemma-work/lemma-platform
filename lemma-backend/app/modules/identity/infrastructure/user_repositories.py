@@ -119,7 +119,16 @@ class UserRepository(UserRepositoryPort):
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def get_id_by_mobile_digits(self, digits: str) -> Optional[UUID]:
-        """Owner of this phone number, compared on digits only (index-aligned)."""
+        """Any owner of this phone number, compared on digits only.
+
+        Unfiltered, and deliberately: this answers "is the number taken", for
+        the 409 in ``_ensure_identifiers_unique``. The unique index it stands in
+        front of counts deactivated and deleted rows too, so a filtered lookup
+        here would let a second person claim a departed one's number and then
+        fail on the insert with an ``IntegrityError`` instead of a clean
+        refusal. Nothing resolves an inbound sender through this -- that path
+        uses ``get_ids_by_mobile_numbers``, which filters.
+        """
         stmt = select(User.id).where(
             User.mobile_number.isnot(None),
             func.regexp_replace(User.mobile_number, r"\D", "", "g") == digits,
@@ -127,9 +136,34 @@ class UserRepository(UserRepositoryPort):
         return await self.session.scalar(stmt)
 
     async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]:
-        """Owner of this telegram username, compared case-insensitively."""
+        """Any owner of this telegram username, compared case-insensitively.
+
+        The "is it taken" question, with the same reasoning as
+        ``get_id_by_mobile_digits`` above. Resolving an inbound sender asks
+        ``get_live_id_by_telegram_lower`` instead.
+        """
         stmt = select(User.id).where(
             func.lower(User.telegram_username) == username_lower
+        )
+        return await self.session.scalar(stmt)
+
+    async def get_live_id_by_telegram_lower(
+        self, username_lower: str
+    ) -> Optional[UUID]:
+        """The live user holding this telegram username, if there is one.
+
+        Split from the lookup above rather than given a flag, because the two
+        callers are asking different questions and only one of them may see a
+        departed colleague. This one resolves an inbound surface sender into the
+        identity an agent run then executes as -- a match here is an authority
+        grant, exactly as in ``get_id_by_email_insensitive``, and it is the
+        *first* branch tried, so it decides before the filtered email path is
+        reached.
+        """
+        stmt = select(User.id).where(
+            func.lower(User.telegram_username) == username_lower,
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
         )
         return await self.session.scalar(stmt)
 

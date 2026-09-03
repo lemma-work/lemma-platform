@@ -40,6 +40,7 @@ from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
     apply_grants,
     grants_from_payload as _grants_from_payload,
+    has_grants as _has_grants,
 )
 
 logger = get_logger(__name__)
@@ -63,6 +64,7 @@ class BundleApplier:
         user_id: UUID,
         bundle_root: Path,
         replacements: dict[str, str] | None = None,
+        warnings: list[str] | None = None,
     ):
         self._uow = uow
         self._ctx = ctx
@@ -70,6 +72,10 @@ class BundleApplier:
         self._user_id = user_id
         self._root = bundle_root
         self._replacements = replacements or {}
+        # The import's own warning list, so a best-effort fallback the apply
+        # takes (an unreadable file manifest, say) reaches the person who
+        # imported rather than only a debug log.
+        self._warnings = warnings if warnings is not None else []
 
     async def apply_step(self, step: PlanStep) -> None:
         handler = {
@@ -190,7 +196,11 @@ class BundleApplier:
             return
 
         if step.detail.get("is_folder"):
-            meta = _read_json_file(files_root.joinpath(*parts) / ".folder.json")
+            meta = _read_json_file(
+                files_root.joinpath(*parts) / ".folder.json",
+                label=f".folder.json for '{pod_path}'",
+                warnings=self._warnings,
+            )
             await service.create_folder(
                 self._pod_id,
                 pod_path,
@@ -203,7 +213,7 @@ class BundleApplier:
         source = files_root.joinpath(*parts)
         if not source.is_file():
             return
-        meta = _file_manifest_entry(files_root, pod_path)
+        meta = _file_manifest_entry(files_root, pod_path, self._warnings)
         directory_path = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
         file_content = await run_blocking(source.read_bytes, limiter="cpu_bound")
         await service.create_file(
@@ -300,13 +310,17 @@ class BundleApplier:
         own runner, which runs before agents, apps, and files. A function granted
         `/knowledge` or `function:write_lesson:execute` therefore tried to
         resolve a name that did not exist yet and lost the grant. Agents were
-        always deferred; this makes the two behave the same."""
+        always deferred; this makes the two behave the same.
+
+        Gated on ``has_grants``, not on the parsed list: a manifest that says
+        ``{"grants": []}`` means "holds nothing" and clears the target's grants,
+        while one with no ``permissions`` key leaves them alone."""
         from app.composition.pod_bundle_resources import build_function_service
 
         payload = self._load("functions", step.name)
-        grants = _grants_from_payload(payload)
-        if not grants:
+        if not _has_grants(payload):
             return
+        grants = _grants_from_payload(payload)
         service = build_function_service(self._uow)
         function = await _get_function(
             service, self._pod_id, step.name, self._user_id, self._ctx
@@ -332,13 +346,14 @@ class BundleApplier:
 
     async def _apply_agent_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace an agent's resource permission grants once
-        every resource it references (tables, functions) has been applied."""
+        every resource it references (tables, functions) has been applied. An
+        explicitly empty grant list clears them — see `_apply_function_grants`."""
         from app.composition.pod_bundle_resources import get_agent_service
 
         payload = self._load("agents", step.name)
-        grants = _grants_from_payload(payload)
-        if not grants:
+        if not _has_grants(payload):
             return
+        grants = _grants_from_payload(payload)
         service = get_agent_service(self._uow)
         agent = await _get_agent(service, self._pod_id, step.name, self._ctx)
         if agent is None or agent.id is None:
@@ -383,7 +398,9 @@ class BundleApplier:
         payload = self._load("schedules", step.name)
         existing = await _get_schedule(service, self._pod_id, step.name, self._ctx)
         if existing is not None:
-            return  # schedules are treated as create-once by name for this slice
+            # Create-once by name. The plan says SKIP for this case, so reaching
+            # here means the pod grew the schedule between plan and apply.
+            return
         # Build from the shared allow-list (also used by lemma-cli's direct
         # import) so the two importers can't silently drift on which exported
         # fields survive — this is what previously dropped account_id,
@@ -416,6 +433,7 @@ class BundleApplier:
         service = get_workflow_service(self._uow)
         payload = self._load("workflows", step.name)
         if await _flow_exists(service, self._pod_id, step.name, self._ctx):
+            # Create-once by name, like schedules; the plan says SKIP for it.
             return
         await service.create_workflow(
             pod_id=self._pod_id,
@@ -478,22 +496,59 @@ async def _file_exists(service, pod_id, path, ctx) -> bool:
         return False
 
 
-def _read_json_file(path: Path) -> dict[str, Any]:
+def _read_json_file(path: Path, *, label: str, warnings: list[str]) -> dict[str, Any]:
+    """Read a bundle's file-layout metadata (``.folder.json``, ``.files.json``).
+
+    An absent file is normal — a bundle need not carry either — and reads as "no
+    metadata". A present-but-unreadable one is not: falling back to defaults
+    lands every file as ``visibility="POD"`` with no description and search on,
+    which is a silent default on a visibility field. So it is reported on the
+    import instead of returning ``{}`` mutely."""
     import json
 
+    if not path.is_file():
+        return {}
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except OSError, ValueError:
+        _note_unreadable_metadata(label, warnings, exc_info=True)
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if not isinstance(parsed, dict):
+        _note_unreadable_metadata(label, warnings, exc_info=False)
+        return {}
+    return parsed
 
 
-def _file_manifest_entry(files_root: Path, pod_path: str) -> dict[str, Any]:
+def _note_unreadable_metadata(
+    label: str, warnings: list[str], *, exc_info: bool
+) -> None:
+    """Report unreadable layout metadata once per label, not once per file:
+    ``.files.json`` is re-read for every FILE step, so a broken manifest would
+    otherwise emit one log line and one user-visible warning per bundled file."""
+    message = (
+        f"'{label}' could not be read; the files it describes were imported with "
+        f"default description, visibility and search settings."
+    )
+    if message in warnings:
+        return
+    warnings.append(message)
+    logger.warning(
+        "pod_bundle.applier.file_metadata_unreadable.degraded",
+        metadata_file=label,
+        exc_info=exc_info,
+    )
+
+
+def _file_manifest_entry(
+    files_root: Path, pod_path: str, warnings: list[str]
+) -> dict[str, Any]:
     """The ``.files.json`` entry for a file path (description/visibility/
     search_enabled), or an empty dict when there is no manifest/entry."""
     from lemma_pod_bundle.layout import FILES_MANIFEST
 
-    manifest = _read_json_file(files_root / FILES_MANIFEST)
+    manifest = _read_json_file(
+        files_root / FILES_MANIFEST, label=FILES_MANIFEST, warnings=warnings
+    )
     for entry in manifest.get("files") or []:
         if isinstance(entry, dict) and str(entry.get("path") or "") == pod_path:
             return entry

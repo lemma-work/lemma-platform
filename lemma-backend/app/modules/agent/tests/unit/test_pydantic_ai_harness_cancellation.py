@@ -141,8 +141,11 @@ async def test_the_failure_reaches_the_run_as_an_error_and_never_as_completed(
 
     assert AgentEventType.COMPLETED not in types
     assert types[-1] == AgentEventType.ERROR
-    # The user is told to retry, not to go and check a configuration that is fine.
-    assert "Retry" in events[-1].data
+    # The user is told to try again, not to go and check a configuration that
+    # is fine. Not by name, though: this run had already produced output, and
+    # the Retry control refuses exactly those.
+    assert "send another message" in events[-1].data
+    assert "configuration" not in events[-1].data
 
 
 @pytest.mark.asyncio

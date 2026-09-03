@@ -127,15 +127,20 @@ async def view_image(
     request: ViewImageRequest,
 ) -> Any:
     """
-    Load an image file from the private workspace and return it as binary tool content.
+    Load an image and return it as binary tool content, from either store.
 
     Use this for screenshots, generated images, charts, or any other visual artifact
     that the agent should inspect.
 
     PATH HANDLING:
-    - This tool reads only from the private current conversation workspace directory.
-    - Always pass a relative path such as `images/output.png`.
-    - Do not pass absolute paths or paths outside the current workspace directory.
+    - Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,
+      or neither, is refused — the store is the one you name, never inferred
+      from the shape of the path.
+    - `workspace_file_path` is relative to the conversation's sandbox, e.g.
+      `images/output.png`. Use it for artifacts this run just produced.
+    - `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a
+      file that lives in the pod.
+    - Images only. For a PDF, use `pod_view_document_pages` instead.
     """
     return await workspace_cli.view_image_internal(ctx.deps, request)
 

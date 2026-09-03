@@ -16,9 +16,7 @@ from datetime import datetime, timedelta, timezone
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
-    ConnectRequestStatus,
 )
-from app.modules.connectors.domain.errors import ConnectRequestNotFoundError
 
 # Long enough for a person to read a consent screen, find a password manager
 # and pass an MFA prompt; short enough that a leaked `state` is not a standing
@@ -34,36 +32,21 @@ def oldest_claimable_connect_request() -> datetime:
 
     Passed into the claim so the age test runs in the same UPDATE as the status
     test, rather than being decided in Python beside it.
-    """
-    return datetime.now(timezone.utc) - CONNECT_REQUEST_TTL
-
-
-def assert_still_open(connect_request: ConnectRequestEntity) -> None:
-    """Refuse a callback for a flow that is finished, failed, or stale.
-
-    The status used to be written on every path and read on none, so a `state`
-    was a permanent bearer capability meaning "attach a connector account to
-    this user in this org". It travels through the provider's redirect, so it
-    lands in browser history, proxy logs and Referer headers -- and replaying
-    it with a fresh authorization code obtained for the same client stores the
-    replayer's provider identity as an account belonging to whoever started the
-    flow. Their agents and schedules then act through it.
 
     Single use and time-bounded together: expiry alone still allows a replay
     inside the window, and single use alone leaves an abandoned request valid
-    forever.
+    forever. Both belong in that one UPDATE, which is why the Python-side
+    `assert_still_open` that used to state the same rule beside it is gone --
+    two implementations of one security rule, only one of them reached, and
+    the unreached one was the one with tests.
 
-    Raises the not-found error rather than anything more specific, because a
-    caller holding a `state` should not learn whether it was wrong, spent or
-    merely old.
+    The `state` travels through the provider's redirect, so it lands in browser
+    history, proxy logs and Referer headers; replaying it with a fresh
+    authorization code obtained for the same client would otherwise store the
+    replayer's provider identity as an account belonging to whoever started the
+    flow, and their agents and schedules would then act through it.
     """
-    if connect_request.status is not ConnectRequestStatus.PENDING:
-        raise ConnectRequestNotFoundError()
-    started = connect_request.created_at
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) - started > CONNECT_REQUEST_TTL:
-        raise ConnectRequestNotFoundError()
+    return datetime.now(timezone.utc) - CONNECT_REQUEST_TTL
 
 
 def stored_code_verifier(connect_request: ConnectRequestEntity) -> str | None:

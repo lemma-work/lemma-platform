@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 
+from ..cli_app.enums import SURFACE_PLATFORM_HELP
 from .context import selected_conversation, selected_org, selected_pod
 from .io import emit
 from .lazy import LazyEntry, LazyRootGroup
@@ -102,13 +103,13 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "surface": (
         f"{_CMD}.surfaces",
         "app",
-        "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.",
+        SURFACE_PLATFORM_HELP,
         False,
     ),
     "surfaces": (
         f"{_CMD}.surfaces",
         "app",
-        "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.",
+        SURFACE_PLATFORM_HELP,
         False,
     ),
     "profile": (

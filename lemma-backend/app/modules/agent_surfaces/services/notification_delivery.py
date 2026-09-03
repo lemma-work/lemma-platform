@@ -163,6 +163,35 @@ class UndeliverableReason:
         "The pod's only mailbox surface cannot start a new email thread. Ask "
         "them to email the pod address once, or connect a chat surface."
     )
+    # The four below are for `surface.send`, which names its surface and its
+    # recipient rather than searching for a route -- so it can fail in ways the
+    # resolver above never reaches. All four used to be the same 404, which said
+    # "no reachable conversation" about a switched-off surface and about someone
+    # who is not in the pod at all.
+    SURFACE_NOT_ACTIVE = (
+        "This surface is not active, so nothing can be sent from it. Reconnect "
+        "it, or send from another of the pod's surfaces."
+    )
+    NOT_A_POD_MEMBER = (
+        "This person is not a member of the pod this surface belongs to. Add "
+        "them to the pod, or send to somebody who is already in it."
+    )
+    SEND_FAILED = (
+        "The surface could not deliver the message. It is worth trying again; "
+        "if it keeps failing, check the surface's connection."
+    )
+    #: A wiring fault in this process rather than anything the caller did, so it
+    #: says what the caller can act on and the detail goes to the log.
+    SEND_NOT_AVAILABLE = (
+        "Sending on this surface is unavailable right now. Try again shortly."
+    )
+
+    @staticmethod
+    def wrong_tenant_on(channel: str) -> str:
+        return (
+            f"This person's {channel_label(channel)} account is in a different "
+            "workspace from the one this surface is connected to."
+        )
 
     # The four below take the channel the agent asked for. They are methods
     # rather than constants because a refusal that does not name the channel

@@ -3917,3 +3917,39 @@ def test_an_error_we_cannot_explain_is_left_to_traceback(capsys):
 
     assert report_cli_error(ValueError("a genuine bug")) is False
     assert capsys.readouterr().err == ""
+
+
+def test_init_says_when_the_picker_is_not_the_whole_list(monkeypatch, tmp_path):
+    """A picker showing the first page and nothing else is a confident wrong
+    answer: the org the user wants may simply not be on it."""
+    config_file = tmp_path / "config.json"
+
+    class FakeOrganizations:
+        def list(self, *, limit, page_token=None):
+            return {
+                "items": [{"id": f"org-{n}", "name": f"Org {n}"} for n in range(limit)],
+                "limit": limit,
+                "next_page_token": "next",
+            }
+
+    class FakePods:
+        def list_by_organization(self, org_id, *, limit, page_token=None):
+            return {"items": [{"id": "pod-1", "name": "Ops"}]}
+
+    fake_client = SimpleNamespace(organizations=FakeOrganizations(), pods=FakePods())
+
+    from lemma_cli.cli_core.commands import system
+
+    def fake_run_with_client(ctx, fn):
+        from lemma_cli.cli_core.state import state_from_ctx
+
+        return fn(fake_client, state_from_ctx(ctx))
+
+    monkeypatch.setattr(system, "run_with_client", fake_run_with_client)
+    # Non-interactive: take the first, but still say the list was cut short.
+    monkeypatch.setattr(system, "select_from_items", lambda items, **_kw: items[0])
+
+    result = runner.invoke(app, ["--config-file", str(config_file), "init"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "more organizations" in " ".join(result.stderr.split())

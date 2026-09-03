@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -295,3 +298,68 @@ async def test_ensure_schema_locks_the_same_key_as_the_pod_schema_provisioner():
     )
     provisioner_statement = str(provisioner_connection.execute.await_args.args[0])
     assert provisioner_statement == statements[lock_index]
+
+
+class TestAFailedIndexBuildIsVisible:
+    """Production runs at LOG_LEVEL=INFO, so a caught failure logged at debug is
+    the same as one that was never logged. A pod whose vector index never built
+    keeps answering searches by sequential scan and simply gets slower as it
+    grows -- until `guard_query_plan`'s cost ceiling starts refusing unrelated
+    queries in the same schema.
+    """
+
+    def _engine_that_fails(self, message: str):
+        @asynccontextmanager
+        async def _begin():
+            raise RuntimeError(message)
+            yield  # pragma: no cover - makes this an async generator
+
+        return SimpleNamespace(begin=_begin)
+
+    async def _warnings(self, caplog, message: str) -> tuple[list[dict], str]:
+        service = _search_service()
+        service.engine = self._engine_that_fails(message)
+        with caplog.at_level(logging.DEBUG):
+            await service._ensure_vector_index()
+        return [
+            record.msg
+            for record in caplog.records
+            if record.levelno >= logging.WARNING and isinstance(record.msg, dict)
+        ], service.schema_name
+
+    @pytest.mark.asyncio
+    async def test_a_refused_build_is_reported_at_warning(self, caplog) -> None:
+        warnings, _ = await self._warnings(caplog, "permission denied for schema")
+
+        assert "datastore.postgres_search_service.vector_index_build.degraded" in [
+            warning["event"] for warning in warnings
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_report_names_the_schema_that_lost_its_index(
+        self, caplog
+    ) -> None:
+        """Without it the line says a build failed somewhere in the install."""
+        warnings, schema_name = await self._warnings(
+            caplog, "permission denied for schema"
+        )
+
+        build = next(
+            warning
+            for warning in warnings
+            if warning["event"].endswith("vector_index_build.degraded")
+        )
+        assert build["schema_name"] == schema_name
+        assert "permission denied for schema" in build["error_traceback"]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_extension_stays_quiet(self, caplog) -> None:
+        """An install without pgvector is a deployment choice, not a fault, and
+        it would otherwise warn once per pod on every process."""
+        warnings, _ = await self._warnings(caplog, 'extension "vector" does not exist')
+
+        assert not [
+            warning
+            for warning in warnings
+            if warning["event"].endswith("vector_index_build.degraded")
+        ]

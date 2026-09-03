@@ -32,6 +32,7 @@ from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.runtime_history import (
     apply_surface_history_window,
 )
+from app.modules.agent.services.runtime_history import bound_runtime_history
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
 
@@ -674,3 +675,57 @@ class TestElisionNoticesStayOutOfTheSystemChannel:
         ]
         assert notices
         assert all(m.role is MessageRole.USER for m in notices)
+
+
+class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
+    """The loader trimmed after attaching messages, so a long conversation read
+    every user message of every run it was about to discard -- per turn, on the
+    interactive path, on exactly the conversations the run cap protects.
+
+    Trimming first is only correct if the notice announcing the dropped runs
+    survives the move: the window is idempotent, so a pre-trimmed list looks to
+    `select_runtime_history` like a conversation that lost nothing.
+    """
+
+    def _long_conversation(self, run_count: int) -> list[AgentRun]:
+        conversation_id = uuid4()
+        return [
+            _run(conversation_id, index, message_count=4) for index in range(run_count)
+        ]
+
+    def test_only_the_runs_that_survive_the_window_are_asked_for(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        assert len(bounded) == MAX_HISTORY_AGENT_RUNS
+        assert dropped == 12
+        assert bounded[-1] is runs[-1]
+
+    def test_trimming_first_selects_what_trimming_last_selected(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        trimmed_first = select_runtime_history(
+            _as_bounded(bounded), None, already_dropped=dropped
+        )
+        trimmed_last = select_runtime_history(_as_bounded(runs), None)
+
+        assert _fingerprint(trimmed_first) == _fingerprint(trimmed_last)
+
+    def test_the_dropped_runs_are_still_announced(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        selected = select_runtime_history(
+            _as_bounded(bounded), None, already_dropped=dropped
+        )
+
+        notices = [
+            message
+            for message in selected
+            if (message.metadata or {}).get("summary_kind")
+            == "conversation_runs_dropped"
+        ]
+        assert len(notices) == 1
+        assert notices[0].metadata["dropped_run_count"] == 12

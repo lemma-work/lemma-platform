@@ -28,6 +28,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleUpdateEntity,
     normalize_datastore_schedule_config,
 )
+from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
@@ -41,6 +42,7 @@ from app.modules.schedule.services.schedule_target_policy import (
     target_agent_after_update,
     derive_webhook_target_from_workflow_start,
     named_agent_target_fields,
+    validate_global_workflow_is_unclaimed,
     validate_instruction_survives_update,
     validate_target_instruction,
     validate_single_target,
@@ -50,6 +52,7 @@ from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
 )
+from app.modules.schedule.services.webhook_source_policy import validate_webhook_source
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +69,7 @@ class ScheduleService:
         target_resolver: ScheduleTargetResolver | None = None,
         datastore_policy: DatastoreSchedulePolicy | None = None,
         authorization_service: object | None = None,
+        webhook_sources: WebhookSourceRegistry | None = None,
     ):
         self.uow = uow
         self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
@@ -79,6 +83,9 @@ class ScheduleService:
             external_schedule_writer = ExternalScheduleWriterAdapter(uow=uow)
         self.external_schedule_writer = external_schedule_writer
         self.authorization_service = authorization_service
+        # Injected rather than resolved here: the registry is a deployment
+        # fact assembled at the composition root, which a module may not import.
+        self.webhook_sources = webhook_sources
         if datastore_policy is None:
             from app.composition.schedule_datastore_policy import (
                 SqlAlchemyDatastoreSchedulePolicy,
@@ -147,6 +154,8 @@ class ScheduleService:
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
             validate_time_schedule_config(schedule_create.config)
+        elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
+            validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
         created = await self.schedule_repository.create(schedule)
 
@@ -285,6 +294,10 @@ class ScheduleService:
                     ),
                 )
             )
+        if existing.schedule_type == ScheduleType.WEBHOOK and schedule_update.config:
+            # Only a config the caller wrote; a re-derived one is the row's own.
+            candidate = existing.model_copy(update={"config": update_data["config"]})
+            validate_webhook_source(candidate, self.webhook_sources)
         # Whatever the schedule points at once this lands -- the retargeted
         # agent if it is being retargeted, otherwise the one it already had.
         target_agent = await target_agent_after_update(
@@ -360,19 +373,13 @@ class ScheduleService:
             if flow is None or flow.pod_id != schedule_create.pod_id:
                 raise ScheduleValidationError("Workflow target not found in pod")
             if flow.is_global_workflow:
-                existing = await self.schedule_repository.find_active_by_workflow(
-                    pod_id=schedule_create.pod_id,
-                    workflow_id=flow.id,
-                    user_id=schedule_create.user_id,
-                )
-                if existing:
-                    raise ScheduleValidationError(
-                        "Global workflow already has a schedule for this user in this "
-                        "pod (GLOBAL workflows are system-wide singletons). "
-                        f"Conflicting schedule: '{existing[0].name}' "
-                        f"({existing[0].id}). Update or delete it instead of "
-                        "creating another."
+                validate_global_workflow_is_unclaimed(
+                    await self.schedule_repository.find_active_by_workflow(
+                        pod_id=schedule_create.pod_id,
+                        workflow_id=flow.id,
+                        user_id=schedule_create.user_id,
                     )
+                )
 
         if schedule_create.agent_id is not None:
             agent = await self.target_resolver.get_agent(schedule_create.agent_id)
@@ -455,17 +462,9 @@ class ScheduleService:
                         user_id=existing.user_id,
                     )
                 )
-                conflicting = [
-                    item for item in existing_for_workflow if item.id != schedule_id
-                ]
-                if conflicting:
-                    raise ScheduleValidationError(
-                        "Global workflow already has a schedule for this user in this "
-                        "pod (GLOBAL workflows are system-wide singletons). "
-                        f"Conflicting schedule: '{conflicting[0].name}' "
-                        f"({conflicting[0].id}). Update or delete it instead of "
-                        "creating another."
-                    )
+                validate_global_workflow_is_unclaimed(
+                    [item for item in existing_for_workflow if item.id != schedule_id]
+                )
         updated = await self.schedule_repository.update(schedule_id, **update_data)
 
         if is_explicit_reactivation(existing, updated, update_data):

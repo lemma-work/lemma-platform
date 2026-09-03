@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, model_validator
 
 from app.core.domain.entity import Entity
+from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
@@ -102,3 +103,24 @@ class AuthConfigEntity(Entity):
     @property
     def uses_native(self) -> bool:
         return self.kind is not ConnectorKind.COMPOSIO
+
+
+def reject_if_disabled(auth_config: AuthConfigEntity) -> None:
+    """Refuse to use an install an admin has switched off.
+
+    `status` is the only way short of deletion to stop an install being used,
+    and deletion cascades away every account on it -- so an admin who disables
+    a compromised install reasonably believes it is off. It has to be off on
+    every path that reaches the provider, not only the ones that look the
+    install up by name.
+
+    Named rather than a 404: the caller supplied an id for an install they can
+    already see in their own organization, so there is nothing to withhold, and
+    "not found" would send them looking for a row that is right there.
+    """
+    if auth_config.status is AuthConfigStatus.DISABLED:
+        raise ConnectorValidationError(
+            f"The connector install '{auth_config.name}' is disabled. "
+            "Re-enable it before connecting or running operations against it.",
+            details={"reason": "install_disabled"},
+        )

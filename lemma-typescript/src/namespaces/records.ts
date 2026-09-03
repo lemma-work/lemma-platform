@@ -33,6 +33,10 @@ export class RecordsNamespace {
     private readonly podId: () => string,
   ) {}
 
+  /**
+   * One page of a table's rows. `limit` defaults to 20 and the rest is behind
+   * `next_page_token`; see {@link listAll} when the answer has to be complete.
+   */
   list(table: string, options: ListRecordsOptions = {}) {
     const { filters, sort, limit, pageToken, offset } = options;
 
@@ -47,6 +51,38 @@ export class RecordsNamespace {
         pageToken,
       ),
     );
+  }
+
+  /**
+   * Every matching row, paged to exhaustion.
+   *
+   * "Read a table" and "read all of a table" are different operations and the
+   * difference is invisible at the call site, so a default page of 20 makes a
+   * partial read look complete. The filter and sort are re-sent with every
+   * page, so the walk cannot widen halfway through.
+   */
+  async listAll(
+    table: string,
+    options: Omit<ListRecordsOptions, "limit" | "pageToken"> & { pageSize?: number } = {},
+  ): Promise<Record<string, unknown>[]> {
+    const { filters, sort, offset, pageSize } = options;
+    const rows: Record<string, unknown>[] = [];
+    let pageToken: string | undefined;
+
+    for (;;) {
+      const page = await this.list(table, {
+        filters,
+        sort,
+        offset,
+        limit: pageSize ?? 500,
+        pageToken,
+      });
+      rows.push(...(page.items ?? []));
+      pageToken = page.next_page_token ?? undefined;
+      if (!pageToken) {
+        return rows;
+      }
+    }
   }
 
   create(table: string, data: Record<string, unknown>) {

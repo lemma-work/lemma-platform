@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.modules.datastore.api.record_query import (
+    RECORD_FILTER_DESCRIPTION,
     parse_record_filters,
     parse_record_sorts,
 )
+from app.modules.datastore.api.schemas.datastore_schemas import RecordFilterOperator
 from app.modules.datastore.domain.errors import DatastoreValidationError
 
 
@@ -74,3 +78,34 @@ def test_parse_record_sorts_accepts_json_sort_clauses():
 def test_parse_record_sorts_rejects_bad_json():
     with pytest.raises(DatastoreValidationError, match="Invalid sort parameter"):
         parse_record_sorts(["{bad"])
+
+
+class TestTheFilterParameterDocumentsWhatItAccepts:
+    """The description is what the OpenAPI spec, both SDKs and the docs render.
+    Hand-written, it listed eight of the nine operators -- `in` was implemented,
+    named in the rejection message, and invisible to everyone reading a client.
+    """
+
+    def test_every_operator_the_parser_takes_is_named(self) -> None:
+        for operator in RecordFilterOperator:
+            assert f"`{operator.value}`" in RECORD_FILTER_DESCRIPTION
+
+    def test_the_list_is_the_enum_rather_than_a_copy_of_it(self) -> None:
+        """A copy is what drifted. Pinning the rendered list to the enum means
+        a tenth operator documents itself."""
+        listed = re.search(
+            r"Allowed operators are: (.+?)\. ", RECORD_FILTER_DESCRIPTION
+        )
+
+        assert listed is not None
+        assert listed.group(1) == ", ".join(
+            f"`{operator.value}`" for operator in RecordFilterOperator
+        )
+
+    def test_the_wildcards_in_a_like_pattern_are_explained(self) -> None:
+        """`%` and `_` are wildcards, so a caller filtering on a literal value
+        containing `_` -- ordinary in identifiers and paths -- silently gets
+        extra rows. Nothing said so, and nothing said how to escape one."""
+        assert "`%`" in RECORD_FILTER_DESCRIPTION
+        assert "`_`" in RECORD_FILTER_DESCRIPTION
+        assert "backslash" in RECORD_FILTER_DESCRIPTION

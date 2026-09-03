@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
+import app.modules.datastore.infrastructure.session as session_module
 from app.modules.datastore.domain.events import DatastoreFileCreatedEvent
 from app.modules.datastore.infrastructure.transactional_events import (
+    ensure_datastore_event_outbox,
+    reset_datastore_event_outbox_state,
     stage_domain_events,
 )
 
@@ -82,3 +88,92 @@ async def test_stage_domain_events_skips_empty_batches() -> None:
     await stage_domain_events(session, [])
 
     session.execute.assert_not_awaited()
+
+
+class TestTheOutboxBootstrapIsSafeAcrossProcesses:
+    """`CREATE TABLE ... IF NOT EXISTS` is not race-free in PostgreSQL: two
+    transactions can both observe the table as absent and one then loses on the
+    catalog's unique index. The guard here was a module-global flag and an
+    `asyncio.Lock`, which coordinate one event loop -- and the callers are two
+    API replicas or two workers booting together, where the loser's failure is
+    a replica that refuses to start.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _forget_the_bootstrap(self):
+        # The "already done" flag is a module global; leaving it set decides
+        # what a later test in this process sees.
+        reset_datastore_event_outbox_state()
+        yield
+        reset_datastore_event_outbox_state()
+
+    def _engine(self, statements: list[str], *, create_raises=None):
+        class _Connection:
+            async def execute(self, statement, params=None):
+                statements.append(str(statement))
+
+            async def run_sync(self, function, **kwargs):
+                statements.append("create_table")
+                if create_raises is not None:
+                    raise create_raises
+
+        @asynccontextmanager
+        async def _begin():
+            yield _Connection()
+
+        return SimpleNamespace(begin=_begin)
+
+    @pytest.mark.asyncio
+    async def test_the_create_is_serialized_by_an_advisory_lock(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        statements: list[str] = []
+        monkeypatch.setattr(
+            session_module, "get_datastore_engine", lambda: self._engine(statements)
+        )
+
+        await ensure_datastore_event_outbox()
+
+        assert "pg_advisory_xact_lock" in statements[0]
+        assert statements[1] == "create_table"
+
+    @pytest.mark.asyncio
+    async def test_losing_the_race_is_not_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Something outside this lock's reach -- a migration, an operator --
+        can also create the table, and a replica must not refuse to boot over a
+        table that exists."""
+        duplicate = DBAPIError("CREATE TABLE", {}, Exception("duplicate key value"))
+        duplicate.orig.sqlstate = "42P07"  # type: ignore[attr-defined]
+        statements: list[str] = []
+        monkeypatch.setattr(
+            session_module,
+            "get_datastore_engine",
+            lambda: self._engine(statements, create_raises=duplicate),
+        )
+
+        await ensure_datastore_event_outbox()
+
+        # It tried, and it treated the loss as a success -- a second call does
+        # not go back to the database.
+        assert statements[-1] == "create_table"
+        await ensure_datastore_event_outbox()
+        assert statements.count("create_table") == 1
+
+    @pytest.mark.asyncio
+    async def test_any_other_failure_still_stops_startup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lifespan hook exists to fail the boot: record mutation must never
+        degrade to best-effort publication after the commit."""
+        refused = DBAPIError("CREATE TABLE", {}, Exception("permission denied"))
+        refused.orig.sqlstate = "42501"  # type: ignore[attr-defined]
+        monkeypatch.setattr(
+            session_module,
+            "get_datastore_engine",
+            lambda: self._engine([], create_raises=refused),
+        )
+
+        with pytest.raises(DBAPIError):
+            await ensure_datastore_event_outbox()

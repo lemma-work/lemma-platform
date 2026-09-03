@@ -219,10 +219,22 @@ def _delegated_allowed_actions_expr(
     empty_actions: ColumnElement,
     resource_path_col=None,
 ) -> ColumnElement:
-    # Grant-first: the workload's own grants decide the projection for every
-    # visibility, mirroring _authorize_delegated_workload. The invoking user's
-    # role neither widens nor narrows it; only PERSONAL rows owned by someone
-    # else stay empty.
+    # The workload's own grants decide the projection for every visibility;
+    # only PERSONAL rows owned by someone else stay empty.
+    #
+    # That is HALF of what ``workload_authority`` decides. Since PS-ACCESS-020
+    # was implemented, a delegated action also has to clear the invoking
+    # person's own authority, and that half is not expressible here: their
+    # access comes from role permissions, ownership and visibility as well as
+    # grants. So this projection can be *wider* than what the workload may
+    # actually do, and every action it lists is re-decided by ``authorize``
+    # before it happens.
+    #
+    # Deliberate rather than overlooked: the projection is exactly as wide as
+    # it was when grants were standalone authority, so narrowing the decision
+    # took exposure away and left none behind. Narrowing the projection to
+    # match means intersecting two text[] expressions per row, which is worth
+    # doing on its own and not on the way past.
     workload_actions = _conditional_actions_array_expr(
         [
             (

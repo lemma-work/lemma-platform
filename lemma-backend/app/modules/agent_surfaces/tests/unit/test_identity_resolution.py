@@ -62,7 +62,7 @@ class _FakeUsers:
     async def get_id_by_email_insensitive(self, email):
         return self._by_email
 
-    async def get_id_by_telegram_lower(self, username):
+    async def get_live_id_by_telegram_lower(self, username):
         self.telegram_lookups.append(username)
         return self._by_telegram
 

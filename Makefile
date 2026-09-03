@@ -62,7 +62,7 @@ LLM_OTEL      ?= 0
 # and the harness refuses to delete anything outside it.
 E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 
-UNIT_MARKERS  ?= not e2e and not local_guest and not desktop_e2e and not provider
+UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -1806,6 +1806,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ In-subject test doubles…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"

@@ -15,7 +15,7 @@ Resource groups are registered with both singular and plural aliases (`pod`/`pod
 
 | Verb | Meaning |
 |------|---------|
-| `list` | List resources (supports `--limit`). |
+| `list` | List resources (supports `--limit`; see below). |
 | `get NAME` | Fetch one resource. |
 | `create` | Create a resource. For local config resources (servers) create is an upsert. |
 | `update NAME` | Partially update a resource. |
@@ -67,6 +67,14 @@ in `cli_core/app.py` or telemetry reports it as `None`
 The **global** `--json` / `--output json` flags (before the command) control output
 format only. Never use `--json` as a per-command payload flag — that is what `--data`
 is for.
+
+`--limit` is universal on purpose: the skills teach it as one idiom, so a `list`
+that lacks it fails to parse (exit 2) on a command an agent had every reason to
+expect it on. The only exception is a listing of a **complete** set — the local
+server list, the bundled skills, an endpoint that takes no page token — where
+`--limit` could only truncate an answer that is already whole.
+`tests/test_list_limit_convention.py` walks the app and holds this: it names
+every exemption and the reason, and fails on a new `list` without the flag.
 
 ## Destructive operations
 

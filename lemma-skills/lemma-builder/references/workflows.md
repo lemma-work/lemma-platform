@@ -50,6 +50,12 @@ scopes data*:
   the tables/files/connectors they touch; the workflow does not lend them access. A
   missing grant surfaces as `MISSING_WORKLOAD_RESOURCE_GRANT` on that node. Grant
   every callee, then wire it into the graph.
+- **And the run owner is the ceiling.** Each node does the intersection of the
+  callee's grants and *the run owner's own access* — so a run started by a `VIEWER`
+  (or a `DATASTORE` fire on a row owned by one) fails the write nodes with
+  `DELEGATION_EXCEEDS_INVOKER` no matter how the callee is granted. When a workflow
+  must write on behalf of people who only read, start it from a schedule owned by
+  someone who can write, or a FORM step that hands the write to a member who can.
 - **`FORM` nodes are the human tier.** A FORM is assigned to a specific **pod member**
   and waits for *their* submission — gated by pod membership/role, not by workload
   grants. This is how a run hands a decision to a person.
@@ -81,7 +87,12 @@ Start types: `MANUAL`, `SCHEDULED`, `DATASTORE_EVENT`, `EVENT`. Create schedules
 
 - `SCHEDULED` → `config.schedule_type` ∈ `ONCE | CRON`.
 - `DATASTORE_EVENT` → `config.table_name` (required), plus optional `config.operations` (a subset of `INSERT | UPDATE | DELETE`; omit to match all).
-- `EVENT` → `config.connector_trigger_id` **and** `config.connector_id`.
+- `EVENT` → `config.connector_trigger_id` **and** `config.connector_id`, plus an
+  optional `config.trigger_config` for the trigger's own narrowing parameters (a
+  GitHub `repository_id`, say). This is the **one** place those parameters are nested:
+  a WEBHOOK schedule takes them at the top level of its own `config`, and when a
+  schedule derives its trigger from this start, the two are merged — a schedule config
+  that *conflicts* with what the start already fixed is rejected by name.
 
 ```json
 "start": { "type": "DATASTORE_EVENT", "config": { "table_name": "tickets", "operations": ["INSERT"] } }
@@ -368,7 +379,7 @@ Debugging a run, in order:
 - `input_mapping` strings are not auto-expressions; always `{"type": "expression"|"literal", "value": ...}`.
 - Node ids `start` and `loop` are reserved.
 - Agent nodes need agents with output schemas for reliable downstream mapping.
-- **Delegated identity per run.** `FUNCTION`/`AGENT` nodes run as the **run owner** under the callee's own grants, RLS-scoped to that user — they can't read another member's rows. A workflow that must span all members' data needs **shared** tables (RLS off), and each callee still needs explicit grants or its node fails with `MISSING_WORKLOAD_RESOURCE_GRANT`.
+- **Delegated identity per run.** `FUNCTION`/`AGENT` nodes run as the **run owner** under the callee's own grants, RLS-scoped to that user — they can't read another member's rows. A workflow that must span all members' data needs **shared** tables (RLS off), and each callee still needs explicit grants or its node fails with `MISSING_WORKLOAD_RESOURCE_GRANT`. The run owner's role is also the ceiling: a node whose *callee* is granted an action the *run owner* cannot perform fails with `DELEGATION_EXCEEDS_INVOKER`.
 - Verify each function/agent independently before wiring it into a graph — graph debugging is slower than unit testing.
 
 ## Verify
@@ -376,7 +387,7 @@ Debugging a run, in order:
 - Run with a realistic form payload; confirm `COMPLETED` and inspect `step_history` for every expected node.
 - For each FORM: confirm the wait appears in the assignee's `lemma workflows runs waiting` queue, submit as that member, confirm other members get 403.
 - For each DECISION: drive both branches with test payloads; don't infer routing from edge labels.
-- For `FUNCTION`/`AGENT` nodes: confirm each callee is granted its tables/files/connectors (no `MISSING_WORKLOAD_RESOURCE_GRANT`), and that RLS reads match the run owner's seat.
+- For `FUNCTION`/`AGENT` nodes: confirm each callee is granted its tables/files/connectors (no `MISSING_WORKLOAD_RESOURCE_GRANT`), and that RLS reads match the run owner's seat. Run it once as the **lowest-privileged member who will really start it** — that is the seat `DELEGATION_EXCEEDS_INVOKER` shows up in, and never the builder's own.
 - Confirm final table/file state matches the business outcome, not just the run status.
 
 ## See also

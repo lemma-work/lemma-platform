@@ -12,6 +12,7 @@ from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.models.connect_request import ConnectRequest
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
 from app.modules.connectors.tests.support.fake_auth_provider import (
@@ -34,6 +35,32 @@ GMAIL_NATIVE_CAPABILITIES = [
     }
 ]
 GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+
+async def _live_state(db_session, connect_request: dict) -> str:
+    """The `state` a pending connect request is waiting on.
+
+    Read from the row because the API does not return it, on purpose: it is a
+    live capability whose only job is to survive the provider's redirect, and
+    putting it in the response body put it in browser memory and any HAR
+    capture too. A real provider learns it from the authorization URL; the fake
+    one here answers a fixed URL, so the row is the honest substitute.
+    """
+    from sqlalchemy import select
+
+    row = (
+        (
+            await db_session.execute(
+                select(ConnectRequest).where(
+                    ConnectRequest.id == UUID(connect_request["id"])
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None, "the connect request was not written"
+    return (row.attributes or {})["state"]
 
 
 async def _create_pod(owner_client, org_id: str, name: str) -> str:
@@ -171,7 +198,7 @@ async def test_connect_request_and_accounts_lifecycle(
     )
     assert response.status_code == 200, response.text
     connect_request = response.json()
-    state = connect_request["attributes"]["state"]
+    state = await _live_state(db_session, connect_request)
 
     response = await authenticated_client.get(
         "/connectors/connect-requests/oauth/callback",
@@ -896,7 +923,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
             json={"connector_id": connector_id},
         )
         assert response.status_code == 200, response.text
-        state = response.json()["attributes"]["state"]
+        state = await _live_state(db_session, response.json())
         callback = await authenticated_client.get(
             "/connectors/connect-requests/oauth/callback",
             params={"state": state, "code": identity_code, "format": "json"},
@@ -1232,7 +1259,7 @@ async def test_a_state_cannot_be_replayed_after_it_has_been_used(
         json={"connector_id": connector_id},
     )
     assert response.status_code == 200, response.text
-    state = response.json()["attributes"]["state"]
+    state = await _live_state(db_session, response.json())
 
     first = await authenticated_client.get(
         "/connectors/connect-requests/oauth/callback",
@@ -1254,6 +1281,84 @@ async def test_a_state_cannot_be_replayed_after_it_has_been_used(
 
 
 @pytest.mark.e2e
+async def test_the_connect_request_response_carries_no_flow_secrets(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """A tripwire on an absence, like the credentials route next door.
+
+    The response used to include the whole `attributes` object -- the live
+    `state`, the provider's handle on the authorization, and the PKCE verifier.
+    The caller is the person who started the flow, so this was not a
+    cross-user leak; it put the verifier and the `state` into browser memory,
+    client-side logging and any HAR capture, which is precisely the exposure
+    PKCE exists to survive. Nothing consumed them.
+    """
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert "attributes" not in body
+    assert body["authorization_url"], "the one field the client actually needs"
+    # The secrets are still recorded -- they have to survive the redirect.
+    assert await _live_state(db_session, body)
+
+
+@pytest.mark.e2e
+async def test_a_failed_exchange_does_not_leave_its_secrets_behind(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """The success path already scrubbed these; the failure path did not.
+
+    A flow that errored is the one nobody comes back to, so its row kept the
+    verifier and the provider's connection handle for good -- in plaintext
+    JSONB, on a table with no retention.
+    """
+    org_id = fixed_test_org["id"]
+    connector_id = await _oauth_install(authenticated_client, db_session, org_id)
+
+    def _refuse(_install, _redirect_uri, _code_verifier):
+        raise RuntimeError("the provider refused the code")
+
+    _install_fake_auth_provider(monkeypatch, FakeAuthProvider(on_exchange=_refuse))
+
+    response = await authenticated_client.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        json={"connector_id": connector_id},
+    )
+    state = await _live_state(db_session, response.json())
+    callback = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback",
+        params={"state": state, "code": "code", "format": "json"},
+    )
+    assert callback.status_code >= 400, callback.text
+
+    from sqlalchemy import select
+
+    row = (
+        (
+            await db_session.execute(
+                select(ConnectRequest).where(
+                    ConnectRequest.connector_id == connector_id
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert row is not None
+    assert row.status == "ERROR"
+    assert "code_verifier" not in (row.attributes or {})
+    assert "provider_state" not in (row.attributes or {})
+
+
+@pytest.mark.e2e
 async def test_a_spent_pkce_verifier_is_not_left_behind(
     authenticated_client, fixed_test_org, db_session, monkeypatch
 ):
@@ -1267,17 +1372,13 @@ async def test_a_spent_pkce_verifier_is_not_left_behind(
         f"/organizations/{org_id}/connectors/connect-requests",
         json={"connector_id": connector_id},
     )
-    state = response.json()["attributes"]["state"]
+    state = await _live_state(db_session, response.json())
     await authenticated_client.get(
         "/connectors/connect-requests/oauth/callback",
         params={"state": state, "code": "code", "format": "json"},
     )
 
     from sqlalchemy import select
-
-    from app.modules.connectors.infrastructure.models.connect_request import (
-        ConnectRequest,
-    )
 
     row = (
         (

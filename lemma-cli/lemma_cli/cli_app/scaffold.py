@@ -221,7 +221,9 @@ SCHEDULE_JSON = """{
   "schedule_type": "TIME",          // TIME (cron) | DATASTORE (row events) | WEBHOOK (app events)
   "config": { "cron": "0 9 * * *" },// TIME: cron | scheduled_at
   // DATASTORE: { "table_name": "<table>", "operations": ["INSERT"] }   <- table_name, NOT "datastore"
-  // WEBHOOK:   { "source": "<slack|composio|…>" }
+  // WEBHOOK:   { "source": "<composio|github>" }  // refused at create if the
+  //            deployment does not register it; not read at all when the
+  //            schedule is bound to an account + connector_trigger_id
   // Exactly one target — the agent or workflow to start. It must already exist in the pod.
   "workflow_name": "__TARGET__",
   // "agent_name": "some-agent",   // ...or target an agent instead of a workflow

@@ -32,7 +32,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from composio import Composio
@@ -48,6 +48,7 @@ from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.models.connect_request import ConnectRequest
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
@@ -410,13 +411,21 @@ async def test_composio_oauth_connect_and_reconnect_human(
         print(f"\n=== {op_name} succeeded: {json.dumps(exec_resp.json())[:300]} ===\n")
 
     async def _initiate() -> tuple[str, str, str]:
-        """POST a connect request; return (state, connection_id, authorization_url)."""
+        """POST a connect request; return (state, connection_id, authorization_url).
+
+        `state` and Composio's connection id are read from the row rather than
+        the response: both are live capabilities the API deliberately does not
+        hand back, and the connection id in particular is the thing the
+        callback binding exists to keep out of anyone else's hands.
+        """
         resp = await authenticated_client.post(
             cr_url, json={"auth_config_id": str(auth_config.id)}
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        attributes = body["attributes"] or {}
+        row = await db_session.get(ConnectRequest, UUID(body["id"]))
+        assert row is not None, "the connect request was not written"
+        attributes = row.attributes or {}
         return (
             attributes["state"],
             attributes["provider_state"],

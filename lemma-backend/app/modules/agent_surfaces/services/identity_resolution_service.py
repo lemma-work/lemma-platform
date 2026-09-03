@@ -264,7 +264,10 @@ class SurfaceIdentityResolutionService:
         cleaned = str(username or "").strip().lstrip("@").lower()
         if not cleaned:
             return None
-        return await self._users.get_id_by_telegram_lower(cleaned)
+        # The *live*-user lookup, not the "is this handle taken" one beside it:
+        # a match here is what the run then executes as, so a deactivated or
+        # deleted holder of the handle must resolve to nobody.
+        return await self._users.get_live_id_by_telegram_lower(cleaned)
 
     async def _match_user_by_phone(self, phone: str) -> _UserMatch:
         candidates = _phone_lookup_candidates(phone)

@@ -9,10 +9,26 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import delete
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
+)
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
+from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.services.identity_resolution_service import (
+    SurfaceIdentityResolutionService,
+)
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -579,3 +595,58 @@ async def test_telegram_contact_share_links_user_then_allows_chat(
     # Text is rendered as MarkdownV2, so reserved chars ([ ] _) are escaped.
     assert "E2E agent reply" in telegram_messages[-1]["text"]
     assert "TELEGRAM" in telegram_messages[-1]["text"]
+
+
+async def test_a_deactivated_telegram_handle_resolves_to_nobody(
+    db_session: AsyncSession,
+    fixed_test_user,
+):
+    """A departed colleague's @username must not still be an authority grant.
+
+    Resolution runs the telegram-username lookup *first*, so it decides who an
+    inbound message executes as before the filtered email path is ever reached.
+    The email lookup has excluded deactivated and deleted rows for exactly this
+    reason; this one did not, and PS-SURF-012 gives a resolved person "exactly
+    the access their Lemma identity has" -- which for a deactivated identity is
+    none.
+    """
+    user_id = UUID(fixed_test_user["id"])
+    await _set_user_mobile_number(
+        db_session,
+        user_id=fixed_test_user["id"],
+        mobile_number="+15559990099",
+        telegram_username="departedcolleague",
+    )
+    uow = SqlAlchemyUnitOfWork(session=db_session)
+    service = SurfaceIdentityResolutionService(
+        uow=uow,
+        external_user_repository=ExternalSurfaceUserRepository(uow),
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="900200",
+        sender_external_user_id="900200",
+        message_text="let me back in",
+        is_dm=True,
+        metadata={"sender_username": "departedcolleague"},
+    )
+
+    live = await service.resolve(event=event)
+    assert live.internal_user_id == user_id
+
+    user = await db_session.get(User, user_id)
+    assert user is not None
+    user.is_active = False
+    await db_session.commit()
+    # The cached ExternalSurfaceUser row the first resolve wrote would answer
+    # ahead of any lookup, so this asks the question the repository answers.
+    await db_session.execute(
+        delete(AgentSurfaceExternalUser).where(
+            AgentSurfaceExternalUser.external_user_id == "900200"
+        )
+    )
+    await db_session.commit()
+
+    departed = await service.resolve(event=event)
+    assert departed.internal_user_id is None

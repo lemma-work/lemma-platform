@@ -14,6 +14,7 @@ from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
+    AgentSurfaceStatus,
     ConversationType,
     SurfaceCredentialMode,
     SurfaceIdentityPolicy,
@@ -32,6 +33,9 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
 from app.modules.agent_surfaces.services import surface_egress
+from app.modules.agent_surfaces.services.notification_delivery import (
+    UndeliverableReason,
+)
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
     EnvelopeFile,
@@ -1014,29 +1018,36 @@ async def test_execute_chat_sends_direct_replies():
     }
 
 
-async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
+async def test_execute_chat_names_the_surface_that_cannot_answer_a_stranger(caplog):
+    """A surface with no credentials ignores every unrecognised sender.
+
+    PS-SURF-012 says someone with no access is told how to get it rather than
+    failing silently, and this branch is the one most likely to fire -- a
+    surface whose account expired. The incident counter alone said "the fallback
+    dependency is degraded" after three of them, without naming which surface,
+    which is the one fact needed to fix it.
+    """
+    surface_id = uuid4()
     parsed_event = _telegram_event(chat_id="123", message_id="missing-creds")
     adapter = AsyncMock()
     service = _build_service(adapter=adapter)
     service._resolve_credentials_from_context = AsyncMock(
         return_value={"bot_token": ""}
     )
-    incident = Mock()
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.fallback_reply_service._fallback_incident",
-        incident,
-    )
     context = SurfaceReplyContext(
         platform="TELEGRAM",
+        surface_id=surface_id,
         reply_kind="signup",
         reply_message="Please sign up",
         event=parsed_event,
     )
 
-    await service.execute_chat(context)
+    with caplog.at_level("WARNING"):
+        await service.execute_chat(context)
 
     adapter.send_message.assert_not_awaited()
-    incident.record_failure.assert_called_once_with(error_type="MissingCredentials")
+    assert "surface_fallback_no_credentials" in caplog.text
+    assert str(surface_id) in caplog.text
 
 
 async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
@@ -2202,12 +2213,12 @@ async def test_send_to_member_reuses_existing_thread():
         AsyncMock(return_value=link)
     )
 
-    sent = await service.send_to_member(
+    undeliverable = await service.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="Your report is ready.",
     )
-    assert sent is True
+    assert undeliverable is None
     assert "Your report is ready." in adapter.send_message.await_args.kwargs["message"]
 
 
@@ -2255,13 +2266,13 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
         latest_link
     )
 
-    sent = await service.send_to_member(
+    undeliverable = await service.send_to_member(
         surface=surface,
         user_id=user_id,
         message="Use the newest thread.",
     )
 
-    assert sent is True
+    assert undeliverable is None
     service.conversation_link_repository.get_latest_by_surface_and_external_user.assert_awaited_once_with(
         surface_id=surface.id,
         external_user_id="777",
@@ -2343,15 +2354,15 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         message="system only",
     )
 
-    assert custom_sent is True
-    assert system_sent is True
+    assert custom_sent is None
+    assert system_sent is None
     first_event = adapter.send_message.await_args_list[0].kwargs["event"]
     second_event = adapter.send_message.await_args_list[1].kwargs["event"]
     assert first_event.external_thread_id == "custom-chat"
     assert second_event.external_thread_id == "system-chat"
 
 
-async def test_send_to_member_rejects_non_member():
+async def test_send_to_member_says_the_person_is_not_in_the_pod():
     surface = _slack_surface()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface])
@@ -2359,16 +2370,18 @@ async def test_send_to_member_rejects_non_member():
         get_user_pod_ids=AsyncMock(return_value=[uuid4()])  # a different pod
     )
 
-    sent = await service.send_to_member(
+    undeliverable = await service.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="x",
     )
-    assert sent is False
+    # One 404 for six causes told a caller nothing: "no reachable conversation"
+    # is not what happened to somebody who is not in the pod at all.
+    assert undeliverable == UndeliverableReason.NOT_A_POD_MEMBER
     adapter.send_message.assert_not_awaited()
 
 
-async def test_send_to_member_returns_false_without_reachable_thread():
+async def test_send_to_member_says_they_have_never_written_in():
     surface = _slack_surface()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface])
@@ -2384,12 +2397,12 @@ async def test_send_to_member_returns_false_without_reachable_thread():
         AsyncMock(return_value=None)
     )
 
-    sent = await service.send_to_member(
+    undeliverable = await service.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="x",
     )
-    assert sent is False
+    assert undeliverable == UndeliverableReason.never_interacted_on("SLACK")
     adapter.send_message.assert_not_awaited()
 
 
@@ -2688,3 +2701,78 @@ async def test_a_transient_failure_is_still_raised_so_it_retries():
         await service._prepare_surface_context(
             surface=surface, parsed=event, adapter=adapter
         )
+
+
+async def test_a_whole_ingest_failure_still_tells_the_agent_the_files_arrived():
+    """A blown-up ingest must not read to the agent as "they sent no files".
+
+    Per-file failures are already reported through ``failed_files``. When
+    ``ingest_attachments`` itself raises, the report was thrown away with the
+    files: the agent answered the text alone and looked like it ignored the
+    photo -- the exact outcome ``failed_files`` exists to prevent.
+    """
+    surface = _slack_surface(agent_id=None)
+    conversation = _conversation(surface, uuid4())
+    service = _build_service(
+        adapter=AsyncMock(), surfaces=[surface], conversation=conversation
+    )
+    service.file_ingest_service = SimpleNamespace(
+        ingest_attachments=AsyncMock(side_effect=RuntimeError("datastore is down"))
+    )
+    context = _slack_chat_context(surface, conversation, "here you go")
+    context.event.metadata["attachments"] = [
+        {"name": "receipt.pdf"},
+        {"name": "photo.jpg"},
+    ]
+
+    await service.execute_chat(context)
+
+    kwargs = (
+        service.conversation_service.add_user_message_and_start_run.await_args.kwargs
+    )
+    failed = kwargs["message_metadata"]["failed_files"]
+    assert [item["name"] for item in failed] == ["receipt.pdf", "photo.jpg"]
+
+
+async def test_send_to_member_says_the_surface_is_switched_off():
+    surface = _slack_surface()
+    surface.status = AgentSurfaceStatus.INACTIVE
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+
+    undeliverable = await service.send_to_member(
+        surface=surface, user_id=uuid4(), message="x"
+    )
+
+    assert undeliverable == UndeliverableReason.SURFACE_NOT_ACTIVE
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_send_to_member_says_the_person_is_in_another_workspace():
+    """Slack ids are per workspace, so "never written in" would be a lie here.
+
+    They have written in — to a different Slack workspace than the one this
+    surface is connected to, which is not something they can fix by messaging
+    the bot again.
+    """
+    surface = _slack_surface().model_copy(update={"external_workspace_id": "T-HOME"})
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
+    )
+    service.external_user_repository = AsyncMock(
+        list_by_resolved_users=AsyncMock(
+            return_value=[
+                SimpleNamespace(external_user_id="U-MEMBER", tenant_id="T-ELSEWHERE")
+            ]
+        )
+    )
+
+    undeliverable = await service.send_to_member(
+        surface=surface, user_id=uuid4(), message="x"
+    )
+
+    assert undeliverable == UndeliverableReason.wrong_tenant_on("SLACK")
+    assert undeliverable != UndeliverableReason.never_interacted_on("SLACK")
+    adapter.send_message.assert_not_awaited()

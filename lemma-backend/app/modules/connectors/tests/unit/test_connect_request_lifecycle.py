@@ -1,9 +1,14 @@
 """How long a started connection may take to come back, and what is left after.
 
-The single-use half of this had a test. The expiry half had none, and neither
-did the naive-datetime normalisation underneath it -- a row read back without a
-timezone would raise on the comparison rather than expire, turning a stale
-request into a 500.
+Expiry and single use are both decided inside `claim_pending_by_state`, in one
+UPDATE, so they are exercised against the repository rather than here -- see
+`test_accounts_connect_requests_e2e`. What is left is the constant the claim is
+built from, and the scrub that runs once the exchange has happened.
+
+There was a second, unreached implementation of the same rule with the same
+`created_at` arithmetic, and these tests covered that one. A dead rule with
+passing tests is worse than no tests: it reports green on something production
+does not call, and reads to the next person as the live decision.
 """
 
 from __future__ import annotations
@@ -11,16 +16,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-import pytest
 
 from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
-from app.modules.connectors.domain.errors import ConnectRequestNotFoundError
 from app.modules.connectors.services.connect_request_lifecycle import (
     CONNECT_REQUEST_TTL,
-    assert_still_open,
     oldest_claimable_connect_request,
     without_spent_secrets,
 )
@@ -38,35 +40,6 @@ def _request(*, age: timedelta, status=ConnectRequestStatus.PENDING, aware=True)
         created_at=started if aware else started.replace(tzinfo=None),
         attributes={"state": "s", "code_verifier": "v", "provider_state": "ca_1"},
     )
-
-
-def test_a_fresh_request_is_open():
-    assert_still_open(_request(age=timedelta(minutes=1)))
-
-
-def test_a_request_older_than_the_ttl_is_refused():
-    """A leaked `state` stops being a capability after the window closes."""
-    with pytest.raises(ConnectRequestNotFoundError):
-        assert_still_open(_request(age=CONNECT_REQUEST_TTL + timedelta(minutes=1)))
-
-
-def test_a_naive_created_at_is_read_as_utc_rather_than_raising():
-    """The row can come back without a timezone. Comparing a naive datetime to
-    an aware one raises `TypeError`, which would surface as a 500 on a stale
-    callback instead of a refusal."""
-    with pytest.raises(ConnectRequestNotFoundError):
-        assert_still_open(
-            _request(age=CONNECT_REQUEST_TTL + timedelta(minutes=1), aware=False)
-        )
-    assert_still_open(_request(age=timedelta(minutes=1), aware=False))
-
-
-@pytest.mark.parametrize(
-    "status", [ConnectRequestStatus.SUCCESS, ConnectRequestStatus.ERROR]
-)
-def test_a_finished_request_is_refused_however_recent(status):
-    with pytest.raises(ConnectRequestNotFoundError):
-        assert_still_open(_request(age=timedelta(seconds=1), status=status))
 
 
 def test_the_claim_window_matches_the_ttl():

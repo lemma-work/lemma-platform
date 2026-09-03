@@ -21,6 +21,22 @@ def client():
     return TestClient(appmod.app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def healthy_by_default(monkeypatch):
+    """Readiness asks five things; each test is about one of them.
+
+    The SuperTokens core and the schema revision are real network and database
+    reads, so without this every test in the file would also be a test of
+    whichever of those happened to be running on the machine.
+    """
+    monkeypatch.setattr(
+        appmod, "supertokens_core_reachable", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        appmod, "schema_migration_state", AsyncMock(return_value="current")
+    )
+
+
 def test_liveness_endpoints_return_ok(client):
     for path in ("/health/live", "/livez", "/health"):
         r = client.get(path)
@@ -39,6 +55,11 @@ def test_liveness_returns_503_when_loop_wedged(client, monkeypatch):
     r = client.get("/health/live")
     assert r.status_code == 503
     assert r.json()["status"] == "unhealthy"
+
+
+#: `database_reachable` lives beside the engine, so this is where a test
+#: replaces it.
+_SESSION_ENGINE = "app.core.infrastructure.db.session.get_engine"
 
 
 class _FakeConn:
@@ -63,13 +84,18 @@ class _FakeEngineDown:
 
 
 def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ready"
-    assert body["components"] == {"db": "ok", "redis": "ok"}
+    assert body["components"] == {
+        "db": "ok",
+        "redis": "ok",
+        "supertokens": "ok",
+        "migrations": "current",
+    }
 
 
 def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
@@ -88,7 +114,7 @@ def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
     Kubernetes liveness probe reads to restart a wedged worker. Nothing on
     desktop read it.
     """
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     heartbeat = tmp_path / "worker_heartbeat"
@@ -119,7 +145,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     unready for the absence. Nor may a process that has simply not written its
     first heartbeat yet -- which is every start before the first tick.
     """
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
@@ -138,7 +164,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
 
 
 def test_ready_echoes_runtime_instance_id(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.settings, "lemma_runtime_instance_id", "launch-123")
 
@@ -189,36 +215,41 @@ def test_capability_health_reports_how_the_deployment_is_configured(
     Reading a local file instead would describe a different machine, and a suite
     that trusts one skips and runs for the wrong reasons.
     """
-    monkeypatch.setattr(appmod.settings, "environment", "development")
+    monkeypatch.setattr(appmod.settings, "environment", "local")
     monkeypatch.setattr(appmod.settings, "e2e_llm_mode", "real")
     monkeypatch.setattr(appmod.settings, "auth_abuse_protection_enabled", False)
     monkeypatch.setattr(appmod.settings, "auth_email_verification_required", False)
 
     configuration = client.get("/health/capabilities").json()["configuration"]
 
-    assert configuration["environment"] == "development"
+    assert configuration["environment"] == "local"
     assert configuration["llm_mode"] == "real"
     assert configuration["abuse_protection"] is False
     assert configuration["email_verification_required"] is False
     assert "role_cache_ttl_seconds" in configuration
 
 
-def test_capability_health_withholds_security_posture_in_production(
-    client, monkeypatch
+@pytest.mark.parametrize("environment", ["production", "development", "staging"])
+def test_capability_health_withholds_security_posture_off_a_local_machine(
+    client, monkeypatch, environment
 ):
-    """This endpoint is unauthenticated, and production owes a stranger nothing.
+    """This endpoint is unauthenticated, and a stranger is owed nothing.
 
     Whether signup is rate limited and whether a connector may reach a private
     address are the two facts an attacker would most like handed to them. They
-    are reported where a test suite needs them and withheld where they would be
-    reconnaissance. `llm_mode` survives both ways: production serving the
-    scripted test model is a misconfiguration worth seeing.
+    are reported where the scenario suite needs them -- a local stack -- and
+    withheld everywhere else. This used to be withheld only in `production`,
+    which is one environment value narrower than the principle: a staging or
+    preview deployment on the internet runs as `development` and was
+    advertising which of its abuse controls were off. `llm_mode` survives every
+    way: a deployment serving the scripted test model is a misconfiguration
+    worth seeing.
     """
-    monkeypatch.setattr(appmod.settings, "environment", "production")
+    monkeypatch.setattr(appmod.settings, "environment", environment)
 
     configuration = client.get("/health/capabilities").json()["configuration"]
 
-    assert configuration["environment"] == "production"
+    assert configuration["environment"] == environment
     assert configuration["llm_mode"]
     withheld = {
         "abuse_protection",
@@ -229,13 +260,13 @@ def test_capability_health_withholds_security_posture_in_production(
         "private_network_targets",
     }
     assert not withheld & set(configuration), (
-        f"production disclosed its security posture: "
+        f"{environment} disclosed its security posture: "
         f"{sorted(withheld & set(configuration))}"
     )
 
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineDown)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 503
@@ -246,7 +277,7 @@ def test_ready_returns_503_when_db_down(client, monkeypatch):
 
 
 def test_ready_returns_503_when_redis_down(client, monkeypatch):
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=False))
     r = client.get("/health/ready")
     assert r.status_code == 503
@@ -284,7 +315,7 @@ def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
     """
     from app.core.observability.worker_liveness import WORKER_SEEN_KEY
 
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     # A worker was here; nothing is answering now.
@@ -305,7 +336,7 @@ def test_ready_is_ready_when_a_separate_worker_process_is_ticking(client, monkey
         WORKER_SEEN_KEY,
     )
 
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     _worker_redis(monkeypatch, WORKER_ALIVE_KEY, WORKER_SEEN_KEY)
@@ -372,7 +403,7 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
     """
     import logging
 
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineDown)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineDown)
     monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
 
     with caplog.at_level(logging.DEBUG):
@@ -389,7 +420,7 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
 
     # And the recovery is reported too, so the incident has an end.
     caplog.clear()
-    monkeypatch.setattr(appmod, "get_engine", _FakeEngineOk)
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
     with caplog.at_level(logging.DEBUG):
         assert client.get("/health/ready").status_code == 200
     assert [
@@ -398,3 +429,65 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
         if isinstance(record.msg, dict)
         and record.msg["event"].startswith("dependency.")
     ] == ["dependency.recovered"]
+
+
+def test_ready_is_not_ready_when_the_supertokens_core_is_down(client, monkeypatch):
+    """The component whose outage makes the product totally unusable.
+
+    `initialize_supertokens` is configuration and makes no network call, while
+    `verify_auth` calls the core on every authenticated request. So readiness
+    checked Postgres and Redis, answered 200, and every API call failed --
+    exactly the state PS-OPS-030 says a process must not report itself healthy
+    in.
+    """
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        appmod, "supertokens_core_reachable", AsyncMock(return_value=False)
+    )
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["components"]["supertokens"] == "down"
+    assert body["components"]["db"] == "ok"
+
+
+def test_ready_is_not_ready_against_a_schema_older_than_the_code(client, monkeypatch):
+    """A rolling deploy's new replica used to serve against the old schema.
+
+    `SELECT 1` proves the database is up and nothing about whether it has the
+    columns this build needs, so the replica reported ready and started failing
+    requests on missing columns -- errors that read as application bugs.
+    """
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        appmod, "schema_migration_state", AsyncMock(return_value="pending")
+    )
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 503
+    assert r.json()["components"]["migrations"] == "pending"
+
+
+def test_ready_does_not_hold_a_process_out_over_a_schema_it_could_not_read(
+    client, monkeypatch
+):
+    """A question that could not be asked is not an answer.
+
+    The `db` component already reports a database that is simply broken, so an
+    unreadable `alembic_version` must not be a second, permanent refusal.
+    """
+    monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
+    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        appmod, "schema_migration_state", AsyncMock(return_value="unknown")
+    )
+
+    r = client.get("/health/ready")
+
+    assert r.status_code == 200
+    assert r.json()["components"]["migrations"] == "unknown"

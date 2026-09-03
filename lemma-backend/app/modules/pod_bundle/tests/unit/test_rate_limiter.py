@@ -81,3 +81,31 @@ async def test_fails_open_when_redis_errors():
     # Well past any limit, but a Redis blip must never block a legitimate job.
     await limiter.check_and_increment(user_id="u1", operation="export", limit=1)
     await limiter.check_and_increment(user_id="u1", operation="export", limit=1)
+
+
+class _IncrementsButCannotExpire:
+    """Redis answers INCR and then fails EXPIRE — a partial outage, not a blip."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+
+    async def incr(self, key: str) -> int:
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key]
+
+    async def expire(self, key: str, ttl: int) -> None:
+        raise RuntimeError("redis read-only")
+
+
+async def test_a_counted_start_is_enforced_even_when_the_ttl_cannot_be_set():
+    """Setting the TTL shared a try block with the INCR that answers the guard.
+
+    A failed EXPIRE therefore returned "under the limit" from a call that had
+    already counted the start — so the one path where the counter is known to
+    work was the path that skipped the check. The key is date-stamped, so a
+    missing TTL only leaves it to linger; it is never read on another day."""
+    limiter = _limiter(_IncrementsButCannotExpire())
+
+    await limiter.check_and_increment(user_id="u1", operation="import", limit=1)
+    with pytest.raises(BundleRateLimitExceededError):
+        await limiter.check_and_increment(user_id="u1", operation="import", limit=1)

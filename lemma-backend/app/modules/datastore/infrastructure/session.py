@@ -13,6 +13,16 @@ from app.core.observability.connection_scope import attach_connection_scope_moni
 _engine = None
 _session_maker = None
 
+#: Session settings this engine always carries, in both pooling branches.
+#:
+#: ``TimeZone`` because a ``DATETIME`` column is ``TIMESTAMP WITH TIME ZONE``:
+#: anything zone-less reaching the server -- a literal in a caller's own SQL,
+#: ``now()`` rendered back out -- is resolved against this setting, so leaving
+#: it to the server's default made the same value mean different instants on
+#: two deployments. Pinned rather than merely documented, because nothing in a
+#: pod's data says which zone it was written in.
+_DATASTORE_SESSION_SETTINGS: dict[str, str] = {"TimeZone": "UTC"}
+
 
 def _json_serial(obj):
     if isinstance(obj, (datetime, date)):
@@ -77,7 +87,7 @@ def _build_datastore_connect_args() -> dict:
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0,
     }
-    server_settings: dict[str, str] = {}
+    server_settings: dict[str, str] = dict(_DATASTORE_SESSION_SETTINGS)
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
         server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
@@ -103,6 +113,7 @@ def get_datastore_engine():
         connect_args: dict = {
             "statement_cache_size": 0,
             "prepared_statement_cache_size": 0,
+            "server_settings": dict(_DATASTORE_SESSION_SETTINGS),
         }
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool

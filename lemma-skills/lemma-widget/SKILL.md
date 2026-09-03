@@ -50,7 +50,9 @@ free-form input.
 
 3. Replace every uppercase `__PLACEHOLDER__` with inspected names and useful labels.
    For `__FIELD_CONFIG__`, insert a JSON array such as
-   `[{"label":"Owner","field":"owner"}]`.
+   `[{"label":"Owner","field":"owner"}]`. In the metric and chart starters
+   `__TABLE_NAME__` and `__GROUP_FIELD__` land inside a SQL statement, so they take
+   the exact table and column identifier — not a display label.
 
 4. Adapt the content and styling, then call `display_resource` with `type="WIDGET"`.
    The starter's SDK loader and loading/empty/error scaffolding carry over as-is.
@@ -114,6 +116,8 @@ so it arrives after first paint, and it never arrives at all when the widget is
 opened outside the conversation frame. A bare reference resolves to nothing there
 and the widget renders colorless.
 
+## Loading the SDK
+
 For a data-backed widget, preserve the starter's browser SDK loader:
 
 - Build the SDK URL from `window.__LEMMA_CONFIG__.apiUrl`.
@@ -134,7 +138,7 @@ Common calls:
 await client.records.list("tickets", { limit: 50 });
 await client.records.get("tickets", "record-id");
 await client.datastore.query(
-  "select status, count(*) as total from tickets group by status"
+  "select status, count(*) as matched from tickets group by status"
 );
 await client.files.search("quarterly planning", { limit: 10 });
 await client.files.children.markdown("/knowledge/report.pdf");
@@ -143,8 +147,11 @@ await client.files.children.content(
 );
 ```
 
-Prefer `datastore.query` for aggregates. A widget that stays live opens the change
-stream rather than polling with `setInterval`:
+Both `children` calls resolve to a `Blob`; call `.text()` on the markdown one
+before rendering it.
+
+A widget that stays live opens the change stream rather than polling with
+`setInterval`:
 
 ```js
 const handle = client.datastore.watchChanges({
@@ -156,6 +163,25 @@ const handle = client.datastore.watchChanges({
 
 It is a WebSocket with its own auth, so it is subject to the same cross-site
 constraint as `initialize()` above — always keep the non-live render working.
+
+## Never count what came back
+
+Both read paths are capped, and the two report it differently. Getting this wrong
+prints a number that is simply false in front of the person who asked for it.
+
+- `records.list` serves **one page, at most 1000 rows** — a `limit` above that is
+  rejected, not clamped. Its `total` *is* the exact RLS-scoped count of matching
+  rows, so `items.length` is what you are showing and `total` is what exists.
+  Say "12 of 480" rather than letting twelve stand for all of it.
+- `datastore.query` returns `{ items, total, truncated }`, and here `total`
+  counts **rows returned, not rows matched**. When `truncated` is true the row
+  cap cut the result short and `items` is a prefix of the real answer, so the
+  count is a floor. Narrow the query rather than label a floor as a total.
+
+Aggregate in SQL. A count taken over a page of records is a count of the page:
+group in the database (`select status, count(*) …`) and a widget over a 5,000-row
+table stops reporting the first hundred rows as the whole table. The metric and
+chart starters do exactly this; keep their query rather than counting rows in JS.
 
 ## Visual standard
 
@@ -180,7 +206,10 @@ constraint as `initialize()` above — always keep the non-live render working.
   tags, secrets, hardcoded hosts, or pod ids.
 - Every `--lemma-widget-*` reference has a fallback value.
 - SDK code uses injected config and boots from the script load handler.
-- Loading, empty, error, and mobile states are present.
+- No displayed count is the size of a page: totals come from SQL or from
+  `records.list`'s `total`, and a `truncated` query result says so.
+- Loading, empty, error, and mobile states are present, and the
+  non-authenticated branch does not tell a signed-in person to sign in.
 
 For React or a full product UI, load `lemma-builder` and follow
 `references/apps.md`. For interaction-tool behavior, see
