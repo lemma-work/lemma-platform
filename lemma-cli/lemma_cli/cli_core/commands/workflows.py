@@ -170,7 +170,7 @@ def update_workflow(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).workflows.update(
-            workflow, WorkflowUpdateRequest.from_dict(payload)
+            workflow, build_request(WorkflowUpdateRequest, payload, context="workflow")
         ),
     )
     if result is not None:
