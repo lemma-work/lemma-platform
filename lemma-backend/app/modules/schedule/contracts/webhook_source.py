@@ -118,7 +118,6 @@ class WebhookSourcePlugin(Protocol):
     @property
     def source(self) -> str:
         """The `{source}` segment this plugin answers for."""
-        ...
 
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
         """Prove the delivery came from this source, and parse it.
@@ -128,7 +127,6 @@ class WebhookSourcePlugin(Protocol):
         path whose rate an external sender chooses -- a synchronous
         implementation blocks the event loop once per delivery.
         """
-        ...
 
     async def observe(self, verified: VerifiedDelivery) -> None:
         """React to a delivery that changes the *source's own* state.
@@ -144,7 +142,6 @@ class WebhookSourcePlugin(Protocol):
         has already happened, and refusing the delivery would only make the
         provider redeliver it.
         """
-        ...
 
     def normalize(self, verified: VerifiedDelivery) -> NormalizedWebhook | None:
         """The routing key and payload, or None to acknowledge and do nothing.
@@ -153,7 +150,6 @@ class WebhookSourcePlugin(Protocol):
         delivery for an event nothing is subscribed to must be answered 2xx, or
         the provider retries it and then disables the hook.
         """
-        ...
 
 
 class WebhookSourceRegistry:

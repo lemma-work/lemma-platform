@@ -143,6 +143,8 @@ async def test_the_dispatcher_presents_before_it_executes(monkeypatch):
     )
     from app.modules.connectors.services.execution.dispatcher import KindDispatcher
 
+    from types import SimpleNamespace
+
     seen: dict[str, object] = {}
 
     class _Executor:
@@ -150,21 +152,18 @@ async def test_the_dispatcher_presents_before_it_executes(monkeypatch):
             seen.update(request.credentials)
             return {"ok": True}
 
-    class _Registry(KindRegistry):
-        def __init__(self):  # noqa: D107 - stand-in, not the real registry
-            pass
-
-        def get(self, kind):
-            from types import SimpleNamespace
-
-            return SimpleNamespace(executor=_Executor(), discoverer=None)
-
     class _Swaps:
         async def present(self, request):
             return {"access_token": "ghs_presented", "token_type": "Bearer"}
 
+    # The real registry, not a stand-in that overrides `get`: what is under test
+    # is the dispatcher's own ordering, and a double for the lookup would certify
+    # the half that was never in question.
+    registry = KindRegistry(
+        {ConnectorKind.HTTP: SimpleNamespace(executor=_Executor(), discoverer=None)}
+    )
     dispatcher = KindDispatcher(
-        _Registry(), presenters=PresenterRegistry({"github": _Swaps()})
+        registry, presenters=PresenterRegistry({"github": _Swaps()})
     )
 
     await dispatcher.execute(_request("installation_ok"))

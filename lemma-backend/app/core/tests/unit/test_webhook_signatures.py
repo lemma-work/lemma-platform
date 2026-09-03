@@ -98,7 +98,10 @@ class TestSlackScheme:
             SurfaceWebhookSecurityService,
         )
 
-        secret = "8f742231b10e8888abcd99yyyzzz85a5"
+        # Arbitrary: this compares two implementations, so the value only
+        # has to be the same on both sides. It was Slack's published example,
+        # which reads like a real key to a secret scanner and to a person.
+        secret = "a-slack-signing-secret"
         timestamp = int(time.time())
         body = b"token=xyz&team_id=T1DC2JH3J&command=%2Fwebhook&text="
 

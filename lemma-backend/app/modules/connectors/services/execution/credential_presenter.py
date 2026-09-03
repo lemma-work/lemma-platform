@@ -29,7 +29,8 @@ logger = get_logger(__name__)
 class CredentialPresenter(Protocol):
     """Turns the stored credential into the one this call should carry."""
 
-    async def present(self, request: ExecutionRequest) -> dict[str, object]: ...
+    async def present(self, request: ExecutionRequest) -> dict[str, object]:
+        """The credentials this request should actually carry."""
 
 
 class PassThroughPresenter:
