@@ -101,11 +101,27 @@ async def test_a_notification_can_be_answered(team):
 @proves("PS-SURF-032")
 @covers("notification.acknowledge")
 async def test_a_notification_can_be_acknowledged(team):
+    """The scenario is named for the stopping, which is the half nothing read.
+
+    Acknowledging used to be the whole test: the call was made and its answer
+    thrown away, so the only thing that could fail was the request itself. A
+    notification that came back still asking would have passed.
+    """
     alice, bob, pod = team
     await alice.notifies(bob, in_pod=pod, title="Heads up")
     notification = (await bob.notifications_in(pod))[0]
 
     await bob.acknowledges(notification, in_pod=pod)
+
+    after = next(
+        item
+        for item in await bob.notifications_in(pod)
+        if str(item["id"]) == str(notification["id"])
+    )
+    assert str(after.get("status")) == "ACKNOWLEDGED", (
+        f"a notification that was acknowledged still reads as "
+        f"{after.get('status')!r}, so it goes on asking"
+    )
 
 
 @scenario("Someone outside the pod sees none of its notifications")
