@@ -11,10 +11,12 @@ SHELL := /bin/bash
 #                     uvicorn server. Requires docker.
 #   make coverage     unit coverage report
 #   make lint         ruff check
+#   make typecheck    basedpyright over lemma_cli (advisory in CI, real here)
+#   make structure    file size / complexity / untyped escapes vs the baseline
 #   make sync-local   rebuild the sibling path dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help test test-unit test-e2e coverage lint sync-local
+.PHONY: help test test-unit test-e2e coverage lint typecheck structure sync-local
 
 help:
 	@echo "Lemma CLI:"
@@ -23,6 +25,8 @@ help:
 	@echo "  make test-e2e      e2e tests (real backend + docker)"
 	@echo "  make coverage      unit coverage report"
 	@echo "  make lint          ruff check"
+	@echo "  make typecheck     basedpyright over lemma_cli"
+	@echo "  make structure     size/complexity/untyped escapes vs the baseline"
 	@echo "  make sync-local    rebuild the sibling path dependencies"
 
 # lemma-sdk and lemma-pod-bundle resolve from sibling checkouts and are
@@ -56,3 +60,14 @@ coverage: sync-local
 
 lint: sync-local
 	uv run ruff check .
+
+# The repo-level gate (`make measure-clients` at the root) is advisory and
+# prints a count. These two print the findings, because the count is for
+# whoever is watching the trend and the findings are for whoever is fixing
+# one. Nothing had ever type-checked this package before; expect the first
+# run to name things that have been wrong for a long time.
+typecheck: sync-local
+	uv run basedpyright lemma_cli
+
+structure:
+	uv run python ../scripts/check_client_structure.py
