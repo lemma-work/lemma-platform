@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.modules.schedule.domain.interfaces import ProvisionedTrigger
 from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
     ScheduleEntity,
@@ -83,7 +84,9 @@ async def test_create_external_schedule_success():
 
     created_schedule = ScheduleEntity(id=uuid4(), **schedule_create.model_dump())
     schedule_repo.create.return_value = created_schedule
-    external_writer.create_provider_trigger.return_value = "provider_123"
+    external_writer.create_provider_trigger.return_value = ProvisionedTrigger(
+        provider_trigger_id="provider_123"
+    )
 
     updated_schedule = created_schedule.model_copy(deep=True)
     updated_schedule.config["provider_trigger_id"] = "provider_123"
@@ -150,7 +153,8 @@ async def test_create_schedule_no_provider_schedule_created():
 
     created_schedule = ScheduleEntity(id=uuid4(), **schedule_create.model_dump())
     schedule_repo.create.return_value = created_schedule
-    external_writer.create_provider_trigger.return_value = None
+    # "nothing needed provisioning", which is now said rather than implied.
+    external_writer.create_provider_trigger.return_value = ProvisionedTrigger()
 
     result = await service.create_schedule(schedule_create)
 

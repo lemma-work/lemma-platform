@@ -13,7 +13,7 @@ session-bound.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable, Literal
 from uuid import UUID
 
 from app.modules.connectors.domain.auth_config import AuthConfigSource
@@ -39,6 +39,23 @@ class ResolvedInstall:
     spec: KindSpec
 
 
+#: Whatever a provider handed back. Genuinely unknown here -- it is the
+#: provider's own JSON, or a `BinaryContentResult` for the five operations that
+#: download a file -- and it is not narrowed until an operation's output schema
+#: is applied further out. Named rather than written as a bare `Any` at each
+#: site so the reason is stated once and reads as a decision.
+#: Who a connector call presents as. `github_token_kind` says what a GitHub App
+#: is *permitted* to do; this says what the caller *should be*, and they are not
+#: the same question. An agent's operations act as the app so a schedule
+#: outlives the person who set it up; pod publish, pod import and the sandbox's
+#: `git`/`gh` act as the person, so the work is attributed to whoever owns the
+#: repository. Defaulting to "user" keeps every caller that says nothing on the
+#: behaviour it had before there was an app to be.
+ActingIdentity = Literal["user", "app"]
+
+ExecutionResult = Any
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionRequest:
     """Everything the executor needs, carrying no session-bound state."""
@@ -50,6 +67,15 @@ class ExecutionRequest:
     credentials: dict[str, Any]
     config: dict[str, Any]
     deadline_seconds: float
+    #: The upstream tenant this *account* is bound to, when it has one --
+    #: `accounts.external_ref`. Separate from `config`, which is the install's
+    #: and therefore shared by every account on it: a GitHub App installed on
+    #: two organizations gives their accounts different installations, so
+    #: reading this from the install config would hand one org's token to the
+    #: other. Generic here; what it means is the presenter's business.
+    account_external_ref: str | None = None
+    #: Who this call should present as. See `ActingIdentity`.
+    act_as: ActingIdentity = "user"
 
 
 @dataclass(frozen=True, slots=True)

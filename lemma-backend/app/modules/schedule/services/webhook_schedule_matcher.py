@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.contracts.webhook_source import WebhookPayload
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.core.log.log import get_logger
 
@@ -39,3 +40,21 @@ class WebhookScheduleMatcher:
             )
 
         return []
+
+    async def match_criteria(self, criteria: WebhookPayload) -> List[ScheduleEntity]:
+        """Schedules whose stored config contains `criteria`.
+
+        For a source plugin that states its own routing key. `match` above keeps
+        deriving one per source for the sources that predate the plugins.
+
+        Note the direction: containment is `config @> criteria`, so a schedule
+        may declare *more* than the key and still match. Narrowing a schedule to
+        one repository or a few actions is therefore a second pass over what
+        this returns, not something expressible here.
+        """
+        if not criteria:
+            return []
+        return await self.schedule_repository.find_by_config(
+            schedule_type=ScheduleType.WEBHOOK,
+            criteria=criteria,
+        )

@@ -135,3 +135,22 @@ plaintext rule above still covers a minisign-format secret key.
 '''
 regex = '''dW50cnVzdGVkIGNvbW1lbnQ6IHJ{1}zaWduIG'''
 keywords = ["dW50cnVzdGVkIGNvbW1lbnQ6"]
+
+[[allowlists]]
+description = '''
+Slack's own published example signing secret, from the worked example in their
+"Verifying requests from Slack" documentation. It was briefly used as the key in
+`test_webhook_signatures.py` -- where the value is arbitrary, because that test
+compares two implementations against each other -- and is no longer in the tree:
+it now reads `a-slack-signing-secret`, which no scanner or person will mistake
+for a credential.
+
+It survives only in this branch's history, and gitleaks scans the commits a pull
+request introduces rather than its result, so removing it from the tree does not
+clear the finding. Allowlisted by exact value rather than by path, so the entry
+cannot quietly cover a real secret in the same file. `main` is squash-merged, so
+the value never reaches its history at all.
+'''
+regexes = [
+  '''8f742231b10e8888abcd99yyyzzz85a5''',
+]

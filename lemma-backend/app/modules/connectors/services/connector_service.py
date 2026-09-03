@@ -43,6 +43,7 @@ from app.modules.connectors.domain.errors import (
     UnsupportedAuthProviderError,
 )
 from app.modules.connectors.domain.install_binding import resolve_external_ref
+from app.modules.connectors.services.auth.github_installation import bound_external_ref
 from app.modules.connectors.domain.ports import (
     AccountRepositoryPort,
     AppOperationGatewayPort,
@@ -363,13 +364,10 @@ class ConnectorService:
                     capability.auth_scheme != AuthScheme.OAUTH2
                     or self.system_oauth_config.has_default_oauth_config(connector)
                 )
-                # Surface the runtime-resolved OAuth defaults (native registry)
-                # for apps that don't store their own, so the read API matches
-                # what the connect flow will actually use.
+                # Resolved, not read, so the API matches the connect flow: a
+                # stored URL may still carry an env placeholder to fill.
                 resolved_oauth2_defaults = (
-                    capability.oauth2_defaults
-                    if capability.oauth2_defaults is not None
-                    else self.system_oauth_config.resolve_oauth2_defaults(connector)
+                    self.system_oauth_config.resolve_oauth2_defaults(connector)
                 )
                 capabilities.append(
                     capability.model_copy(
@@ -1031,12 +1029,14 @@ class ConnectorService:
                 user_id, auth_config.id
             )
 
+        # Re-derived on every re-auth: a reconnect is how an account moves to
+        # another workspace or installation, and a stale key keeps sending it
+        # someone else's events. A GitHub App install names it on the callback
+        # and only then, so a reconnect asks GitHub which one the token is for.
+        external_ref = await bound_external_ref(connector.id, credentials, redirect_uri)
         if account:
             account.credentials = credentials
-            # Re-derived on every re-auth: a reconnect is how an account moves
-            # to a different workspace or installation, and a stale routing key
-            # would keep sending that account another tenant's events.
-            account.external_ref = resolve_external_ref(connector.id, credentials)
+            account.external_ref = external_ref
             if provider_account_id:
                 account.provider_account_id = provider_account_id
             if email:
@@ -1060,7 +1060,7 @@ class ConnectorService:
                     is_default=has_existing is None,
                     credentials=credentials,
                     provider_account_id=provider_account_id,
-                    external_ref=resolve_external_ref(connector.id, credentials),
+                    external_ref=external_ref,
                     email=email,
                     display_name=display_name,
                 )

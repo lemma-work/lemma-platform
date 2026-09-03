@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.connectors.domain.install_binding import resolve_external_ref
+from app.modules.connectors.domain.install_binding import (
+    bind_external_ref,
+    resolve_external_ref,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -78,5 +81,73 @@ def test_a_missing_or_malformed_tenant_is_absent_rather_than_wrong(credentials):
 def test_an_over_long_value_is_refused_rather_than_truncated():
     assert (
         resolve_external_ref("slack", {"raw_response": {"team": {"id": "T" * 256}}})
+        is None
+    )
+
+
+def test_a_github_install_is_bound_from_the_callback():
+    """The App install redirect is the only place the installation is named.
+
+    The credentials that come back are the authorizing user's own: the same
+    person authorizing in two organizations gets two installations and one
+    indistinguishable pair of tokens, so `resolve_external_ref` has nothing to
+    read (see `test_github_account_has_no_tenant_of_its_own` above).
+    """
+    assert (
+        bind_external_ref(
+            "github",
+            {"access_token": "gho_x"},
+            "https://api.example.com/oauth/callback"
+            "?code=c&installation_id=158040062&setup_action=install",
+        )
+        == "158040062"
+    )
+
+
+def test_the_callback_outranks_the_credentials():
+    """A reconnect that moves an account to another tenant has to move the key.
+
+    The provider naming the tenant *for this authorization* is a stronger
+    statement than a value found lying in the credential blob, which on a
+    re-auth may still describe where the account used to point.
+    """
+    ref = bind_external_ref(
+        "slack",
+        {"raw_response": {"team": {"id": "T_OLD"}}},
+        "https://api.example.com/oauth/callback?installation_id=999",
+    )
+    # Slack declares no callback param, so its credentials still decide.
+    assert ref == "T_OLD"
+
+
+def test_connectors_without_a_callback_param_are_unchanged():
+    for connector_id, credentials, expected in (
+        ("slack", {"raw_response": {"team_id": "T1"}}, "T1"),
+        ("notion", {"connection_id": "ca_1"}, "ca_1"),
+        ("gmail", {"access_token": "t"}, None),
+    ):
+        url = "https://api.example.com/oauth/callback?code=c&installation_id=42"
+        assert bind_external_ref(connector_id, credentials, url) == expected
+        assert bind_external_ref(connector_id, credentials, url) == (
+            resolve_external_ref(connector_id, credentials)
+        )
+
+
+def test_a_callback_without_the_param_falls_through():
+    assert bind_external_ref("github", {"connection_id": "ca_2"}, "https://x/cb") == (
+        "ca_2"
+    )
+    assert bind_external_ref("github", {"access_token": "t"}, None) is None
+    # setup_action=request means an admin was *asked* to install; no id yet.
+    assert (
+        bind_external_ref("github", {}, "https://x/cb?setup_action=request&code=c")
+        is None
+    )
+
+
+def test_an_oversized_or_empty_installation_id_is_not_a_key():
+    assert bind_external_ref("github", {}, "https://x/cb?installation_id=") is None
+    assert (
+        bind_external_ref("github", {}, "https://x/cb?installation_id=" + "9" * 256)
         is None
     )

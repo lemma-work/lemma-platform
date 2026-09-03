@@ -21,7 +21,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { useAccounts, useConnectors, useTriggers } from '@/lib/hooks/use-connectors';
+import { useAccounts, useConnectors, useTrigger, useTriggers } from '@/lib/hooks/use-connectors';
+import { SchemaFields } from '@/components/connectors/schema-fields';
+import type { SchemaValues } from '@/components/connectors/connector-utils';
+import { cleanTriggerConfig } from './trigger-config';
 import { useTable, useTables } from '@/lib/hooks/use-datastores';
 import { useFlow } from '@/lib/hooks/use-flows';
 import { usePod } from '@/lib/hooks/use-pods';
@@ -185,6 +188,8 @@ export function TriggerModal({
     const [connectorId, setConnectorId] = useState('');
     const [triggerId, setTriggerId] = useState('');
     const [accountId, setAccountId] = useState('');
+    // The selected trigger's own parameters, keyed by its `config_schema`.
+    const [triggerConfig, setTriggerConfig] = useState<SchemaValues>({});
     const [condition, setCondition] = useState('');
     const [instruction, setInstruction] = useState('');
     const [conditions, setConditions] = useState<MatchCondition[]>([]);
@@ -289,6 +294,29 @@ export function TriggerModal({
     const selectedTriggerId = triggerId && connectorTriggers.some((entry) => entry.id === triggerId)
         ? triggerId
         : connectorTriggers[0]?.id ?? '';
+    // The list response is lean by design (no `config_schema`), so the selected
+    // trigger's detail is fetched to learn what it can be narrowed by. This is
+    // what makes a trigger's own parameters -- GitHub's repository and actions,
+    // Slack's channel -- fillable at all; the modal has always sent an empty
+    // `trigger_config` because it never asked for one.
+    const eventTriggerId = target.kind === 'workflow'
+        ? workflowEventStart?.connector_trigger_id || ''
+        : selectedTriggerId;
+    const { data: selectedTriggerDetail } = useTrigger({
+        organizationId: pod?.organization_id,
+        connectorId: eventConnectorId,
+        triggerName: eventTriggerId || undefined,
+        enabled: wantsConnectors && kind === ScheduleType.WEBHOOK && Boolean(eventTriggerId),
+    });
+    const triggerConfigSchema = (selectedTriggerDetail as { config_schema?: unknown } | undefined)
+        ?.config_schema as Parameters<typeof SchemaFields>[0]['schema'] | undefined;
+    const hasTriggerConfigFields = Boolean(
+        triggerConfigSchema
+        && Object.keys(
+            (triggerConfigSchema as { properties?: Record<string, unknown> }).properties || {},
+        ).length > 0,
+    );
+
     const selectedTable = tableName || tables[0]?.name || '';
     // The list endpoint returns summaries — a `column_count`, not the columns —
     // so the picker reads the selected table's own schema. Only fetched while a
@@ -378,11 +406,16 @@ export function TriggerModal({
                 ...(when ? { when } : {}),
             };
         }
+        // A trigger's own parameters go at the *top level*. The backend matches
+        // a delivery against this object directly, so anything nested under a
+        // `trigger_config` key is invisible to matching -- which is why the
+        // modal used to send it empty and nothing was ever narrowed.
+        const params = cleanTriggerConfig(triggerConfig);
         if (target.kind === 'agent') {
-            return { connector_id: connectorId, connector_trigger_id: selectedTriggerId, trigger_config: {} };
+            return { connector_id: connectorId, connector_trigger_id: selectedTriggerId, ...params };
         }
         // Workflow webhooks derive their connector + event from the workflow start.
-        return {};
+        return params;
     };
 
     const handleSave = async () => {
@@ -593,13 +626,21 @@ export function TriggerModal({
                                         onConnectorChange={(value) => {
                                             setConnectorId(value);
                                             setTriggerId('');
+                                            setTriggerConfig({});
                                         }}
                                         triggers={connectorTriggers.map((entry) => ({
                                             id: entry.id,
                                             label: getTriggerLabel(entry as { id: string } & Record<string, unknown>),
                                         }))}
                                         triggerId={selectedTriggerId}
-                                        onTriggerChange={setTriggerId}
+                                        onTriggerChange={(value) => {
+                                            setTriggerId(value);
+                                            setTriggerConfig({});
+                                        }}
+                                        configSchema={triggerConfigSchema ?? null}
+                                        configValues={triggerConfig}
+                                        onConfigChange={setTriggerConfig}
+                                        hasConfigFields={hasTriggerConfigFields}
                                         accounts={compatibleAccounts}
                                         accountId={selectedAccountId}
                                         onAccountChange={setAccountId}
@@ -1181,6 +1222,10 @@ function EventFields({
     onAccountChange,
     workflowEvent,
     workflowEventBlocked,
+    configSchema,
+    configValues,
+    onConfigChange,
+    hasConfigFields,
 }: {
     targetKind: TriggerTargetKind;
     isEditing: boolean;
@@ -1195,6 +1240,10 @@ function EventFields({
     onAccountChange: (value: string) => void;
     workflowEvent: { connector_id?: string; connector_trigger_id?: string } | null;
     workflowEventBlocked: boolean;
+    configSchema: Parameters<typeof SchemaFields>[0]['schema'];
+    configValues: SchemaValues;
+    onConfigChange: (values: SchemaValues) => void;
+    hasConfigFields: boolean;
 }) {
     // Which app and event a webhook listens to is fixed when it is created —
     // the update API cannot move it — so editing states them rather than
@@ -1229,7 +1278,15 @@ function EventFields({
                     </p>
                 </div>
                 {workflowEventBlocked ? null : (
-                    <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+                    <>
+                        <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+                        <TriggerConfigFields
+                            schema={configSchema}
+                            values={configValues}
+                            onChange={onConfigChange}
+                            visible={hasConfigFields}
+                        />
+                    </>
                 )}
             </div>
         );
@@ -1266,6 +1323,49 @@ function EventFields({
                 </div>
             </div>
             <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+            <TriggerConfigFields
+                schema={configSchema}
+                values={configValues}
+                onChange={onConfigChange}
+                visible={hasConfigFields}
+            />
+        </div>
+    );
+}
+
+/**
+ * A trigger's own parameters, rendered from its `config_schema`.
+ *
+ * Every one of these narrows a trigger that already works -- GitHub fires on
+ * every repository in the installation until one is named -- so the whole block
+ * is absent when a trigger declares no parameters, and nothing here is
+ * required.
+ */
+function TriggerConfigFields({
+    schema,
+    values,
+    onChange,
+    visible,
+}: {
+    schema: Parameters<typeof SchemaFields>[0]['schema'];
+    values: SchemaValues;
+    onChange: (values: SchemaValues) => void;
+    visible: boolean;
+}) {
+    if (!visible || !schema) return null;
+    return (
+        <div className="space-y-1.5">
+            <Label className="text-xs">Narrow this event</Label>
+            <SchemaFields
+                schema={schema}
+                values={values}
+                onChange={onChange}
+                followSchemaOrder
+                emptyMessage="This event takes no further settings."
+            />
+            <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                Optional. Left empty, the trigger fires on every matching event.
+            </p>
         </div>
     );
 }

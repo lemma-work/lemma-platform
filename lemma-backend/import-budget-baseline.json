@@ -1,13 +1,13 @@
 {
-  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py. Last lowered by deferring composio: one module-scope line in composio_auth_provider.py pulled the SDK and, through it, openai -- 993 modules and ~1s on every backend start, to serve a health check. Previously raised by splitting agent_surfaces: 23 first-party modules and zero third-party ones, which is the shape this gate is meant to allow -- a decision somebody made, not something a dependency did quietly. Measured main at 5526/6517 against a 5491/6479 baseline before that split, i.e. main had already drifted 35 modules inside the tolerance with nothing to notice, because the gate ran only in `make quality` and never in CI. It runs in CI now.",
+  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py. Last raised for the GitHub App work: 8 first-party modules and zero third-party ones -- the App auth and installation services, the credential presenters, the shared webhook signature module, and the source-plugin port. Measured main at 4630/6407 against this 4585/6372 baseline before that, i.e. #598 had already spent 45 of the 50-module tolerance without raising it, so the number here had stopped describing anything.",
   "tolerance": 50,
   "entrypoints": {
     "app.app": {
-      "modules": 4585,
+      "modules": 4636,
       "rss_mib": null
     },
     "app.events": {
-      "modules": 6372,
+      "modules": 6413,
       "rss_mib": null
     }
   }

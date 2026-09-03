@@ -113,6 +113,12 @@ EXPECTED = [
         None,
         "sentinel",
     ),
+    (
+        "connector_github_app_webhook_secret_previous",
+        "CONNECTOR_GITHUB_APP_WEBHOOK_SECRET_PREVIOUS",
+        None,
+        "sentinel",
+    ),
 ]
 
 

@@ -75,7 +75,7 @@ async def test_create_provider_trigger_passes_connector_trigger_to_manager(monke
 
     provider_id = await adapter.create_provider_trigger(schedule)
 
-    assert provider_id == "ti_123"
+    assert provider_id.provider_trigger_id == "ti_123"
     manager.create_schedule.assert_awaited_once()
     call_kwargs = manager.create_schedule.await_args.kwargs
     assert call_kwargs["account"] == account

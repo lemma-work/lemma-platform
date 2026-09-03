@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
@@ -91,6 +92,37 @@ def _agent_target_ref(schedule, *, pod_id: UUID) -> ResourceRef:
     )
 
 
+#: What a firing carries alongside its payload: the source's routing key, its
+#: `source_event_id`, and whatever else the source chose to say about the
+#: delivery. Free-form because each source decides what belongs there.
+FiringMetadata = dict[str, Any]
+
+
+def _conversation_metadata(
+    schedule, metadata: FiringMetadata | None
+) -> FiringMetadata | None:
+    """What the started conversation should know about where it is.
+
+    A webhook source may say which repository its delivery came from -- see
+    `NormalizedWebhook.context` -- and that turns a triggered run from "an agent
+    told about a pull request" into "an agent standing in the checkout with the
+    branch already out". `parse_project_repo` validates it downstream, so
+    nothing here has to trust the shape.
+
+    The schedule's account becomes the clone identity. Deliberately the *user's*
+    account and not the App installation: the sandbox's `git` and `gh` act as
+    the person, so the work an agent pushes is attributed to whoever owns the
+    repository rather than to a bot nobody recognises.
+    """
+    repo = (metadata or {}).get("repo")
+    if not isinstance(repo, dict) or not repo:
+        return None
+    bound = dict(repo)
+    if schedule.account_id is not None:
+        bound["account_id"] = str(schedule.account_id)
+    return {"repo": bound}
+
+
 class ScheduleStartService:
     """Handles schedule.fired events for workflows."""
 
@@ -112,6 +144,7 @@ class ScheduleStartService:
         user_id: UUID,
         trigger: TriggerContext,
         target_run_id: str,
+        metadata: FiringMetadata | None = None,
     ) -> UUID:
         """Start the conversation this firing hands over to.
 
@@ -128,6 +161,7 @@ class ScheduleStartService:
             conversation_id=UUID(target_run_id),
             source="SCHEDULE",
             instructions=schedule.instruction,
+            conversation_metadata=_conversation_metadata(schedule, metadata),
         )
 
     async def handle_schedule_fired(
@@ -279,6 +313,7 @@ class ScheduleStartService:
                         user_id=execution_user_id,
                         trigger=trigger,
                         target_run_id=target_run_id,
+                        metadata=metadata,
                     )
                 finally:
                     reset_current_context(ctx_token)

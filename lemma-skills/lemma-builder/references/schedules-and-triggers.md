@@ -117,6 +117,26 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
     must have an `EVENT` start with a trigger id, or creation fails with
     *"Webhook workflow schedules require an EVENT workflow start"*.
 
+  **A trigger may take parameters of its own**, declared by its `config_schema`
+  and read with `lemma connectors triggers get <auth-config> <trigger-id>`. They
+  go at the **top level** of `config`, alongside `source` — not nested under a
+  `trigger_config` key, where nothing would match them. GitHub's
+  `github:http:pull_request`, for example, takes an optional `repository_id` and
+  `actions`; leaving both out means every repository and every action. Every one
+  of these narrows a trigger that already works, so none is required.
+
+  Some keys are **bound for you** and must not be written by hand. A GitHub
+  schedule's `installation_id` comes from the connected account when the
+  schedule is created — it is not something to copy out of a URL, and a wrong
+  one routes another organization's events at your pod.
+
+  **A triggered agent needs its own connector grant.** Connecting the account
+  authorizes the *person*; a scheduled run is a delegated workload and is
+  refused unless the **agent** also holds `connector.use` on the connector
+  (`PUT /pods/{pod}/agents/{name}/permissions`). Without it the run still
+  starts and the repository is still bound — the sandbox simply has no
+  credentials, and `git clone` fails with `could not read Username`.
+
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
 to `is_active: false` so it won't fire before its target exists).
 
