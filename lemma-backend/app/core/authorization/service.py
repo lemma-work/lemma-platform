@@ -37,6 +37,7 @@ from app.core.authorization.session_approvals import has_session_approval
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.grants import (
+    HUMAN_GRANTEE_TYPES,
     delete_grantee_grants,
     grant_resource_type_values,
 )
@@ -1749,6 +1750,15 @@ class Authorizer:
                 grant_resource_type_values(resource_type)
             ),
             ResourcePermissionGrantModel.resource_id == resource_id,
+            # Human sharing grants only. A grant to an agent is a workload
+            # capability grant and says nothing about whether people may see the
+            # resource -- which is why `clear_human_sharing_grants` deletes the
+            # human ones and preserves these when a resource leaves RESTRICTED.
+            # Counting them here contradicted that: pinning a shared account on
+            # an agent was itself what made the account RESTRICTED, so the act of
+            # configuring the agent locked every pod member out of the very
+            # account it was configured to use.
+            ResourcePermissionGrantModel.grantee_type.in_(HUMAN_GRANTEE_TYPES),
         ]
         grant_exists_stmt = select(exists().where(*conditions))
         has_grants = (await self.session.execute(grant_exists_stmt)).scalar_one()

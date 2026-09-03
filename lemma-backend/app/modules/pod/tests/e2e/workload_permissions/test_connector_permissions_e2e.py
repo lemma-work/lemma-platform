@@ -285,6 +285,138 @@ async def test_named_workload_other_account_requires_workload_grant(
     assert str(account.id) == other_account_id
 
 
+@pytest.mark.parametrize("role", ["POD_USER", "POD_EDITOR", "POD_ADMIN"])
+@pytest.mark.asyncio
+async def test_a_shared_account_pinned_on_an_agent_serves_the_whole_pod(
+    role,
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+    fixed_test_user,
+    db_session,
+):
+    """The shared-mailbox pattern: one team account, every member's agent run.
+
+    A pod is a trust boundary, so an agent visible inside it should be able to
+    use the account it was configured with, whoever set the run going. This
+    broke in a way that made the feature impossible to configure rather than
+    merely restricted: granting the agent the account is what marked the
+    account RESTRICTED, and the invoker check then found no *human* grant on it
+    and refused everyone — including a pod admin.
+
+    Parameterised over the roles that hold `connector_account.use`, because the
+    bug was insensitive to role and a single-role test would not have shown
+    that.
+    """
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
+    mailbox_owner = await signup_user(async_client, f"shared-owner-{role.lower()}")
+    shared_account_id = await seed_account(
+        db_session,
+        user_id=mailbox_owner["id"],
+        organization_id=fixed_test_org["id"],
+        auth_config_id=env["auth_config_id"],
+        connector_id=env["connector_id"],
+    )
+
+    member = await signup_user(async_client, f"shared-member-{role.lower()}")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=member,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=env["pod_id"],
+        organization_member_id=org_member["id"],
+        role=role,
+        roles=[role],
+    )
+
+    name = f"conn_agent_{uuid4().hex[:8]}"
+    agent = await create_agent(authenticated_client, env["pod_id"], name)
+    await replace_workload_grants(
+        authenticated_client,
+        env["pod_id"],
+        AGENT,
+        name,
+        [_connector_grant(env["connector_id"]), _account_grant(shared_account_id)],
+    )
+
+    account = await build_account_resolution_service(db_session).resolve_account(
+        user_id=UUID(member["id"]),
+        connector_id=env["connector_id"],
+        auth_actor=await build_workload_ctx(
+            db_session,
+            user_id=member["id"],
+            workload_type=AGENT,
+            workload_id=agent["id"],
+            pod_id=env["pod_id"],
+            workload_name=name,
+        ),
+        account_id=UUID(shared_account_id),
+    )
+
+    assert str(account.id) == shared_account_id
+
+
+@pytest.mark.asyncio
+async def test_a_person_still_cannot_reach_the_shared_account_directly(
+    authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session
+):
+    """The other half of the same change, and the reason it is safe.
+
+    Making the account visible to the pod again does not hand it to people: a
+    plain, non-delegated caller is refused another person's account by account
+    resolution itself, whatever the visibility says. Using it *through* the
+    agent it was pinned on is the only way in.
+    """
+    env = await _setup(
+        authenticated_client, fixed_test_org, fixed_test_user, db_session
+    )
+    mailbox_owner = await signup_user(async_client, "shared-owner-direct")
+    shared_account_id = await seed_account(
+        db_session,
+        user_id=mailbox_owner["id"],
+        organization_id=fixed_test_org["id"],
+        auth_config_id=env["auth_config_id"],
+        connector_id=env["connector_id"],
+    )
+    member = await signup_user(async_client, "shared-member-direct")
+    org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=member,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=env["pod_id"],
+        organization_member_id=org_member["id"],
+        role="POD_USER",
+        roles=["POD_USER"],
+    )
+
+    name = f"conn_agent_{uuid4().hex[:8]}"
+    await create_agent(authenticated_client, env["pod_id"], name)
+    await replace_workload_grants(
+        authenticated_client,
+        env["pod_id"],
+        AGENT,
+        name,
+        [_connector_grant(env["connector_id"]), _account_grant(shared_account_id)],
+    )
+
+    with pytest.raises(AccountResolutionError):
+        await build_account_resolution_service(db_session).resolve_account(
+            user_id=UUID(member["id"]),
+            connector_id=env["connector_id"],
+            account_id=UUID(shared_account_id),
+        )
+
+
 @pytest.mark.asyncio
 async def test_shared_account_is_refused_to_an_invoker_who_cannot_use_it(
     authenticated_client, async_client, fixed_test_org, fixed_test_user, db_session

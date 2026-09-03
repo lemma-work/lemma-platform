@@ -111,6 +111,11 @@ rights than the person who asked.
   then the system shall refuse the access.
 - The system shall apply this on every request the workload makes, not only on
   the first.
+- Granting a workload access to a resource shall not, by itself, withdraw that
+  resource from the people in the pod. A grant to an agent says what the agent
+  may do; it says nothing about who may see the thing. Otherwise configuring a
+  shared account for an agent would be the act that stopped the pod's members
+  running it.
 
 **Contracts:** `agent.permissions.get`, `function.permissions.get`, `record.list`, `query.execute`
 
