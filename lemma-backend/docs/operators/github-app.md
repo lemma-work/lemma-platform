@@ -92,7 +92,7 @@ shared field would hand one organization's token to another's account.
 
 ## Reconnecting after the cutover
 
-Migration `0028_github_app_reauth` marks every native GitHub account
+Migration `0029_github_app_reauth` marks every native GitHub account
 `REAUTH_REQUIRED`. Tokens minted under the old OAuth App belong to an
 application the deployment no longer holds the secret for — they cannot be
 refreshed and cannot be revoked from here — and they carry no installation, so

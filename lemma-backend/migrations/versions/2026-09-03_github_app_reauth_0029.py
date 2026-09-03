@@ -26,14 +26,14 @@ and the App switch says nothing about it.
 Reversing this cannot restore CONNECTED, because by then it would be a lie
 about a credential that no longer works. The downgrade is deliberately a no-op.
 
-Revision ID: 0028_github_app_reauth
-Revises: 0027_schedule_account_set_null
+Revision ID: 0029_github_app_reauth
+Revises: 0028_deletes_stop_taking_history
 """
 
 from alembic import op
 
-revision = "0028_github_app_reauth"
-down_revision = "0027_schedule_account_set_null"
+revision = "0029_github_app_reauth"
+down_revision = "0028_deletes_stop_taking_history"
 branch_labels = None
 depends_on = None
 
