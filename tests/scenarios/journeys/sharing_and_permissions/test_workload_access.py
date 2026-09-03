@@ -181,7 +181,9 @@ async def test_a_grant_is_not_a_promotion_for_the_person_driving_it(
     )
     await bob.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
 
-    assert any(str(t["name"]) == str(table["name"]) for t in await alice.tables_in(pod)), (
+    assert any(
+        str(t["name"]) == str(table["name"]) for t in await alice.tables_in(pod)
+    ), (
         f"an agent deleted the {table['name']} table for a member who could "
         f"not have deleted it himself — the grant was read as the workload's "
         f"authority instead of as a ceiling on it"
