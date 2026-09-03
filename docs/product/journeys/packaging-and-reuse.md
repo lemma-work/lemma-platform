@@ -92,7 +92,11 @@ their credentials do not travel with it.
   reject it rather than exhausting storage.
 - The system shall bound how much a bundle may contain — items, records, files,
   and total size — and shall say which limit was exceeded.
-- The system shall bound how many imports one organization may start in a day.
+- The system shall bound how many imports one person may start in a day, and
+  shall bound exports separately, so a day of one never blocks the other. The
+  bound is per person rather than per organization on purpose: what it guards
+  is one account's worth of worker time, and a shared allowance would let one
+  member's runaway loop lock out everybody else.
 
 **Contracts:** `pod.bundle.import.start`, `pod.bundle.upload`
 

@@ -119,6 +119,75 @@ async def test_a_destructive_attempt_asks_rather_than_failing_silently(
     )
 
 
+@scenario("A grant does not let an agent do what the person driving it cannot")
+@proves("PS-ACCESS-020")
+@covers(
+    "agent.permissions.replace",
+    "agent.conversation.create",
+    "table.delete",
+    "table.list",
+)
+async def test_a_grant_is_not_a_promotion_for_the_person_driving_it(
+    world, pod_with_a_record
+):
+    """The sentence in PS-ACCESS-020 with teeth, and the one nothing exercised.
+
+    Five scenarios were marked as proving this promise. They showed that a new
+    agent starts with nothing, and that an ordinary member cannot widen one —
+    both true, and neither of them the promise, which is about a workload that
+    *does* hold the grant. So the agent here is granted deletion outright, and
+    the only thing left standing between the request and the table is that the
+    person who asked could not delete it themselves.
+
+    Deletion is also destructive (PS-ACCESS-021), which would refuse this on
+    its own and prove nothing about the intersection. The explicit grant is
+    what takes that carve-out off the table: it is standing authority for the
+    destructive action, so what refuses here is the ceiling and nothing else.
+    """
+    needs(MODEL_IS_REAL)
+    alice, pod, table, _record = pod_with_a_record
+
+    # A POD_EDITOR may run agents and change tables. Deleting one is an admin's
+    # to do — which is the whole distance this scenario measures.
+    bob = await world.person("sofia")
+    await alice.adds(bob, to_pod=pod, as_role="POD_EDITOR")
+
+    agent = await alice.creates_an_agent(in_pod=pod, toolsets=["POD"])
+    await alice.replaces_agent_grants(
+        agent["name"],
+        in_pod=pod,
+        grants=[
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table["name"],
+                "permission_ids": ["datastore.table.delete"],
+            }
+        ],
+    )
+
+    # Asserted, not assumed. Without this the scenario would keep passing if
+    # the grant silently stopped being applied — and would then be measuring
+    # PS-AGENT-002 again rather than this promise.
+    held = await alice.grants_of_agent(agent["name"], in_pod=pod)
+    assert any(
+        "datastore.table.delete" in (grant.get("permission_ids") or [])
+        for grant in held.get("grants") or []
+    ), f"the agent was never granted the deletion this scenario turns on: {held}"
+
+    conversation = await bob.starts_a_conversation(
+        in_pod=pod,
+        with_agent=agent["name"],
+        saying=f"Delete the {table['name']} table entirely. Go ahead.",
+    )
+    await bob.waits_for_the_run_to_settle(conversation=conversation, in_pod=pod)
+
+    assert any(str(t["name"]) == str(table["name"]) for t in await alice.tables_in(pod)), (
+        f"an agent deleted the {table['name']} table for a member who could "
+        f"not have deleted it himself — the grant was read as the workload's "
+        f"authority instead of as a ceiling on it"
+    )
+
+
 @scenario("An agent can only reach the connectors it was granted")
 @proves("PS-CONN-033", "PS-AGENT-002")
 @covers("agent.create", "agent.conversation.create", "connector.operation.execute")
