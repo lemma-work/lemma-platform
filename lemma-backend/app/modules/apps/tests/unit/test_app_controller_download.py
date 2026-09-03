@@ -134,3 +134,34 @@ async def test_bundle_finalize_failure_cleans_storage_before_reraising():
     service.cleanup_written_bundle.assert_awaited_once_with(plan, written)
     assert factory.state["open"] is False
     assert factory.state["opens"] == 2
+
+
+# --- Content-Disposition -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("app_name", "expected"),
+    [
+        ("dashboard", 'attachment; filename="dashboard-source.zip"'),
+        # A quote would end the filename token and let the rest of the path
+        # segment become header parameters of its own.
+        ('a"; x=y', 'attachment; filename="a___x_y-source.zip"'),
+        # CR/LF is the classic header-injection payload.
+        ("a\r\nX-Evil: 1", 'attachment; filename="a__X-Evil__1-source.zip"'),
+    ],
+)
+def test_archive_filename_is_quoted_and_sanitized(app_name, expected):
+    """The header is built from the path parameter, not from the stored app.
+
+    Names are normalized at create time and pod membership gates the route, so
+    a hostile name should not exist -- but the lookup happens later, inside the
+    use case, so the header was trusting a segment nothing had validated."""
+    from app.modules.apps.api.controllers.app_controller import _archive_disposition
+
+    assert _archive_disposition(app_name, "source") == expected
+
+
+def test_archive_filename_never_ends_up_empty():
+    from app.modules.apps.api.controllers.app_controller import _archive_disposition
+
+    assert _archive_disposition("", "dist") == 'attachment; filename="app-dist.zip"'

@@ -18,6 +18,7 @@ from app.modules.pod_bundle.domain.state import (
     PublishState,
     PublishMode,
     PublishStatus,
+    StepStatus,
 )
 
 
@@ -239,6 +240,60 @@ class ApplyImportRequest(BaseModel):
     )
 
 
+class PartialApplyResponse(BaseModel):
+    """What a stopped import already wrote to the pod, and how to continue it.
+
+    Apply is not transactional: each step commits in its own unit of work, so an
+    import that fails or is cancelled part-way leaves the pod changed and there
+    is no rollback. `committed_steps` says which steps landed, but a bare list
+    of integers does not tell anyone that the pod was modified at all, nor that
+    re-applying resumes instead of duplicating. This does."""
+
+    steps_applied: int = Field(
+        ..., description="Plan steps already applied to this pod. Not undone."
+    )
+    steps_total: int = Field(..., description="Steps in the approved plan.")
+    resume_from_step: int | None = Field(
+        default=None,
+        description=(
+            "Index of the first step still to run. Applying this import again "
+            "resumes here; steps already applied are not repeated."
+        ),
+    )
+    resumable: bool = Field(
+        ...,
+        description=(
+            "Whether applying this import again continues it. False once the "
+            "job reached a status apply no longer accepts, in which case the "
+            "pod keeps what was already applied and the rest must be imported "
+            "afresh."
+        ),
+    )
+
+    @classmethod
+    def from_state(cls, state: ImportState) -> "PartialApplyResponse | None":
+        """``None`` unless the import stopped part-way with the pod modified."""
+        if state.status is ImportStatus.COMPLETED or not state.is_terminal:
+            return None
+        if not state.committed_steps:
+            return None
+        steps = list(state.plan.steps) if state.plan else []
+        # The failed step itself is FAILED, not PENDING, and apply resets it to
+        # PENDING on the way back in -- so "still to run" is anything that did
+        # not reach DONE or SKIPPED, not `plan.next_pending_step()`.
+        remaining = [
+            step.index
+            for step in steps
+            if step.status not in (StepStatus.DONE, StepStatus.SKIPPED)
+        ]
+        return cls(
+            steps_applied=len(state.committed_steps),
+            steps_total=len(steps),
+            resume_from_step=remaining[0] if remaining else None,
+            resumable=state.status is ImportStatus.FAILED,
+        )
+
+
 class ImportStatusResponse(BaseModel):
     """Status of a durable pod import job."""
 
@@ -256,6 +311,14 @@ class ImportStatusResponse(BaseModel):
     cancel_requested_at: datetime | None = None
     current_step: int | None = None
     committed_steps: list[int] = Field(default_factory=list)
+    partial_apply: PartialApplyResponse | None = Field(
+        default=None,
+        description=(
+            "Set when the import stopped part-way and the pod was already "
+            "changed. Null on a clean success, and on a job that changed "
+            "nothing."
+        ),
+    )
 
     @classmethod
     def from_state(cls, state: ImportState) -> "ImportStatusResponse":
@@ -276,6 +339,7 @@ class ImportStatusResponse(BaseModel):
             cancel_requested_at=state.cancel_requested_at,
             current_step=state.current_step,
             committed_steps=state.committed_steps,
+            partial_apply=PartialApplyResponse.from_state(state),
         )
 
 

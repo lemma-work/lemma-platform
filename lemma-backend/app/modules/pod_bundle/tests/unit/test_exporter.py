@@ -22,6 +22,7 @@ from lemma_pod_bundle import extract_bundle
 import app.modules.pod_bundle.infrastructure.exporter as exporter_mod
 from app.modules.agent.contracts import AgentKind
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+from app.modules.pod_bundle.infrastructure.exporter_surfaces import export_surfaces
 
 
 # --- fakes -------------------------------------------------------------------
@@ -722,6 +723,8 @@ async def test_resource_grants_payload_serializes_grants_by_name(monkeypatch):
         pod_id=uuid4(),
         grantee_type="AGENT",
         grantee_id=uuid4(),
+        warnings=[],
+        grantee_name="triage",
     )
     assert out == {
         "grants": [
@@ -754,13 +757,19 @@ async def test_resource_grants_payload_is_empty_list_when_no_grants(monkeypatch)
         pod_id=uuid4(),
         grantee_type="FUNCTION",
         grantee_id=uuid4(),
+        warnings=[],
+        grantee_name="score_lead",
     )
     assert out == {"grants": []}
 
 
 async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):
     """A grant-read failure must not sink the whole export — it degrades to no
-    grants for that resource."""
+    grants for that resource, and says so.
+
+    Degrading silently is the bug: the bundle then omits `permissions`, so the
+    imported agent runs on whatever grants the target pod already gives it —
+    usually none — and neither side of the transfer shows anything wrong."""
 
     async def _boom(session, *, pod_id, grantee_type, grantee_id):
         raise RuntimeError("db down")
@@ -768,13 +777,19 @@ async def test_resource_grants_payload_is_best_effort_on_error(monkeypatch):
     monkeypatch.setattr(
         "app.core.authorization.grants.list_grantee_resource_grants", _boom
     )
+    warnings: list[str] = []
     out = await exporter_mod._resource_grants_payload(
         SimpleNamespace(session=object()),
         pod_id=uuid4(),
         grantee_type="AGENT",
         grantee_id=uuid4(),
+        warnings=warnings,
+        grantee_name="triage",
     )
     assert out is None
+    assert len(warnings) == 1
+    assert "triage" in warnings[0]
+    assert "permissions" in warnings[0]
 
 
 class _SelfListingFiles:
@@ -844,3 +859,74 @@ async def test_the_pods_own_assistant_is_never_exported(
 
     assert (root / "agents" / "assistant" / "assistant.json").is_file()
     assert not (root / "agents" / "pod_default").exists()
+
+
+# --- surface export is best-effort, but audible ------------------------------
+
+
+class _FakeSurface:
+    """The shape `_surface_response` is handed: a surface row with a name."""
+
+    def __init__(self, name: str, *, platform: str = "SLACK"):
+        self.name = name
+        self._platform = platform
+
+    def model_dump(self, mode: str | None = None) -> dict[str, Any]:
+        return {"name": self.name, "platform": self._platform, "status": "ACTIVE"}
+
+
+async def test_surface_export_warns_when_the_pod_s_surfaces_cannot_be_listed(
+    monkeypatch, tmp_path
+):
+    """A bundle with no `surfaces/` looks exactly like a pod that has none.
+
+    Best-effort is right — one unreadable surface must not sink an export — but
+    it has to be audible, or the person importing finds out when the surface
+    never answers."""
+
+    def _boom(uow):
+        raise RuntimeError("surface service down")
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources.get_surface_service", _boom
+    )
+    warnings: list[str] = []
+    await export_surfaces(
+        tmp_path, SimpleNamespace(session=object()), uuid4(), warnings
+    )
+
+    assert not (tmp_path / "surfaces").exists()
+    assert len(warnings) == 1
+    assert "surface export skipped" in warnings[0]
+
+
+async def test_one_unserializable_surface_warns_and_the_rest_still_export(
+    monkeypatch, tmp_path
+):
+    """One bad surface is not fatal, but it is named in the warnings."""
+
+    async def _list(pod_id, limit=100):
+        return [_FakeSurface("support_bot"), _FakeSurface("sales_bot")], None
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources.get_surface_service",
+        lambda uow: SimpleNamespace(list_surfaces_by_pod=_list),
+    )
+
+    def _respond(surface):
+        if surface.name == "sales_bot":
+            raise ValueError("no connector row")
+        return surface
+
+    monkeypatch.setattr(
+        "app.composition.pod_bundle_resources._surface_response", _respond
+    )
+    warnings: list[str] = []
+    await export_surfaces(
+        tmp_path, SimpleNamespace(session=object()), uuid4(), warnings
+    )
+
+    assert (tmp_path / "surfaces" / "support_bot" / "support_bot.json").is_file()
+    assert not (tmp_path / "surfaces" / "sales_bot").exists()
+    assert len(warnings) == 1
+    assert "sales_bot" in warnings[0]

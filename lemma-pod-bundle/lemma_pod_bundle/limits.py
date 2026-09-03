@@ -26,3 +26,11 @@ MAX_DATA_TOTAL_BYTES = 20 * _MB
 # starve seed data, and vice versa.
 MAX_APP_BYTES = 10 * _MB
 MAX_APPS_TOTAL_BYTES = 20 * _MB
+
+# Import-side ceiling on how many apply steps one bundle may declare (one per
+# resource, file, deferred grants entry and seeded table). The export caps above
+# bound what *we* write; nothing bounded what an uploaded or GitHub-fetched
+# bundle asks the importer to do, so under the uncompressed-byte guard a bundle
+# could still declare tens of thousands of steps. Generous next to any real pod
+# — the exporter itself lists at most 1,000 of each resource type.
+MAX_IMPORT_PLAN_STEPS = 5_000
