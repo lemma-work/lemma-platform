@@ -57,6 +57,14 @@ button to have a truthful source or action. Respect delegated identity, RLS, and
 resource grants in the experience: distinguish a genuinely empty result from
 missing access, and never imply that a user's RLS-scoped rows are team-wide data.
 
+Every read is capped, so a count is only ever a count of what came back.
+`records.list` serves one page — 1000 rows at most — beside a `total` that is the
+exact scoped count of matching rows; an ad-hoc `datastore.query` reports `total`
+as the rows *returned* and raises `truncated` when the cap cut the answer short.
+Design the label for the number you actually hold: “12 of 480”, or an aggregate
+computed in the query. A page size rendered as a total is a wrong number in the
+one place the person is trusting the app most.
+
 Choose HTML or Vite with `lemma-builder` based on application complexity, not
 appearance. Keep a one-page HTML app when it is sufficient; use Vite for genuine
 routing, reused components, or substantial client state. Do not switch stacks just

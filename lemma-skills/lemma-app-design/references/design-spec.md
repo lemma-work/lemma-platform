@@ -212,7 +212,10 @@ when live data is unavailable.
 | Surface | Loading | Populated | Empty | Partial/stale | Error/recovery | Permission | Pending/success |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 
-Distinguish “no matching rows,” “no rows created,” and “not allowed to see rows.”
+Distinguish “no matching rows,” “no rows created,” “not allowed to see rows,” and
+“more rows matched than this view returned.” The last one is the partial column's
+job: name what the surface shows when a page cap or a `truncated` query result
+means the visible set is a prefix, and what the person does to see the rest.
 Preserve inputs across recoverable errors. Specify skeleton geometry, progress
 language, retry behavior, and focus destination.
 

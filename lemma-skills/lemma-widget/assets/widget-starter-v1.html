@@ -72,8 +72,19 @@
       metaEl.textContent = "Unavailable";
     }
 
-    function field(row, key) {
-      return row && row.data && row.data[key] != null ? row.data[key] : row && row[key];
+    function notice(message) {
+      // Not an error state. The widget is a cross-site iframe and the browser
+      // SDK authenticates by cookie, which some browsers and local HTTP setups
+      // withhold — the person is usually signed in, so this must not shout.
+      stateEl.hidden = false;
+      delete stateEl.dataset.kind;
+      stateEl.textContent = message;
+      contentEl.hidden = true;
+      metaEl.textContent = "";
+    }
+
+    function number(value) {
+      return new Intl.NumberFormat().format(Number(value) || 0);
     }
 
     function escapeHtml(value) {
@@ -82,28 +93,31 @@
       });
     }
 
-    function render(rows) {
-      if (!rows.length) {
+    function render(groups, truncated) {
+      if (!groups.length) {
         stateEl.textContent = "No __EMPTY_LABEL__ yet.";
         metaEl.textContent = "0 records";
         return;
       }
-      var counts = {};
-      rows.forEach(function (row) {
-        var key = field(row, "__GROUP_FIELD__") || "Unspecified";
-        counts[key] = (counts[key] || 0) + 1;
-      });
+      var sum = groups.reduce(function (running, row) {
+        return running + (Number(row.group_count) || 0);
+      }, 0);
+      // Only a complete group list sums to a real total. When the row cap cut
+      // the groups short the sum is a floor, so the card says what it is.
       var cards = [
-        '<article class="lw-v1__card"><div class="lw-v1__label">Total</div><div class="lw-v1__value">' +
-          new Intl.NumberFormat().format(rows.length) + "</div></article>"
-      ].concat(Object.keys(counts).slice(0, 5).map(function (key) {
-        return '<article class="lw-v1__card"><div class="lw-v1__label">' + escapeHtml(key) +
-          '</div><div class="lw-v1__value">' + new Intl.NumberFormat().format(counts[key]) + "</div></article>";
+        '<article class="lw-v1__card"><div class="lw-v1__label">' +
+          (truncated ? "Top groups" : "Total") + '</div><div class="lw-v1__value">' +
+          number(sum) + "</div></article>"
+      ].concat(groups.slice(0, 5).map(function (row) {
+        return '<article class="lw-v1__card"><div class="lw-v1__label">' +
+          escapeHtml(row.group_key == null ? "Unspecified" : row.group_key) +
+          '</div><div class="lw-v1__value">' + number(row.group_count) + "</div></article>";
       }));
       contentEl.innerHTML = cards.join("");
       contentEl.hidden = false;
       stateEl.hidden = true;
-      metaEl.textContent = new Intl.NumberFormat().format(rows.length) + " records";
+      metaEl.textContent = number(groups.length) + (groups.length === 1 ? " group" : " groups") +
+        (truncated ? " shown" : "");
     }
 
     async function boot() {
@@ -111,11 +125,17 @@
         var client = new window.LemmaClient.LemmaClient();
         var auth = await client.initialize();
         if (!auth || auth.status !== "authenticated") {
-          fail("Sign in to Lemma to view this data.");
+          notice("This view can't load pod data in this browser.");
           return;
         }
-        var response = await client.records.list("__TABLE_NAME__", { limit: 100 });
-        render((response && response.items) || []);
+        // Counted in SQL rather than over a page of records: `records.list` serves
+        // at most one capped page, so counting what came back would report a
+        // slice of the table as if it were the whole of it.
+        var response = await client.datastore.query(
+          "select __GROUP_FIELD__ as group_key, count(*) as group_count" +
+          " from __TABLE_NAME__ group by __GROUP_FIELD__ order by group_count desc"
+        );
+        render((response && response.items) || [], !!(response && response.truncated));
       } catch (error) {
         fail(error && error.message ? error.message : "Unable to load live pod data.");
       }
