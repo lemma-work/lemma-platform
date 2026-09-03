@@ -16,44 +16,52 @@ single identity model:
   workers), **workflows** (DAGs over functions + agents + *humans*), **schedules/
   triggers** (time, row-events, webhooks), and **connectors** (third-party apps).
 - **Interface layer** — **apps** (browser UIs), **widgets** (inline live views),
-  and **surfaces** (agents on Slack/Teams/email/…).
+  and **surfaces** (one agent each, on Slack/Teams/Telegram/WhatsApp/email).
 
 Members (humans) and **workloads** (agents, functions) act on the same resources.
 Good pod scope = *one team, one operating loop, one coherent data model.*
 
 ## Identity & permissions — the spine
 
-Two ledgers drive everything — **human roles** and **workload grants** — and a named
-workload is governed by its grants alone (**grant-first**: an explicit workload grant
-is standalone authority; the invoking user's role isn't also required).
+Two ledgers drive everything — **human roles** and **workload grants** — and a
+delegated call must satisfy **both**: a workload does the **intersection** of what it
+was granted and what the person it is acting for could do, never the union.
 
 1. **Zero access by default.** A freshly created agent or function can touch
    *nothing* — no tables, no folders, no connectors. Every resource is granted
    explicitly. Grants are **name-based and portable** (a table name, a folder
    path like `/knowledge`, a connector id) so they survive export/import into any
    pod. A missing grant surfaces at runtime as `MISSING_WORKLOAD_RESOURCE_GRANT`.
-2. **Delegated identity.** When a function or agent runs, it acts **as the user
-   who invoked it**, not as some service account. So row-level security and the
-   personal `/me` file area resolve to *that* user. A workload never has its own
-   `/me` and never sees more rows than the invoking user would — it just has the
-   subset of capabilities you granted, exercised on that user's behalf.
+2. **Delegated identity, bounded by the invoker.** When a function or agent runs, it
+   acts **as the user who invoked it**, not as some service account. So row-level
+   security and the personal `/me` file area resolve to *that* user, and a workload
+   never has its own `/me`. It is also **capped by that user's own access**: a grant is
+   a ceiling on the workload, not a promotion for the person — a `VIEWER` running an
+   agent granted `datastore.record.write` still cannot write, and gets
+   `DELEGATION_EXCEEDS_INVOKER`. Automation is not exempt: a schedule fires as a real
+   person (its configured user, or the changed row's owner), so a schedule owned by a
+   viewer is a schedule that cannot write.
 3. **Destructive actions are gated.** No workload — not even the default pod agent
    that otherwise mirrors your permissions — can delete tables/agents/functions/
    workflows/apps/schedules, manage members/roles, or manage connector accounts by
    default. Unlock it with either an **explicit grant** of that permission on the
-   workload (standing authority — needed for headless schedules/webhooks) or a live
-   **`request_approval`** the user answers with "approve for session" (works for the
-   rest of that conversation). Denied attempts surface as
-   `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL`.
+   workload (standing authority — needed for schedules and webhooks that run
+   unattended) or a live **`request_approval`** the user answers with "approve for
+   session" (works for the rest of that conversation). Denied attempts surface as
+   `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL`. Clearing this gate opens the *gate* only —
+   the intersection in (2) still applies, so nobody can approve for a workload what
+   they could not do themselves.
 
 **Pod member roles** (humans): `VIEWER` < `USER` < `EDITOR` < `ADMIN`. Roles gate
-member-facing actions; workload grants are separate and additive.
+member-facing actions **and** cap every workload acting for that member.
 
-**Common deny codes**: `MISSING_WORKLOAD_RESOURCE_GRANT` (grant the workload the
-resource), `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (grant it or approve),
-`INSUFFICIENT_PERMISSION` (a human-role gap), `DELEGATION_SCOPE_VIOLATION`,
-`PERSONAL_RESOURCE_DENIED` (another user's private resource). The full model, with
-payloads and a decoder table, is in `authorization-model.md`.
+**Common deny codes**: `MISSING_WORKLOAD_RESOURCE_GRANT` (the workload half — grant it
+the resource), `DELEGATION_EXCEEDS_INVOKER` (the person half — fix the invoker's role;
+more grants won't help), `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (grant it or approve),
+`INSUFFICIENT_PERMISSION` (an org-scoped resource the person's role can't reach),
+`DELEGATION_SCOPE_VIOLATION`, `PERSONAL_RESOURCE_DENIED` (another user's private
+resource). The full model, with payloads and a decoder table, is in
+`authorization-model.md`.
 
 ## Data layer — tables
 
@@ -104,7 +112,7 @@ Each indexed document gains **derived child artifacts** addressed under its path
 - `…/document.md` — full converted markdown, carrying `<!-- PAGE N -->` markers
   (1-based) so you can slice by page.
 - `…/pages/page_0001.jpg` … — rendered page images (great for view-image).
-- `…/images/image_0.png` … — extracted figures.
+- `…/image_0.png` … — extracted figures (siblings of `document.md`; only pages sit in a subfolder).
 
 These are produced **automatically on upload** — the primary way to read a pod
 document (markdown, page images, figures) with **no parsing step**. For a document
@@ -147,9 +155,9 @@ surfaces ◀── converse ──▶ humans   (its agent can also start workflo
   user's connected account (delegated), never touching raw credentials.
 - **Apps / widgets / surfaces** are the human interfaces over the same tables, files,
   agents, and workflows — pod-authenticated, so each sees exactly what RLS allows.
-  **Surfaces** are *conversational*: a human chats with a pod agent on Slack / Teams /
-  WhatsApp / email (and that agent can itself start functions, workflows, or other
-  agents). **Apps** are browser UIs that can stay **live** by subscribing to table
+  **Surfaces** are *conversational*: a human chats with **one** pod agent on Slack /
+  Teams / Telegram / WhatsApp, or emails the address that agent was provisioned (and
+  that agent can itself start functions, workflows, or other agents). **Apps** are browser UIs that can stay **live** by subscribing to table
   changes over WebSocket (`datastore.watchChanges`) — client-side reaction for fresh UI,
   distinct from a server-side `DATASTORE` schedule that *does work*.
 
@@ -204,10 +212,12 @@ Corollaries that prevent common mistakes:
 A pod is a **local folder bundle**, imported progressively (upsert by resource
 name). Folder name **must equal** the resource's `name`. Import is
 dependency-ordered: **tables → files → functions → agents → workflows →
-schedules → connectors/surfaces → app → seed**. Two things do **not** round-trip
-through bundles and must be set up by CLI + recorded in the README: **file
-contents** (use a `seed/` script) and **connector** auth-configs/accounts.
-Workload **grants** and surfaces *do* travel in bundles.
+schedules → connectors/surfaces → app → seed**. Workload **grants** and surfaces
+*do* travel in bundles. **Connector** auth-configs and accounts never do — set them
+up by CLI and record the commands in the README. **File bytes and table rows** travel
+only when you ask for them by name on the way out (`pods export --folder /knowledge
+--data-table tickets`) and switch them on at the way in (`pods import --with-files
+--with-data`); a re-runnable `seed/` script is still the better demo path.
 
 ## See also
 

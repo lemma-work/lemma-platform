@@ -38,13 +38,38 @@ payload shapes differ between kinds. A payload that works on `composio` will not
 work on `package`. The auth-config *name* encodes the choice, which is why every
 command is keyed by it.
 
-> `provider` / `AuthProvider` is the retired name for this axis. If you see
+**Kind is one discriminator over three independent axes**, and knowing which axis a
+question belongs to saves a lot of guessing:
+
+| Axis | What it says | Where it lives |
+| --- | --- | --- |
+| **Auth** | `OAUTH2`, `API_KEY`, or `NOAUTH` — and whether the org may bring its own OAuth client or must use Lemma's system credentials | the kind's `auth_scheme` on the catalog entry |
+| **Discovery** | where the operation list comes from: `none` (the catalog already holds them — Composio toolkits, vendored packages, connectors with a bundled spec) or `mcp` / `openapi` (discovered *per install* and stored against the auth config) | the kind's `discovery` |
+| **Execution** | how one operation is actually called — an `execution` descriptor per operation (absent for package-executed ones, always present for discovered ones) | the operation row |
+
+They move independently. That is why `auth-configs refresh-operations` exists only
+for MCP/OpenAPI installs (the discovery axis), why an org can hold two installs of
+one connector with different credentials but the same operations, and why the same
+operation can present as two different callers — see below.
+
+> `provider` / `AuthProvider` is the retired name for the kind axis. If you see
 > `--provider` in older notes, the flag is `--kind`.
 
 **Delegated identity.** When a function or agent runs, it acts as the user who
 invoked it (`pod-model.md` → delegated identity). So a granted connector resolves
 to *that user's* connected account. The workload only needs the
 `connector.use` grant; it never sees, stores, or passes the credential.
+
+**Who the call presents as is a second question.** For most connectors the answer is
+always "the person". Where a connector is backed by an **app installation** — GitHub
+today — a call can present either as the person or as the **app**, and the caller
+decides: an **agent's** connector operations ask to act as the app, so a schedule
+keeps working after the person who set it up leaves the team, while pod publish, pod
+import, and the sandbox's own `git` / `gh` act as the **person**, so commits carry
+their name. The app's token is used only when the caller asked for it, the route
+allows it (GitHub's own metadata says which do; `/user/...` routes never can), and
+the account knows its installation — anything else falls back to the person's token.
+Nothing about this is a setting to maintain.
 
 ## Do it in one call — `connectors run`
 
@@ -114,7 +139,34 @@ lemma connectors overview
 `auth-configs` and `accounts` both support `list` / `get` / `create` / `delete`.
 `auth-configs update` additionally carries `--default/--no-default` (which install a
 bare connector id resolves to) and `--status ACTIVE|DISABLED`; `auth-configs
-refresh-operations` re-syncs the operation catalog.
+refresh-operations` re-syncs the operation catalog — only meaningful for the
+per-install discovery kinds (`mcp`, `http`), since every other kind's operations come
+from the catalog.
+
+### GitHub is a first-class connector, backed by a real App
+
+Worth calling out because it behaves differently from an ordinary OAuth connector in
+three ways:
+
+- **Connecting has two halves.** Authorizing gives Lemma a token that belongs to the
+  right person and can see *nothing*, because a GitHub App's user token reaches only
+  the repositories the App is installed on. The App has to be **installed** on the
+  user or organization as well (`github.com/apps/<slug>/installations/new`). A
+  connected account that authorized but never installed is the usual reason a
+  repository "does not exist".
+- **The account carries an `installation_id`.** It is resolved at connect time and
+  stored on the account, not on the org install — one App can be installed on many
+  organizations under one auth config, so the installation belongs to the individual
+  authorization. Nothing about it is typed by hand: a webhook schedule's
+  `installation_id` is bound from the connected account when the schedule is created,
+  and a wrong one would route another organization's events at your pod.
+- **An agent's calls act as the App.** See *Delegated identity* above: an agent's
+  connector operations present as the App where GitHub permits it, so a schedule
+  outlives the person who set it up, while pod publish/import and the sandbox's
+  `git`/`gh` stay the person so their name is on the commits.
+
+The rest is ordinary: `connector:github:use` on the workload, operation ids from
+`operations search`, triggers wired through a `WEBHOOK` schedule.
 
 ## Discover → execute (never guess)
 
@@ -269,8 +321,9 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 - **Inbound event → automation.** A connector trigger + WEBHOOK schedule +
   `filter_instruction` starts a workflow on real-world events (see
   `schedules-and-triggers.md`).
-- **Surface.** A connector account also backs an **agent surface** (Slack/Gmail/…)
-  — same account, different consumer. See `surfaces.md`.
+- **Surface.** A connector account also backs an **agent surface** — but only for
+  Slack and Teams; Telegram/WhatsApp default to a system bot and email is provisioned
+  outright. Same account, different consumer. See `surfaces.md`.
 
 ## Limits & gotchas
 
