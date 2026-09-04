@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from functools import partial
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.authorization.current import get_current_context
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
@@ -16,16 +19,26 @@ from app.modules.connectors.domain.errors import (
     ConnectorAccessDeniedError,
 )
 
+# Nothing in this file is patched. `ensure_github_credentials` takes its Redis
+# client and its credential resolver as arguments, `_resolve_github_credential`
+# takes its unit of work and its two connector collaborators, and
+# `prepare_project_directory` takes the two steps it sequences — so every test
+# below runs the bridge's own decisions (the marker key, the TTLs, which
+# outcome is cacheable, the file contents, the shell command) rather than a
+# stand-in for them.
+
 
 class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
+        self.calls: list[tuple] = []
 
     async def exists(self, key: str) -> int:
+        self.calls.append(("exists", key))
         return 1 if key in self.values else 0
 
     async def set(self, key: str, value: str, *, ex: int):
-        del ex
+        self.calls.append(("set", key, value, ex))
         self.values[key] = value
 
 
@@ -46,6 +59,43 @@ class _FakeCredentialSession:
 
 def _context() -> BaseAgentContext:
     return BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+
+
+def _credential(**overrides):
+    """A resolver returning one credential, recording who asked."""
+    calls: list[BaseAgentContext] = []
+
+    async def _resolve(ctx):
+        calls.append(ctx)
+        return bridge._GithubCredential(
+            **{
+                "access_token": "gho_faketoken123",
+                "login": "octocat",
+                "email": "octocat@example.com",
+                **overrides,
+            }
+        )
+
+    _resolve.calls = calls  # type: ignore[attr-defined]
+    return _resolve
+
+
+def _resolves_to_nothing():
+    calls: list[BaseAgentContext] = []
+
+    async def _resolve(ctx):
+        calls.append(ctx)
+        return
+
+    _resolve.calls = calls  # type: ignore[attr-defined]
+    return _resolve
+
+
+def _must_not_resolve():
+    async def _resolve(ctx):
+        raise AssertionError("must not resolve a credential on this path")
+
+    return _resolve
 
 
 # The account is part of the key so two conversations in one session cannot
@@ -72,63 +122,51 @@ def test_looks_like_git_command(cmd: str, expected: bool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_skips_when_already_provisioned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_github_credentials_skips_when_already_provisioned() -> None:
     redis = _FakeRedis()
     redis.values[_MARKER_KEY] = "provisioned"
-    monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
-
-    async def _fail_resolve(ctx):
-        raise AssertionError("must not resolve a credential when already provisioned")
-
-    monkeypatch.setattr(bridge, "_resolve_github_credential", _fail_resolve)
 
     session = _FakeCredentialSession()
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(),
+        session,
+        redis=redis,
+        resolve_credential=_must_not_resolve(),
+    )
 
     assert session.written == []
     assert session.commands == []
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_caches_no_account_as_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_github_credentials_caches_no_account_as_unavailable() -> None:
     redis = _FakeRedis()
-    monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
-
-    async def _no_account(ctx):
-        return None
-
-    monkeypatch.setattr(bridge, "_resolve_github_credential", _no_account)
 
     session = _FakeCredentialSession()
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(), session, redis=redis, resolve_credential=_resolves_to_nothing()
+    )
 
     assert session.written == []
     assert session.commands == []
     assert redis.values[_MARKER_KEY] == "unavailable"
+    # Short, so connecting the right account and carrying on works without
+    # waiting out the provisioned TTL.
+    assert ("set", _MARKER_KEY, "unavailable", bridge._UNAVAILABLE_TTL_SECONDS) in (
+        redis.calls
+    )
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_writes_credential_file_and_marks_provisioned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_github_credentials_writes_credential_file_and_marks_provisioned() -> (
+    None
+):
     redis = _FakeRedis()
-    monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
-
-    async def _credential(ctx):
-        return bridge._GithubCredential(
-            access_token="gho_faketoken123",
-            login="octocat",
-            email="octocat@example.com",
-        )
-
-    monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
 
     session = _FakeCredentialSession()
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(), session, redis=redis, resolve_credential=_credential()
+    )
 
     written = dict(session.written)
     assert written["/tmp/.git-credentials"] == (
@@ -152,27 +190,47 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
     assert "gho_faketoken123" not in cmd
     assert "chmod 600 /tmp/lemma-gh/hosts.yml" in cmd
     assert redis.values[_MARKER_KEY] == "provisioned"
+    assert ("set", _MARKER_KEY, "provisioned", bridge._PROVISIONED_TTL_SECONDS) in (
+        redis.calls
+    )
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_falls_back_to_noreply_email(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_github_credentials_keys_the_marker_by_account() -> None:
+    """A conversation bound to a project names the account it works as. Two
+    conversations sharing one session must not inherit each other's file."""
+    redis = _FakeRedis()
+    account_id = uuid4()
+    ctx = _context()
+    ctx.workspace_repo = ProjectRepo(
+        owner="acme", repo="widgets", account_id=account_id
+    )
+
+    await bridge.ensure_github_credentials(
+        ctx,
+        _FakeCredentialSession(),
+        redis=redis,
+        resolve_credential=_credential(),
+    )
+
+    assert f"{bridge._MARKER_KEY_PREFIX}:session-1:{account_id}" in redis.values, (
+        redis.values
+    )
+    assert _MARKER_KEY not in redis.values
+
+
+@pytest.mark.asyncio
+async def test_ensure_github_credentials_falls_back_to_noreply_email() -> None:
     """A private-email account (GitHub's "keep my email address private")
     still needs a git-committable email -- fall back to GitHub's own noreply
     convention rather than leaving user.email unset."""
-    redis = _FakeRedis()
-    monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
-
-    async def _credential(ctx):
-        return bridge._GithubCredential(
-            access_token="gho_faketoken123", login="octocat", email=None
-        )
-
-    monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
-
     session = _FakeCredentialSession()
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(),
+        session,
+        redis=_FakeRedis(),
+        resolve_credential=_credential(email=None),
+    )
 
     cmd = session.commands[0]
     assert "user.name octocat" in cmd
@@ -180,24 +238,17 @@ async def test_ensure_github_credentials_falls_back_to_noreply_email(
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_skips_identity_setup_without_login(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_github_credentials_skips_identity_setup_without_login() -> None:
     """An account connected before profile enrichment existed has no login on
     file -- the credential file still gets written (git/gh still work), it
     just can't configure a commit identity for itself."""
-    redis = _FakeRedis()
-    monkeypatch.setattr(bridge, "get_redis", lambda url=None: redis)
-
-    async def _credential(ctx):
-        return bridge._GithubCredential(
-            access_token="gho_faketoken123", login=None, email=None
-        )
-
-    monkeypatch.setattr(bridge, "_resolve_github_credential", _credential)
-
     session = _FakeCredentialSession()
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(),
+        session,
+        redis=_FakeRedis(),
+        resolve_credential=_credential(login=None, email=None),
+    )
 
     cmd = session.commands[0]
     assert "user.name" not in cmd
@@ -205,22 +256,19 @@ async def test_ensure_github_credentials_skips_identity_setup_without_login(
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_noop_without_session_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    called = False
-
-    def _get_redis(url=None):
-        nonlocal called
-        called = True
-        return _FakeRedis()
-
-    monkeypatch.setattr(bridge, "get_redis", _get_redis)
+async def test_ensure_github_credentials_noop_without_session_id() -> None:
+    """No session, no credential file — and nothing asked of Redis or the
+    connector layer on the way to deciding that."""
+    redis = _FakeRedis()
+    resolve = _must_not_resolve()
 
     session = _FakeCredentialSession(session_id=None)
-    await bridge.ensure_github_credentials(_context(), session)
+    await bridge.ensure_github_credentials(
+        _context(), session, redis=redis, resolve_credential=resolve
+    )
 
-    assert called is False
+    assert redis.calls == []
+    assert session.written == []
 
 
 class _RecordingWorkspaceSession:
@@ -262,69 +310,82 @@ class _RecordingRuntime:
 
 
 @pytest.mark.asyncio
-async def test_exec_command_internal_invokes_bridge_only_for_git_like_commands(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "cmd, repo, wanted",
+    [
+        ("pwd", None, False),
+        ("git status", None, True),
+        # A repo-backed conversation needs credentials for every command, not
+        # just git-looking ones: the clone that puts the project on disk has to
+        # happen before whatever the agent actually asked for, even `ls`.
+        ("ls", ProjectRepo(owner="acme", repo="widgets"), True),
+    ],
+)
+async def test_exec_command_internal_asks_for_project_preparation_when_wanted(
+    cmd: str, repo: ProjectRepo | None, wanted: bool
 ) -> None:
-    session = _RecordingWorkspaceSession()
-    monkeypatch.setattr(
-        workspace_cli, "get_workspace_tool_runtime", lambda: _RecordingRuntime(session)
-    )
+    """The gate itself, rather than what the bridge did behind it.
 
-    calls: list[str] = []
+    This used to replace `ensure_github_credentials` and assert it was called,
+    which conflated the caller's `wanted=` decision with the callee's own
+    early return — so the two could disagree and this file could not tell.
+    """
+    asked: list[bool] = []
 
-    async def _fake_ensure(ctx, workspace_session):
+    async def _prepare(ctx, workspace_session, *, wanted):
         del ctx, workspace_session
-        calls.append("called")
+        asked.append(wanted)
+        return
 
-    monkeypatch.setattr(github_project, "ensure_github_credentials", _fake_ensure)
-
-    await workspace_cli.exec_command_internal(_context(), ExecCommandRequest(cmd="pwd"))
-    assert calls == []
+    ctx = _context()
+    if repo is not None:
+        ctx.workspace_repo = repo
 
     await workspace_cli.exec_command_internal(
-        _context(), ExecCommandRequest(cmd="git status")
+        ctx,
+        ExecCommandRequest(cmd=cmd),
+        runtime=_RecordingRuntime(_RecordingWorkspaceSession()),
+        prepare_project=_prepare,
     )
-    assert calls == ["called"]
+
+    assert asked == [wanted]
 
 
 @pytest.mark.asyncio
-async def test_exec_command_internal_runs_command_even_if_bridge_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session = _RecordingWorkspaceSession()
-    monkeypatch.setattr(
-        workspace_cli, "get_workspace_tool_runtime", lambda: _RecordingRuntime(session)
-    )
+async def test_exec_command_internal_runs_command_even_if_bridge_raises() -> None:
+    """A broken credential bridge must not fail the underlying command.
+
+    The swallow lives in `prepare_project_directory`, and that is the code
+    running here: only the credential step itself is replaced, so the
+    exception really does travel out of it, through the real handler, and back
+    into `exec_command_internal`.
+    """
 
     async def _broken_bridge(ctx, workspace_session):
         del ctx, workspace_session
         raise RuntimeError("redis is down")
 
-    # Patched where it is now called from: the shared preparation step both
-    # workspace tools go through.
-    monkeypatch.setattr(github_project, "ensure_github_credentials", _broken_bridge)
-
     result = await workspace_cli.exec_command_internal(
-        _context(), ExecCommandRequest(cmd="git push")
+        _context(),
+        ExecCommandRequest(cmd="git push"),
+        runtime=_RecordingRuntime(_RecordingWorkspaceSession()),
+        prepare_project=partial(
+            github_project.prepare_project_directory,
+            ensure_credentials=_broken_bridge,
+        ),
     )
 
-    # A broken credential bridge must not fail the underlying command --
-    # it should still run (and, without credentials, fail with its own
+    # It should still run (and, without credentials, fail with its own
     # native git auth error, not a generic workspace-tool error).
     assert result.success is True
     assert result.error is None
 
 
 # --------------------------------------------------------------------------
-# `_resolve_github_credential` itself. Every test above stubs this function
-# out entirely, so none of them ever reach its own account-resolution/error
-# handling. `SessionUnitOfWorkFactory(async_session_maker)` is hard-coded
-# inside it rather than injected, but entering and exiting that unit of work
-# touches no network: nothing here ever executes a query, so the async
-# session is created and closed without a real Postgres connection --
-# `build_delegated_context` and `get_account_resolution_service` (imported
-# inside the function to avoid a cycle, so patched at their source module) are
-# the only things stubbed.
+# `_resolve_github_credential` itself. Every test above supplies a resolver, so
+# none of them reach its own account-resolution/error handling. It takes its
+# unit of work as an argument now, so these no longer open a real async session
+# and rely on nobody executing a query inside it.
 
 
 def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
@@ -336,18 +397,28 @@ def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
     return ctx
 
 
+_DELEGATED = SimpleNamespace(organization_id=None)
+
+
 async def _fake_build_delegated_context(uow, ctx):
     del uow, ctx
-    return SimpleNamespace(organization_id=None)
+    return _DELEGATED
 
 
-def _patch_account_resolution(monkeypatch: pytest.MonkeyPatch, service) -> None:
-    monkeypatch.setattr(
-        bridge, "build_delegated_context", _fake_build_delegated_context
-    )
-    monkeypatch.setattr(
-        "app.modules.connectors.api.dependencies.get_account_resolution_service",
-        lambda uow: service,
+def _uow_factory():
+    @asynccontextmanager
+    async def _scope():
+        yield SimpleNamespace(session=None)
+
+    return lambda: _scope()
+
+
+async def _resolve(ctx, service):
+    return await bridge._resolve_github_credential(
+        ctx,
+        uow_factory=_uow_factory(),
+        delegated_context=_fake_build_delegated_context,
+        account_resolution=lambda _uow: service,
     )
 
 
@@ -360,7 +431,7 @@ def _patch_account_resolution(monkeypatch: pytest.MonkeyPatch, service) -> None:
     ],
 )
 async def test_resolve_github_credential_returns_none_when_resolution_is_denied(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
+    error: Exception,
 ) -> None:
     """Neither "no account connected" nor "not authorized" is an error the
     caller should see -- both mean the same thing to a git command: there is
@@ -372,17 +443,11 @@ async def test_resolve_github_credential_returns_none_when_resolution_is_denied(
             del kwargs
             raise error
 
-    _patch_account_resolution(monkeypatch, _DenyingResolution())
-
-    result = await bridge._resolve_github_credential(_context())
-
-    assert result is None
+    assert await _resolve(_context(), _DenyingResolution()) is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_github_credential_returns_none_without_an_access_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_resolve_github_credential_returns_none_without_an_access_token() -> None:
     class _NoTokenResolution:
         async def resolve_account(self, **kwargs):
             del kwargs
@@ -392,67 +457,68 @@ async def test_resolve_github_credential_returns_none_without_an_access_token(
                 email="octocat@example.com",
             )
 
-    _patch_account_resolution(monkeypatch, _NoTokenResolution())
+    assert await _resolve(_context(), _NoTokenResolution()) is None
 
-    result = await bridge._resolve_github_credential(_context())
 
-    assert result is None
+class _WorkingResolution:
+    def __init__(self, *, email: str | None = "octocat@example.com"):
+        self.captured: dict[str, object] = {}
+        self.context_while_resolving: object = "not-set"
+        self._email = email
+
+    async def resolve_account(self, **kwargs):
+        self.captured.update(kwargs)
+        self.context_while_resolving = get_current_context()
+        return SimpleNamespace(
+            credentials=SimpleNamespace(access_token="gho_realtoken"),
+            display_name="octocat",
+            email=self._email,
+        )
 
 
 @pytest.mark.asyncio
-async def test_resolve_github_credential_returns_a_credential_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    class _WorkingResolution:
-        async def resolve_account(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                credentials=SimpleNamespace(access_token="gho_realtoken"),
-                display_name="octocat",
-                email="octocat@example.com",
-            )
-
-    _patch_account_resolution(monkeypatch, _WorkingResolution())
+async def test_resolve_github_credential_returns_a_credential_on_success() -> None:
+    resolution = _WorkingResolution()
     ctx = _context()
 
-    credential = await bridge._resolve_github_credential(ctx)
+    credential = await _resolve(ctx, resolution)
 
     assert credential == bridge._GithubCredential(
         access_token="gho_realtoken", login="octocat", email="octocat@example.com"
     )
-    assert captured["user_id"] == ctx.user_id
-    assert captured["connector_id"] == "github"
+    assert resolution.captured["user_id"] == ctx.user_id
+    assert resolution.captured["connector_id"] == "github"
     # No project repo, so no account is named -- resolution falls back to
     # picking for the user (ambiguous only if they connected GitHub twice).
-    assert captured["account_id"] is None
+    assert resolution.captured["account_id"] is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_github_credential_names_the_projects_connected_account(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_resolve_github_credential_resolves_under_the_delegated_context() -> None:
+    """The connector layer authorizes off the *current* context, so the
+    delegated one has to be installed for the call and taken back down after
+    it. Neither half was observable while this function built its own unit of
+    work: the token dance ran, and nothing here could see whether it worked.
+    """
+    resolution = _WorkingResolution()
+
+    await _resolve(_context(), resolution)
+
+    assert resolution.context_while_resolving is _DELEGATED
+    assert resolution.captured["auth_actor"] is _DELEGATED
+    assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_github_credential_names_the_projects_connected_account() -> None:
     """A project names the account it works as; resolution must be told,
     rather than falling back to whichever account happens to resolve for the
     user (ambiguous when they connected GitHub more than once)."""
-    captured: dict[str, object] = {}
-
-    class _WorkingResolution:
-        async def resolve_account(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                credentials=SimpleNamespace(access_token="gho_realtoken"),
-                display_name="octocat",
-                email=None,
-            )
-
-    _patch_account_resolution(monkeypatch, _WorkingResolution())
+    resolution = _WorkingResolution(email=None)
     account_id = uuid4()
-    ctx = _project_context(account_id=account_id)
 
-    credential = await bridge._resolve_github_credential(ctx)
+    credential = await _resolve(_project_context(account_id=account_id), resolution)
 
     assert credential is not None
     assert credential.email is None
-    assert captured["account_id"] == account_id
+    assert resolution.captured["account_id"] == account_id

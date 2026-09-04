@@ -21,17 +21,25 @@ never break the worker that invokes it, but non-fatal is not the same as silent.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Protocol
 from uuid import UUID
 
 from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 
 from app.modules.agent.config import agent_settings
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+    ConversationOpeningTexts,
+)
 from app.modules.agent.services.realtime import (
     publish_conversation_event,
     title_updated_payload,
@@ -105,11 +113,197 @@ _TITLE_SYSTEM_PROMPT = (
 )
 
 
-class ConversationTitleService:
-    """Generate and persist a conversation title from its opening messages."""
+class ConversationOpeningReader(Protocol):
+    """The two reads titling makes, and the one write it makes."""
 
-    def __init__(self, *, uow_factory: UnitOfWorkFactory):
+    async def get_conversation(
+        self,
+        conversation_id: UUID,
+        *,
+        include_messages: bool = False,
+        include_runs: bool = False,
+    ) -> Conversation | None: ...
+
+    async def get_conversation_opening_texts(
+        self, conversation_id: UUID
+    ) -> ConversationOpeningTexts: ...
+
+    async def update_conversation(self, conversation: Conversation) -> Conversation: ...
+
+
+class TitleGenerator(Protocol):
+    """Asks a model for a title, or raises. Deciding what to do about a failure
+    is the service's job, so this deliberately does not have a fallback."""
+
+    async def generate(
+        self,
+        *,
+        user_id: UUID,
+        organization_id: UUID | None,
+        pod_id: UUID,
+        user_text: str,
+        reply_text: str | None,
+    ) -> str | None: ...
+
+
+class OutcomeCounter(Protocol):
+    def add(self, amount: int, attributes: dict[str, str] | None = None) -> None: ...
+
+
+class ConversationTitleGenerator:
+    """The LLM half: resolve the system runtime, ask for a title, meter it.
+
+    Split out of `ConversationTitleService` because the two halves are tested
+    against completely different things. The service's job is a decision —
+    idempotence, the script guard, the fallback, the order of persist/publish/
+    count — and a test of it should not have to stand up a model. This half's
+    job is the call itself, and its interesting properties (the reasoning-effort
+    setting, sanitisation, that a failed call is still metered before it
+    propagates) are only checkable with the model faked. Fused into one class,
+    every test of either had to replace the other's names inside the module.
+    """
+
+    def __init__(
+        self,
+        *,
+        runtime_profiles: Callable[
+            [], AgentRuntimeProfileService
+        ] = AgentRuntimeProfileService,
+        model_for_profile: Callable[
+            ..., Model
+        ] = require_pydantic_ai_model_from_runtime_profile,
+        llm_agent: Callable[..., PydanticAIAgent] = PydanticAIAgent,
+        # The reservation is opaque here: titling never inspects it, it only
+        # hands it back to `record_usage`.
+        reserve_usage: Callable[..., Awaitable[object | None]] = (
+            reserve_usage_for_runtime
+        ),
+        record_usage: Callable[..., Awaitable[None]] = (
+            record_pydantic_ai_result_usage
+        ),
+    ) -> None:
+        self._runtime_profiles = runtime_profiles
+        self._model_for_profile = model_for_profile
+        self._llm_agent = llm_agent
+        self._reserve_usage = reserve_usage
+        self._record_usage = record_usage
+
+    async def generate(
+        self,
+        *,
+        user_id: UUID,
+        organization_id: UUID | None,
+        pod_id: UUID,
+        user_text: str,
+        reply_text: str | None,
+    ) -> str | None:
+        resolved = await self._resolve_runtime(
+            organization_id=organization_id, user_id=user_id
+        )
+        runtime_profile = resolved.public_snapshot()
+        model = self._model_for_profile(
+            runtime_profile=runtime_profile,
+            runtime_credentials=resolved.credentials or {},
+            fallback_model_name=resolved.model_name_for_harness,
+        )
+        usage_context = UsageExecutionContext(
+            user_id=user_id,
+            organization_id=organization_id,
+            pod_id=pod_id,
+            source_type="conversation_title",
+        )
+        reservation = await self._reserve_usage(
+            organization_id=organization_id,
+            user_id=user_id,
+            runtime_profile=runtime_profile,
+        )
+        agent = self._llm_agent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
+        result = None
+        try:
+            result = await agent.run(
+                _build_user_prompt(user_text, reply_text),
+                usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
+                model_settings=_TITLE_MODEL_SETTINGS,
+            )
+            await self._record_usage(
+                ctx=usage_context,
+                runtime_profile=runtime_profile,
+                result=result,
+                status="COMPLETED",
+                reservation=reservation,
+                metadata={"helper": "conversation_title"},
+            )
+        except Exception:
+            await self._record_usage(
+                ctx=usage_context,
+                runtime_profile=runtime_profile,
+                result=result,
+                status="FAILED",
+                reservation=reservation,
+                metadata={"helper": "conversation_title"},
+            )
+            raise
+
+        return _sanitize_title(str(result.output))
+
+    async def _resolve_runtime(
+        self,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID,
+    ):
+        service = self._runtime_profiles()
+        try:
+            return await service.resolve(
+                runtime=AgentRuntimeConfig(
+                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+                    model_name=agent_settings.conversation_title_model,
+                ),
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+        except RuntimeError:
+            # Model not in this deployment's catalog — use the profile default.
+            return await service.resolve(
+                runtime=AgentRuntimeConfig(
+                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+                ),
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+
+
+class ConversationTitleService:
+    """Generate and persist a conversation title from its opening messages.
+
+    Every collaborator is a constructor argument defaulting to the real one.
+    They used to be module globals reached by name, which meant a test could
+    only isolate this decision by replacing those names *inside* this module —
+    so the tests named after the service spent most of their assertions on
+    stand-ins for its own code, and a rename behind any of them would have
+    landed green.
+    """
+
+    def __init__(
+        self,
+        *,
+        uow_factory: UnitOfWorkFactory,
+        conversation_repository: Callable[
+            [SqlAlchemyUnitOfWork], ConversationOpeningReader
+        ] = ConversationRepository,
+        generator: TitleGenerator | None = None,
+        publish_event: Callable[
+            [UUID, dict[str, object]], Awaitable[None]
+        ] = publish_conversation_event,
+        counter: OutcomeCounter = title_counter,
+    ):
         self.uow_factory = uow_factory
+        self.conversation_repository = conversation_repository
+        self.generator = (
+            generator if generator is not None else (ConversationTitleGenerator())
+        )
+        self.publish_event = publish_event
+        self.counter = counter
 
     async def generate_title_if_absent(self, conversation_id: UUID) -> str | None:
         """Generate a title when one is missing; return it, or ``None`` to skip.
@@ -122,7 +316,7 @@ class ConversationTitleService:
             # ``include_messages=True`` spent 1.4s materialising every message
             # into an entity, inside an open transaction, to find two strings.
             async with self.uow_factory() as uow:
-                repo = ConversationRepository(uow)
+                repo = self.conversation_repository(uow)
                 conversation = await repo.get_conversation(conversation_id)
                 if conversation is None or conversation.title:
                     return None
@@ -139,7 +333,7 @@ class ConversationTitleService:
             title: str | None = None
             if agent_settings.conversation_title_model:
                 try:
-                    title = await self._generate(
+                    title = await self.generator.generate(
                         user_id=conversation.user_id,
                         organization_id=conversation.organization_id,
                         pod_id=conversation.pod_id,
@@ -179,7 +373,7 @@ class ConversationTitleService:
             # Re-check + persist under a fresh transaction. A concurrent run may
             # have set the title between the read above and now.
             async with self.uow_factory() as uow:
-                repo = ConversationRepository(uow)
+                repo = self.conversation_repository(uow)
                 conversation = await repo.get_conversation(conversation_id)
                 if conversation is None or conversation.title:
                     return None
@@ -187,14 +381,14 @@ class ConversationTitleService:
                 await repo.update_conversation(conversation)
                 await uow.commit()
 
-            await publish_conversation_event(
+            await self.publish_event(
                 conversation_id,
                 title_updated_payload(conversation_id, title),
             )
             # Counted here, at the one point where the whole thing worked, so a
             # failure anywhere above falls through to the handler below and is
             # counted once, as a failure, rather than twice.
-            title_counter.add(1, {"outcome": outcome})
+            self.counter.add(1, {"outcome": outcome})
             return title
         except Exception:  # never break the calling worker
             logger.error(
@@ -202,92 +396,8 @@ class ConversationTitleService:
                 conversation_id=conversation_id,
                 exc_info=True,
             )
-            title_counter.add(1, {"outcome": _OUTCOME_FAILED})
+            self.counter.add(1, {"outcome": _OUTCOME_FAILED})
             return None
-
-    async def _generate(
-        self,
-        *,
-        user_id: UUID,
-        organization_id: UUID | None,
-        pod_id: UUID,
-        user_text: str,
-        reply_text: str | None,
-    ) -> str | None:
-        resolved = await self._resolve_runtime(
-            organization_id=organization_id, user_id=user_id
-        )
-        runtime_profile = resolved.public_snapshot()
-        model = require_pydantic_ai_model_from_runtime_profile(
-            runtime_profile=runtime_profile,
-            runtime_credentials=resolved.credentials or {},
-            fallback_model_name=resolved.model_name_for_harness,
-        )
-        usage_context = UsageExecutionContext(
-            user_id=user_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-            source_type="conversation_title",
-        )
-        reservation = await reserve_usage_for_runtime(
-            organization_id=organization_id,
-            user_id=user_id,
-            runtime_profile=runtime_profile,
-        )
-        agent = PydanticAIAgent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
-        result = None
-        try:
-            result = await agent.run(
-                _build_user_prompt(user_text, reply_text),
-                usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
-                model_settings=_TITLE_MODEL_SETTINGS,
-            )
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime_profile,
-                result=result,
-                status="COMPLETED",
-                reservation=reservation,
-                metadata={"helper": "conversation_title"},
-            )
-        except Exception:
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime_profile,
-                result=result,
-                status="FAILED",
-                reservation=reservation,
-                metadata={"helper": "conversation_title"},
-            )
-            raise
-
-        return _sanitize_title(str(result.output))
-
-    async def _resolve_runtime(
-        self,
-        *,
-        organization_id: UUID | None,
-        user_id: UUID,
-    ):
-        service = AgentRuntimeProfileService()
-        try:
-            return await service.resolve(
-                runtime=AgentRuntimeConfig(
-                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                    model_name=agent_settings.conversation_title_model,
-                ),
-                organization_id=organization_id,
-                user_id=user_id,
-            )
-        except RuntimeError:
-            # Model not in this deployment's catalog — use the profile default.
-            return await service.resolve(
-                runtime=AgentRuntimeConfig(
-                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                ),
-                organization_id=organization_id,
-                user_id=user_id,
-            )
 
 
 def _title_from_user_message(user_text: str) -> str:
