@@ -52,6 +52,7 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
+from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import (
     record_pydantic_ai_result_usage,
     reserve_usage_for_runtime,
@@ -169,9 +170,14 @@ class ConversationTitleGenerator:
         runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
         model_for_profile: Callable[..., Model] | None = None,
         llm_agent: Callable[..., PydanticAIAgent] | None = None,
-        # The reservation is opaque here: titling never inspects it, it only
-        # hands it back to `record_usage`.
-        reserve_usage: Callable[..., Awaitable[object | None]] | None = None,
+        # Titling never inspects the reservation; it only hands it back to
+        # `record_usage`. Typed as what it is all the same — `object` made the
+        # seam and the real function disagree, and the `or` below unions the
+        # two, which is a `UsageReservation | object | None` that
+        # `record_pydantic_ai_result_usage` will not accept.
+        reserve_usage: (
+            Callable[..., Awaitable["UsageReservation | None"]] | None
+        ) = None,
         record_usage: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         # `None` rather than the real callable as a default, deliberately. A
