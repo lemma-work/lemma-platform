@@ -12,7 +12,8 @@ schema defaults, and validates against the resolved schema stored on the wait.
 So a hallucinated field is rejected server-side rather than written into a run.
 
 Lives in ``composition`` because the agent module must not import ``workflow``;
-the lazy imports keep that true. Same shape as ``agent_notifications.py``.
+the lazy imports keep that true. Same shape as
+``agent_surfaces/contracts/notifications.py``.
 """
 
 from __future__ import annotations

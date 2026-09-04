@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.composition.agent_notifications import (
+from app.modules.agent_surfaces.contracts.notifications import (
     notification_form_action,
     record_notification_response,
 )

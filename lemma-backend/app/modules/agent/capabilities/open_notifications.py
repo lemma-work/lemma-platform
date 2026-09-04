@@ -142,7 +142,7 @@ async def build_open_notifications_capability(
     this changes the moment somebody answers, and a stale copy would have an
     agent chasing a question that is already closed.
     """
-    from app.composition.agent_notifications import (
+    from app.modules.agent_surfaces.contracts.notifications import (
         open_notifications_for_conversation,
     )
 
