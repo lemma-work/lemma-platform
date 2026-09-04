@@ -469,7 +469,7 @@ ENDPOINTS = [
         "pod",
         max_limit=1000,
     ),
-    Endpoint("org_pods", "/pods/organization/{scope}", _seed_pods, _stmt_pods, "org"),
+    Endpoint("org_pods", "/organizations/{scope}/pods", _seed_pods, _stmt_pods, "org"),
 ]
 
 

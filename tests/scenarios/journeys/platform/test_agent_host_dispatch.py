@@ -69,7 +69,7 @@ async def _pair_and_publish(alice) -> str:
     )
     completed = await alice.api.call(
         "POST",
-        "/agent-host/pairings:complete",
+        "/agent-host/pairings/complete",
         json={
             "pairing_code": pairing["pairing_code"],
             "display_name": "Scenario laptop",

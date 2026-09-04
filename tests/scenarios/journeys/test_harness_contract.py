@@ -833,7 +833,7 @@ def test_every_journey_runs_in_ci():
 #: Taken from the controllers: ``limit`` defaults to 100 on each of these and
 #: the response carries ``next_page_token``.
 PAGES_ARE_REAL = {
-    "/pods/organization/*",
+    "/organizations/*/pods",
     "/pods/*/conversations",
     "/pods/*/datastore/files",
     "/pods/*/agents",
