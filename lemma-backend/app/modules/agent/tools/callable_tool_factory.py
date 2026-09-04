@@ -38,10 +38,10 @@ from app.modules.function.contracts import (
     FunctionStatus,
     FunctionType,
 )
-from app.composition.agent_functions import (
-    create_function_repository,
-    create_function_run_repository,
-    create_function_use_cases,
+from app.modules.function.contracts.agent_tools import (
+    execute_function_for_agent,
+    get_function_by_id,
+    get_function_run,
 )
 
 
@@ -147,7 +147,6 @@ class AgentCallableToolFactory:
 
         tools: list[Tool] = []
         async with self.uow_factory() as uow:
-            function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
             if grants is None:
                 grants = await self._load_grant_summary(
@@ -156,7 +155,7 @@ class AgentCallableToolFactory:
             function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
             for function_id in function_ids:
-                function = await function_repo.get(function_id)
+                function = await get_function_by_id(uow, function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 with suppress(Exception):
@@ -272,18 +271,17 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            use_cases = create_function_use_cases(self.uow_factory)
-            run = await use_cases.execute_function_as_workload(
+            run = await execute_function_for_agent(
+                self.uow_factory,
                 pod_id=function.pod_id,
                 name=function.name,
                 input_data=dict(request),
                 user_id=ctx.deps.user_id,
-                principal_type="AGENT",
-                principal_id=parent_agent_id,
+                agent_id=parent_agent_id,
+                agent_name=parent_agent_name,
                 # Minimal single-operation scope; implication-expanded, so the
                 # implied function.read is admitted (see delegation.py).
                 delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
-                delegation_actor_name=parent_agent_name,
             )
 
             # JOB functions enqueue a background run and return PENDING; await it.
@@ -420,7 +418,7 @@ class AgentCallableToolFactory:
         attempt = 0
         while True:
             async with self.uow_factory() as uow:
-                run = await create_function_run_repository(uow).get_run(run_id)
+                run = await get_function_run(uow, run_id)
             if run is not None and run.status in terminal:
                 return run
             if loop.time() >= deadline:

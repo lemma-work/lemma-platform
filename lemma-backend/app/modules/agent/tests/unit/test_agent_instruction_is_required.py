@@ -40,7 +40,8 @@ def _service(monkeypatch, agent):
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     # The memory grant is `create`/`update`'s own concern and has its own file.
     monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", AsyncMock()
+        "app.modules.agent.services.agent_memory_grant.derive_agent_memory_grant",
+        AsyncMock(),
     )
     return service, repository
 

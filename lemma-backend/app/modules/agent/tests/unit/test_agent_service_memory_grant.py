@@ -69,7 +69,8 @@ async def test_creating_an_agent_derives_its_memory_grant(monkeypatch):
         asked.update(kwargs)
 
     monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", _derive
+        "app.modules.agent.services.agent_memory_grant.derive_agent_memory_grant",
+        _derive,
     )
     monkeypatch.setattr(
         "app.composition.agent_email_surface.provision_agent_email_surface",
@@ -105,7 +106,8 @@ async def test_updating_derives_from_the_agent_as_saved_not_from_the_request(
         asked.update(kwargs)
 
     monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", _derive
+        "app.modules.agent.services.agent_memory_grant.derive_agent_memory_grant",
+        _derive,
     )
 
     await service.update_agent(

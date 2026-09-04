@@ -174,7 +174,7 @@ class AgentService:
         This used to be the agent controller's job alone, so an agent created
         straight through this service -- which is what the pod bundle applier
         does -- got the toolset and no folder to write to. See
-        `app.composition.agent_memory` for what that cost.
+        `app.modules.agent.services.agent_memory_grant` for what that cost.
 
         A floor, not the whole story: an inline `permissions` list replaces
         every grant a grantee holds, so the callers that do one still have to
@@ -182,7 +182,9 @@ class AgentService:
         """
         if ctx is None:
             return
-        from app.composition.agent_memory import derive_agent_memory_grant
+        from app.modules.agent.services.agent_memory_grant import (
+            derive_agent_memory_grant,
+        )
 
         await derive_agent_memory_grant(
             self.uow,
