@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -40,7 +41,6 @@ from app.modules.agent.services.conversation_title_service import (
     title_matches_user_script,
 )
 from app.modules.agent.services.realtime import title_updated_payload
-from app.modules.usage.domain.entities import UsageReservation
 
 
 # --- collaborators -------------------------------------------------------
@@ -527,15 +527,24 @@ def _generator(
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
-    async def _reserve(*, organization_id, user_id, runtime_profile):
-        del runtime_profile
-        return UsageReservation(
-            organization_id=organization_id, user_id=user_id, amount_usd=0.01
-        )
+    @asynccontextmanager
+    async def _billed(model, *, source_type, runtime_profile, context):
+        """Stand in for the metering scope, recording that it was entered.
 
-    async def _record(*, ctx, runtime_profile, result, status, reservation, metadata):
-        capture["usage"].append(status)  # type: ignore[union-attr]
-        capture["usage_source_type"] = ctx.source_type
+        The real one admits against the spend counters, hands back a model that
+        bills per request, and settles on the way out. What matters to a title
+        test is that titling happens *inside* it and which way it left.
+        """
+        del runtime_profile
+        capture["usage_source_type"] = context.source_type
+        capture["billed_as"] = source_type
+        try:
+            yield model
+        except Exception:
+            capture["usage"].append("FAILED")  # type: ignore[union-attr]
+            raise
+        else:
+            capture["usage"].append("COMPLETED")  # type: ignore[union-attr]
 
     profiles = _FakeProfileService()
     capture["profiles"] = profiles
@@ -544,8 +553,7 @@ def _generator(
             runtime_profiles=lambda: profiles,
             model_for_profile=lambda **_: object(),
             llm_agent=_FakeLLMAgent,
-            reserve_usage=_reserve,
-            record_usage=_record,
+            metering=_billed,
         ),
         capture,
     )

@@ -25,12 +25,11 @@ from pydantic_ai import BinaryContent
 from pydantic_ai.messages import UserContent
 from pydantic_ai import UsageLimits
 
+from app.modules.agent.services.metered_model import billed
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     current_usage_context,
-    record_pydantic_ai_result_usage,
-    reserve_usage_for_runtime,
 )
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
@@ -232,31 +231,29 @@ async def describe_images(
     for image in images:
         prompt.append(BinaryContent(data=image.data, media_type=image.media_type))
 
-    agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
     usage_context = _vision_usage_context(
         organization_id=organization_id, user_id=user_id
     )
-    try:
-        reservation = await reserve_usage_for_runtime(
-            organization_id=organization_id,
-            user_id=user_id,
-            runtime_profile=runtime_profile,
-        )
-    except UsageLimitExceededError as exc:
-        raise allowance_refusal() from exc
-
     result = None
-    status = "FAILED"
     failure: tuple[str, BaseException] | None = None
     try:
-        async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
-            result = await agent.run(
-                prompt,
-                usage_limits=UsageLimits(
-                    request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
-                ),
-            )
-        status = "COMPLETED"
+        async with billed(
+            model,
+            source_type="vision",
+            runtime_profile=runtime_profile,
+            context=usage_context,
+        ) as metered_vision_model:
+            agent = PydanticAIAgent(metered_vision_model, instructions=_SYSTEM_PROMPT)
+            async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
+                result = await agent.run(
+                    prompt,
+                    usage_limits=UsageLimits(
+                        request_limit=1,
+                        output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT,
+                    ),
+                )
+    except UsageLimitExceededError as exc:
+        raise allowance_refusal() from exc
     except TimeoutError as exc:
         failure = (
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s.",
@@ -268,26 +265,14 @@ async def describe_images(
         )
         failure = ("The vision model could not describe the image.", exc)
 
-    # Once, after the outcome is known and before anything is re-raised. Writing
-    # it from inside the handlers meant a failed write replaced the provider's
-    # error with a database one -- and took the reservation down with it, since
-    # releasing is this call's job too.
-    await record_pydantic_ai_result_usage(
-        ctx=usage_context,
-        runtime_profile=runtime_profile,
-        result=result,
-        status=status,
-        reservation=reservation,
-        metadata={"helper": "vision"},
-    )
     if failure is not None:
         message, cause = failure
         raise VisionDescriptionError(message) from cause
 
     # `result` is set on every path that leaves `failure` unset, but that is an
-    # invariant of the two blocks above rather than something a type checker can
-    # see -- and a missing description and an empty one are the same answer to
-    # the caller either way.
+    # invariant of the block above rather than something a type checker can see
+    # -- and a missing description and an empty one are the same answer to the
+    # caller either way.
     description = (result.output or "").strip() if result is not None else ""
     if not description:
         raise VisionDescriptionError("The vision model returned no description.")

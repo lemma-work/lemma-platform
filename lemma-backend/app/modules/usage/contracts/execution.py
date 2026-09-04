@@ -25,6 +25,7 @@ from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.services.pydantic_ai_tracking import (
     record_agent_run_usage,
     record_pydantic_ai_result_usage,
+    release_usage_reservation,
     reserve_usage_for_runtime,
 )
 from app.modules.usage.services.usage_context import (
@@ -47,6 +48,7 @@ __all__ = [
     "current_usage_context",
     "record_agent_run_usage",
     "record_pydantic_ai_result_usage",
+    "release_usage_reservation",
     "reserve_usage_for_runtime",
     "spend_bounded_usage_limits",
     "usage_context_from_agent_context",

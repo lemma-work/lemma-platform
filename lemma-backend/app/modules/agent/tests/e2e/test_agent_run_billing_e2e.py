@@ -76,16 +76,19 @@ async def _usage_for_run(
             params={"days": 1},
         )
         assert response.status_code == status.HTTP_200_OK, response.text
-        # The run's own row, not merely a row carrying its id. History
-        # compaction and the vision delegate meter under the same
-        # `agent_run_id` with their own `source_type`, so a script long enough
-        # to compact would otherwise bind this assertion to whichever row came
-        # back first.
+        # The run's own row, not merely a row carrying its id. Work the run
+        # delegates -- compacting its history, reading an image for it --
+        # meters under the same `agent_run_id`, so a script long enough to
+        # compact would otherwise bind this assertion to whichever row came
+        # back first. Every delegated row carries `metadata.helper` naming what
+        # spent it and the run's own row carries none; `source_type` would not
+        # do, because the run's is derived from its workload rather than fixed.
         return next(
             (
                 item
                 for item in response.json()["items"]
-                if item["agent_run_id"] == run_id and item["source_type"] == "AGENT_RUN"
+                if item["agent_run_id"] == run_id
+                and not (item.get("metadata") or {}).get("helper")
             ),
             None,
         )

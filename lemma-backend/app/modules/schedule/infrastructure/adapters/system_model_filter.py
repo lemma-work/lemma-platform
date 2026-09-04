@@ -28,11 +28,8 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
     DurableScheduleEventPublisher,
 )
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
-from app.modules.usage.contracts.execution import (
-    UsageExecutionContext,
-    record_pydantic_ai_result_usage,
-    reserve_usage_for_runtime,
-)
+from app.modules.agent.contracts.metering import billed
+from app.modules.usage.contracts.execution import UsageExecutionContext
 
 #: The one property this filter adds to whatever schema the schedule declared,
 #: and the only one it reads back.
@@ -100,31 +97,20 @@ class SystemModelScheduleFilter:
             workload_type="schedule",
             workload_id=schedule.id,
         )
-        reservation = await reserve_usage_for_runtime(
-            organization_id=usage_context.organization_id,
-            user_id=usage_context.user_id,
-            runtime_profile=runtime.runtime_profile,
-        )
-
-        agent = PydanticAIAgent(
+        async with billed(
             runtime.model,
-            system_prompt=self._system_prompt(instruction),
-            output_type=StructuredDict(schema),
-        )
-        result = None
-        try:
+            source_type="schedule_filter",
+            runtime_profile=runtime.runtime_profile,
+            context=usage_context,
+        ) as metered_filter_model:
+            agent = PydanticAIAgent(
+                metered_filter_model,
+                system_prompt=self._system_prompt(instruction),
+                output_type=StructuredDict(schema),
+            )
             result = await agent.run(
                 self._user_message(event_payload),
                 usage_limits=runtime.usage_limits,
-            )
-        finally:
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="COMPLETED" if result is not None else "FAILED",
-                reservation=reservation,
-                metadata={"helper": "schedule_filter"},
             )
 
         output = result.output

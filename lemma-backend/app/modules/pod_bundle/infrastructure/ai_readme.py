@@ -100,12 +100,9 @@ def build_system_polish_fn(
     async def _polish(readme: str) -> str:
         from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
+        from app.modules.agent.contracts.metering import billed
         from app.modules.agent.contracts.model_runtime import resolve_system_runtime
-        from app.modules.usage.contracts.execution import (
-            UsageExecutionContext,
-            record_pydantic_ai_result_usage,
-            reserve_usage_for_runtime,
-        )
+        from app.modules.usage.contracts.execution import UsageExecutionContext
 
         polish_limits = UsageLimits(
             request_limit=1,
@@ -125,33 +122,14 @@ def build_system_polish_fn(
             pod_id=pod_id,
             source_type="pod_bundle_readme",
         )
-        reservation = await reserve_usage_for_runtime(
-            organization_id=organization_id,
-            user_id=user_id,
+        async with billed(
+            runtime.model,
+            source_type="pod_bundle_readme",
             runtime_profile=runtime.runtime_profile,
-        )
-        agent = PydanticAIAgent(runtime.model, system_prompt=_PROMPT)
-        result = None
-        try:
+            context=usage_context,
+        ) as metered_polish_model:
+            agent = PydanticAIAgent(metered_polish_model, system_prompt=_PROMPT)
             result = await agent.run(readme, usage_limits=runtime.usage_limits)
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="COMPLETED",
-                reservation=reservation,
-                metadata={"helper": "pod_bundle_readme"},
-            )
-        except Exception:
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="FAILED",
-                reservation=reservation,
-                metadata={"helper": "pod_bundle_readme"},
-            )
-            raise
         return str(result.output)
 
     return _polish
