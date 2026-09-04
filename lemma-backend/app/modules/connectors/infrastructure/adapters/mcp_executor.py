@@ -6,6 +6,11 @@ An ``mcp``-kind connector stores the MCP server URL on the auth-config
 tool (``tool_name``); executing calls ``tools/call`` on the server and maps the
 result back to JSON (or a ``BinaryContentResult`` for binary content blocks).
 
+An install may also carry ``connection_config.session_setup``: calls replayed at
+the start of every session, because a session here lasts exactly one tool call
+and some servers gate their tools behind session-scoped state. See
+``MCP_SESSION_SETUP_KEY``.
+
 The MCP client factory is injectable so tests can drive an in-memory server.
 """
 
@@ -13,10 +18,11 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Any, Callable
+from collections.abc import Mapping
+from typing import Any, Callable, Protocol
 
 import httpx
-from fastmcp.exceptions import FastMCPError, McpError
+from fastmcp.exceptions import FastMCPError, McpError, ToolError
 
 from lemma_connectors.core.results import BinaryContentResult
 
@@ -85,6 +91,23 @@ def _flatten_message(exc: BaseException) -> str:
 # ``list_tools()`` and ``call_tool(name, args)``.
 McpClientFactory = Callable[..., Any]
 
+#: Install-config key holding the calls to replay at the start of every session.
+#:
+#: A session is exactly one tool call long here -- the client is built, used and
+#: closed per operation -- so any server-side state a tool sets up is gone before
+#: the next call sees it. Servers that gate their tools behind a session-scoped
+#: switch (Arize Phoenix's ``enable_tool_group`` is the one that prompted this)
+#: are therefore unusable: the gated tools are not in ``list_tools()`` on a
+#: virgin session, so they are never discovered, never stored as operations, and
+#: never addressable by name.
+#:
+#: Replaying the setup on every session is what makes them reachable without
+#: keeping a session alive across calls -- which would need replica affinity and
+#: eviction, and would put session state where nothing else in this module keeps
+#: any. Discovery replays it too, so the tools it unlocks are discovered rather
+#: than merely callable.
+MCP_SESSION_SETUP_KEY = "session_setup"
+
 
 def default_mcp_client_factory(
     server_url: str, headers: dict[str, str], timeout: float | None = None
@@ -113,6 +136,102 @@ def build_mcp_headers(
     if token:
         headers.setdefault("Authorization", f"Bearer {token}")
     return headers
+
+
+class McpToolSession(Protocol):
+    """The part of a connected MCP client this module calls.
+
+    Stated rather than left as `Any`, because the setup replay is handed a
+    client by two different callers and what it is allowed to do with one is
+    exactly this.
+    """
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, object],
+        *,
+        raise_on_error: bool,
+    ) -> object:
+        """Call one tool and return its result without raising on a refusal.
+
+        `raise_on_error=False` is not optional here. fastmcp defaults it to
+        True, which turns a tool's refusal into a `ToolError` that reads as the
+        transport failing -- the whole defect this protocol's callers exist to
+        avoid. Stating it in the signature is what stops it being forgotten.
+        """
+
+
+def _session_setup_steps(
+    connection_config: Mapping[str, object] | None,
+) -> list[tuple[str, dict[str, object]]]:
+    """The install's setup calls, as ``(tool_name, arguments)`` pairs.
+
+    Read defensively rather than trusted: this is tenant-written JSON, and an
+    entry that is not a usable call is skipped instead of failing every
+    operation on the install.
+    """
+    raw = (connection_config or {}).get(MCP_SESSION_SETUP_KEY)
+    if not isinstance(raw, list):
+        return []
+    steps: list[tuple[str, dict[str, object]]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        tool_name = entry.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            continue
+        arguments = entry.get("arguments")
+        steps.append((tool_name, arguments if isinstance(arguments, dict) else {}))
+    return steps
+
+
+async def apply_session_setup(
+    client: McpToolSession, connection_config: Mapping[str, object] | None
+) -> None:
+    """Replay the install's setup calls on a freshly opened session.
+
+    Called by both the executor and the discoverer, immediately after the
+    session opens and before anything else is asked of it. A step that the
+    server rejects fails the whole call, and says which step it was -- a
+    half-applied preamble is a session whose tool list is neither the configured
+    one nor the default, and silently continuing would make that look like the
+    operation itself misbehaving.
+    """
+    for tool_name, arguments in _session_setup_steps(connection_config):
+        result = await client.call_tool(tool_name, arguments, raise_on_error=False)
+        raise_on_tool_error(tool_name, result, during_setup=True)
+
+
+def raise_on_tool_error(
+    tool_name: str, result: object, *, during_setup: bool = False
+) -> None:
+    """Report a tool that answered ``isError`` as the server rejecting the call.
+
+    Not an outage, and two things followed from calling it one. The breaker
+    counts infrastructure errors, so five bad-argument calls inside the window
+    disabled a healthy MCP server for the whole organization. And
+    ``OperationExecutionInfrastructureError`` hardcodes its own message, so the
+    tool's explanation was discarded and the caller got "Connector provider is
+    temporarily unavailable" with no way to correct itself and every reason to
+    retry. Transport failures are still classified separately, where they
+    belong.
+    """
+    if not getattr(result, "is_error", False):
+        return
+    text = _collect_text(getattr(result, "content", None) or [])
+    raise OperationExecutionValidationError(
+        "",
+        details={
+            "provider": "mcp",
+            "reason": "session_setup_failed" if during_setup else "tool_error",
+            # Named `operation_name` because that is the key the error's own
+            # detail allowlist lets through; for a setup step it is the step's
+            # tool, which is the whole point of saying it.
+            "operation_name": tool_name,
+            "upstream_message": redact_text(text)[:_UPSTREAM_MESSAGE_LIMIT],
+        },
+    )
 
 
 class McpExecutor:
@@ -158,9 +277,33 @@ class McpExecutor:
         try:
             client = self._client_factory(server_url, headers, deadline_seconds)
             async with client:
-                result = await client.call_tool(tool_name, payload or {})
+                await apply_session_setup(client, connection_config)
+                # `raise_on_error=False` is load-bearing. fastmcp defaults it to
+                # True, so a tool answering `isError` raised `ToolError` -- a
+                # `FastMCPError`, which `_is_transport_failure` accepts -- before
+                # `_map_result` could ever see the result. Every tool-level
+                # refusal was therefore reported as a provider outage, and the
+                # classification below was unreachable code that a test calling
+                # `_map_result` directly certified as working.
+                result = await client.call_tool(
+                    tool_name, payload or {}, raise_on_error=False
+                )
         except OperationExecutionValidationError, OperationExecutionInfrastructureError:
             raise
+        except ToolError as exc:
+            # Belt and braces: `raise_on_error=False` covers the direct path,
+            # but a transport that wraps a tool error still must not be read as
+            # the server being down.
+            message = _flatten_message(exc)
+            raise OperationExecutionValidationError(
+                "",
+                details={
+                    "provider": "mcp",
+                    "reason": "tool_error",
+                    "operation_name": tool_name,
+                    "upstream_message": redact_text(message)[:_UPSTREAM_MESSAGE_LIMIT],
+                },
+            ) from exc
         except (*_MCP_TRANSPORT_ERRORS, BaseExceptionGroup, RuntimeError) as exc:
             if not _is_transport_failure(exc):
                 # A group carrying something we do not recognise is a bug in this
@@ -175,26 +318,9 @@ class McpExecutor:
         return self._map_result(tool_name, result)
 
     def _map_result(self, tool_name: str, result: Any) -> Any:
-        if getattr(result, "is_error", False):
-            text = _collect_text(getattr(result, "content", None) or [])
-            # A tool that answers `is_error` is the server rejecting this call
-            # -- a bad argument, a missing project, a refusal it chose. Not an
-            # outage, and two things followed from calling it one. The breaker
-            # counts infrastructure errors, so five bad-argument calls inside
-            # the window disabled a healthy MCP server for the whole
-            # organization. And `OperationExecutionInfrastructureError`
-            # hardcodes its own message, so the tool's explanation was
-            # discarded and the caller got "Connector provider is temporarily
-            # unavailable" with no way to correct itself and every reason to
-            # retry. Transport failures are still classified above, where they
-            # belong.
-            raise OperationExecutionValidationError(
-                "",
-                details={
-                    "provider": "mcp",
-                    "upstream_message": redact_text(text)[:_UPSTREAM_MESSAGE_LIMIT],
-                },
-            )
+        # A tool that answers `is_error` is the server rejecting this call -- a
+        # bad argument, a missing project, a refusal it chose.
+        raise_on_tool_error(tool_name, result)
         structured = _structured_output(result)
         if structured is not None:
             return structured

@@ -6,7 +6,6 @@ import asyncio
 import functools
 import logging
 import time
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -47,6 +46,8 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
 from app.core.infrastructure.jobs.job_liveness import (
     register_job_liveness_middleware,
 )
@@ -142,46 +143,6 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
         await asyncio.Event().wait()  # until the lane's task group unwinds
 
     worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
-
-
-def _install_task_dump_handler() -> None:
-    """Print every pending coroutine's stack on SIGQUIT.
-
-    A worker that stops responding to SIGTERM shows nothing useful in a thread
-    dump: `faulthandler` reports the event loop sitting in `select()`, which is
-    what an idle loop always looks like. The question is always *which awaited
-    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
-    free — neither streaq nor anything else here uses it.
-
-    Windows has no SIGQUIT at all, so `signal.SIGQUIT` raises `AttributeError`
-    there rather than the errors the guard below anticipates. That was harmless
-    while only `python -m app.worker` reached here, because Desktop never ran
-    it; the moment the embedded app runs its lanes, this is the first thing a
-    Windows backend would execute, and it would fail before serving anything.
-    """
-    import signal
-
-    sigquit = getattr(signal, "SIGQUIT", None)
-    if sigquit is None:  # pragma: no cover - platform
-        return
-
-    def _dump(*_args: object) -> None:
-        for task in asyncio.all_tasks():
-            frames = "".join(
-                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
-                if getattr(task.get_coro(), "cr_frame", None)
-                else []
-            )
-            logger.warning(
-                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
-                task_name=task.get_name(),
-                frames=frames[-2000:],
-            )
-
-    try:
-        asyncio.get_running_loop().add_signal_handler(sigquit, _dump)
-    except NotImplementedError, RuntimeError:  # pragma: no cover - platform
-        pass
 
 
 async def _stop_secondary_lanes() -> None:
@@ -825,7 +786,11 @@ async def run_worker_lanes(
         "worker.lanes.starting",
         lanes=",".join(lane.value for lane in selected),
     )
-    _install_task_dump_handler()
+    install_task_dump_handler()
+    # Before any lane consumes: a cron removed from the code stops firing only
+    # when its schedule is removed from Redis too.
+    for lane in selected:
+        await prune_orphaned_crons_safely(LANE_WORKERS[lane], redis=get_redis())
     primary, *secondary = selected
     if not secondary:
         await LANE_WORKERS[primary].run_async(task_status=task_status)

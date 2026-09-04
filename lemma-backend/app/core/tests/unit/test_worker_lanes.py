@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.infrastructure.jobs import streaq_runtime
+from app.core.infrastructure.jobs import cron_pruning, streaq_runtime
 from app.core.infrastructure.jobs.streaq_runtime import (
     LANE_WORKERS,
     TASK_LANES,
@@ -281,3 +281,185 @@ def test_one_already_registered_task_does_not_skip_the_rest(monkeypatch):
     # And having finished, it does not do it again.
     streaq_runtime.ensure_task_lanes_registered()
     assert len(imported) == 1
+
+
+class TestARemovedCronStopsFiring:
+    """streaq keeps a cron's schedule in Redis, so deleting the code does not
+    stop it.
+
+    `resume_interrupted_agent_runs` was removed months before this was written
+    and was still enqueued every five minutes against a worker that no longer
+    registered it -- 294 error-level lines a day, all of them
+    "skipped, missing function", and all of them what real worker errors were
+    being read against.
+    """
+
+    class _FakePipeline:
+        """redis-py's contract: queue, and apply nothing until `execute`.
+
+        Modelled rather than recorded, because the first version of this double
+        recorded calls and asserted on them -- so it passed against a sweep that
+        queued three deletes and never executed them. The bug reached a live run
+        before anything noticed. Here the store only changes on `execute`, so
+        forgetting it fails the assertion about what is left.
+        """
+
+        def __init__(self, store: "TestARemovedCronStopsFiring._FakeRedis") -> None:
+            self._store = store
+            self._queued: list = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def zrem(self, key, *members):
+            self._queued.append(("zrem", key, members))
+
+        def hdel(self, key, *fields):
+            self._queued.append(("hdel", key, fields))
+
+        def delete(self, *keys):
+            self._queued.append(("delete", keys))
+
+        async def execute(self):
+            for command, *rest in self._queued:
+                if command == "zrem":
+                    _, members = rest
+                    self._store.scheduled = [
+                        name for name in self._store.scheduled if name not in members
+                    ]
+                elif command == "hdel":
+                    _, fields = rest
+                    self._store.registered = [
+                        name for name in self._store.registered if name not in fields
+                    ]
+                else:
+                    self._store.deleted.extend(rest[0])
+            self._queued.clear()
+
+    class _FakeRedis:
+        def __init__(self, scheduled, registered):
+            self.scheduled = list(scheduled)
+            self.registered = list(registered)
+            self.deleted: list[str] = []
+
+        async def zrange(self, key, start, stop):
+            return tuple(self.scheduled)
+
+        async def hkeys(self, key):
+            return tuple(self.registered)
+
+        def pipeline(self, transaction=False):
+            return TestARemovedCronStopsFiring._FakePipeline(self)
+
+    @staticmethod
+    def _worker(*, known, scheduled, registered):
+        """The worker, and separately the client it is swept with.
+
+        A streaq `Worker` only exposes a `redis` once its context manager has
+        entered, and this sweep runs before the worker consumes anything -- so
+        the client is passed in rather than read off the worker.
+        """
+        redis = TestARemovedCronStopsFiring._FakeRedis(scheduled, registered)
+        worker = SimpleNamespace(
+            registry={name: object() for name in known},
+            queue_name="lemma",
+            cron_schedule_key="streaq:lemma:cron:schedule",
+            cron_registry_key="streaq:lemma:cron:jobs",
+            cron_data_key="streaq:lemma:cron:data:",
+        )
+        return worker, redis
+
+    async def test_a_schedule_with_no_function_behind_it_is_forgotten(self):
+        worker, redis = self._worker(
+            known={"reconcile_workflow_waits"},
+            scheduled=["reconcile_workflow_waits", "resume_interrupted_agent_runs"],
+            registered=["reconcile_workflow_waits", "resume_interrupted_agent_runs"],
+        )
+
+        pruned = await cron_pruning.prune_orphaned_crons(worker, redis=redis)
+
+        assert pruned == ["resume_interrupted_agent_runs"]
+        # State, not calls: a queued command that is never executed changes
+        # nothing, and that is precisely how this shipped broken once.
+        assert redis.scheduled == ["reconcile_workflow_waits"]
+        assert redis.registered == ["reconcile_workflow_waits"]
+        assert redis.deleted == ["streaq:lemma:cron:data:resume_interrupted_agent_runs"]
+
+    async def test_a_cron_this_worker_still_runs_is_left_alone(self):
+        worker, redis = self._worker(
+            known={"reconcile_workflow_waits"},
+            scheduled=["reconcile_workflow_waits"],
+            registered=["reconcile_workflow_waits"],
+        )
+
+        assert await cron_pruning.prune_orphaned_crons(worker, redis=redis) == []
+        assert redis.scheduled == ["reconcile_workflow_waits"]
+        assert redis.deleted == []
+
+    async def test_a_name_left_in_only_one_of_the_two_places_is_still_swept(self):
+        """The registry hash and the schedule set are written together and can
+        drift apart; either one alone keeps the name alive."""
+        worker, redis = self._worker(
+            known={"reconcile_workflow_waits"},
+            scheduled=["gone_from_schedule"],
+            registered=["gone_from_hash"],
+        )
+
+        assert await cron_pruning.prune_orphaned_crons(worker, redis=redis) == [
+            "gone_from_hash",
+            "gone_from_schedule",
+        ]
+        assert redis.scheduled == []
+        assert redis.registered == []
+
+    async def test_a_worker_that_registered_nothing_deletes_nothing(self):
+        """An empty registry is evidence about this process, not about Redis.
+
+        Sweeping on it would read every cron in the queue as orphaned and
+        delete the lot -- from a process whose only distinguishing feature is
+        that it failed to import its own handlers.
+        """
+        worker, redis = self._worker(
+            known=set(),
+            scheduled=["reconcile_workflow_waits"],
+            registered=["reconcile_workflow_waits"],
+        )
+
+        assert await cron_pruning.prune_orphaned_crons(worker, redis=redis) == []
+        assert redis.scheduled == ["reconcile_workflow_waits"]
+
+    @staticmethod
+    def _worker_whose_redis_raises(exc: BaseException):
+        class _Exploding:
+            async def zrange(self, *a, **k):
+                raise exc
+
+        worker = SimpleNamespace(
+            # Non-empty: an empty registry is refused before Redis is reached.
+            registry={"reconcile_workflow_waits": object()},
+            queue_name="lemma",
+            cron_schedule_key="s",
+            cron_registry_key="r",
+            cron_data_key="d:",
+        )
+        return worker, _Exploding()
+
+    async def test_a_redis_failure_here_never_stops_a_worker_starting(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        worker, redis = self._worker_whose_redis_raises(
+            RedisConnectionError("redis is having a moment")
+        )
+
+        await cron_pruning.prune_orphaned_crons_safely(worker, redis=redis)
+
+    async def test_a_bug_in_the_sweep_is_not_reported_as_redis_being_unwell(self):
+        """Housekeeping must not stop a worker starting, and must not swallow a
+        defect in this module and blame the dependency for it."""
+        worker, redis = self._worker_whose_redis_raises(TypeError("wrong shape"))
+
+        with pytest.raises(TypeError):
+            await cron_pruning.prune_orphaned_crons_safely(worker, redis=redis)

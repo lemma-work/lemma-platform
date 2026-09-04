@@ -8,6 +8,10 @@ its size ceiling.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from uuid import UUID
+
+from app.core.domain.errors import DomainError
 from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import (
@@ -23,6 +27,10 @@ from app.modules.connectors.domain.connector import (
 from app.modules.connectors.domain.ports import SystemOAuthConfigPort
 from app.modules.connectors.services.auth.mcp_install_authorization import (
     MCP_OAUTH_CONFIG_KEY,
+)
+from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CUSTOM_REASON,
+    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
 )
 from app.modules.connectors.domain.errors import (
     ConnectorValidationError,
@@ -173,3 +181,117 @@ def resolve_auth_install(
         oauth2=oauth2_config,
         composio_toolkit_slug=toolkit_slug,
     )
+
+
+def _org_custom_oauth_is_possible(
+    connector: ConnectorEntity,
+    system_oauth_config: SystemOAuthConfigPort,
+) -> bool:
+    """Whether an org's own client id and secret have anywhere to be sent.
+
+    Credentials are only half of an OAuth app; the other half is the
+    connector's endpoints, which `resolve_auth_install` pairs them with. A
+    connector carrying neither stored `oauth2_defaults` nor a registry entry
+    accepts the install and then raises at *sign-in*, leaving a connection that
+    can never be connected and a name now taken.
+    """
+    return system_oauth_config.resolve_oauth2_defaults(connector) is not None
+
+
+def install_auth_schemes(
+    auth_configs: Sequence[AuthConfigEntity],
+    *,
+    kinds_by_connector: Mapping[str, list[dict[str, object]]],
+    system_oauth_config: SystemOAuthConfigPort,
+) -> dict[UUID, str]:
+    """How each install actually authenticates, keyed by install id.
+
+    The *install's* scheme, not the catalog's, and the two genuinely differ.
+    `mcp` is one catalog entry standing for every server a tenant may point at,
+    and they do not agree on how to authenticate: the entry says `API_KEY`,
+    while an install whose server described its own authorization at create
+    time is an OAuth one. A client with only the catalog cannot tell, which is
+    how an OAuth-only MCP server came to be "connected" with an empty
+    credential set and 401 every call afterwards.
+
+    Takes the kinds already fetched rather than a repository, so the caller can
+    read a whole page in one query -- `ConnectorRepository.kinds_for` exists for
+    this, as `titles_for` does for the same page's titles.
+    """
+    schemes: dict[UUID, str] = {}
+    for auth_config in auth_configs:
+        connector = ConnectorEntity(
+            id=auth_config.connector_id,
+            kinds=kinds_by_connector.get(auth_config.connector_id) or [],
+        )
+        try:
+            install = resolve_auth_install(connector, auth_config, system_oauth_config)
+        except DomainError:
+            # An install whose catalog entry no longer offers its kind cannot be
+            # connected at all; saying nothing about how is better than failing
+            # the list it appears in.
+            continue
+        schemes[auth_config.id] = install.auth_scheme.value
+    return schemes
+
+
+def validate_auth_config_request(
+    *,
+    connector: ConnectorEntity,
+    kind: ConnectorKind,
+    config_source: AuthConfigSource,
+    provider_config: Mapping[str, object] | None,
+    system_oauth_config: SystemOAuthConfigPort,
+) -> None:
+    """Whether this organization may install this connector, this way.
+
+    Lives here rather than on the service for the reason stated at the top of
+    this module: it is a pure function of the catalog entry, the requested
+    kind, and the deployment's OAuth environment.
+    """
+    supplied: Mapping[str, object] = provider_config or {}
+    spec = connector.spec_for(kind)
+
+    if kind is ConnectorKind.COMPOSIO:
+        if config_source != AuthConfigSource.SYSTEM_DEFAULT:
+            raise ConnectorValidationError(
+                COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+                details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
+            )
+        return
+
+    # Everything below is about who issued the OAuth tokens. A kind that
+    # does not use OAuth -- sql, mcp, most http installs -- has nothing to
+    # answer here, and its config is checked by its own install schema.
+    if spec.auth_scheme != AuthScheme.OAUTH2:
+        return
+    if (
+        config_source == AuthConfigSource.ORG_CUSTOM
+        and not spec.supports_org_custom_oauth
+    ):
+        raise ConnectorValidationError(
+            f"Org custom OAuth credentials are not supported for '{connector.id}'."
+        )
+    if config_source == AuthConfigSource.ORG_CUSTOM and not (
+        _org_custom_oauth_is_possible(connector, system_oauth_config)
+    ):
+        raise ConnectorValidationError(
+            f"This deployment has no OAuth endpoints configured for "
+            f"'{connector.id}', so an org-supplied OAuth app has nowhere to "
+            f"send people. Install it through a kind that does, or ask an "
+            f"operator to configure the connector's OAuth endpoints."
+        )
+    if config_source == AuthConfigSource.SYSTEM_DEFAULT:
+        if not system_oauth_config.has_default_oauth_config(connector):
+            raise ConnectorValidationError(
+                "System default OAuth credentials are not configured for this app. "
+                "Create an org custom auth config with OAuth credentials instead."
+            )
+        return
+
+    credential_config = supplied.get("oauth2_credentials") or supplied
+    if not isinstance(credential_config, dict):
+        raise ConnectorValidationError(
+            "Org custom OAuth configs require oauth2_credentials."
+        )
+    OAuth2CredentialConfig.model_validate(credential_config)

@@ -29,6 +29,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorKind,
     HttpKindSpec,
     LemmaProviderCapability,
+    McpKindSpec,
 )
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
@@ -1605,3 +1606,114 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
         )
 
     assert account.provider_account_id == "sreejinping"
+
+
+class TestAnInstallSaysHowItAuthenticates:
+    """The catalog cannot answer this for `mcp`, and answering from it was a bug.
+
+    One catalog entry stands for every MCP server a tenant may point at, and
+    they do not agree on how to sign in. The entry says API_KEY; an install
+    whose server described its own authorization when it was created is an
+    OAuth install. A client with only the catalog cannot tell the difference,
+    and the two gates in this service disagreeing about it is what let an
+    OAuth-only server end up "connected" with no token at all.
+    """
+
+    _OAUTH_BLOCK = {
+        "issuer": "https://server.example",
+        "authorization_endpoint": "https://server.example/oauth2/authorize",
+        "token_endpoint": "https://server.example/oauth2/token",
+        "resource": "https://server.example/mcp",
+        "scopes": ["read"],
+        "client_id": "registered-client",
+        "client_secret": None,
+    }
+
+    @staticmethod
+    def _mcp_install(config: dict) -> AuthConfigEntity:
+        return AuthConfigEntity(
+            id=uuid4(),
+            organization_id=ORG_ID,
+            connector_id="mcp",
+            provider="LEMMA",
+            kind=ConnectorKind.MCP,
+            config_source=AuthConfigSource.ORG_CUSTOM,
+            name="an-mcp-server",
+            config=config,
+        )
+
+    @staticmethod
+    def _service_for(install: AuthConfigEntity) -> ConnectorService:
+        return _service(
+            connector_repository=AsyncMock(
+                get=AsyncMock(
+                    return_value=ConnectorEntity(id="mcp", kinds=[McpKindSpec()])
+                ),
+                kinds_for=AsyncMock(
+                    return_value={"mcp": [McpKindSpec().model_dump(mode="json")]}
+                ),
+            ),
+            auth_config_repository=_auth_config_repo(install),
+        )
+
+    async def test_a_token_install_reports_the_catalog_scheme(self):
+        install = self._mcp_install({"server_url": "https://server.example/mcp"})
+
+        schemes = await self._service_for(install).install_auth_schemes([install])
+
+        assert schemes == {install.id: "API_KEY"}
+
+    async def test_an_install_that_negotiated_oauth_reports_oauth(self):
+        install = self._mcp_install(
+            {"server_url": "https://server.example/mcp", "oauth": self._OAUTH_BLOCK}
+        )
+
+        schemes = await self._service_for(install).install_auth_schemes([install])
+
+        assert schemes == {install.id: "OAUTH2"}, (
+            "the client has no other way to know signing in is what connects this"
+        )
+
+    async def test_nothing_to_resolve_is_an_empty_answer_not_a_query(self):
+        repository = AsyncMock(kinds_for=AsyncMock(return_value={}))
+
+        assert (
+            await _service(connector_repository=repository).install_auth_schemes([])
+            == {}
+        )
+        repository.kinds_for.assert_not_awaited()
+
+    async def test_an_oauth_mcp_install_refuses_a_credential_post(self):
+        """The account POST is how the broken state was reachable: an empty
+        credential set against a server that only accepts a browser sign-in
+        produced an account that looked connected and 401'd every call."""
+        install = self._mcp_install(
+            {"server_url": "https://server.example/mcp", "oauth": self._OAUTH_BLOCK}
+        )
+        service = self._service_for(install)
+
+        with pytest.raises(ConnectorValidationError, match="OAuth connect request"):
+            await service.create_account(
+                user_id=uuid4(),
+                organization_id=ORG_ID,
+                auth_config_id=install.id,
+                credentials={},
+            )
+
+    async def test_a_token_mcp_install_still_accepts_one(self):
+        install = self._mcp_install({"server_url": "https://server.example/mcp"})
+        service = self._service_for(install)
+        service.account_repository.get_by_user_and_auth_config = AsyncMock(
+            return_value=None
+        )
+
+        # Far enough to prove the scheme gate let it through; what happens after
+        # is the credential path's own business and its own tests.
+        with pytest.raises(Exception) as caught:
+            await service.create_account(
+                user_id=uuid4(),
+                organization_id=ORG_ID,
+                auth_config_id=install.id,
+                credentials={"bearer_token": "t"},
+            )
+        assert "OAuth connect request" not in str(caught.value)

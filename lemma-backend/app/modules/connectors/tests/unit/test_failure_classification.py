@@ -66,38 +66,108 @@ def test_a_status_the_provider_chose_is_still_an_answer():
     assert not isinstance(error, BREAKER_COUNTS)
 
 
-class _TextBlock:
-    type = "text"
+@pytest.fixture
+def refusing_server():
+    """An in-memory MCP server whose tool refuses the call it is given.
 
-    def __init__(self, text: str) -> None:
-        self.text = text
+    Deliberately a real server driven through `McpExecutor.execute`, not a
+    hand-built result handed to `_map_result`. The stand-in this replaces
+    certified a path production never took: fastmcp's `call_tool` defaults to
+    `raise_on_error=True`, so a refusing tool raised `ToolError` -- which
+    `_is_transport_failure` accepts -- long before `_map_result` was reached.
+    The classification tested green while every MCP tool error in production
+    was reported as a provider outage.
+    """
+    from fastmcp import Client, FastMCP
+    from fastmcp.exceptions import ToolError as ServerToolError
+
+    server = FastMCP("refusing-server")
+
+    @server.tool
+    def create_issue(project_key: str) -> dict:
+        """Create an issue."""
+        raise ServerToolError(f'project key "{project_key}" does not exist')
+
+    def factory(server_url, headers, timeout=None):
+        return Client(server)
+
+    return factory
 
 
-class _ToolError:
-    is_error = True
+async def _execute_create_issue(factory) -> Exception:
+    with pytest.raises(Exception) as caught:
+        await McpExecutor(client_factory=factory).execute(
+            connector_id="mcp",
+            operation_name="create_issue",
+            execution={"kind": "mcp", "tool_name": "create_issue"},
+            payload={"project_key": "FOO"},
+            third_party_credentials=None,
+            connection_config={"server_url": "https://mcp.example.test/mcp"},
+        )
+    return caught.value
 
-    def __init__(self, text: str) -> None:
-        self.content = [_TextBlock(text)]
 
-
-def test_an_mcp_tool_error_reaches_the_caller_with_what_the_tool_said():
+@pytest.mark.asyncio
+async def test_an_mcp_tool_error_reaches_the_caller_with_what_the_tool_said(
+    refusing_server,
+):
     """An agent given "Connector provider is temporarily unavailable" cannot
     correct itself and has every reason to retry. The tool told it exactly what
     was wrong."""
-    with pytest.raises(OperationExecutionValidationError) as caught:
-        McpExecutor()._map_result(
-            "create_issue", _ToolError('project key "FOO" does not exist')
-        )
+    error = await _execute_create_issue(refusing_server)
 
-    assert caught.value.details == {
-        "upstream_message": 'project key "FOO" does not exist'
-    }
+    assert isinstance(error, OperationExecutionValidationError)
+    assert error.details["upstream_message"] == 'project key "FOO" does not exist'
+    assert error.details["operation_name"] == "create_issue"
+    assert error.details["reason"] == "tool_error"
 
 
-def test_an_mcp_tool_error_does_not_open_the_breaker():
+@pytest.mark.asyncio
+async def test_an_mcp_tool_error_does_not_open_the_breaker(refusing_server):
     """Five bad-argument calls used to disable a healthy MCP server for the
     whole organization."""
-    with pytest.raises(Exception) as caught:
-        McpExecutor()._map_result("create_issue", _ToolError("bad argument"))
+    error = await _execute_create_issue(refusing_server)
 
+    assert not isinstance(error, BREAKER_COUNTS)
+
+
+@pytest.mark.asyncio
+async def test_a_session_setup_step_the_server_refuses_names_itself():
+    """A half-applied preamble leaves a session whose tool list is neither the
+    configured one nor the default. Reporting it as the operation failing sends
+    the reader to the wrong call."""
+    from fastmcp import Client, FastMCP
+    from fastmcp.exceptions import ToolError as ServerToolError
+
+    server = FastMCP("gated-server")
+
+    @server.tool
+    def enable_tool_group(group: str) -> dict:
+        """Enable a group of tools."""
+        raise ServerToolError(f"Unknown tool group '{group}'.")
+
+    @server.tool
+    def ping() -> dict:
+        """Answer."""
+        return {"ok": True}
+
+    with pytest.raises(OperationExecutionValidationError) as caught:
+        await McpExecutor(client_factory=lambda *a, **k: Client(server)).execute(
+            connector_id="mcp",
+            operation_name="ping",
+            execution={"kind": "mcp", "tool_name": "ping"},
+            payload={},
+            third_party_credentials=None,
+            connection_config={
+                "server_url": "https://mcp.example.test/mcp",
+                "session_setup": [
+                    {"tool_name": "enable_tool_group", "arguments": {"group": "nope"}}
+                ],
+            },
+        )
+
+    details = caught.value.details
+    assert details["reason"] == "session_setup_failed"
+    assert details["operation_name"] == "enable_tool_group"
+    assert "Unknown tool group" in details["upstream_message"]
     assert not isinstance(caught.value, BREAKER_COUNTS)

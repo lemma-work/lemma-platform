@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime
+from collections.abc import Sequence
 from typing import Any, Optional
 from uuid import UUID
 
@@ -12,8 +13,6 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.auth_config import (
-    COMPOSIO_ORG_CUSTOM_REASON,
-    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
     AuthConfigEntity,
     AuthConfigSource,
     reject_if_disabled,
@@ -30,7 +29,6 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
     KindSpec,
-    OAuth2CredentialConfig,
 )
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
@@ -76,6 +74,8 @@ from app.modules.connectors.services.auth_config_schemas import (
     default_auth_config_schema,
 )
 from app.modules.connectors.services.auth_install_resolver import (
+    install_auth_schemes,
+    validate_auth_config_request,
     composio_capability,
     lemma_capability,
     provider_value,
@@ -383,47 +383,13 @@ class ConnectorService:
         config_source: AuthConfigSource,
         provider_config: dict | None,
     ) -> None:
-        provider_config = provider_config or {}
-        spec = connector.spec_for(kind)
-
-        if kind is ConnectorKind.COMPOSIO:
-            if config_source != AuthConfigSource.SYSTEM_DEFAULT:
-                raise ConnectorValidationError(
-                    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
-                    details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
-                )
-            return
-
-        # Everything below is about who issued the OAuth tokens. A kind that
-        # does not use OAuth -- sql, mcp, most http installs -- has nothing to
-        # answer here, and its config is checked by its own install schema.
-        if spec.auth_scheme != AuthScheme.OAUTH2:
-            return
-        if (
-            config_source == AuthConfigSource.ORG_CUSTOM
-            and not spec.supports_org_custom_oauth
-        ):
-            raise ConnectorValidationError(
-                f"Org custom OAuth credentials are not supported for '{connector.id}'."
-            )
-        if config_source == AuthConfigSource.SYSTEM_DEFAULT:
-            if not self.system_oauth_config.has_default_oauth_config(connector):
-                raise ConnectorValidationError(
-                    "System default OAuth credentials are not configured for this app. "
-                    "Create an org custom auth config with OAuth credentials instead."
-                )
-            return
-
-        credential_config = (
-            provider_config.get("oauth2_credentials")
-            if isinstance(provider_config, dict)
-            else None
-        ) or provider_config
-        if not isinstance(credential_config, dict):
-            raise ConnectorValidationError(
-                "Org custom OAuth configs require oauth2_credentials."
-            )
-        OAuth2CredentialConfig.model_validate(credential_config)
+        validate_auth_config_request(
+            connector=connector,
+            kind=kind,
+            config_source=config_source,
+            provider_config=provider_config,
+            system_oauth_config=self.system_oauth_config,
+        )
 
     async def create_auth_config(
         self,
@@ -557,6 +523,25 @@ class ConnectorService:
             cursor=cursor,
         )
         return list(configs), next_cursor
+
+    async def install_auth_schemes(
+        self, auth_configs: Sequence[AuthConfigEntity]
+    ) -> dict[UUID, str]:
+        """How each install actually authenticates, keyed by install id.
+
+        Batched over the page: the answer needs each install's catalog kinds,
+        and reading whole connector rows one at a time is a round trip per
+        install on the connectors page's single call.
+        """
+        if not auth_configs:
+            return {}
+        return install_auth_schemes(
+            auth_configs,
+            kinds_by_connector=await self.connector_repository.kinds_for(
+                [config.connector_id for config in auth_configs]
+            ),
+            system_oauth_config=self.system_oauth_config,
+        )
 
     async def _resolve_auth_config(
         self,
@@ -790,14 +775,20 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider = AuthProvider(self._provider_value(auth_config))
-        if provider == AuthProvider.LEMMA:
-            auth_scheme = self._lemma_capability(connector).auth_scheme
-        elif provider == AuthProvider.COMPOSIO:
-            auth_scheme = self._composio_capability(connector).auth_scheme
-        else:
+        if provider not in (AuthProvider.LEMMA, AuthProvider.COMPOSIO):
             raise UnsupportedAuthProviderError(provider.value)
 
-        if auth_scheme == AuthScheme.OAUTH2:
+        # Composio credential-managed apps must establish a connected account on
+        # Composio's side; native (Lemma) apps store the credentials verbatim.
+        auth_install = self._resolve_auth_install(connector, auth_config)
+
+        # The *install's* scheme, matching `initiate_connect_request`. Reading
+        # the catalog's instead let an MCP install that had negotiated OAuth at
+        # create time still accept an empty credential POST, because the `mcp`
+        # entry says API_KEY -- so the person got an account that looked
+        # connected, held no token, and 401'd every call. The two gates
+        # disagreeing is what made that state reachable at all.
+        if auth_install.auth_scheme == AuthScheme.OAUTH2:
             raise ConnectorValidationError(
                 "OAuth2 accounts must be connected with an OAuth connect request."
             )
@@ -813,9 +804,6 @@ class ConnectorService:
         # tokens for different agents); the first connected becomes the default.
         is_default = existing_account is None
 
-        # Composio credential-managed apps must establish a connected account on
-        # Composio's side; native (Lemma) apps store the credentials verbatim.
-        auth_install = self._resolve_auth_install(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(provider.value)
         # Resolve, release, call, persist -- the rule in `docs/development.md`.
         # Everything above was a read, and everything below until the create is
