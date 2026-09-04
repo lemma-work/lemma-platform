@@ -37,6 +37,14 @@ VISION_TIMEOUT_SECONDS = 120
 MAX_IMAGES_PER_CALL = 8
 MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024
 
+# A guard against a model that will not stop, not a budget the work has to fit
+# inside. At 4096 it was the latter: a dense table or a full-page diagram
+# transcribed verbatim -- which is exactly what the instructions above ask for
+# -- ran past it, `UsageLimitExceeded` was raised, and the whole description was
+# discarded rather than truncated. Eight pages of images may legitimately need
+# this much; a runaway needs stopping long before it.
+VISION_OUTPUT_TOKENS_LIMIT = 32768
+
 _SYSTEM_PROMPT = (
     "You are the eyes of another agent that cannot see images. Answer only "
     "from what is visible. Transcribe text and tables verbatim, preserving "
@@ -178,7 +186,9 @@ async def describe_images(
         async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
             result = await agent.run(
                 prompt,
-                usage_limits=UsageLimits(request_limit=1, output_tokens_limit=4096),
+                usage_limits=UsageLimits(
+                    request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
+                ),
             )
     except TimeoutError as exc:
         raise VisionDescriptionError(

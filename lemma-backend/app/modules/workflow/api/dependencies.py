@@ -13,7 +13,7 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.composition.icons import create_icon_service
+from app.modules.icon.contracts.provisioning import create_icon_service
 from app.composition.workflow_function import FunctionControlAdapter
 from app.composition.workflow_notifications import WorkflowNotificationAdapter
 from app.composition.workflow_scheduler import ScheduleControlAdapter

@@ -31,7 +31,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import BadRequestError, DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.composition.agent_datastore import build_file_service
+from app.modules.datastore.contracts.agent_tools import build_file_service
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreConflictError
 

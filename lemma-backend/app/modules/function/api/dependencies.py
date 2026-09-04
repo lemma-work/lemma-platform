@@ -17,7 +17,7 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
-from app.composition.icons import create_icon_service
+from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
     FunctionRunRepository,
@@ -30,9 +30,11 @@ from app.modules.function.services.function_file_manager import FunctionFileMana
 from app.modules.function.services.function_service import FunctionService
 from app.core.config import settings
 from app.core.object_storage import build_object_store, local_file_storage_path
-from app.composition.workspace_identity import (
-    mint_function_session_token,
-    resolve_workspace_organization_id,
+from app.modules.identity.contracts.delegated_tokens import (
+    mint_delegated_token_with_expiry,
+)
+from app.modules.pod.contracts.detached_reads import (
+    pod_organization_id_detached,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
@@ -41,6 +43,7 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
 )
 from app.modules.function.application.function_session_token_cache import (
+    FunctionSessionToken,
     FunctionSessionTokenCache,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
@@ -75,6 +78,45 @@ _function_runtime_http_clients = FunctionRuntimeHttpClientPool()
 
 async def close_function_runtime_http_clients() -> None:
     await _function_runtime_http_clients.close()
+
+
+async def mint_function_session_token(
+    *,
+    user_id: UUID,
+    workload_type: str | None,
+    workload_id: UUID | None,
+    pod_id: UUID | None,
+    session_id: str,
+    workload_name: str | None,
+    scope: list[str] | None,
+    delegated_tokens_enabled: bool,
+) -> FunctionSessionToken:
+    """Identity's delegated token, in the shape the session cache stores.
+
+    The expiry-bearing mint, not the plain one: the cache checks the issuer's
+    own expiry against the run's deadline before handing a token back, and a
+    local TTL standing in for that is how a cache serves a token that has
+    already died.
+    """
+    issued = await mint_delegated_token_with_expiry(
+        user_id=user_id,
+        workload_type=workload_type,
+        workload_id=workload_id,
+        pod_id=pod_id,
+        session_id=session_id,
+        workload_name=workload_name,
+        scope=scope,
+        delegated_tokens_enabled=delegated_tokens_enabled,
+    )
+    return FunctionSessionToken(value=issued.value, expires_at=issued.expires_at)
+
+
+async def resolve_function_organization_id(pod_id: UUID | None) -> str | None:
+    """The organization scope a function run's sandbox is given."""
+    if pod_id is None:
+        return None
+    organization_id = await pod_organization_id_detached(pod_id)
+    return str(organization_id) if organization_id else None
 
 
 def get_function_storage_factory():
@@ -156,7 +198,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
         runtime_http_client_factory=_function_runtime_http_clients.get,
-        organization_resolver=resolve_workspace_organization_id,
+        organization_resolver=resolve_function_organization_id,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 

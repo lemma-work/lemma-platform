@@ -326,7 +326,6 @@ def _build_service(
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
         conversation_service=conversation_service,
-        connector_service=AsyncMock(),
         adapter_registry=_registry(adapter),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(
@@ -1316,7 +1315,7 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
 
     # Stub credential resolution + auth so the short UoWs do no real DB work.
     class _StubResolver:
-        def __init__(self, *, session, connector_service) -> None:
+        def __init__(self, *, uow) -> None:
             pass
 
         async def for_platform(self, platform, account_id, *, surface=None):
@@ -1357,7 +1356,6 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
     service = AgentSurfaceIngressService(
         uow_factory=factory,
         conversation_service_factory=lambda uow: conversation_service,
-        connector_service_factory=lambda uow: AsyncMock(),
         adapter_registry=_registry(adapter),
         file_ingest_service=SimpleNamespace(ingest_attachments=_record_ingest),
     )

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from contextlib import suppress
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 
 from app.core.log.log import get_logger
@@ -32,13 +34,18 @@ from app.modules.agent_surfaces.platforms.teams.client import (
     get_graph_token,
 )
 
+from app.modules.connectors.contracts.surfaces import SurfaceAccount
+
 if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
         SurfaceCredentialResolver,
     )
-    from app.composition.surface_connectors import ConnectorService
 
 logger = get_logger(__name__)
+
+# Reads the connected account behind a surface. Bound to a unit of work by the
+# caller; ``None`` when the account is gone.
+FindAccount = Callable[[UUID], Awaitable[SurfaceAccount | None]]
 
 # Hard ceiling on a single surface's live identity lookup so one slow/hung
 # provider (notably the Teams Graph call, which has no client-level timeout) can
@@ -52,7 +59,7 @@ class SurfaceReachResolver:
         surface: AgentSurfaceEntity,
         *,
         credential_resolver: "SurfaceCredentialResolver | None" = None,
-        connector_service: "ConnectorService | None" = None,
+        find_account: FindAccount | None = None,
         surface_repository=None,
     ) -> SurfaceReach:
         email = surface.surface_identity_email
@@ -71,9 +78,7 @@ class SurfaceReachResolver:
             await self._persist_username(surface, handle, surface_repository)
 
         if handle is None:
-            handle = await self._fallback_handle(
-                surface, connector_service=connector_service
-            )
+            handle = await self._fallback_handle(surface, find_account=find_account)
 
         return SurfaceReach(handle=handle, email=email)
 
@@ -179,16 +184,14 @@ class SurfaceReachResolver:
         self,
         surface: AgentSurfaceEntity,
         *,
-        connector_service: "ConnectorService | None",
+        find_account: FindAccount | None,
     ) -> str | None:
         """account.display_name → surface_identity_email → None."""
-        if surface.account_id is not None and connector_service is not None:
+        if surface.account_id is not None and find_account is not None:
             try:
-                account = await connector_service.account_repository.get(
-                    surface.account_id
-                )
-                if account and account.display_name:
-                    return account.display_name
+                connected = await find_account(surface.account_id)
+                if connected and connected.display_name:
+                    return connected.display_name
             except Exception:
                 logger.debug(
                     "agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed"

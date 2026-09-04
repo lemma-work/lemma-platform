@@ -12,12 +12,43 @@ a schema change.
 
 from __future__ import annotations
 
+import asyncio
+import random
 from typing import List
 
 import httpx
 
 from app.core.config import reveal_secret, settings
-from app.core.embeddings.embeddings import Embedder
+from app.core.embeddings.embeddings import Embedder, EmbeddingProviderError
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
+
+#: Attempts per batch, including the first. Bounded deliberately: the caller is
+#: a background job with its own retry, and a provider that is still refusing
+#: after this long is having an outage rather than a blip.
+_MAX_ATTEMPTS = 4
+_BASE_BACKOFF_SECONDS = 0.5
+_MAX_BACKOFF_SECONDS = 8.0
+
+
+def _is_worth_retrying(exc: Exception) -> bool:
+    """Whether asking again could plausibly get a different answer.
+
+    A 429 and a 5xx are the provider saying "not now"; a transport error never
+    reached it at all. Every other 4xx is a statement about the request, and a
+    bad request does not become a good one by being sent four times.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or status >= 500
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential, with jitter so concurrent workers do not retry in lockstep."""
+    delay = min(_BASE_BACKOFF_SECONDS * (2**attempt), _MAX_BACKOFF_SECONDS)
+    return delay * random.uniform(0.8, 1.2)
 
 
 class OpenAICompatEmbedder(Embedder):
@@ -48,21 +79,7 @@ class OpenAICompatEmbedder(Embedder):
         async with httpx.AsyncClient(timeout=60.0) as client:
             for i in range(0, len(texts), self.BATCH_SIZE):
                 batch = texts[i : i + self.BATCH_SIZE]
-                try:
-                    response = await client.post(
-                        url,
-                        headers=headers,
-                        json={
-                            "model": self.model,
-                            "input": batch,
-                            "dimensions": self.dimension,
-                        },
-                    )
-                    response.raise_for_status()
-                except Exception as e:
-                    raise Exception(
-                        f"Failed to get embeddings for batch starting at index {i}: {e}"
-                    )
+                response = await self._post_batch(client, url, headers, batch, index=i)
                 # OpenAI-shaped response: {"data": [{"embedding": [...], "index": n}]}.
                 # Sort by index so the order matches the input batch.
                 data = sorted(
@@ -79,3 +96,54 @@ class OpenAICompatEmbedder(Embedder):
                         )
                     all_embeddings.append(vector)
         return all_embeddings
+
+    async def _post_batch(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        batch: List[str],
+        *,
+        index: int,
+    ) -> httpx.Response:
+        """One batch, retried while the provider is only temporarily unwilling.
+
+        Without this a single `503` from the embedding endpoint failed the whole
+        datastore file job -- the document was already parsed, chunked and
+        stored, and every one of those chunks was thrown away because one HTTP
+        call landed during an upstream blip.
+        """
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "model": self.model,
+                        "input": batch,
+                        "dimensions": self.dimension,
+                    },
+                )
+                response.raise_for_status()
+                return response
+            # Narrow on purpose: `post` and `raise_for_status` between them
+            # raise nothing else, and catching `Exception` here would report a
+            # defect in this module as the provider being unwell.
+            except httpx.HTTPError as exc:
+                last_attempt = attempt == _MAX_ATTEMPTS - 1
+                if last_attempt or not _is_worth_retrying(exc):
+                    raise EmbeddingProviderError(
+                        f"Failed to get embeddings for batch starting at index "
+                        f"{index} after {attempt + 1} attempt"
+                        f"{'' if attempt == 0 else 's'}: {exc}"
+                    ) from exc
+                delay = _backoff_seconds(attempt)
+                logger.warning(
+                    "embeddings.provider.retrying.degraded",
+                    attempt=attempt + 1,
+                    max_attempts=_MAX_ATTEMPTS,
+                    delay_seconds=round(delay, 2),
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable: the loop either returns or raises")

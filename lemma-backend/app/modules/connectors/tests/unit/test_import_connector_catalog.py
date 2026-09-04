@@ -20,6 +20,7 @@ from app.modules.connectors.domain.connector import (
     HttpKindSpec,
     LemmaProviderCapability,
     McpKindSpec,
+    OAuth2Defaults,
     SqlKindSpec,
 )
 from app.modules.connectors.domain.connector_operation import (
@@ -1702,7 +1703,16 @@ def test_a_second_native_kind_survives_the_merge():
         id="slack",
         title="Slack",
         provider_capabilities=[
-            LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
+            # A `package` spec as the real Slack has one: with the endpoints
+            # that make it installable. A bare OAuth2 spec carrying none is a
+            # different thing entirely and is dropped -- see the test below.
+            LemmaProviderCapability(
+                auth_scheme=AuthMethod.OAUTH2,
+                oauth2_defaults=OAuth2Defaults(
+                    authorization_url="https://slack.com/oauth/v2/authorize",
+                    token_url="https://slack.com/api/oauth.v2.access",
+                ),
+            ),
             ComposioProviderCapability(toolkit_slug="slack"),
         ],
     )
@@ -1716,6 +1726,108 @@ def test_a_second_native_kind_survives_the_merge():
         ConnectorKind.PACKAGE,
         ConnectorKind.COMPOSIO,
     ]
+
+
+class TestADeadPackageKindIsNotCarriedForever:
+    """A connector that leaves the native-operations set keeps a `package` spec
+    naming no package, with no OAuth endpoints and no system client.
+
+    It is not inert. `supports_org_custom_oauth` was set on every OAuth2 native
+    spec unconditionally, so the UI offered "use my own OAuth app" for it, took
+    a client id and secret, created the install, and only then failed at
+    sign-in with "OAuth2 defaults are not configured" -- with the install left
+    behind and its name taken. Sixty of eighty-four connectors in one
+    deployment were in that state, Instagram among them.
+    """
+
+    def test_a_composio_only_connector_loses_its_stranded_native_kind(self):
+        instagram = ConnectorEntity(
+            id="instagram",
+            title="Instagram",
+            provider_capabilities=[
+                LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
+                ComposioProviderCapability(toolkit_slug="instagram"),
+            ],
+        )
+
+        merged = importer._merge_provider_capabilities(
+            instagram,
+            importer._composio_provider_capability(
+                auth_method=AuthMethod.OAUTH2, toolkit_slug="instagram"
+            ),
+        )
+
+        assert [capability.kind for capability in merged] == [ConnectorKind.COMPOSIO]
+
+    def test_a_google_app_that_resolves_its_endpoints_at_runtime_is_kept(self):
+        """Gmail stores no endpoints either -- it resolves them from the native
+        registry. By shape alone it is indistinguishable from a dead spec, and
+        pruning it would be far worse than the bug this fixes."""
+        gmail = ConnectorEntity(
+            id="gmail",
+            title="Gmail",
+            provider_capabilities=[
+                LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
+                ComposioProviderCapability(toolkit_slug="gmail"),
+            ],
+        )
+
+        merged = importer._merge_provider_capabilities(
+            gmail,
+            importer._composio_provider_capability(
+                auth_method=AuthMethod.OAUTH2, toolkit_slug="gmail"
+            ),
+        )
+
+        assert ConnectorKind.PACKAGE in [capability.kind for capability in merged]
+
+    def test_a_kind_this_import_produced_is_never_pruned(self):
+        """The prune is about what is *carried*. A spec the current import just
+        built is the current answer, whatever shape it has."""
+        somewhere = ConnectorEntity(id="somewhere", title="Somewhere")
+
+        merged = importer._merge_provider_capabilities(
+            somewhere, LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2)
+        )
+
+        assert [capability.kind for capability in merged] == [ConnectorKind.PACKAGE]
+
+
+class TestOrgCustomOAuthIsOnlyOfferedWhereItWorks:
+    """`supports_org_custom_oauth` is a promise the deployment has to keep."""
+
+    def test_a_connector_with_no_endpoints_does_not_offer_it(self):
+        spec = importer._native_kind_spec(
+            connector_id="instagram", auth_method=AuthMethod.OAUTH2
+        )
+
+        assert spec.supports_org_custom_oauth is False
+
+    def test_a_connector_carrying_its_own_endpoints_does(self):
+        spec = importer._native_kind_spec(
+            connector_id="slack",
+            auth_method=AuthMethod.OAUTH2,
+            oauth2_defaults={
+                "authorization_url": "https://slack.com/oauth/v2/authorize",
+                "token_url": "https://slack.com/api/oauth.v2.access",
+            },
+        )
+
+        assert spec.supports_org_custom_oauth is True
+
+    def test_a_google_app_resolving_its_endpoints_at_runtime_does_too(self):
+        spec = importer._native_kind_spec(
+            connector_id="gmail", auth_method=AuthMethod.OAUTH2
+        )
+
+        assert spec.supports_org_custom_oauth is True
+
+    def test_a_non_oauth_connector_has_nothing_to_offer(self):
+        spec = importer._native_kind_spec(
+            connector_id="notion", auth_method=AuthMethod.API_KEY
+        )
+
+        assert spec.supports_org_custom_oauth is False
 
 
 def test_merging_the_same_kind_twice_replaces_rather_than_duplicates():

@@ -125,7 +125,7 @@ def _masked_wholesale(value: object) -> object:
 
 
 def _response_from_entity(
-    entity, *, include_config: bool = True
+    entity, *, include_config: bool = True, auth_scheme: str | None = None
 ) -> AuthConfigResponseSchema:
     """The install as a client sees it.
 
@@ -138,7 +138,18 @@ def _response_from_entity(
     """
     data = entity.model_dump(mode="json")
     data["config"] = _redact_config(data.get("config")) if include_config else None
+    # The install's own scheme, resolved by the service. Not derivable from the
+    # entity: an MCP install is OAuth when its server said so at create time,
+    # and `config` -- the only place that is written down -- is withheld from
+    # plain members, who still need to know whether signing in is what connects
+    # this install.
+    data["auth_scheme"] = auth_scheme
     return AuthConfigResponseSchema.model_validate(data)
+
+
+async def _one_auth_scheme(connector_service, auth_config) -> str | None:
+    schemes = await connector_service.install_auth_schemes([auth_config])
+    return schemes.get(auth_config.id)
 
 
 @router.post(
@@ -161,7 +172,10 @@ async def create_auth_config(
         config=data.config,
         name=data.name,
     )
-    return _response_from_entity(auth_config)
+    return _response_from_entity(
+        auth_config,
+        auth_scheme=await _one_auth_scheme(connector_service, auth_config),
+    )
 
 
 @router.get(
@@ -189,9 +203,15 @@ async def list_auth_configs(
     include_config = await connector_service.may_read_install_config(
         user_id=user.id, organization_id=organization_id
     )
+    schemes = await connector_service.install_auth_schemes(items)
     return AuthConfigListResponseSchema(
         items=[
-            _response_from_entity(item, include_config=include_config) for item in items
+            _response_from_entity(
+                item,
+                include_config=include_config,
+                auth_scheme=schemes.get(item.id),
+            )
+            for item in items
         ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
@@ -219,6 +239,7 @@ async def get_auth_config(
         include_config=await connector_service.may_read_install_config(
             user_id=user.id, organization_id=organization_id
         ),
+        auth_scheme=await _one_auth_scheme(connector_service, auth_config),
     )
 
 
@@ -256,7 +277,10 @@ async def update_auth_config(
         is_default=data.is_default,
     )
     return AuthConfigUpdateResponseSchema(
-        auth_config=_response_from_entity(auth_config),
+        auth_config=_response_from_entity(
+            auth_config,
+            auth_scheme=await _one_auth_scheme(connector_service, auth_config),
+        ),
         operations_discovered=discovery.operation_count,
         operations_discovery=OperationDiscoverySchema.model_validate(
             discovery, from_attributes=True

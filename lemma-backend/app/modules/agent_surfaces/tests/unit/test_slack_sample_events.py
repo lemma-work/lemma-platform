@@ -94,7 +94,6 @@ def _build_service(*, surface, conversation_service, monkeypatch):
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
         conversation_service=conversation_service,
-        connector_service=AsyncMock(),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),

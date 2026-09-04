@@ -29,7 +29,7 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceChannelRoute,
 )
-from app.composition.surface_identity import Pod
+from app.modules.pod.contracts.members import pod_name
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
@@ -232,14 +232,14 @@ class SurfaceConfigurationMixin(
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
-        pod = await self.uow.session.get(Pod, surface.pod_id)
+        name_of_pod = await pod_name(self.uow.session, surface.pod_id)
         # Egress: the pod and agent rows are read above; the connection
         # goes back before the view is pushed to the platform.
         async with connection_released(self.uow.session):
             await adapter.publish_home_view(
                 credentials=credentials,
                 user_id=external_user_id,
-                pod_name=str(getattr(pod, "name", "") or "") or None,
+                pod_name=name_of_pod or None,
                 agent_name=await self._surface_agent_name(surface),
                 # The channels this bot answers in. Ids alone: each entry used
                 # to name the agent routed to that channel, and there is one

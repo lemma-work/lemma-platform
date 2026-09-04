@@ -303,9 +303,11 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, str]:
-        from app.composition.workspace_identity import mint_workspace_token
+        from app.modules.identity.contracts.delegated_tokens import (
+            mint_delegated_token,
+        )
 
-        token = await mint_workspace_token(
+        token = await mint_delegated_token(
             user_id=user_id,
             workload_type=workload_type,
             workload_id=workload_id,
@@ -343,11 +345,12 @@ class WorkspaceSandboxService:
     async def _resolve_organization_id(self, pod_id: UUID | None) -> str | None:
         if pod_id is None:
             return None
-        from app.composition.workspace_identity import (
-            resolve_workspace_organization_id,
+        from app.modules.pod.contracts.detached_reads import (
+            pod_organization_id_detached,
         )
 
-        return await resolve_workspace_organization_id(pod_id)
+        organization_id = await pod_organization_id_detached(pod_id)
+        return str(organization_id) if organization_id else None
 
     async def get_session(
         self,

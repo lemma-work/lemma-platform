@@ -9,8 +9,10 @@ from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
 from app.modules.pod.services.pod_join_request_service import PodJoinRequestService
-from app.composition.icons import create_icon_service
-from app.composition.pod_schedules import create_pod_schedule_teardown
+from app.modules.icon.contracts.provisioning import create_icon_service
+from app.modules.schedule.contracts.pod_teardown import (
+    create_pod_schedule_teardown,
+)
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
     PodRepository,

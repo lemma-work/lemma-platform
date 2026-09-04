@@ -32,10 +32,6 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAuthConfigPort,
     SurfaceInstallationRepositoryPort,
 )
-from app.composition.surface_connectors import (
-    ConnectorTriggerRepository,
-)
-from app.composition.surface_schedule import ScheduleService
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -81,8 +77,6 @@ class AgentSurfaceService(
         *,
         surface_repository: SurfaceInstallationRepositoryPort,
         account_binding_resolver: SurfaceAccountBindingPort,
-        schedule_service: "ScheduleService | None" = None,
-        connector_trigger_repository: ConnectorTriggerRepository | None = None,
         account_port: SurfaceAccountPort | None = None,
         auth_config_port: SurfaceAuthConfigPort | None = None,
         credential_resolver: "SurfaceCredentialResolver | None" = None,
@@ -90,8 +84,6 @@ class AgentSurfaceService(
     ):
         self.surface_repository = surface_repository
         self.account_binding_resolver = account_binding_resolver
-        self.schedule_service = schedule_service
-        self.connector_trigger_repository = connector_trigger_repository
         self._account_port = account_port
         self._auth_config_port = auth_config_port
         self._credential_resolver = credential_resolver

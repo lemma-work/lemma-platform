@@ -28216,6 +28216,31 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "session_setup": {
+          "type": "array",
+          "title": "Session setup",
+          "description": "Optional. Tool calls replayed at the start of every session with this server, before anything else. Use it for servers that only expose some of their tools after a session-scoped call - Arize Phoenix's enable_tool_group, for example. The tools these unlock are discovered as operations like any other.",
+          "items": {
+            "type": "object",
+            "required": [
+              "tool_name"
+            ],
+            "properties": {
+              "tool_name": {
+                "type": "string",
+                "title": "Tool",
+                "description": "The name of the tool to call, as the server lists it."
+              },
+              "arguments": {
+                "type": "object",
+                "title": "Arguments",
+                "description": "Arguments for the call, as the tool's own schema expects them.",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
