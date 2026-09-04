@@ -23,6 +23,17 @@ class TranscriptionResult:
     duration_seconds: float | None = None
 
 
+class SpeechProviderError(RuntimeError):
+    """A provider could not transcribe or speak, for a reason it names.
+
+    Every provider raises this and nothing else, so a caller can handle "it did
+    not work" without catching `Exception` -- which is what a caller had to do
+    while the only promise this interface made was that *something* might go
+    wrong. A `RuntimeError` subclass because that is what the credential check
+    already raised.
+    """
+
+
 class SpeechProviderName(str, Enum):
     DEEPGRAM = "deepgram"
     # Future: ELEVENLABS = "elevenlabs", WHISPER = "whisper", GOOGLE = "google"
@@ -38,7 +49,8 @@ class SpeechProvider(ABC):
     @abstractmethod
     async def transcribe(
         self, audio_bytes: bytes, *, mime: str, language: str | None = None
-    ) -> TranscriptionResult: ...
+    ) -> TranscriptionResult:
+        """Transcribe ``audio_bytes``, raising ``SpeechProviderError`` if it cannot."""
 
     @abstractmethod
     async def synthesize(

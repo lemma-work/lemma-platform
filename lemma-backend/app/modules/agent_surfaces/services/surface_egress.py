@@ -26,6 +26,10 @@ from app.modules.agent.contracts import (
     DisplayResourceRequest,
     DisplayResourceType,
 )
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
@@ -75,17 +79,17 @@ logger = get_logger(__name__)
 
 
 def _approval_plan(
-    pending: dict[str, Any], conversation_id: UUID, tool_call_id: str | None
+    pending: PendingInteraction, conversation_id: UUID, tool_call_id: str | None
 ) -> Any:
     """The approval card for a paused ``request_approval`` call."""
-    tool_args = pending.get("tool_args") or {}
+    tool_args = pending.tool_args
     # An approve-for-session button only makes sense when the paused call
     # carries a real permission gate (it lets the exact action skip future
     # prompts); otherwise it is noise.
     permission_ids = tool_args.get("permission_ids")
     return build_approval_render_plan(
         conversation_id=conversation_id,
-        tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
+        tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
         title=str(tool_args.get("title") or "Action requires your approval"),
         reason=str(tool_args.get("reason") or "") or None,
         tool_name=str(tool_args.get("tool_name") or "") or None,
@@ -156,7 +160,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 text=clean_message,
                 files=await files_held_for_one_reply(
                     uow=self.uow,
-                    conversation_service=self.conversation_service,
                     target=target,
                     conversation_id=conversation_id,
                 ),
@@ -199,7 +202,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         if display_request.type is DisplayResourceType.FILE and display_request.path:
             resolved = await resolve_pod_file_parts(
                 uow=self.uow,
-                conversation_service=self.conversation_service,
                 target=target,
                 conversation_id=conversation_id,
                 path=display_request.path,
@@ -241,7 +243,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 render_plan,
                 await resolve_table_preview(
                     uow=self.uow,
-                    conversation_service=self.conversation_service,
                     target=target,
                     conversation_id=conversation_id,
                     request=display_request,
@@ -276,18 +277,15 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 conversation_id=conversation_id,
             )
             return False
-        pending = await self.conversation_service.get_pending_ask_user(
-            conversation_id=conversation_id
-        )
-        if not isinstance(pending, dict):
+        pending = await agent_conversations.pending_question(self.uow, conversation_id)
+        if pending is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
-        raw_request = _ask_user_request_dict(pending.get("tool_args"))
+        raw_request = _ask_user_request_dict(pending.tool_args)
         if raw_request is None:
-            pending.get("tool_args")
             logger.debug(
                 "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
@@ -313,7 +311,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         plan = build_ask_user_render_plan(
             request=request,
             conversation_id=conversation_id,
-            tool_call_id=str(pending.get("tool_call_id") or tool_call_id or ""),
+            tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
         )
         return await self._deliver_envelope(
             target,
@@ -325,7 +323,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 choices=plan,
                 files=await files_held_for_one_reply(
                     uow=self.uow,
-                    conversation_service=self.conversation_service,
                     target=target,
                     conversation_id=conversation_id,
                 ),
@@ -366,10 +363,8 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         # for good. On a chat surface, where one conversation stands for the
         # whole relationship with a person, that is permanent: dev's standing
         # Telegram chat stopped rendering approval cards entirely.
-        pending = await self.conversation_service.get_pending_approval(
-            conversation_id=conversation_id
-        )
-        if not isinstance(pending, dict) or pending.get("kind") != "request_approval":
+        pending = await agent_conversations.pending_approval(self.uow, conversation_id)
+        if pending is None or not pending.is_approval:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
                 conversation_id=conversation_id,
@@ -401,7 +396,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 decision=plan,
                 files=await files_held_for_one_reply(
                     uow=self.uow,
-                    conversation_service=self.conversation_service,
                     target=target,
                     conversation_id=conversation_id,
                 ),
@@ -460,7 +454,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                     parts=receipt.degraded,
                 )
         await remember_a_prompt_that_arrived_as_words(
-            self.conversation_service.conversation_repository,
+            self.uow,
             conversation_id=conversation_id,
             envelope=envelope,
             receipt=receipt,
@@ -487,7 +481,6 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         caption = sanitize_user_visible_text(caption) if caption else caption
         loaded = await load_pod_file_bytes(
             uow=self.uow,
-            conversation_service=self.conversation_service,
             target=target,
             conversation_id=conversation_id,
             path=path,

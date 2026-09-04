@@ -312,7 +312,7 @@ async def process_agent_run(
         uow_factory=worker_ctx.uow_factory,
         harness_registry=build_harness_registry(),
     )
-    from app.composition.agent_surface_runtime import build_progress_observer
+    from app.modules.agent_surfaces.contracts.egress import build_progress_observer
 
     # No try/except around this. A CancelledError from a worker shutting down
     # must reach streaq: it only XACKs a task that returned, and relinquishes a

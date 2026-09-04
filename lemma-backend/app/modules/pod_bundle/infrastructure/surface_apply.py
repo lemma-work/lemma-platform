@@ -123,7 +123,8 @@ async def apply_surface(
         surface = await create_surface(
             uow,
             pod_id=pod_id,
-            agent=agent,
+            agent_id=agent.id if agent else None,
+            agent_name=agent.name if agent else None,
             platform=platform,
             name=resolved_name,
             config=config,

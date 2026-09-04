@@ -149,7 +149,9 @@ class RunToolAssembler:
             and conversation.metadata
             and conversation.metadata.get("surface_platform")
         ):
-            from app.composition.agent_surface_runtime import build_surface_toolsets
+            from app.modules.agent_surfaces.contracts.egress import (
+                build_surface_toolsets,
+            )
 
             toolsets.extend(
                 await build_surface_toolsets(self.uow_factory, conversation)

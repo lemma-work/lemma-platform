@@ -26,9 +26,27 @@ class ScheduleTarget:
 
 
 class ScheduleTargetResolver(Protocol):
+    """The four lookups a schedule's target may need, by id or by name.
+
+    All four, because `ScheduleService` calls all four. `get_agent` and
+    `get_agent_by_name` were declared on `ScheduleEventFilter` below instead --
+    a Protocol about evaluating an LLM filter, which no filter implements and
+    which nothing reaches those two through. So the annotation said the
+    resolver had two methods while `_get_agent_by_name` and `_validate_target`
+    used the other two, and a stand-in that satisfied the type failed on the
+    third call. The same shape `AgentPort.run_agent_by_id` was added to fix,
+    on the other side of the same seam.
+    """
+
     async def get_workflow(self, workflow_id: UUID) -> ScheduleTarget | None: ...
 
     async def get_workflow_by_name(
+        self, pod_id: UUID, name: str
+    ) -> ScheduleTarget | None: ...
+
+    async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None: ...
+
+    async def get_agent_by_name(
         self, pod_id: UUID, name: str
     ) -> ScheduleTarget | None: ...
 
@@ -54,12 +72,6 @@ class ScheduleEventFilter(Protocol):
         event_payload: dict[str, Any],
         schedule: ScheduleEntity,
     ) -> tuple[bool, dict[str, Any] | None]: ...
-
-    async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None: ...
-
-    async def get_agent_by_name(
-        self, pod_id: UUID, name: str
-    ) -> ScheduleTarget | None: ...
 
 
 class ScheduleRepository(ABC):

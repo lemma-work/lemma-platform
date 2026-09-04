@@ -2,8 +2,9 @@
 
 The agent module must not import the schedule module directly (the architecture
 ratchet enforces this), so the one-shot timer a snooze needs is wired here, in
-the composition layer, exactly as ``workflow_scheduler`` does it for workflow
-``wait_until`` nodes.
+the composition layer. Workflow's ``wait_until`` nodes reached the same timer
+the same way until `workflow/execution/timers.py` took it over, which is where
+this belongs too.
 
 The payload shape is the contract with ``ScheduleStartService.handle_schedule_fired``:
 ``conversation_id`` selects the snooze branch, and ``wait_ref`` is the per-wait

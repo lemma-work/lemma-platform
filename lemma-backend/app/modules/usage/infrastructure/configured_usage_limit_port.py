@@ -9,7 +9,17 @@ way to configure a limit at all (DEV-OPS-004).
 
 A billing/plan provider still wins when registered via
 ``configure_usage_limit_provider``; this port is what a deployment gets when
-nothing else supplies one.
+nothing else supplies one. That override seam is the point, and it is unchanged:
+`lemma-cloud` registers a plan-backed factory at startup and never reaches this
+file.
+
+This lived in `app/composition/usage_limits.py`, where it was the only file that
+was not a binding between two modules: nothing else implements usage's port for
+usage, and no other module reads it. It is usage's own default adapter, so it
+lives with usage's other adapters. What kept it out was one line — the override
+lookup read the organization's handle by constructing identity's
+`OrganizationRepository` — and identity now answers that itself, as
+`organization_slug`.
 """
 
 from __future__ import annotations
@@ -20,6 +30,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.identity.contracts.organizations import organization_slug
 from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
 
 logger = get_logger(__name__)
@@ -127,15 +138,11 @@ class ConfiguredUsageLimitPort:
 
         rules = _parse_overrides(settings.usage_org_limit_overrides_json)
         if organization_id is not None and rules:
-            from app.modules.identity.infrastructure.organization_repositories import (
-                OrganizationRepository,
+            override = _limit_for(
+                await organization_slug(self._uow, organization_id), rules
             )
-
-            organization = await OrganizationRepository(self._uow).get(organization_id)
-            if organization is not None:
-                override = _limit_for(organization.slug, rules)
-                if override is not None:
-                    org_monthly = override
+            if override is not None:
+                org_monthly = override
 
         values = UsageLimitValues(
             org_monthly_limit_usd=org_monthly,

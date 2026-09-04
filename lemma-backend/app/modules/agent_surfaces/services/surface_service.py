@@ -198,7 +198,8 @@ class AgentSurfaceService(
         self,
         *,
         pod_id: UUID,
-        agent: Any | None,
+        agent_id: UUID | None,
+        agent_name: str | None,
         platform: SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,
@@ -214,9 +215,8 @@ class AgentSurfaceService(
         straight through is what used to land them on the ``pod-<hex>@``
         fallback: unreadable, and never screened for reserved local parts.
 
-        ``agent`` is the resolved agent or None rather than an id, because the
-        readable half of the address is its *name* and both callers already hold
-        the entity.
+        Takes the agent's id and name rather than the agent, because those are
+        the two things minting needs and both callers already hold them.
         """
         from app.modules.agent_surfaces.services.email_surface_provisioning import (
             create_surface_on_minted_address,
@@ -231,8 +231,8 @@ class AgentSurfaceService(
             # the address is built from and the assistant's stored name is the
             # internal `pod_default` -- that would mint `pod-default.acme@` for
             # a pod that answers at `acme@`.
-            agent_id=getattr(agent, "id", None) or pod_id,
-            agent_name=getattr(agent, "name", None),
+            agent_id=agent_id or pod_id,
+            agent_name=agent_name,
             platform=platform,
             name=name,
             config=config or SurfaceConfig(),

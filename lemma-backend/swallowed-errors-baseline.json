@@ -1,7 +1,6 @@
 {
   "_comment": "Pre-existing broad excepts that leave no trace of what they caught: no log at all, or a debug record with no exc_info that production never emits. This file may shrink freely; growing it means a new failure has been made invisible. See scripts/check_swallowed_errors.py.",
   "violations": {
-    "app/composition/agent_notifications.py::open_notifications_for_conversation::silent-broad-catch::Exception -> return": 1,
     "app/core/analytics/app_session.py::_record_app_session::debug-only-broad-catch::analytics.app_session.cache_unavailable": 1,
     "app/core/analytics/app_session.py::maybe_record_app_session::debug-only-broad-catch::analytics.app_session.record_failed": 1,
     "app/core/authorization/service.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
@@ -10,7 +9,6 @@
     "app/core/pubsub/subscriber.py::RedisStreamReader.current_last_id::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent/services/run_observer_delivery.py::_deliver::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent/tools/skills/pydantic_adapter.py::load_skill::silent-broad-catch::Exception -> assign": 1,
-    "app/modules/agent_surfaces/api/controllers/surface_controller.py::_resolve_agent_display_name::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent_surfaces/api/controllers/surface_controller.py::_resolve_surface_reach::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent_surfaces/platforms/slack/channel_reads.py::SlackChannelReadsMixin.fetch_recent_context::debug-only-broad-catch::agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic": 1,
     "app/modules/agent_surfaces/platforms/slack/service.py::SlackPlatformService.get_user_display_name::debug-only-broad-catch::agent_surfaces.service.slack_get_user_display_name.observed": 1,
@@ -42,7 +40,6 @@
     "app/modules/agent_surfaces/services/surface_display_delivery.py::deliver_surface_message_to_surface::debug-only-broad-catch::agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_display_delivery.py::deliver_voice_note_to_surface::debug-only-broad-catch::agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_inbound_message.py::SurfaceInboundMessageMixin._fetch_channel_context::debug-only-broad-catch::agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic": 1,
-    "app/modules/agent_surfaces/services/surface_inbound_message.py::SurfaceInboundMessageMixin._transcribe_all._one::silent-broad-catch::Exception -> return": 1,
     "app/modules/agent_surfaces/services/surface_interactions.py::SurfaceInteractionMixin.handle_interaction::silent-broad-catch::Exception -> fallthrough": 1,
     "app/modules/agent_surfaces/services/surface_progress.py::SurfaceProgressMixin.clear_progress_for_conversation::debug-only-broad-catch::agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_progress.py::SurfaceProgressMixin.send_progress_update_for_conversation::debug-only-broad-catch::agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic": 1,

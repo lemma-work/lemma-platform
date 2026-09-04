@@ -117,14 +117,21 @@ def _warn_about_dropped_text(conversation: Conversation, metadata: object) -> No
 
 
 def _parsed_event_metadata(payload: object) -> object:
-    """The typed surface metadata, falling back to the payload as stored."""
+    """The typed surface metadata, falling back to the payload as stored.
+
+    Narrow on ``ValidationError`` now that the operation says what it returns:
+    a payload written by an older shape should still reach the caller, but a
+    bug in the parse should not read as one.
+    """
     if not isinstance(payload, dict):
         return None
-    try:
-        from app.composition.agent_surface_runtime import (
-            parse_surface_event_metadata,
-        )
+    from pydantic import ValidationError
 
+    from app.modules.agent_surfaces.contracts.egress import (
+        parse_surface_event_metadata,
+    )
+
+    try:
         return parse_surface_event_metadata(payload)
-    except Exception:
+    except ValidationError:
         return payload

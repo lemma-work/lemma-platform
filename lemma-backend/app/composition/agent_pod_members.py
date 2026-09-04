@@ -7,7 +7,8 @@ conversation already, which is why it exists.
 
 Lives in ``composition`` for the usual reason: the agent module must not import
 ``pod`` directly, and the lazy import inside the function keeps that true. Same
-shape as ``agent_notifications.py``, including opening its own unit of work.
+shape as ``agent_surfaces/contracts/notifications.py``, including opening its
+own unit of work.
 
 Authority is the caller's, not the agent's: ``list_pod_members`` already checks
 the requester's org role and pod access, so passing the run's ``user_id``
@@ -117,7 +118,7 @@ async def _attach_reach(
     what the tool returns — ``to`` is the value the model copies, and offering a
     second id would only invite it to pass the wrong one.
     """
-    from app.composition.agent_notifications import reachable_channels
+    from app.modules.agent_surfaces.contracts.notifications import reachable_channels
 
     recipients = {
         member["user_id"]: member["email"] for member in members if member["user_id"]

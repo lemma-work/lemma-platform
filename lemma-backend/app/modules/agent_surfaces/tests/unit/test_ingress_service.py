@@ -4,12 +4,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from types import MethodType
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent.contracts import AgentKind
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -36,6 +38,7 @@ from app.modules.agent_surfaces.services import surface_egress
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
+from app.modules.agent.tools.speech.provider import SpeechProviderError
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
     EnvelopeFile,
@@ -63,7 +66,6 @@ from app.modules.agent_surfaces.platforms.email_one_reply import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
-from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
@@ -77,8 +79,64 @@ from app.modules.agent_surfaces.services.telegram_command_service import (
 
 pytestmark = pytest.mark.asyncio
 
+#: Where `agent` publishes what a surface does to a conversation, and where the
+#: doubles below are installed. On the contract rather than on the surface
+#: modules that call it: the operations belong to another module, and the real
+#: ones reach a database.
+_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
 
-_ROUTE_AGENT_IDS: dict[str, object] = {}
+
+@pytest.fixture(autouse=True)
+def conversation_operations(monkeypatch):
+    """`agent`'s conversation operations, doubled for every test in this file.
+
+    Autouse because nearly every path here opens, reads or resumes a
+    conversation. Tests reach the doubles through ``agent_conversations``,
+    which is the same module the code under test calls.
+    """
+    doubles = {
+        "surface_conversation": AsyncMock(return_value=None),
+        "open_surface_conversation": AsyncMock(),
+        "start_surface_turn": AsyncMock(return_value=uuid4()),
+        "append_notification_message": AsyncMock(),
+        "pending_interaction": AsyncMock(return_value=None),
+        "pending_question": AsyncMock(return_value=None),
+        "pending_approval": AsyncMock(return_value=None),
+        "resolve_pending_interaction": AsyncMock(return_value=True),
+        "retry_failed_run": AsyncMock(),
+        "surface_agent_identity": AsyncMock(return_value=None),
+        "conversation_metadata_value": AsyncMock(return_value=None),
+        "set_conversation_metadata_value": AsyncMock(),
+    }
+    for name, double in doubles.items():
+        monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    monkeypatch.setattr(
+        f"{_AGENT_DIRECTORY}.agent_name_for_id", AsyncMock(return_value="Surface Agent")
+    )
+
+
+def _pending(kind: str, *, tool_call_id: str, tool_args: dict | None = None):
+    """One paused call, in the shape the published operation returns it."""
+    return SimpleNamespace(
+        tool_call_id=tool_call_id,
+        kind=kind,
+        tool_args=tool_args or {},
+        agent_run_id=uuid4(),
+        is_approval=kind == "request_approval",
+    )
+
+
+def _surface_conversation(surface, *, conversation_id: UUID | None = None):
+    """A conversation as the published lookup returns it."""
+    return SimpleNamespace(
+        id=conversation_id or uuid4(),
+        user_id=uuid4(),
+        pod_id=surface.pod_id,
+        agent_id=surface.agent_id,
+        title=None,
+        updated_at=datetime.now(timezone.utc),
+    )
 
 
 def _registry(adapter):
@@ -277,21 +335,15 @@ def _build_service(
         else None
     )
 
-    conversation_service = AsyncMock()
-    conversation_service.agent_repository = SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(name="Surface Agent", kind=AgentKind.USER)
-            if any(surface.agent_id for surface in resolved_surfaces)
-            else None
-        ),
-        get_by_pod_and_name=AsyncMock(
-            side_effect=lambda *, pod_id, name: SimpleNamespace(
-                id=_ROUTE_AGENT_IDS.get(name, uuid4()), name=name, kind=AgentKind.USER
-            )
-        ),
+    agent_conversations.surface_agent_identity.return_value = (
+        SimpleNamespace(
+            id=uuid4(), name="Surface Agent", is_pod_default=False, icon_url=None
+        )
+        if any(surface.agent_id for surface in resolved_surfaces)
+        else None
     )
     if conversation is not None:
-        conversation_service.create_conversation.return_value = conversation
+        agent_conversations.open_surface_conversation.return_value = conversation
 
     session_model = SimpleNamespace(conversation_metadata={})
     organization_id = uuid4()
@@ -325,7 +377,6 @@ def _build_service(
         uow=uow,
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
-        conversation_service=conversation_service,
         adapter_registry=_registry(adapter),
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(
@@ -383,7 +434,7 @@ async def test_prepare_webhook_returns_signup_context_for_unresolved_user():
     assert context.surface_id == surface.id
     assert context.reply_kind == "signup"
     assert context.agent_display_name == "Surface Agent"
-    service.conversation_service.create_conversation.assert_not_called()
+    agent_conversations.open_surface_conversation.assert_not_called()
 
 
 async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
@@ -429,7 +480,7 @@ async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
     assert str(surface.pod_id) not in (context.reply_message or "")
     assert context.reply_kind == "surface_setup"
     assert "set up or select a surface" in (context.reply_message or "")
-    service.conversation_service.create_conversation.assert_not_called()
+    agent_conversations.open_surface_conversation.assert_not_called()
 
 
 async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
@@ -491,7 +542,7 @@ async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
         f"https://app.example.test/pod/{surface.pod_id}"
     )
     assert "auth.example.test" not in context.reply_message
-    service.conversation_service.create_conversation.assert_not_called()
+    agent_conversations.open_surface_conversation.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -693,7 +744,7 @@ async def test_prepare_webhook_creates_conversation_link_for_resolved_user():
     assert context.message_metadata.event_metadata["attachments"] == [
         {"name": "diagram.png"}
     ]
-    create_kwargs = service.conversation_service.create_conversation.await_args.kwargs
+    create_kwargs = agent_conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Surface Agent"
     assert create_kwargs["metadata"]["surface_id"] == str(surface.id)
@@ -740,7 +791,7 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == conversation_id
-    service.conversation_service.create_conversation.assert_not_called()
+    agent_conversations.open_surface_conversation.assert_not_called()
     service.conversation_link_repository.update_last_event.assert_awaited_once()
 
 
@@ -788,7 +839,7 @@ async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes
     assert context.conversation_id == new_conversation.id
     update = service.conversation_link_repository.update_conversation.await_args.kwargs
     assert update["routed_agent_id"] == new_agent_id
-    service.conversation_service.create_conversation.assert_awaited_once()
+    agent_conversations.open_surface_conversation.assert_awaited_once()
     service.conversation_link_repository.update_last_event.assert_not_called()
 
 
@@ -962,7 +1013,7 @@ async def test_prepare_webhook_resets_stale_dm_conversation_link():
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == new_conversation.id
-    service.conversation_service.create_conversation.assert_awaited_once()
+    agent_conversations.open_surface_conversation.assert_awaited_once()
     service.conversation_link_repository.update_conversation.assert_awaited_once()
     service.conversation_link_repository.update_last_event.assert_not_called()
 
@@ -984,7 +1035,7 @@ async def test_prepare_webhook_ignores_duplicate_external_message():
     )
 
     assert context is None
-    service.conversation_service.create_conversation.assert_not_called()
+    agent_conversations.open_surface_conversation.assert_not_called()
 
 
 async def test_execute_chat_sends_direct_replies():
@@ -1107,10 +1158,8 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
     await service.execute_chat(context)
 
     adapter.add_processing_indicator.assert_awaited_once()
-    service.conversation_service.add_user_message_and_start_run.assert_awaited_once()
-    kwargs = (
-        service.conversation_service.add_user_message_and_start_run.await_args.kwargs
-    )
+    agent_conversations.start_surface_turn.assert_awaited_once()
+    kwargs = agent_conversations.start_surface_turn.await_args.kwargs
     assert kwargs["conversation_id"] == conversation.id
     assert kwargs["pod_id"] == surface.pod_id
     assert kwargs["agent_name"] is None
@@ -1146,13 +1195,9 @@ async def test_a_message_arriving_mid_run_is_not_acknowledged():
     service = _build_service(
         adapter=adapter, surfaces=[surface], conversation=conversation
     )
-    service.conversation_service.add_user_message_and_start_run.return_value = (
-        AgentRunStartResult(
-            conversation_id=conversation.id,
-            agent_run_id=uuid4(),
-            started_new_run=False,
-        )
-    )
+    # ``None`` is how the operation says no new run was needed: the message was
+    # handed to the one already going.
+    agent_conversations.start_surface_turn.return_value = None
 
     for _ in range(3):
         await service.execute_chat(_slack_chat_context(surface, conversation, "photo"))
@@ -1197,9 +1242,7 @@ async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatc
         adapter=adapter,
         credentials={"bot_token": "secret"},
         uow_factory=service._uow_factory,
-        conversation_service_factory=service._conversation_service_factory,
         uow=service.uow,
-        conversation_service=service.conversation_service,
     )
 
     assert handled is True
@@ -1245,9 +1288,7 @@ async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeyp
         adapter=adapter,
         credentials={"bot_token": "secret"},
         uow_factory=service._uow_factory,
-        conversation_service_factory=service._conversation_service_factory,
         uow=service.uow,
-        conversation_service=service.conversation_service,
     )
 
     assert handled is True
@@ -1278,9 +1319,7 @@ async def test_telegram_app_command_is_not_a_special_command():
         adapter=adapter,
         credentials={"bot_token": "secret"},
         uow_factory=service._uow_factory,
-        conversation_service_factory=service._conversation_service_factory,
         uow=service.uow,
-        conversation_service=service.conversation_service,
     )
 
     assert handled is False
@@ -1345,17 +1384,13 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
 
     adapter.add_processing_indicator.side_effect = _record_indicator
 
-    conversation_service = AsyncMock()
-    conversation_service.get_pending_user_interaction.return_value = None
-
-    async def _record_write(**_kwargs):
+    async def _record_write(*_args, **_kwargs):
         write_active.append(factory.active)
 
-    conversation_service.add_user_message_and_start_run.side_effect = _record_write
+    agent_conversations.start_surface_turn.side_effect = _record_write
 
     service = AgentSurfaceIngressService(
         uow_factory=factory,
-        conversation_service_factory=lambda uow: conversation_service,
         adapter_registry=_registry(adapter),
         file_ingest_service=SimpleNamespace(ingest_attachments=_record_ingest),
     )
@@ -1388,7 +1423,7 @@ async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch)
     assert ingest_active == [0]
     # The message write ran INSIDE a short UoW.
     assert write_active == [1]
-    conversation_service.add_user_message_and_start_run.assert_awaited_once()
+    agent_conversations.start_surface_turn.assert_awaited_once()
     # Two short UoWs total: credential read + message-write tail.
     assert factory.opened == 2
     assert factory.active == 0
@@ -1665,11 +1700,9 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_ask_user.return_value = {
-        "tool_call_id": "tool-1",
-        "tool_args": _ASK_USER_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_question.return_value = _pending(
+        "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
+    )
 
     sent = await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
@@ -1703,11 +1736,13 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     adapter._render_choices.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_ask_user.return_value = {
-        "tool_call_id": "tool-1",
-        "tool_args": _ASK_USER_TOOL_ARGS_FLAT,  # the real production shape
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_question.return_value = _pending(
+        # The real production shape: pydantic-ai flattens the single model
+        # parameter, so the args are the model's own fields.
+        "ask_user",
+        tool_call_id="tool-1",
+        tool_args=_ASK_USER_TOOL_ARGS_FLAT,
+    )
 
     sent = await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
@@ -1749,10 +1784,8 @@ async def test_handle_interaction_resumes_via_approval_path():
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     owner = link.external_user_id
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
-    )
+    conversation = _surface_conversation(surface, conversation_id=conversation_id)
+    agent_conversations.surface_conversation.return_value = conversation
 
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.SLACK,
@@ -1765,16 +1798,14 @@ async def test_handle_interaction_resumes_via_approval_path():
     )
     await service.handle_interaction(interaction)
 
-    service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
-    kwargs = (
-        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
-    )
+    agent_conversations.resolve_pending_interaction.assert_awaited_once()
+    kwargs = agent_conversations.resolve_pending_interaction.await_args.kwargs
     assert kwargs["approval_id"] == "tool-1"
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
     # "Other" free text overrides the selected option for that question.
     assert kwargs["response"] == {"answers": {"color": "Teal"}}
     # An ask_user answer must NOT be injected as a plain user message.
-    service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
+    agent_conversations.start_surface_turn.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -1801,10 +1832,8 @@ async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, wh
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(
-            return_value=SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-        )
+    agent_conversations.surface_conversation.return_value = _surface_conversation(
+        surface
     )
 
     await service.handle_interaction(
@@ -1819,8 +1848,8 @@ async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, wh
         )
     )
 
-    service.conversation_service.resolve_user_approval_internal.assert_not_awaited()
-    service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
+    agent_conversations.resolve_pending_interaction.assert_not_awaited()
+    agent_conversations.start_surface_turn.assert_not_awaited()
     # And the person is told, or the button just looks broken.
     said = adapter.acknowledge_interaction.await_args.kwargs["text"]
     assert "reply" in said.lower(), f"{why}: should point at the typed reply"
@@ -1843,10 +1872,8 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     owner = link.external_user_id
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
-    )
+    conversation = _surface_conversation(surface, conversation_id=conversation_id)
+    agent_conversations.surface_conversation.return_value = conversation
 
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.SLACK,
@@ -1859,10 +1886,8 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     )
     await service.handle_interaction(interaction)
 
-    service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
-    kwargs = (
-        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
-    )
+    agent_conversations.resolve_pending_interaction.assert_awaited_once()
+    kwargs = agent_conversations.resolve_pending_interaction.await_args.kwargs
     assert kwargs["approval_id"] == "tool-9"
     assert kwargs["decision"] == expected
     # An approval button carries a decision, not an answer payload.
@@ -1891,9 +1916,7 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
         existing_link=link,
     )
     service.conversation_link_repository.find_surface_id_for_external_thread.return_value = surface.id
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
-    )
+    agent_conversations.surface_conversation.return_value = conversation
     service._refresh_interaction_conversation = AsyncMock(
         return_value=(link, conversation, False)
     )
@@ -1906,12 +1929,8 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
         dedup_id="cbq-retry",
     )
 
-    with patch(
-        "app.modules.agent_surfaces.services.surface_interactions."
-        "retry_interaction_conversation",
-        new=AsyncMock(),
-    ) as retry:
-        await service.handle_interaction(interaction)
+    await service.handle_interaction(interaction)
+    retry = agent_conversations.retry_failed_run
 
     service.conversation_link_repository.get_by_conversation_id.assert_not_awaited()
     service.conversation_link_repository.get_by_external_thread.assert_awaited_once_with(
@@ -1922,7 +1941,7 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
         external_user_id="777",
     )
     retry.assert_awaited_once()
-    assert retry.await_args.kwargs["conversation"] is conversation
+    assert retry.await_args.kwargs["conversation_id"] == conversation.id
     adapter.acknowledge_interaction.assert_awaited_once_with(
         credentials={},
         interaction=interaction,
@@ -1960,9 +1979,7 @@ async def test_refresh_retry_uses_normal_agent_change_reset_policy():
         conversation=new_conversation,
         existing_link=link,
     )
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=new_conversation)
-    )
+    agent_conversations.surface_conversation.return_value = new_conversation
 
     refreshed = await service._refresh_interaction_conversation(
         link=link,
@@ -1975,7 +1992,7 @@ async def test_refresh_retry_uses_normal_agent_change_reset_policy():
     assert restarted is True
     assert refreshed_link.conversation_id == new_conversation.id
     assert refreshed_conversation is new_conversation
-    service.conversation_service.create_conversation.assert_awaited_once()
+    agent_conversations.open_surface_conversation.assert_awaited_once()
     update = service.conversation_link_repository.update_conversation.await_args.kwargs
     assert update["conversation_id"] == new_conversation.id
     assert update["routed_agent_id"] == new_agent_id
@@ -1998,12 +2015,11 @@ async def test_send_approval_prompt_renders_native_buttons():
     adapter._render_decision.return_value = True  # platform rendered native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_approval.return_value = {
-        "tool_call_id": "tool-2",
-        "kind": "request_approval",
-        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
+    )
 
     sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
@@ -2046,29 +2062,19 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
 
-    stale_question = {
-        "tool_call_id": "tool-ask",
-        "kind": "ask_user",
-        "tool_args": {},
-        "agent_run_id": uuid4(),
-    }
-    the_approval = {
-        "tool_call_id": "tool-2",
-        "kind": "request_approval",
-        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
+    stale_question = _pending("ask_user", tool_call_id="tool-ask")
+    the_approval = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
+    )
     # Oldest first, exactly as `oldest_unresolved_pause` walks them.
     pauses = [stale_question, the_approval]
 
-    async def oldest_of_any_kind(*, conversation_id):
-        return pauses[0]
-
-    async def oldest_approval(*, conversation_id):
-        return next((p for p in pauses if p["kind"] == "request_approval"), None)
-
-    service.conversation_service.get_pending_user_interaction = oldest_of_any_kind
-    service.conversation_service.get_pending_approval = oldest_approval
+    agent_conversations.pending_interaction.return_value = pauses[0]
+    agent_conversations.pending_approval.return_value = next(
+        (pause for pause in pauses if pause.is_approval), None
+    )
 
     sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
@@ -2093,12 +2099,11 @@ async def test_send_approval_prompt_falls_back_to_text():
     adapter._render_decision.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_approval.return_value = {
-        "tool_call_id": "tool-2",
-        "kind": "request_approval",
-        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
+    )
 
     sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
@@ -2119,15 +2124,11 @@ async def test_send_approval_prompt_adds_session_button_with_permission_ids():
     adapter._render_decision.return_value = True
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_approval.return_value = {
-        "tool_call_id": "tool-2",
-        "kind": "request_approval",
-        "tool_args": {
-            **_REQUEST_APPROVAL_TOOL_ARGS,
-            "permission_ids": ["perm-1"],
-        },
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args={**_REQUEST_APPROVAL_TOOL_ARGS, "permission_ids": ["perm-1"]},
+    )
 
     await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
@@ -2148,7 +2149,7 @@ async def test_send_approval_prompt_skips_when_no_pending():
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_approval.return_value = None
+    agent_conversations.pending_approval.return_value = None
 
     sent = await service.send_approval_prompt_for_conversation(
         conversation_id=conversation_id
@@ -2174,11 +2175,9 @@ async def test_an_email_surface_delivers_the_question_in_its_one_reply():
     adapter = _delivering_adapter("RESEND")
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
-    service.conversation_service.get_pending_ask_user.return_value = {
-        "tool_call_id": "tool-1",
-        "tool_args": _ASK_USER_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
+    agent_conversations.pending_question.return_value = _pending(
+        "ask_user", tool_call_id="tool-1", tool_args=_ASK_USER_TOOL_ARGS
+    )
 
     sent = await service.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
@@ -2411,27 +2410,20 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_approve
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
+    conversation = _surface_conversation(surface, conversation_id=conversation_id)
+    agent_conversations.surface_conversation.return_value = conversation
+    agent_conversations.pending_interaction.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-2",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
     )
-    service.conversation_service.get_pending_user_interaction.return_value = {
-        "tool_call_id": "tool-2",
-        "kind": "request_approval",
-        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
 
     ctx = SimpleNamespace(
         conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
     )
-    resumed = await maybe_resume_pending_interaction(
-        ctx, "approve", conversation_service=service.conversation_service
-    )
+    resumed = await maybe_resume_pending_interaction(ctx, "approve", uow=service.uow)
     assert resumed is ResumeOutcome.CONSUMED
-    kwargs = (
-        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
-    )
+    kwargs = agent_conversations.resolve_pending_interaction.await_args.kwargs
     assert kwargs["approval_id"] == "tool-2"
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
 
@@ -2443,27 +2435,20 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
+    conversation = _surface_conversation(surface, conversation_id=conversation_id)
+    agent_conversations.surface_conversation.return_value = conversation
+    agent_conversations.pending_interaction.return_value = _pending(
+        "request_approval",
+        tool_call_id="tool-3",
+        tool_args=_REQUEST_APPROVAL_TOOL_ARGS,
     )
-    service.conversation_service.get_pending_user_interaction.return_value = {
-        "tool_call_id": "tool-3",
-        "kind": "request_approval",
-        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
 
     ctx = SimpleNamespace(
         conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
     )
-    resumed = await maybe_resume_pending_interaction(
-        ctx, "no", conversation_service=service.conversation_service
-    )
+    resumed = await maybe_resume_pending_interaction(ctx, "no", uow=service.uow)
     assert resumed is ResumeOutcome.CONSUMED
-    kwargs = (
-        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
-    )
+    kwargs = agent_conversations.resolve_pending_interaction.await_args.kwargs
     assert kwargs["decision"] == AgentRunApprovalDecision.DENY
 
 
@@ -2474,28 +2459,19 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
-    service.conversation_service.conversation_repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=conversation)
+    conversation = _surface_conversation(surface, conversation_id=conversation_id)
+    agent_conversations.surface_conversation.return_value = conversation
+    agent_conversations.pending_interaction.return_value = _pending(
+        "ask_user", tool_call_id="tool-4", tool_args=_ASK_USER_TOOL_ARGS
     )
-    service.conversation_service.get_pending_user_interaction.return_value = {
-        "tool_call_id": "tool-4",
-        "kind": "ask_user",
-        "tool_args": _ASK_USER_TOOL_ARGS,
-        "agent_run_id": uuid4(),
-    }
 
     ctx = SimpleNamespace(
         conversation_id=conversation_id, user_id=uuid4(), pod_id=surface.pod_id
     )
     # "2" → second option label "Blue"
-    resumed = await maybe_resume_pending_interaction(
-        ctx, "2", conversation_service=service.conversation_service
-    )
+    resumed = await maybe_resume_pending_interaction(ctx, "2", uow=service.uow)
     assert resumed is ResumeOutcome.CONSUMED
-    kwargs = (
-        service.conversation_service.resolve_user_approval_internal.await_args.kwargs
-    )
+    kwargs = agent_conversations.resolve_pending_interaction.await_args.kwargs
     assert kwargs["decision"] == AgentRunApprovalDecision.APPROVE_ONCE
     assert kwargs["response"] == {"answers": {"color": "Blue"}}
 
@@ -2556,12 +2532,22 @@ async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch)
     assert text4 == "voice memo for you\n\nschedule a meeting tomorrow"
 
 
-async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        SpeechProviderError("deepgram down"),
+        # A provider that breaks its own interface must not cost the person
+        # their message either -- it is reported, not propagated.
+        TimeoutError("the client raised something the interface never promised"),
+    ],
+    ids=["declared_failure", "undeclared_failure"],
+)
+async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch, failure):
     import app.modules.agent.tools.speech.provider as speech_provider
 
     class _Provider:
         async def transcribe(self, audio_bytes, *, mime, language=None):
-            raise RuntimeError("deepgram down")
+            raise failure
 
     monkeypatch.setattr(speech_provider, "get_speech_provider", lambda: _Provider())
     service = _build_service(adapter=AsyncMock(), surfaces=[_slack_surface()])
@@ -2725,9 +2711,7 @@ async def test_a_whole_ingest_failure_still_tells_the_agent_the_files_arrived():
 
     await service.execute_chat(context)
 
-    kwargs = (
-        service.conversation_service.add_user_message_and_start_run.await_args.kwargs
-    )
+    kwargs = agent_conversations.start_surface_turn.await_args.kwargs
     failed = kwargs["message_metadata"]["failed_files"]
     assert [item["name"] for item in failed] == ["receipt.pdf", "photo.jpg"]
 

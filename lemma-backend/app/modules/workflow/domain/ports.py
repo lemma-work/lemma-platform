@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -192,20 +192,29 @@ class AgentPort(ABC):
 
 
 class FunctionPort(ABC):
-    """Port for interacting with the Function module."""
+    """Port for interacting with the Function module.
+
+    Payloads are `dict[str, object]` for the same reason `AgentPort`'s are: a
+    function's inputs, and the run description it hands back, are JSON whose
+    shape belongs to the function's author. `Any` said that too, while letting
+    every caller index into it unchecked -- and `execute_function` returning a
+    bare `Any` left the node executor guessing at runtime whether it had been
+    given a mapping at all.
+    """
 
     @abstractmethod
     async def execute_function(
         self,
         function_name: str,
-        inputs: Dict[str, Any],
+        inputs: dict[str, object],
         pod_id: UUID,
         user_id: UUID,
         ctx: Context | None = None,
-    ) -> Any: ...
+    ) -> dict[str, object]:
+        """Dispatch a run, described by `run_id`, `status` and `function_type`."""
 
     @abstractmethod
-    async def get_run_status(self, function_run_id: UUID) -> Dict[str, Any]:
+    async def get_run_status(self, function_run_id: UUID) -> dict[str, object]:
         """Gets status and output of a function run (for reconciliation)."""
 
     @abstractmethod

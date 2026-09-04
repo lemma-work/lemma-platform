@@ -127,10 +127,27 @@ def _egress_double() -> AgentSurfaceIngressService:
     return double
 
 
-def _conversation_service(conversation_id: UUID):
-    service = AsyncMock()
-    service.create_conversation = AsyncMock(return_value=_Conversation(conversation_id))
-    return service
+#: Where `agent` publishes the conversation operations delivery calls.
+_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+
+
+@pytest.fixture(autouse=True)
+def conversations(monkeypatch):
+    """`agent`'s conversation operations, doubled where they are published.
+
+    Autouse because every delivery path here opens or continues a conversation
+    and the real operations reach a database. Doubled at their source rather
+    than on the modules that call them: they are another module's contract, not
+    a part of the unit under test.
+    """
+    operations = SimpleNamespace(
+        surface_conversation=AsyncMock(return_value=None),
+        open_surface_conversation=AsyncMock(return_value=_Conversation(uuid4())),
+        append_notification_message=AsyncMock(),
+    )
+    for name, double in vars(operations).items():
+        monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
+    return operations
 
 
 def _links():
@@ -164,7 +181,9 @@ def _thread_for(
 # ------------------------------------------------------------------- the bugs
 
 
-async def test_the_conversation_is_opened_under_the_surface_agents_name():
+async def test_the_conversation_is_opened_under_the_surface_agents_name(
+    conversations,
+):
     """Direct regression for the reported crash.
 
     ``agent_name_for_surface`` was private, and delivery called it as though it
@@ -174,11 +193,14 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name():
     surface = _email_surface()
     notification = _notification()
     conversation_id = uuid4()
+    conversations.open_surface_conversation.return_value = _Conversation(
+        conversation_id
+    )
     egress_port = _egress_double()
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 
@@ -189,7 +211,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name():
 
     assert opened == conversation_id
     egress_port.agent_name_for_surface.assert_awaited_once_with(surface)
-    _, kwargs = egress.conversation_service.create_conversation.call_args
+    _, kwargs = conversations.open_surface_conversation.call_args
     assert kwargs["agent_name"] == "Ops"
     # The recipient owns the conversation, never the asker — their reply has to
     # run under their own permissions.
@@ -217,7 +239,7 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -253,7 +275,7 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
     links = _links()
     egress = NotificationEgress(
         egress=_egress_double(),  # open_cold_email_thread returns None
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -281,7 +303,7 @@ async def test_no_link_is_written_when_the_send_raises():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -320,7 +342,7 @@ async def test_redelivering_the_same_notification_reuses_its_thread():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -349,7 +371,7 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 
@@ -414,7 +436,6 @@ def _notification_service(
         surface_repository=surface_repo,
         conversation_link_repository=_links(),
         external_user_repository=external_users,
-        conversation_service=_conversation_service(uuid4()),
         ingress_service=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
@@ -760,7 +781,9 @@ async def test_the_daily_email_cap_stops_the_send_but_not_the_notification(
     service.ingress.open_cold_email_thread.assert_not_awaited()
 
 
-async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
+async def test_a_chat_channel_does_not_spend_the_email_budget(
+    monkeypatch, conversations
+):
     """The budget exists to protect one shared domain.
 
     A notification delivered on Slack costs that domain nothing, so charging it
@@ -785,8 +808,8 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
     )
     # A live conversation on that thread, so delivery continues it rather than
     # opening a new one — the DM-reset check compares real timestamps.
-    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
-        return_value=_Conversation(link.conversation_id)
+    conversations.surface_conversation.return_value = _Conversation(
+        link.conversation_id
     )
     service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=redis)
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
@@ -850,7 +873,9 @@ async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch)
     assert agent_name == "curator"
 
 
-async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
+async def test_the_connection_is_released_before_the_platform_send(
+    monkeypatch, conversations
+):
     """Commit has to happen before the send, not after the whole delivery.
 
     Two things ride on the ordering. "Persist before send" only means anything
@@ -874,8 +899,8 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
         return_value=link
     )
-    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
-        return_value=_Conversation(link.conversation_id)
+    conversations.surface_conversation.return_value = _Conversation(
+        link.conversation_id
     )
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
 
@@ -918,7 +943,7 @@ async def test_a_cold_open_carries_both_names_to_the_platform():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 
@@ -951,7 +976,7 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 

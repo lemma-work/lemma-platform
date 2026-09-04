@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.composition.identity_whatsapp import (
+from app.modules.agent_surfaces.contracts.whatsapp import (
     GlobalWhatsAppDeliveryError,
     send_global_whatsapp_text,
 )

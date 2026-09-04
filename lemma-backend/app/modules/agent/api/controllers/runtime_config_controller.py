@@ -51,12 +51,15 @@ async def _ensure_org_member(
     user: CurrentUser,
     uow: UoWDep,
 ) -> None:
-    from app.composition.identity_notifications import user_is_organization_member
+    from app.modules.identity.contracts.organizations import organization_member_role
 
-    if not await user_is_organization_member(
-        uow,
-        user_id=user.id,
-        organization_id=org_id,
+    # Any role at all is enough here: this endpoint reads the organization's
+    # runtime configuration, which every member can see. The policy is named
+    # where it applies rather than compiled into the read, so a second caller
+    # wanting a narrower rule does not have to publish a second query.
+    if (
+        await organization_member_role(uow, user_id=user.id, organization_id=org_id)
+        is None
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

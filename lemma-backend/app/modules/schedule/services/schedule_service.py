@@ -87,11 +87,11 @@ class ScheduleService:
         # fact assembled at the composition root, which a module may not import.
         self.webhook_sources = webhook_sources
         if datastore_policy is None:
-            from app.composition.schedule_datastore_policy import (
-                SqlAlchemyDatastoreSchedulePolicy,
+            from app.modules.schedule.infrastructure.adapters.datastore_table_policy import (
+                DatastoreTableSchedulePolicy,
             )
 
-            datastore_policy = SqlAlchemyDatastoreSchedulePolicy(uow)
+            datastore_policy = DatastoreTableSchedulePolicy(uow)
         self.datastore_policy = datastore_policy
         self.run_service = ScheduleRunService(
             uow=uow,

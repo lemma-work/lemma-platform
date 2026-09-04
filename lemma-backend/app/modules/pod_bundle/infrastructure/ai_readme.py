@@ -100,33 +100,24 @@ def build_system_polish_fn(
     async def _polish(readme: str) -> str:
         from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
-        from app.core.domain.runtime import AgentRuntimeConfig
-        from app.composition.pod_bundle_readme import (
-            require_pydantic_ai_model_from_runtime_profile,
-            usage_limits_for,
-        )
-        from app.composition.pod_bundle_readme import (
-            DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-            AgentRuntimeProfileService,
-        )
-        from app.composition.pod_bundle_readme import (
+        from app.modules.agent.contracts.model_runtime import resolve_system_runtime
+        from app.modules.usage.contracts.execution import (
+            UsageExecutionContext,
             record_pydantic_ai_result_usage,
             reserve_usage_for_runtime,
         )
-        from app.composition.pod_bundle_readme import UsageExecutionContext
 
-        resolved = await AgentRuntimeProfileService().resolve(
-            runtime=AgentRuntimeConfig(
-                profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-            ),
-            organization_id=organization_id,
-            user_id=user_id,
+        polish_limits = UsageLimits(
+            request_limit=1,
+            input_tokens_limit=64_000,
+            output_tokens_limit=8_000,
+            total_tokens_limit=72_000,
+            count_tokens_before_request=True,
         )
-        runtime_profile = resolved.public_snapshot()
-        model = require_pydantic_ai_model_from_runtime_profile(
-            runtime_profile=runtime_profile,
-            runtime_credentials=resolved.credentials or {},
-            fallback_model_name=resolved.model_name_for_harness,
+        runtime = await resolve_system_runtime(
+            usage_limits=polish_limits,
+            user_id=user_id,
+            organization_id=organization_id,
         )
         usage_context = UsageExecutionContext(
             user_id=user_id,
@@ -137,25 +128,15 @@ def build_system_polish_fn(
         reservation = await reserve_usage_for_runtime(
             organization_id=organization_id,
             user_id=user_id,
-            runtime_profile=runtime_profile,
+            runtime_profile=runtime.runtime_profile,
         )
-        polish_limits = UsageLimits(
-            request_limit=1,
-            input_tokens_limit=64_000,
-            output_tokens_limit=8_000,
-            total_tokens_limit=72_000,
-            count_tokens_before_request=True,
-        )
-        agent = PydanticAIAgent(model, system_prompt=_PROMPT)
+        agent = PydanticAIAgent(runtime.model, system_prompt=_PROMPT)
         result = None
         try:
-            result = await agent.run(
-                readme,
-                usage_limits=usage_limits_for(model, polish_limits),
-            )
+            result = await agent.run(readme, usage_limits=runtime.usage_limits)
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
-                runtime_profile=runtime_profile,
+                runtime_profile=runtime.runtime_profile,
                 result=result,
                 status="COMPLETED",
                 reservation=reservation,
@@ -164,7 +145,7 @@ def build_system_polish_fn(
         except Exception:
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
-                runtime_profile=runtime_profile,
+                runtime_profile=runtime.runtime_profile,
                 result=result,
                 status="FAILED",
                 reservation=reservation,

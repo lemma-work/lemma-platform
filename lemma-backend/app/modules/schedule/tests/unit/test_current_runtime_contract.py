@@ -13,7 +13,12 @@ import re
 from pathlib import Path
 
 
-APP_ROOT = Path(__file__).resolve().parents[3]
+# `app/`, five levels up -- not four. It was `parents[3]`, which is `app/modules`,
+# so every `composition/...` entry below named a path that could never exist and
+# the source scan never opened a file outside `app/modules` at all. The two
+# halves of this ratchet were both reading a tree that did not contain the thing
+# they forbid.
+APP_ROOT = Path(__file__).resolve().parents[4]
 
 # Deleted modules. Each had a live replacement at the time of removal: the
 # workflow adapters were re-export shims over app/composition, the filter job
@@ -36,6 +41,12 @@ REMOVED_PATHS = (
     "composition/schedule_connectors.py",
     "composition/schedule_run_recovery.py",
     "composition/workflow_agent.py",
+    # The filter is schedule's own adapter now
+    # (`infrastructure/adapters/system_model_filter.py`) and the README half is
+    # `agent/contracts/model_runtime.py`. Both were re-exports that made agent
+    # service module paths part of another module's build.
+    "composition/schedule_filter.py",
+    "composition/pod_bundle_readme.py",
 )
 
 # Import paths for the same modules, plus the sentinel that used to stand in for
@@ -50,6 +61,8 @@ FORBIDDEN_REFERENCES = (
     "composition.schedule_connectors",
     "composition.schedule_run_recovery",
     "composition.workflow_agent",
+    "composition.schedule_filter",
+    "composition.pod_bundle_readme",
 )
 
 

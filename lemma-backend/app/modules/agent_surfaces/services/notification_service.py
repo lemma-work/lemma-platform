@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
+from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
@@ -93,7 +94,6 @@ class NotificationService:
         surface_repository,
         conversation_link_repository,
         external_user_repository,
-        conversation_service,
         ingress_service: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
@@ -104,7 +104,6 @@ class NotificationService:
         self.surfaces = surface_repository
         self.links = conversation_link_repository
         self.external_users = external_user_repository
-        self.conversation_service = conversation_service
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
@@ -122,7 +121,7 @@ class NotificationService:
         # coupling. See ``notification_egress``.
         self.egress = NotificationEgress(
             egress=ingress_service,
-            conversation_service=conversation_service,
+            uow=uow,
             conversation_link_repository=conversation_link_repository,
         )
 
@@ -383,12 +382,16 @@ class NotificationService:
         summary: str,
         data: dict | None = None,
     ) -> NotificationEntity:
-        """Record an answer. The domain decides whether it is legal.
+        """Record an answer, and say so if it was the last one outstanding.
 
-        Recording only. Bringing the asking conversation back is the caller's
-        job, through ``composition.agent_notifications`` — this module may not
-        reach into the agent module, and both respond paths (the tool and the
-        app endpoint) already do it. A third one must too.
+        The domain decides whether the answer is legal. Whether the asking
+        conversation should be brought back is decided here and announced as
+        ``NotificationSettledEvent``: this module may not reach into `agent`,
+        and the two respond paths used to each have to remember to make that
+        call themselves.
+
+        The count is read after the write has been flushed, so the row just
+        closed is already counted as settled.
         """
         notification = await self._owned_by(
             pod_id=pod_id,
@@ -396,7 +399,35 @@ class NotificationService:
             user_id=responder_user_id,
         )
         notification.respond(summary=summary, data=data)
-        return await self.notifications.update(notification)
+        updated = await self.notifications.update(notification)
+        await self._announce_if_settled(updated)
+        return updated
+
+    async def _announce_if_settled(self, notification: NotificationEntity) -> None:
+        """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.
+
+        Scoped to ``AGENT_RUN`` because that is the only origin a conversation
+        has: a workflow form is owed to its run, and resuming that is the
+        workflow engine's job.
+        """
+        conversation_id = notification.origin_conversation_id
+        if conversation_id is None:
+            return
+        if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
+            return
+        if await self.notifications.count_open_from_origin_conversation(
+            conversation_id
+        ):
+            return
+        self.uow.collect_events(
+            [
+                NotificationSettledEvent(
+                    pod_id=notification.pod_id,
+                    conversation_id=conversation_id,
+                    notification_id=notification.id,
+                )
+            ]
+        )
 
     async def resolve_through_action(
         self,

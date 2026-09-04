@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
+from app.core.authorization.context import Context
+
 from app.modules.connectors.domain.account import (
     AccountEntity,
     CredentialTypes,
@@ -21,6 +23,13 @@ from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
+
+#: What `PodFileGatewayPort.write_bytes` hands back: the file reference a
+#: connector result carries in place of the bytes it replaced. A mapping rather
+#: than a value object because it is substituted straight into the operation's
+#: JSON result, and it was a bare `dict` -- which is how a result shape four
+#: keys wide went unchecked at both ends.
+WrittenPodFile = dict[str, str | int | None]
 
 
 class ConnectorRepositoryPort(Protocol):
@@ -136,12 +145,16 @@ class ConnectorTriggerRepositoryPort(Protocol):
 class PodFileGatewayPort(Protocol):
     """Reads and writes pod datastore files on behalf of connector operations.
 
-    Kept as a port so the connectors module never imports datastore internals;
-    the adapter is wired at composition.
+    Kept as a port so the connectors module never imports datastore internals.
+    The adapter is `infrastructure/adapters/pod_file_gateway.py`, over
+    datastore's published file operations -- it was in the composition root,
+    which is where the two `Any`s below came from: nothing on either side of a
+    third module's file could name the authorization context both modules
+    already had a type for.
     """
 
     async def read_bytes(
-        self, *, pod_id: UUID, path: str, ctx: Any
+        self, *, pod_id: UUID, path: str, ctx: Context
     ) -> Tuple[bytes, Optional[str], Optional[str]]: ...
 
     async def write_bytes(
@@ -152,8 +165,8 @@ class PodFileGatewayPort(Protocol):
         name: str,
         content: bytes,
         media_type: Optional[str],
-        ctx: Any,
-    ) -> dict: ...
+        ctx: Context,
+    ) -> WrittenPodFile: ...
 
 
 class ConnectorOperationRepositoryPort(Protocol):

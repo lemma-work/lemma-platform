@@ -28,6 +28,24 @@ from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 
 
+async def provision_pod_default_agent(uow, *, pod_id: UUID, user_id: UUID) -> None:
+    """Mint the pod's own assistant, with the pod it belongs to.
+
+    Deliberately **not** best-effort, unlike the mailbox provisioned beside it.
+    A pod without a mailbox is still a perfectly good pod -- it can be talked to
+    in the app, and an address can be added later. A pod without its assistant's
+    row is broken in a way that only shows up when somebody tries to use it: the
+    first message fails its foreign key on the way in, and the run that answers
+    it has no agent to resolve. Failing pod creation loudly beats handing back a
+    pod whose only symptom is that talking to it does not work.
+    """
+    from app.modules.agent.infrastructure.repositories.agent_repository import (
+        AgentRepository,
+    )
+
+    await AgentRepository(uow).create_pod_default(pod_id=pod_id, user_id=user_id)
+
+
 async def list_agents(uow, *, pod_id: UUID, user_id: UUID, ctx: Context) -> list[Agent]:
     """Every agent in the pod this reader may see.
 
@@ -157,6 +175,7 @@ __all__ = [
     "create_agent",
     "get_agent",
     "list_agents",
+    "provision_pod_default_agent",
     "require_agent",
     "sync_agent_memory_grant",
     "update_agent",
