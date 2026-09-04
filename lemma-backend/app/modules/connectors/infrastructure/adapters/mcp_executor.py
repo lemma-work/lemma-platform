@@ -152,7 +152,14 @@ class McpToolSession(Protocol):
         arguments: dict[str, object],
         *,
         raise_on_error: bool,
-    ) -> object: ...
+    ) -> object:
+        """Call one tool and return its result without raising on a refusal.
+
+        `raise_on_error=False` is not optional here. fastmcp defaults it to
+        True, which turns a tool's refusal into a `ToolError` that reads as the
+        transport failing -- the whole defect this protocol's callers exist to
+        avoid. Stating it in the signature is what stops it being forgotten.
+        """
 
 
 def _session_setup_steps(
