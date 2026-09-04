@@ -827,6 +827,15 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
         "deferred"
     ]
     assert any(name.startswith("pod_") for name in captured["deferred"])
+    # The browser is deferred for the same reason: `web_fetch` covers ordinary
+    # research in the prefix, and driving a page is the deliberate step past it.
+    assert {
+        "browser_open",
+        "browser_snapshot",
+        "browser_act",
+        "browser_read",
+        "browser_screenshot",
+    } <= captured["deferred"]
     # A static awareness hint tells the model the deferred tools exist + how to
     # reach them — names listed, schemas not (so the model can search for them).
     from app.modules.agent.capabilities.deferred_hint import (

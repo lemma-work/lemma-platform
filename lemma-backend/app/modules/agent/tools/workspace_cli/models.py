@@ -4,17 +4,14 @@ from typing import Literal, Optional, List
 
 from pydantic import BaseModel, Field
 
-from app.modules.agent.tools.context import BaseToolResponse
-
-
-WORKSPACE_TOOL_COMMENT_DESC = "One-line statement of intent, shown to the user."
+from app.modules.agent.tools.context import TOOL_COMMENT_DESC, BaseToolResponse
 
 
 class ExecCommandRequest(BaseModel):
     cmd: str = Field(description="Shell command to run, exactly as in a terminal.")
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     max_output_tokens: int = Field(
         default=10000,
@@ -67,7 +64,7 @@ class ExecCommandRequest(BaseModel):
 class WriteStdinRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description=(
@@ -105,7 +102,7 @@ class WriteStdinRequest(BaseModel):
 class TerminateProcessRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description="Process ID returned by `exec_command` for the process to stop."
@@ -115,7 +112,7 @@ class TerminateProcessRequest(BaseModel):
 class ListProcessesRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
 
 
@@ -149,14 +146,14 @@ class ManageProcessRequest(BaseModel):
     )
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
 
 
 class ExecutePythonRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     code: str = Field(
         description="Python code to execute in the shared task kernel. The final expression value is returned separately when available."
@@ -234,7 +231,7 @@ class ExecCommandResult(BaseToolResponse):
 class ResizeTerminalRequest(BaseModel):
     comment: Optional[str] = Field(
         default=None,
-        description=WORKSPACE_TOOL_COMMENT_DESC,
+        description=TOOL_COMMENT_DESC,
     )
     process_id: str = Field(
         description="Interactive process ID returned by `exec_command`."

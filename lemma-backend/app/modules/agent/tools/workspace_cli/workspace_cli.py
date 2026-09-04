@@ -43,11 +43,11 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.modules.workspace.session_support import retry_advice
 from app.modules.agent.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
 from app.modules.workspace.contracts.tooling import (
+    retry_advice,
     get_workspace_tool_runtime,
 )
 from pydantic_ai import ToolReturn, BinaryContent
