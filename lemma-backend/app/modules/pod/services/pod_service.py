@@ -88,7 +88,9 @@ class PodService:
         # assistant has no row cannot be talked to at all, and the symptom
         # arrives at the first message rather than at creation.
         if self._uow is not None:
-            from app.modules.agent.contracts.provisioning import provision_pod_default_agent
+            from app.modules.agent.contracts.provisioning import (
+                provision_pod_default_agent,
+            )
 
             # `pod.user_id`, not `creator_user_id`: the migration that backfilled
             # every existing pod read the owner off the pod row, and the two have

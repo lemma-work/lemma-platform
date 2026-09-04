@@ -1,7 +1,8 @@
 """Function API controller."""
 
+from functools import partial
 from uuid import UUID
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
@@ -65,7 +66,7 @@ def _to_function_response(function: FunctionEntity) -> FunctionResponse:
 
 
 async def _apply_function_grants(
-    uow,
+    uow_factory: UnitOfWorkFactory,
     *,
     pod_id: UUID,
     function: FunctionEntity,
@@ -77,24 +78,67 @@ async def _apply_function_grants(
     Functions accepted this block on neither verb while agents accepted it on
     create, so the same bundle payload wired an agent and silently left a
     function with nothing.
+
+    Its own short unit of work, opened after the code has been applied rather
+    than a request-scoped one held across it: the caller's other work needs no
+    connection, and `use_cases.create_function` already opens its own for the
+    parts that do.
+
+    The invalidation is outside the block, which is a fix and not a tidy-up. In
+    the transaction it both held a pooled connection across a Redis round trip
+    and ran in the wrong order -- a concurrent reader could repopulate the cache
+    from the pre-commit state between the invalidation and the commit, which is
+    the hazard `SqlAlchemyUnitOfWork.after_commit` was written for.
     """
 
     assert function.id is not None
-    applied = await apply_inline_workload_grants(
-        uow.session,
-        pod_id=pod_id,
-        grantee_type="FUNCTION",
-        grantee_id=function.id,
-        permissions=getattr(data, "permissions", None),
-        created_by_user_id=user.id,
-    )
-    if applied:
+    permissions = getattr(data, "permissions", None)
+    if permissions is None:
+        # An absent block leaves the grants alone, so there is nothing to open a
+        # connection for. `apply_inline_workload_grants` returns False here
+        # without touching the session; checking first means the common create
+        # -- which names no permissions at all -- checks out no connection.
+        return
+    function_id = function.id
+    await _write_then_invalidate(
+        uow_factory,
+        write=lambda session: apply_inline_workload_grants(
+            session,
+            pod_id=pod_id,
+            grantee_type="FUNCTION",
+            grantee_id=function_id,
+            permissions=permissions,
+            created_by_user_id=user.id,
+        ),
         # The sandbox reads its grants from a cached environment, so skipping
         # this leaves the function running with the access it had before.
-        await invalidate_function_workspace_env_cache(
+        invalidate=lambda: invalidate_function_workspace_env_cache(
             pod_id=pod_id,
-            function_id=function.id,
-        )
+            function_id=function_id,
+        ),
+    )
+
+
+async def _write_then_invalidate(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    write: Callable[[Any], Awaitable[bool]],
+    invalidate: Callable[[], Awaitable[None]],
+) -> None:
+    """Commit ``write``, and only then drop what it made stale.
+
+    Both halves are parameters so the order can be asserted without a database
+    and without a double: the order *is* the behaviour here, and it was wrong.
+    Dropping a cache inside the transaction pins a pooled Postgres connection
+    across a Redis round trip, and races -- a concurrent reader can repopulate
+    the cache from the pre-commit state before the commit lands. See
+    `SqlAlchemyUnitOfWork.after_commit`, which exists for the case where the
+    caller cannot close its transaction early like this one can.
+    """
+    async with uow_factory() as uow:
+        applied = await write(uow.session)
+    if applied:
+        await invalidate()
 
 
 async def _function_action_response(
@@ -134,7 +178,7 @@ async def create_function(
     pod_id: UUID,
     data: CreateFunctionRequest,
     use_cases: FunctionUseCasesDep,
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionActionResponse:
     """Create a new function in a pod."""
     user: UserEntity = request.state.user
@@ -152,7 +196,7 @@ async def create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
     await _apply_function_grants(
-        uow, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory, pod_id=pod_id, function=function, data=data, user=user
     )
     return await _function_action_response(function)
 
@@ -362,9 +406,17 @@ async def replace_function_permissions(
         grants=grants,
         created_by_user_id=user.id,
     )
-    await invalidate_function_workspace_env_cache(
-        pod_id=pod_id,
-        function_id=function.id,
+    # After the commit, not inside it. Inline, this held a pooled connection
+    # across a Redis round trip, and ran in the wrong order besides: a
+    # concurrent reader could repopulate the cache from the pre-commit state
+    # between the invalidation and the commit. `get_uow` commits in its
+    # teardown, before the response goes out.
+    uow.after_commit(
+        partial(
+            invalidate_function_workspace_env_cache,
+            pod_id=pod_id,
+            function_id=function.id,
+        )
     )
     return await _function_permissions_response(uow, pod_id=pod_id, function=function)
 
@@ -387,7 +439,7 @@ async def update_function(
     function_name: str,
     data: UpdateFunctionRequest,
     use_cases: FunctionUseCasesDep,
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionActionResponse:
     """Update a function."""
     user: UserEntity = request.state.user
@@ -403,7 +455,7 @@ async def update_function(
         request=request,
     )
     await _apply_function_grants(
-        uow, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory, pod_id=pod_id, function=function, data=data, user=user
     )
     return await _function_action_response(function)
 

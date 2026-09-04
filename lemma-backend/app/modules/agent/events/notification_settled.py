@@ -7,7 +7,7 @@ this module consumes for one reason can be its own file.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -31,11 +31,15 @@ from app.modules.agent_surfaces.contracts import (
 )
 
 
-class ReplyDelivery(Protocol):
-    """Given a unit of work, the call that delivers a conversation's replies."""
-
-    def __call__(self, uow) -> Callable[..., Awaitable[bool]]: ...
-
+#: Given a unit of work, the call that delivers a conversation's replies.
+#:
+#: A type alias rather than a `Protocol`: FastStream builds a pydantic model out
+#: of this handler's signature, and a `Protocol` that is not `runtime_checkable`
+#: cannot be the first argument to `isinstance`, so pydantic refuses to build the
+#: validator and **the worker fails to start**. Caught by
+#: `test_function_execution_e2e`, which boots a real worker; nothing in the unit
+#: lane builds the subscriber model.
+ReplyDelivery = Callable[..., Callable[..., Awaitable[bool]]]
 
 router = RedisRouter()
 
