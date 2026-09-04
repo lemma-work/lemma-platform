@@ -166,22 +166,22 @@ class ConversationTitleGenerator:
     def __init__(
         self,
         *,
-        runtime_profiles: Callable[
-            [], AgentRuntimeProfileService
-        ] = AgentRuntimeProfileService,
-        model_for_profile: Callable[
-            ..., Model
-        ] = require_pydantic_ai_model_from_runtime_profile,
-        llm_agent: Callable[..., PydanticAIAgent] = PydanticAIAgent,
+        runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
+        model_for_profile: Callable[..., Model] | None = None,
+        llm_agent: Callable[..., PydanticAIAgent] | None = None,
         # The reservation is opaque here: titling never inspects it, it only
         # hands it back to `record_usage`.
-        reserve_usage: Callable[..., Awaitable[object | None]] = (
-            reserve_usage_for_runtime
-        ),
-        record_usage: Callable[..., Awaitable[None]] = (
-            record_pydantic_ai_result_usage
-        ),
+        reserve_usage: Callable[..., Awaitable[object | None]] | None = None,
+        record_usage: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
+        # `None` rather than the real callable as a default, deliberately. A
+        # default argument is evaluated once, when this module is imported, so
+        # `= PydanticAIAgent` would capture the class *object* and a later
+        # `monkeypatch.setattr(module, "PydanticAIAgent", ...)` would rebind the
+        # module attribute while this default kept pointing at the original.
+        # `test_conversation_title_e2e.py` replaces all five of these names on
+        # the module, and with import-bound defaults it silently drove the real
+        # model instead — a title of "[mock] User's first message:".
         self._runtime_profiles = runtime_profiles
         self._model_for_profile = model_for_profile
         self._llm_agent = llm_agent
@@ -201,7 +201,9 @@ class ConversationTitleGenerator:
             organization_id=organization_id, user_id=user_id
         )
         runtime_profile = resolved.public_snapshot()
-        model = self._model_for_profile(
+        model = (
+            self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
+        )(
             runtime_profile=runtime_profile,
             runtime_credentials=resolved.credentials or {},
             fallback_model_name=resolved.model_name_for_harness,
@@ -212,12 +214,14 @@ class ConversationTitleGenerator:
             pod_id=pod_id,
             source_type="conversation_title",
         )
-        reservation = await self._reserve_usage(
+        reservation = await (self._reserve_usage or reserve_usage_for_runtime)(
             organization_id=organization_id,
             user_id=user_id,
             runtime_profile=runtime_profile,
         )
-        agent = self._llm_agent(model, system_prompt=_TITLE_SYSTEM_PROMPT)
+        agent = (self._llm_agent or PydanticAIAgent)(
+            model, system_prompt=_TITLE_SYSTEM_PROMPT
+        )
         result = None
         try:
             result = await agent.run(
@@ -225,7 +229,7 @@ class ConversationTitleGenerator:
                 usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
                 model_settings=_TITLE_MODEL_SETTINGS,
             )
-            await self._record_usage(
+            await (self._record_usage or record_pydantic_ai_result_usage)(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,
                 result=result,
@@ -234,7 +238,7 @@ class ConversationTitleGenerator:
                 metadata={"helper": "conversation_title"},
             )
         except Exception:
-            await self._record_usage(
+            await (self._record_usage or record_pydantic_ai_result_usage)(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,
                 result=result,
@@ -252,7 +256,7 @@ class ConversationTitleGenerator:
         organization_id: UUID | None,
         user_id: UUID,
     ):
-        service = self._runtime_profiles()
+        service = (self._runtime_profiles or AgentRuntimeProfileService)()
         try:
             return await service.resolve(
                 runtime=AgentRuntimeConfig(
