@@ -1,6 +1,7 @@
 """App module registration."""
 
 from app.core.registry import LemmaModule
+from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
 
 
 def _routers():
@@ -15,4 +16,8 @@ def _routers():
     return [app_router, public_app, public_sdk]
 
 
-module = LemmaModule(name="apps", routers=_routers)
+module = LemmaModule(
+    name="apps",
+    routers=_routers,
+    middlewares=(AppHostRoutingMiddleware,),
+)
