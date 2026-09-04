@@ -295,11 +295,11 @@ def grant_function(
 
 
 @app.command("schema")
-def schema_function() -> None:
+def schema_function(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a function bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("function")
+    print_resource_schema(ctx, "function")
 
 
 @app.command("run")

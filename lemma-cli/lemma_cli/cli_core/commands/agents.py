@@ -278,11 +278,11 @@ def grant_agent(
 
 
 @app.command("schema")
-def schema_agent() -> None:
+def schema_agent(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for an agent bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("agent")
+    print_resource_schema(ctx, "agent")
 
 
 @app.command("delete")

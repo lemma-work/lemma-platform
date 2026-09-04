@@ -747,6 +747,16 @@ def doctor_pod(
         return
     report = to_plain(result)
     errors, warnings = report["errors"], report["warnings"]
+    state = state_from_ctx(ctx)
+    if state.output == "json":
+        # The report was always built; only the human rendering existed, so
+        # `--output json` printed prose on the stream it promises is parseable
+        # and never handed over the findings at all. The exit code is part of
+        # the answer, so it is decided the same way in both modes.
+        emit(state, report)
+        if errors:
+            raise typer.Exit(1)
+        return
     for msg in errors:
         console.print(f"[red]error[/red]  {msg}")
     for msg in warnings:

@@ -40,11 +40,11 @@ def init_schedule(
 
 
 @app.command("schema")
-def schema_schedule() -> None:
+def schema_schedule(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a schedule bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("schedule")
+    print_resource_schema(ctx, "schedule")
 
 
 def _normalize_datastore_operations(values: list[str]) -> list[str]:

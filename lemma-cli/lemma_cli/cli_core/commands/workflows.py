@@ -142,11 +142,11 @@ def create_workflow(
 
 
 @app.command("schema")
-def schema_workflow() -> None:
+def schema_workflow(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a workflow bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("workflow")
+    print_resource_schema(ctx, "workflow")
 
 
 @app.command("update")
