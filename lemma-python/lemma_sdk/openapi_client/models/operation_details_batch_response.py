@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.operation_detail import OperationDetail
 
@@ -21,11 +23,14 @@ class OperationDetailsBatchResponse:
         connector_id (str): Connector identifier.
         items (list[OperationDetail]): Operation details for the requested operations.
         returned_count (int): Number of operation details returned in this response.
+        total_operations (int | Unset): Operations the connector exposes in total. Greater than `returned_count` means
+            the unnamed request was capped. Default: 0.
     """
 
     connector_id: str
     items: list[OperationDetail]
     returned_count: int
+    total_operations: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -38,6 +43,8 @@ class OperationDetailsBatchResponse:
 
         returned_count = self.returned_count
 
+        total_operations = self.total_operations
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -47,6 +54,8 @@ class OperationDetailsBatchResponse:
                 "returned_count": returned_count,
             }
         )
+        if total_operations is not UNSET:
+            field_dict["total_operations"] = total_operations
 
         return field_dict
 
@@ -66,10 +75,13 @@ class OperationDetailsBatchResponse:
 
         returned_count = d.pop("returned_count")
 
+        total_operations = d.pop("total_operations", UNSET)
+
         operation_details_batch_response = cls(
             connector_id=connector_id,
             items=items,
             returned_count=returned_count,
+            total_operations=total_operations,
         )
 
         operation_details_batch_response.additional_properties = d

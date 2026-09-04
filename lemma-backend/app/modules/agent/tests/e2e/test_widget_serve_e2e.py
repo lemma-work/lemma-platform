@@ -34,7 +34,7 @@ WIDGET_CONTENT = '<div id="w">hello widget</div>'
 
 
 @pytest_asyncio.fixture
-async def test_pod(authenticated_client, fixed_test_org):
+async def widget_pod(authenticated_client, fixed_test_org):
     payload = {
         "name": f"Widget Test Pod {uuid4()}",
         "slug": f"widget-test-pod-{uuid4()}",
@@ -80,9 +80,9 @@ def _serve_path(absolute_url: str) -> str:
 
 @pytest.mark.asyncio
 async def test_widget_serve_requires_auth_and_injects_config(
-    authenticated_client, test_app, test_pod, fixed_test_user, db_session
+    authenticated_client, test_app, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
     conv_id, tool_call_id = await _seed_widget(
         db_session, pod_id=pod_id, user_id=user_id
@@ -110,9 +110,9 @@ async def test_widget_serve_requires_auth_and_injects_config(
 
 @pytest.mark.asyncio
 async def test_widget_embed_token_round_trip(
-    authenticated_client, test_app, test_pod, fixed_test_user, db_session
+    authenticated_client, test_app, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
     conv_id, tool_call_id = await _seed_widget(
         db_session, pod_id=pod_id, user_id=user_id
@@ -143,9 +143,9 @@ async def test_widget_embed_token_round_trip(
 
 @pytest.mark.asyncio
 async def test_save_widget_as_app_produces_standalone_document(
-    authenticated_client, test_pod, fixed_test_user, db_session
+    authenticated_client, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
     conv_id, tool_call_id = await _seed_widget(
         db_session, pod_id=pod_id, user_id=user_id

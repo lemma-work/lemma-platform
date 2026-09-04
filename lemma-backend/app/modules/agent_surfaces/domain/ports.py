@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.identity.contracts import UserPreferences
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -416,6 +417,44 @@ class SurfaceEventDedupStorePort(Protocol):
         with the claim still held would make the delivery unrecoverable: every
         retry would see a duplicate and drop it.
         """
+
+
+class SurfaceUserDirectoryPort(Protocol):
+    """Who a sender is, and what they chose to answer on.
+
+    A port rather than a direct call into identity's contract so the lookups
+    stay a collaborator the ingress path is handed: a surface that resolves an
+    inbound sender is deciding whose authority a run executes with, and a test
+    of that decision has to be able to say who the directory answers with.
+    """
+
+    async def user_id_by_email(self, email: str) -> UUID | None:
+        """The live user with this address, or nobody."""
+        raise NotImplementedError
+
+    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
+        """The live user holding this handle, or nobody.
+
+        A handle freed by a deactivated account must answer nobody: it can be
+        taken by someone else, and a surface resolving it is choosing whose
+        authority a run executes with.
+        """
+        raise NotImplementedError
+
+    async def user_ids_by_mobile_numbers(
+        self, numbers: list[str], *, verified: bool
+    ) -> list[UUID]:
+        """The live users reachable on any of these numbers."""
+        raise NotImplementedError
+
+    async def preferences(self, user_id: UUID) -> "UserPreferences":
+        """This person's surface preferences, defaults included."""
+        raise NotImplementedError
+
+    async def set_preferences(
+        self, user_id: UUID, preferences: "UserPreferences"
+    ) -> None:
+        """Record this person's surface preferences."""
 
 
 class SurfacePodMembershipPort(Protocol):

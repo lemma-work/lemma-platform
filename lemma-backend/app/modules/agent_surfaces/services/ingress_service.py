@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from collections.abc import Callable
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -27,7 +26,6 @@ from app.modules.agent_surfaces.services.surface_ingress_credentials import (
 )
 from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMixin
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.surface_agent import ConversationService
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
     SurfacePlatformWebhookIngress,
@@ -70,8 +68,8 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
     SurfaceFileIngestService,
+    every_attachment_failed,
 )
-from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -96,15 +94,10 @@ class AgentSurfaceIngressService(
         uow_factory: UnitOfWorkFactory | None = None,
         surface_repository: SurfaceInstallationRepositoryPort | None = None,
         conversation_link_repository: SurfaceConversationLinkRepository | None = None,
-        conversation_service: ConversationService | None = None,
-        connector_service: ConnectorService | None = None,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         pod_membership_port: SurfacePodMembershipPort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
-        conversation_service_factory: Callable[[Any], ConversationService]
-        | None = None,
-        connector_service_factory: Callable[[Any], ConnectorService] | None = None,
     ):
         # Two modes:
         #  - uow mode (request/egress/ingress callers): collaborators are bound
@@ -112,19 +105,21 @@ class AgentSurfaceIngressService(
         #  - uow_factory mode (the worker's execute_chat): the long external I/O
         #    (platform APIs, file ingest, transcription) must NOT pin a pooled
         #    connection, so the credential read and the message-write tail each
-        #    open their own short UoW via the factories.
+        #    open their own short UoW from the factory.
+        #
+        # There used to be a third thing to carry for the second mode: a
+        # `conversation_service_factory`, because a conversation service is
+        # bound to a session and the worker's is not the one it was built with.
+        # `agent.contracts.conversations_for_surfaces` takes the unit of work
+        # per call, so the mode is now only which one to open.
         if uow is None and uow_factory is None:
             raise ValueError(
                 "AgentSurfaceIngressService requires either uow or uow_factory"
             )
         self.uow = uow
         self._uow_factory = uow_factory
-        self._conversation_service_factory = conversation_service_factory
-        self._connector_service_factory = connector_service_factory
         self.surface_repository = surface_repository
         self.conversation_link_repository = conversation_link_repository
-        self.conversation_service = conversation_service
-        self.connector_service = connector_service
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
@@ -138,10 +133,7 @@ class AgentSurfaceIngressService(
             self.identity_service = SurfaceIdentityResolutionService(
                 uow, self.external_user_repository
             )
-            self.credential_resolver = SurfaceCredentialResolver(
-                session=uow.session,
-                connector_service=connector_service,
-            )
+            self.credential_resolver = SurfaceCredentialResolver(uow=uow)
         else:
             self.external_user_repository = None
             self.identity_service = None
@@ -224,9 +216,7 @@ class AgentSurfaceIngressService(
             adapter=adapter,
             credentials=credentials,
             uow_factory=self._uow_factory,
-            conversation_service_factory=self._conversation_service_factory,
             uow=self.uow,
-            conversation_service=self.conversation_service,
         ):
             return
         with suppress(Exception):
@@ -242,13 +232,29 @@ class AgentSurfaceIngressService(
         # so surface files behave like web uploads; failures never block the run.
         ingest = AttachmentIngest()
         if context.pod_id is not None:
-            with suppress(Exception):
+            try:
                 ingest = await self.file_ingest_service.ingest_attachments(
                     pod_id=context.pod_id,
                     platform=context.platform,
                     user_id=context.user_id,
                     parsed=context.event,
                     credentials=credentials,
+                )
+            except Exception as exc:
+                # `ingest_attachments` reports a per-file failure itself, so
+                # reaching here is the whole call coming apart. This was a
+                # `suppress`, which left `ingest` empty -- indistinguishable
+                # downstream from a message that carried no files, which is the
+                # one thing `failed_files` below exists to prevent. The run
+                # still goes ahead: losing the photo is not a reason to lose
+                # the question that came with it.
+                logger.warning(
+                    "agent_surfaces.ingress_service.attachment_ingest_failed.degraded",
+                    error_type=type(exc).__name__,
+                    surface_id=str(context.surface_id) if context.surface_id else None,
+                )
+                ingest = every_attachment_failed(
+                    context.event, reason="Lemma could not receive this file"
                 )
         ingested: list[IngestedAttachment] = ingest.saved
 

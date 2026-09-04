@@ -35,7 +35,7 @@ from ..context import (
 from ..servers import upsert_server
 from ..confirm import confirm_destructive
 from ..io import emit
-from ..io import list_items
+from ..io import list_items, to_plain
 from ..select import item_label, select_from_items
 from ..state import (
     clear_auth,
@@ -768,9 +768,20 @@ def run_doctor(ctx: typer.Context) -> None:
     else:
         skew = "version_mismatch"
 
+    # The CLI and lemma-sdk ship as one version, and the CLI reaches into the
+    # SDK's generated request classes -- so an untested pairing surfaces as an
+    # AttributeError traceback, not a message. `skew` above is the *server*
+    # comparison and says nothing about it.
+    cli, sdk = cli_version(), sdk_dist_version()
+    if "unknown" in (cli, sdk):
+        sdk_pairing = "unknown"
+    else:
+        sdk_pairing = "in_sync" if cli == sdk else "version_mismatch"
+
     payload: dict[str, Any] = {
-        "lemma_cli": cli_version(),
-        "lemma_sdk": sdk_dist_version(),
+        "lemma_cli": cli,
+        "lemma_sdk": sdk,
+        "sdk_pairing": sdk_pairing,
         "bundled_api_schema": bundled or "unknown",
         "server": base_url,
         "server_api_schema": server_version or "unknown",
@@ -786,6 +797,13 @@ def run_doctor(ctx: typer.Context) -> None:
         f"[bold]lemma[/bold] {payload['lemma_cli']}    "
         f"[bold]lemma-sdk[/bold] {payload['lemma_sdk']}"
     )
+    if sdk_pairing == "version_mismatch":
+        console.print(
+            f"[yellow]⚠ untested pairing[/yellow] — this CLI ships with "
+            f"lemma-sdk {cli}, but {sdk} is installed. They are released "
+            "together; reinstall the CLI to pull the matching SDK "
+            "([bold]uv tool install --force lemma-terminal[/bold])."
+        )
     console.print(f"[dim]bundled API schema[/dim] {payload['bundled_api_schema']}")
     console.print(f"[dim]server[/dim] {base_url}")
 
@@ -950,6 +968,22 @@ def _default_with_source(
     }
 
 
+#: How many rows the `init` pickers show. A whole page, not a whole tenant --
+#: `_warn_if_truncated` covers what is past it. Name lookups page further; see
+#: `context.LOOKUP_PAGE_SIZE`.
+_PICKER_PAGE_SIZE = 200
+
+
+def _warn_if_truncated(page: Any, plural: str, flag: str) -> None:
+    """Say when the picker is showing a prefix, and how to skip it."""
+    plain = to_plain(page)
+    if isinstance(plain, dict) and plain.get("next_page_token"):
+        err_console.print(
+            f"[dim]There are more {plural} than this list shows — "
+            f"pass {flag} <name> to choose one directly.[/dim]"
+        )
+
+
 def _configure_defaults(
     client,  # type: ignore[no-untyped-def]
     state,
@@ -961,7 +995,13 @@ def _configure_defaults(
     orgs_api = getattr(client, "orgs", None) or client.organizations
     org_item = resolve_org(client, org) if org else None
     if org_item is None:
-        orgs = list_items(orgs_api.list(limit=200))
+        # One page, not the whole set: a picker is for choosing among a few, and
+        # a thousand-row list is not a picker. But a page that hides the rest
+        # silently is what makes "my org isn't listed" unanswerable, so say so
+        # and name the flag that skips the picker entirely.
+        orgs_page = orgs_api.list(limit=_PICKER_PAGE_SIZE)
+        orgs = list_items(orgs_page)
+        _warn_if_truncated(orgs_page, "organizations", "--org")
         org_item = (
             select_from_items(orgs, label="organization")
             if prompt
@@ -975,9 +1015,11 @@ def _configure_defaults(
     if pod_item is None:
         pods_api = client.pods
         if hasattr(pods_api, "list"):
-            pods = list_items(pods_api.list(org_id=org_id, limit=200))
+            pods_page = pods_api.list(org_id=org_id, limit=_PICKER_PAGE_SIZE)
         else:
-            pods = list_items(pods_api.list_by_organization(org_id, limit=200))
+            pods_page = pods_api.list_by_organization(org_id, limit=_PICKER_PAGE_SIZE)
+        pods = list_items(pods_page)
+        _warn_if_truncated(pods_page, "pods", "--pod")
         pod_item = (
             select_from_items(pods, label="pod")
             if prompt

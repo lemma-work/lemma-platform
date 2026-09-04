@@ -151,7 +151,7 @@ async def test_a_chat_surface_is_untouched_by_any_of_this() -> None:
     from unittest.mock import patch
 
     with patch(
-        "app.composition.agent_surface_runtime.deliver_display_resource",
+        "app.modules.agent_surfaces.contracts.egress.deliver_display_resource",
         new=AsyncMock(return_value=True),
     ) as delivered:
         response = await _display(

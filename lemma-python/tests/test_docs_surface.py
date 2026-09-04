@@ -47,3 +47,45 @@ def test_typed_errors_are_importable_from_package_root():
         "LemmaTimeoutError",
     ):
         assert hasattr(lemma_sdk, name), name
+
+
+def _readme() -> str:
+    from pathlib import Path
+
+    return (Path(__file__).resolve().parents[1] / "README.md").read_text()
+
+
+def test_org_facade_index_names_only_attributes_lemma_has():
+    """The `Facades: ...` line is an index people scan rather than read, so a
+    name in it is copied verbatim; `lemma.runtime` was one that never existed."""
+    import re
+
+    from lemma_sdk import Lemma
+
+    line = next(
+        text for text in _readme().split("\n\n") if text.startswith("Facades: ")
+    )
+    documented = {match.group(1) for match in re.finditer(r"`lemma\.(\w+)`", line)}
+
+    assert documented, "the README's facade index moved or changed shape"
+    assert sorted(name for name in documented if not hasattr(Lemma, name)) == []
+
+
+def test_org_facade_index_covers_every_public_facade():
+    """The other direction: an index that has quietly stopped tracking the
+    client sends readers to the generated escape hatch instead."""
+    import re
+
+    from lemma_sdk import Lemma
+
+    line = next(
+        text for text in _readme().split("\n\n") if text.startswith("Facades: ")
+    )
+    documented = {match.group(1) for match in re.finditer(r"`lemma\.(\w+)`", line)}
+    facades = {
+        name
+        for name, value in vars(Lemma).items()
+        if not name.startswith("_") and type(value).__name__ == "cached_property"
+    }
+
+    assert sorted(facades - documented) == []

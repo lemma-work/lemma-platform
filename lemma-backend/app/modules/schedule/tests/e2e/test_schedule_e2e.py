@@ -10,6 +10,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
@@ -32,12 +33,12 @@ SCHEDULE_E2E_TIMEOUT_SECONDS = 90
 
 
 def _returns_async(fn):
-    """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
+    """Adapt a sync stub to the now-async ``verify_webhook`` operation.
 
-    The port became a coroutine so implementations are forced to offload the
-    blocking Composio SDK off the event loop. A sync stub still type-checks as
-    a callable, so without this the route awaits a dict, raises, and answers
-    403 -- which is what these tests started doing.
+    Verification became a coroutine so the blocking Composio SDK is forced off
+    the event loop. A sync stub still type-checks as a callable, so without this
+    the route awaits a dict, raises, and answers 403 -- which is what these
+    tests started doing.
     """
 
     async def _call(*args, **kwargs):
@@ -1030,9 +1031,9 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
     )
 
     monkeypatch.setattr(
-        "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
+        "app.modules.connectors.contracts.triggers.verify_webhook",
         _returns_async(
-            lambda self, payload_text, headers: {
+            lambda payload_text, headers: {
                 "version": "V3",
                 "payload": {
                     "id": provider_id,
@@ -1190,7 +1191,10 @@ async def test_webhook_agent_schedule_contract_requires_connector_trigger(
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         agent_name=agent["name"],
-        config={"source": "slack", "channel_id": "C123"},
+        # `composio`, not `slack`: this is a Composio-backed Slack trigger, so
+        # its deliveries arrive at `/webhooks/composio`, and a source no ingress
+        # answers for is refused at create.
+        config={"source": "composio", "channel_id": "C123"},
         expected_status=422,
     )
     assert "connector_trigger_id" in missing_trigger["details"][0]["msg"]
@@ -1201,14 +1205,14 @@ async def test_webhook_agent_schedule_contract_requires_connector_trigger(
         schedule_type=ScheduleType.WEBHOOK.value,
         agent_name=agent["name"],
         connector_trigger_id=connector_trigger_id,
-        config={"source": "slack", "channel_id": "C123"},
+        config={"source": "composio", "channel_id": "C123"},
         filter_instruction="Only continue for urgent messages",
         filter_output_schema={"type": "object"},
     )
     assert schedule["agent_id"] == agent["id"]
     assert schedule["workflow_id"] is None
     assert schedule["connector_trigger_id"] == connector_trigger_id
-    assert schedule["config"] == {"source": "slack", "channel_id": "C123"}
+    assert schedule["config"] == {"source": "composio", "channel_id": "C123"}
     assert schedule["filter_instruction"] == "Only continue for urgent messages"
     assert schedule["filter_output_schema"] == {"type": "object"}
 
@@ -2147,3 +2151,60 @@ async def test_an_unknown_timezone_is_refused_at_create(
     )
     assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
     assert "Unknown time zone" in rejected["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_webhook_source_nothing_delivers_is_refused_at_create_and_update(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+):
+    """A schedule listening to nobody must be a 422, not a silent dead trigger.
+
+    `POST /webhooks/{source}` refuses a source with no plugin, so a schedule
+    naming one is accepted, stored, listed as active and never fires. The
+    accepted names are read out of the registry rather than spelled out: a
+    deployment that adds a third source should not need this test edited.
+    """
+    accepted = default_webhook_sources().sources
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+    connector_id = f"unheard_{uuid4().hex[:8]}"
+    connector_trigger_id = f"{connector_id}:message_created"
+    await _seed_connector_trigger(
+        db_session,
+        connector_id=connector_id,
+        trigger_id=connector_trigger_id,
+        event_type="message.created",
+    )
+
+    rejected = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        agent_name=agent["name"],
+        connector_trigger_id=connector_trigger_id,
+        config={"source": "no_such_webhook_source"},
+        expected_status=422,
+    )
+    assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
+    assert "no_such_webhook_source" in rejected["message"]
+    for source in accepted:
+        assert source in rejected["message"], rejected["message"]
+
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        agent_name=agent["name"],
+        connector_trigger_id=connector_trigger_id,
+        config={"source": accepted[0]},
+    )
+    assert schedule["config"] == {"source": accepted[0]}
+
+    rejected_update = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}",
+        json={"config": {"source": "no_such_webhook_source"}},
+    )
+    assert rejected_update.status_code == 422, rejected_update.text
+    assert rejected_update.json()["code"] == "SCHEDULE_VALIDATION_ERROR"

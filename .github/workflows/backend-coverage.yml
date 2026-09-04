@@ -21,10 +21,14 @@ name: Backend coverage
 # commit for unit coverage) by run id, which is the thing a pull_request event
 # cannot do.
 #
-# The floors it enforces are real and still enforced; they are just no longer
-# enforced in front of the merge button. Deliberately not a required check:
-# it also enforces separately-tracked module floors that several modules are
-# still below, so requiring it would block every PR for an unrelated reason.
+# The floors it enforces are real, and `Backend coverage passed` is a required
+# check, so they are enforced in front of the merge button again — just not on
+# the critical path, since this runs after Backend E2E rather than beside it.
+#
+# It could not be required while it enforced module floors several modules were
+# below; that would have blocked every PR for an unrelated reason. Every floor
+# now comes from a measurement rather than a hope, so the gate is green by
+# construction and a red one is a real regression.
 
 on:
   workflow_run:
@@ -376,35 +380,37 @@ jobs:
                 body,
               });
             }
-      # `agent_surfaces` sits at 79 rather than 80, and the reason is measured
-      # rather than aspirational. Across 38 runs where this gate actually
-      # executed it reported 79.56 to 79.98 and failed 32 of them -- the floor
-      # was set fractionally above the value it measures, so the gate was red
-      # on `main` most of the time and the six passes squeaked over by
-      # hundredths. Four separate head SHAs produced both a pass and a failure,
-      # so the variance is real and not a stuck number: this is coverage
-      # measured across worker subprocesses under xdist, and
-      # `.github/e2e-shards.json` already records a ~0.4-point per-run spread
-      # for `agent` from the same cause.
+      # Floors live in `lemma-backend/coverage-baseline.json`, one per module
+      # per lane, recorded from what a run actually measures. Four modules used
+      # to be named here and every other module had none, so anything unnamed
+      # could lose all of its coverage while the whole-repo figure -- one number
+      # over ~190k statements -- barely moved.
       #
-      # A gate that is red most of the time gates nothing, because nobody reads
-      # it. 79 keeps roughly half a point of headroom below the observed floor.
-      # Raise it deliberately when real coverage moves, not to express a hope.
-      - name: Enforce critical-module E2E floors
+      # Each floor sits half a point below the measurement it came from, which
+      # is the conclusion this file had already reached and applied to only one
+      # of its four modules. Across 38 runs where this gate executed, `agent`
+      # reported 79.56 to 79.98 and failed 32 of them: the floor was 80, set
+      # fractionally above the value it measures, and four separate head SHAs
+      # produced both a pass and a failure. The variance is real -- coverage
+      # measured across worker subprocesses under xdist, and
+      # `.github/e2e-shards.json` records a ~0.4-point per-run spread for
+      # `agent` from the same cause. A gate that is red most of the time gates
+      # nothing, because nobody reads it.
+      #
+      # `--write` raises a floor and never lowers one, so a good run locks its
+      # gain in and a bad run cannot be regenerated away.
+      - name: Enforce per-module E2E floors
         run: >-
           uv run python scripts/check_coverage_thresholds.py
           coverage-backend/e2e-union.json
+          --lane e2e_union
           --min-total 0
-          --min-module agent=80
-          --min-module agent_surfaces=79
-          --min-module datastore=80
-          --min-module function=80
-      - name: Enforce total and module floors
+      - name: Enforce total and per-module floors
         run: >-
           uv run python scripts/check_coverage_thresholds.py
           coverage-backend/coverage.json
+          --lane combined
           --min-total 70
-          --min-module schedule=65
       - name: Enforce changed-code coverage
         run: >-
           uv run diff-cover coverage-backend/coverage.xml
@@ -426,3 +432,32 @@ jobs:
             lemma-backend/coverage-backend/overall.md
             lemma-backend/coverage-backend/overall-summary.json
           if-no-files-found: error
+
+  coverage-passed:
+    name: Backend coverage passed
+    # The single required context for this workflow, in the shape ci.yml and
+    # e2e.yml already use: `needs` the real jobs so a new one cannot be added
+    # outside the gate, and report on their results rather than repeating them.
+    timeout-minutes: 10
+    # `!cancelled()`, not `always()`: `cancel-in-progress` above supersedes a
+    # run on every new push to the branch, and a required check that reports
+    # failure for a run somebody replaced makes the run list unreadable — the
+    # reasoning e2e.yml's aggregator spells out at length.
+    if: ${{ !cancelled() }}
+    needs: [detect, aggregate-coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if the coverage gate failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::The backend coverage gate failed. A module fell below"
+          echo "::error::its floor in lemma-backend/coverage-baseline.json, or"
+          echo "::error::changed-code coverage fell below 85%. Write the test —"
+          echo "::error::regenerating the baseline only ever raises a floor."
+          exit 1
+      # `detect` is skipped when the upstream e2e run did not succeed, and then
+      # so is the gate. That is the correct answer here rather than a hold: the
+      # e2e failure is already blocking through its own required check, and a
+      # coverage check that waits for a run which will never happen leaves the
+      # pull request permanently pending.
+      - run: echo "Backend coverage passed (or was skipped as inapplicable)."

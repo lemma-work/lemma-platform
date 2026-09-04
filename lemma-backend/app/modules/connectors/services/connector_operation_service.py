@@ -7,12 +7,14 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
+    MAX_OPERATION_DETAILS_PER_REQUEST,
     OperationDetail,
     OperationDetailsBatchResponse,
     OperationDiscoverResponse,
     OperationExecutionResponse,
     OperationSummary,
 )
+from app.modules.connectors.domain.auth_config import reject_if_disabled
 from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
@@ -28,7 +30,12 @@ from app.modules.connectors.domain.ports import (
     ConnectorRepositoryPort,
     AppOperationGatewayPort,
 )
+from app.modules.connectors.services.operation_ranking import (
+    normalized_operation_name,
+    operation_relevance_score,
+)
 from app.modules.connectors.services.operation_visibility import (
+    count_operations_for_install,
     find_install_or_catalog_operation,
     list_operations_for_install,
 )
@@ -111,53 +118,6 @@ class ConnectorOperationService:
         )
         return auth_config, auth_config.connector_id, auth_config.kind.value
 
-    def _normalize_operation_lookup_name(self, operation_name: str) -> str:
-        return operation_name.strip().lower()
-
-    def _operation_relevance_score(
-        self,
-        operation: Any,
-        query: str | None,
-    ) -> float | None:
-        if not query:
-            return None
-
-        normalized_query = " ".join(
-            query.replace("_", " ").replace("-", " ").replace("/", " ").lower().split()
-        )
-        if not normalized_query:
-            return None
-
-        tokens = normalized_query.split()
-        name = str(getattr(operation, "name", "") or "").lower()
-        provider_name = str(
-            getattr(operation, "provider_operation_name", "") or ""
-        ).lower()
-        display_name = str(getattr(operation, "display_name", "") or "").lower()
-        description = str(getattr(operation, "description", "") or "").lower()
-        search_document = str(getattr(operation, "search_document", "") or "").lower()
-        compact_names = {
-            name,
-            provider_name,
-            display_name,
-            name.replace("_", " "),
-            provider_name.replace("_", " "),
-        }
-        name_text = " ".join(compact_names)
-        all_text = " ".join([name_text, description, search_document])
-
-        score = 0.0
-        if normalized_query in compact_names:
-            score = max(score, 1.0)
-        if normalized_query and normalized_query in name_text:
-            score = max(score, 0.95)
-        if tokens:
-            name_matches = sum(1 for token in tokens if token in name_text)
-            all_matches = sum(1 for token in tokens if token in all_text)
-            score = max(score, 0.85 * (name_matches / len(tokens)))
-            score = max(score, 0.7 * (all_matches / len(tokens)))
-        return round(score, 3)
-
     def _build_operation_summary(
         self,
         operation: Any,
@@ -170,7 +130,7 @@ class ConnectorOperationService:
                 operation.name,
                 operation.description,
             ),
-            relevance_score=self._operation_relevance_score(operation, query),
+            relevance_score=operation_relevance_score(operation, query),
         )
 
     def _build_operation_detail(self, operation: Any) -> OperationDetail:
@@ -197,12 +157,16 @@ class ConnectorOperationService:
         )
 
     def _is_oauth_account(self, account: Any) -> bool:
-        auth_method = getattr(getattr(account, "connector", None), "auth_method", None)
-        if auth_method is not None and hasattr(auth_method, "value"):
-            auth_method = auth_method.value
-        if auth_method is not None:
-            return str(auth_method).upper() == "OAUTH2"
+        """Whether this account holds something a refresh could renew.
 
+        Decided from the credential's own shape, because that is the only
+        authority available here: an auth scheme is a property of the install's
+        `KindSpec`, not of the connector, and this is handed an account. A
+        branch above used to read `account.connector.auth_method` first, as
+        though scheme detection were authoritative -- `ConnectorEntity` has no
+        such field, so the `getattr` always answered None and the sniff below
+        decided every case anyway.
+        """
         creds = getattr(account, "credentials", None)
         if isinstance(creds, dict):
             return any(
@@ -321,13 +285,18 @@ class ConnectorOperationService:
         # `total_operations` is the install's whole set, so a client can say
         # "showing 10 of 340". Only a narrowed selection needs a second read to
         # learn it -- an unfiltered, unlimited listing already *is* the total.
+        # And that read is a count, not a second listing: `len()` over every
+        # row with its JSONB schemas is not a count query, and the agent's
+        # cross-install search fans this out over every install in the org.
         if query is None and limit is None:
             total_operations = len(selected_operations)
         else:
-            total_operations = len(
-                await self._list_operation_entities(
-                    connector_id, kind=kind, auth_config_id=auth_config_id
-                )
+            total_operations = await count_operations_for_install(
+                catalog_repository=self.operation_repository,
+                install_repository=self.auth_config_operation_repository,
+                connector_id=connector_id,
+                kind=kind,
+                auth_config_id=auth_config_id,
             )
 
         items = [
@@ -388,20 +357,27 @@ class ConnectorOperationService:
         operation_names: list[str] | None = None,
         kind: str | None = None,
         auth_config_id: UUID | None = None,
+        limit: int = MAX_OPERATION_DETAILS_PER_REQUEST,
     ) -> OperationDetailsBatchResponse:
+        """Full schemas for several operations at once.
+
+        Bounded even when no names are given. A detail carries the operation's
+        whole input and output schema, so "every operation" on a connector the
+        size of Jira is tens of megabytes of JSON built in memory -- and the
+        endpoint documented that as its intended usage, which made it the
+        cheapest way for any org member to exhaust the API's memory.
+        """
         operations = await self._list_operation_entities(
             connector_id,
             kind=kind,
             auth_config_id=auth_config_id,
         )
         operations_by_name = {
-            self._normalize_operation_lookup_name(operation.name): operation
+            normalized_operation_name(operation.name): operation
             for operation in operations
         }
         operations_by_provider_name = {
-            self._normalize_operation_lookup_name(
-                operation.provider_operation_name
-            ): operation
+            normalized_operation_name(operation.provider_operation_name): operation
             for operation in operations
             if operation.provider_operation_name
         }
@@ -409,7 +385,7 @@ class ConnectorOperationService:
         if operation_names:
             selected_operations: list[Any] = []
             for operation_name in operation_names:
-                normalized_name = self._normalize_operation_lookup_name(operation_name)
+                normalized_name = normalized_operation_name(operation_name)
                 operation = operations_by_name.get(
                     normalized_name
                 ) or operations_by_provider_name.get(normalized_name)
@@ -417,7 +393,7 @@ class ConnectorOperationService:
                     raise OperationNotFoundError(operation_name)
                 selected_operations.append(operation)
         else:
-            selected_operations = operations
+            selected_operations = operations[:limit]
 
         items = [
             self._build_operation_detail(operation) for operation in selected_operations
@@ -426,6 +402,7 @@ class ConnectorOperationService:
             connector_id=connector_id,
             items=items,
             returned_count=len(items),
+            total_operations=len(operations),
         )
 
     async def get_operation_details_batch_for_auth_config(
@@ -435,6 +412,7 @@ class ConnectorOperationService:
         organization_id: UUID,
         auth_config_name: str,
         operation_names: list[str] | None = None,
+        limit: int = MAX_OPERATION_DETAILS_PER_REQUEST,
     ) -> OperationDetailsBatchResponse:
         auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
@@ -446,6 +424,7 @@ class ConnectorOperationService:
             operation_names=operation_names,
             kind=kind,
             auth_config_id=auth_config.id,
+            limit=limit,
         )
 
     # -- Resolve / execute split ------------------------------------------------
@@ -466,6 +445,7 @@ class ConnectorOperationService:
         payload: dict[str, Any],
         actor: Context | None = None,
         account_id: UUID | None = None,
+        act_as: str = "user",
     ) -> ResolvedConnectorExecution:
         auth_config, connector_id, _kind = await self._resolve_auth_config_context(
             user_id=user_id,
@@ -480,8 +460,8 @@ class ConnectorOperationService:
             actor=actor,
             account_id=account_id,
             auth_config_id=auth_config.id,
-            # Already loaded by name above; re-reading it by id was a wasted
-            # round trip on every execution.
+            act_as=act_as,
+            # Loaded by name above; re-reading it by id was a wasted round trip.
             auth_config=auth_config,
         )
 
@@ -496,6 +476,7 @@ class ConnectorOperationService:
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
         auth_config: Any | None = None,
+        act_as: str = "user",
     ) -> ResolvedConnectorExecution:
         kind: str | None = None
         if auth_config_id is not None:
@@ -507,6 +488,10 @@ class ConnectorOperationService:
                 )
             if auth_config is None:
                 raise ConnectorNotFoundError(str(auth_config_id))
+            # A bare `get()` sees every install, including one an admin has
+            # switched off -- and this is the path a pod function or an agent
+            # tool takes, addressing the install by id.
+            reject_if_disabled(auth_config)
             kind = auth_config.kind.value
             account = (
                 await self.account_resolution_service.resolve_account_for_auth_config(
@@ -531,9 +516,8 @@ class ConnectorOperationService:
                 if auth_config is not None:
                     kind = auth_config.kind.value
 
-        # An install's own discovered operation wins over a catalog one of the
-        # same name: for mcp/openapi the catalog has nothing to offer, and where
-        # both exist the install describes the server actually being called.
+        # An install's discovered operation wins over a catalog one of the same
+        # name: the install describes the server actually being called.
         operation = None
         if auth_config_id is not None and self.auth_config_operation_repository:
             operation = (
@@ -555,10 +539,7 @@ class ConnectorOperationService:
         if not operation:
             raise OperationNotFoundError(operation_name)
 
-        third_party_credentials = await self._resolve_execution_credentials(
-            account,
-            user_id,
-        )
+        credentials = await self._resolve_execution_credentials(account, user_id)
         return ResolvedConnectorExecution(
             connector_id=connector_id,
             operation_execution_name=operation.execution_name,
@@ -576,9 +557,11 @@ class ConnectorOperationService:
             execution=getattr(operation, "execution", None),
             operation_name=operation.name,
             input_schema=getattr(operation, "input_schema", None),
-            third_party_credentials=third_party_credentials,
+            third_party_credentials=credentials,
             payload=payload or {},
             account_id=getattr(account, "id", None),
+            account_external_ref=getattr(account, "external_ref", None),
+            act_as=act_as,
             account_user_id=getattr(account, "user_id", None),
             acting_user_id=user_id,
             organization_id=getattr(account, "organization_id", None),

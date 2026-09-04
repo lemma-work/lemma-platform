@@ -47,8 +47,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.services.workspace_location import (
     apply_location_metadata,
 )
-from app.composition.agent_pod import create_agent_pod_repository
-from app.composition.agent_usage import UsageService
+from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -440,7 +440,7 @@ class ConversationService:
         )
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
-        return await create_agent_pod_repository(self.uow).get_organization_id(pod_id)
+        return await pod_organization_id(self.uow, pod_id)
 
     async def stop_conversation(
         self,

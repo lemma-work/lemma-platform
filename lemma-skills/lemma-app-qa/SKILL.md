@@ -177,7 +177,10 @@ Exercise these dimensions where the feature exposes them:
 - **Permission:** explain unavailable access without leaking protected data; keep
   the denial consistent with server behavior.
 - **Full/overflow:** use long labels, many rows, large values, and pagination or
-  scrolling without clipping essential actions.
+  scrolling without clipping essential actions. Seed past one page — `record.list`
+  serves at most 1000 rows and an ad-hoc datastore query answers with `truncated`
+  — then check every displayed count against an independent count. A page size
+  rendered as a total is a data defect, not a layout one.
 - **Responsive:** check at minimum the product's wide layout and `375px`; add
   intermediate widths for layout transitions. Reject hidden essential actions,
   accidental horizontal scrolling, clipped dialogs, and touch targets below the

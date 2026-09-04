@@ -157,8 +157,9 @@ The sandbox binds a client to the invocation, so the shortest path is the contex
 you were handed:
 
 ```python
-async def execute(context, data: Input) -> Output:
-    pod = context.pod          # already authenticated for this invocation
+# the handler's name is whatever `#function_name:` declares — not `execute`
+async def save_expense(ctx: FunctionContext, data: SaveExpenseInput) -> SaveExpenseResult:
+    pod = ctx.pod              # already authenticated for this invocation
 ```
 
 `Pod.from_env()` is equivalent and is what you want in a helper that doesn't have
@@ -171,10 +172,13 @@ pod = Pod.from_env()        # authenticated as the invoking user, with this func
 ```
 
 **What that identity means** is the part people get wrong. The call runs as the
-**invoking user**, so RLS tables scope to *their* rows and `/me` is *their* tree —
-but authorization is **grant-first**: the user's own roles do **not** carry over.
-The function needs its own explicit grant on every table, folder, and connector it
-touches, or the call comes back 403 even though the user could do it by hand.
+**invoking user**, so RLS tables scope to *their* rows and `/me` is *their* tree — but
+the user's own access is a **ceiling, not a substitute for grants**. Both halves have
+to hold: the function needs its own explicit grant on every table, folder, and
+connector it touches (or `MISSING_WORKLOAD_RESOURCE_GRANT`, even though the user could
+do it by hand), *and* the invoking user must be able to do the same thing themselves
+(or `DELEGATION_EXCEEDS_INVOKER`, which no amount of granting fixes). See
+`authorization-model.md` §2.
 
 `Pod` exposes resource facades (all synchronous): `pod.records` / `pod.table(name)`,
 `pod.files`, `pod.connectors`, `pod.workflows`, `pod.agents`, `pod.conversations`,

@@ -9,8 +9,7 @@ from faststream.redis import RedisRouter
 from sqlalchemy.exc import SQLAlchemyError
 from streaq.task import TaskStatus
 
-from app.composition.agent_usage import build_usage_service
-from app.composition.authorization import create_authorization_service
+from app.modules.usage.contracts.execution import build_usage_service
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.session import async_session_maker
@@ -25,6 +24,7 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.infrastructure.jobs.job_liveness import dead_job_ids
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
@@ -312,7 +312,7 @@ async def process_agent_run(
         uow_factory=worker_ctx.uow_factory,
         harness_registry=build_harness_registry(),
     )
-    from app.composition.agent_surface_runtime import build_progress_observer
+    from app.modules.agent_surfaces.contracts.egress import build_progress_observer
 
     # No try/except around this. A CancelledError from a worker shutting down
     # must reach streaq: it only XACKs a task that returned, and relinquishes a
@@ -370,7 +370,7 @@ async def reconcile_agent_approval_now(
             uow=uow,
             conversation_repository=conversation_repository,
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_service(uow),
+            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         )
         # An approved request_approval runs its wrapped tool with a user's
@@ -413,12 +413,15 @@ async def process_conversation_title(
     ).generate_title_if_absent(conversation_id)
 
 
-# Sweep stale runs only well after the agent-run task timeout, so a legitimately
-# long-running agent (up to AGENT_RUN_JOB_TIMEOUT_SECONDS) is never swept; by
-# then the task is definitively gone (crash/OOM/forced shutdown losing the
-# finalization race) and the run must be failed so it doesn't sit in RUNNING
-# forever.
+# Two cutoffs, because there are two ways to know a run is over. A job that has
+# stopped renewing its heartbeat is gone now, however it died, so the first has
+# only to outlast one expired heartbeat. A run whose job never reported one --
+# still queued, or in flight when the heartbeat shipped -- can be judged on the
+# wall clock alone, and that has to clear the longest legitimate run or a
+# healthy agent is failed mid-answer.
+_UNRESPONSIVE_RUN_CUTOFF_SECONDS = 120
 _ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
+_INTERRUPTED_RUN_ERROR = "Agent run was interrupted (worker restart or crash)"
 
 # A live worker acts on a stop within a second, so one still pending after this
 # means no worker ever will. STOP_REQUESTED holds the conversation's one active
@@ -433,10 +436,11 @@ async def reconcile_orphaned_agent_runs() -> None:
     A worker shut down with SIGTERM relinquishes its task for the queue to
     redeliver, so what reaches here is what no worker got to hand back: SIGKILL,
     OOM, and the race where finalization lost to engine disposal. Those cannot
-    be resumed safely -- nothing closed their outstanding tool calls, and
-    staleness alone cannot tell a dead worker from a live peer without a
-    heartbeat -- so they fail terminally, publishing the same lifecycle and SSE
-    events a normal finish does.
+    be resumed safely -- nothing closed their outstanding tool calls -- so they
+    fail terminally, publishing the same lifecycle and SSE events a normal
+    finish does. Which runs those are is the job heartbeat's answer: on age
+    alone this had to wait out the whole task timeout, and every message the
+    person sent in those four hours joined the dead run and went unanswered.
 
     A run left STOP_REQUESTED is the other half, and settles as STOPPED: the
     user asked for it to end, and it is holding the conversation's active slot.
@@ -448,6 +452,13 @@ async def reconcile_orphaned_agent_runs() -> None:
             stale = await repo.list_stale_active_runs(
                 cutoff_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
             )
+            # The band the backstop cannot reach yet, decided by liveness.
+            undecided = await repo.list_active_runs_pending_liveness(
+                cutoff_seconds=_UNRESPONSIVE_RUN_CUTOFF_SECONDS,
+                decided_after_seconds=_ORPHANED_RUN_CUTOFF_SECONDS,
+            )
+            gone = await dead_job_ids(agent_run_job_id(run.id) for run in undecided)
+            stale.extend(run for run in undecided if agent_run_job_id(run.id) in gone)
             finalized: list[tuple[UUID, UUID, AgentRunStatus]] = []
             finalized.extend(
                 await settle_stuck_stops(
@@ -458,12 +469,10 @@ async def reconcile_orphaned_agent_runs() -> None:
                 finish_result = await repo.finish_agent_run(
                     agent_run_id=run.id,
                     status=AgentRunStatus.FAILED,
-                    error="Agent run was interrupted (worker restart or crash)",
+                    error=_INTERRUPTED_RUN_ERROR,
                 )
                 if finish_result is not None and finish_result.updated:
-                    event_data = {
-                        "error": "Agent run was interrupted (worker restart or crash)"
-                    }
+                    event_data = {"error": _INTERRUPTED_RUN_ERROR}
                     repo.collect_events(
                         [
                             AgentRunCompletedEvent(
@@ -498,7 +507,7 @@ async def reconcile_orphaned_agent_runs() -> None:
     # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
     # so SSE clients refresh and workflow waits resume promptly.
     for conversation_id, agent_run_id, status in finalized:
-        event_data = {"error": "Agent run was interrupted (worker restart or crash)"}
+        event_data = {"error": _INTERRUPTED_RUN_ERROR}
         try:
             await publish_conversation_event(
                 conversation_id,

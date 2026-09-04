@@ -1,0 +1,140 @@
+"""An agent's mailbox — or a new pod's assistant's — over its whole life.
+
+Four operations, in place of `app/composition/agent_email_surface.py`. That file
+existed because `agent` and `pod` were held not to import `agent_surfaces`; both
+already reach this module's other contracts, so what is left is an ordinary
+published surface, and the lazy imports at the two call sites are now about
+import cost rather than about a rule.
+
+The provisioning itself lives in `services/email_surface_provisioning`, which
+every caller goes through — notification delivery lazily, the surfaces API and
+the bundle applier with their own name and config, and these two eagerly.
+Teardown goes through `AgentSurfaceService.delete_surfaces_for_agent`.
+
+Best-effort in both directions, and that is this module's own decision rather
+than the caller's. Creating an agent or a pod must not fail because a mail
+domain is unset or Resend is unreachable: both are still perfectly usable over
+chat and in the app, and an address can be added later. Deleting an agent must
+not fail because a provider will not take the webhook back, either — the row
+goes regardless, so a deleted agent never keeps a live mailbox.
+
+A submodule rather than `contracts/__init__`: this reaches the service layer,
+and `contracts/__init__` is imported by anything that wants any contract at all.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.api.dependencies import get_surface_service
+from app.modules.agent_surfaces.services.email_surface_provisioning import (
+    provision_email_surface,
+)
+from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
+
+
+async def provision_agent_email_surface(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_id: UUID, agent_name: str
+) -> str | None:
+    """Create this agent's Resend surface, returning its address.
+
+    None when email is not configured for the deployment, or when provisioning
+    failed — both are survivable, and both are logged rather than raised.
+    """
+    surface, _ = await provision_email_surface(
+        get_surface_service(uow),
+        uow.session,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        # Delegated rather than repeating the lookup: this module owns the one
+        # copy, and a caller reaching for `PodRepository` itself is how there
+        # came to be two.
+        pod_name=await pod_name_for(uow, pod_id),
+    )
+    return surface.surface_identity_email if surface else None
+
+
+async def provision_pod_assistant_email_surface(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, pod_name: str | None
+) -> str | None:
+    """Create the pod assistant's mailbox, returning its address.
+
+    ``agent_id`` is the pod's own id, because that is the assistant's row id --
+    the mailbox belongs to it as plainly as any agent's belongs to theirs. It
+    used to be None, back when a surface with no agent was how the assistant was
+    named; that is what let one column mean two things.
+
+    ``agent_name`` stays None, and for a different reason: it is what the
+    address is built from, and the assistant's stored name is the internal
+    ``pod_default``. None keeps the address the pod's own -- ``acme@`` rather
+    than ``pod-default.acme@``.
+
+    The pod's name is passed in rather than looked up. The caller is pod creation
+    and already holds it, and the row a lookup would read is the one it just
+    wrote.
+
+    Best-effort, on the same terms as an agent's: None when email is not
+    configured or provisioning failed, and both are survivable.
+    """
+    surface, _ = await provision_email_surface(
+        get_surface_service(uow),
+        uow.session,
+        pod_id=pod_id,
+        agent_id=pod_id,
+        agent_name=None,
+        pod_name=pod_name,
+    )
+    return surface.surface_identity_email if surface else None
+
+
+async def teardown_agent_surfaces(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_id: UUID
+) -> int:
+    """Delete the surfaces belonging to an agent being deleted.
+
+    ``agent_surfaces.agent_id`` is ``ON DELETE CASCADE``, so the rows go with
+    the agent on their own. This still runs, for the provider side: a webhook to
+    deregister and an address to free. It used to be load-bearing for
+    correctness -- a nulled row was indistinguishable from the assistant's own
+    surface -- and the cascade is what took that job over. Formerly: leaving them
+    behind does not orphan them — it turns them into agentless surfaces, which
+    is what the pod assistant's own mailbox is. The pod then has two and starts
+    answering from a deleted agent's address.
+
+    Returns how many went, for the caller that wants to say so.
+
+    Best-effort per surface — a provider that will not take its webhook back
+    must not keep an agent undeletable, and the row goes either way. Not
+    best-effort about the database: if the surfaces cannot even be listed, that
+    propagates and aborts the deletion, because reporting an agent deleted while
+    its mailbox is still receiving is the state this exists to prevent.
+    """
+    return await get_surface_service(uow).delete_surfaces_for_agent(pod_id, agent_id)
+
+
+async def release_pod_inbound_addresses(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
+) -> int:
+    """Delete a deleted pod's email surfaces, freeing their addresses now.
+
+    `delete_pod` frees the pod's org-unique *name* immediately, so recreating a
+    pod under it before the pod-deleted event is consumed races the teardown:
+    either the new pod takes a suffixed address and the readable one is
+    orphaned, or it inherits an address the deleted pod's correspondents are
+    still writing to.
+
+    Email only, so this stays bounded — a Resend surface receives on a
+    catch-all webhook and has no provider call to make on the way out. The
+    pod-deleted event still tears down everything else.
+    """
+    return await get_surface_service(uow).delete_email_surfaces_for_pod(pod_id)
+
+
+__all__ = [
+    "provision_agent_email_surface",
+    "provision_pod_assistant_email_surface",
+    "release_pod_inbound_addresses",
+    "teardown_agent_surfaces",
+]

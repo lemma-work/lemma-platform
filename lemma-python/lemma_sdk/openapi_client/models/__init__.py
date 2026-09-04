@@ -111,6 +111,7 @@ _NAME_TO_MODULE = {
     'AuthConfigCreateSchema': 'auth_config_create_schema',
     'AuthConfigCreateSchemaConfigType0': 'auth_config_create_schema_config_type_0',
     'AuthConfigListResponseSchema': 'auth_config_list_response_schema',
+    'AuthConfigOperationsRefreshResponseSchema': 'auth_config_operations_refresh_response_schema',
     'AuthConfigResponseSchema': 'auth_config_response_schema',
     'AuthConfigResponseSchemaConfigType0': 'auth_config_response_schema_config_type_0',
     'AuthConfigResponseSchemaMetadataType0': 'auth_config_response_schema_metadata_type_0',
@@ -132,10 +133,8 @@ _NAME_TO_MODULE = {
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
-    'ConnectRequestResponseSchemaAttributesType0': 'connect_request_response_schema_attributes_type_0',
     'ConnectedAccountSummary': 'connected_account_summary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
-    'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations': 'connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
     'ConnectorKind': 'connector_kind',
@@ -306,6 +305,8 @@ _NAME_TO_MODULE = {
     'OperationDetailsBatchRequest': 'operation_details_batch_request',
     'OperationDetailsBatchResponse': 'operation_details_batch_response',
     'OperationDiscoverResponse': 'operation_discover_response',
+    'OperationDiscoverySchema': 'operation_discovery_schema',
+    'OperationDiscoveryStatus': 'operation_discovery_status',
     'OperationExecutionRequest': 'operation_execution_request',
     'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
@@ -325,6 +326,7 @@ _NAME_TO_MODULE = {
     'OrganizationRole': 'organization_role',
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
+    'PartialApplyResponse': 'partial_apply_response',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
@@ -631,6 +633,7 @@ if TYPE_CHECKING:
     from .auth_config_create_schema import AuthConfigCreateSchema
     from .auth_config_create_schema_config_type_0 import AuthConfigCreateSchemaConfigType0
     from .auth_config_list_response_schema import AuthConfigListResponseSchema
+    from .auth_config_operations_refresh_response_schema import AuthConfigOperationsRefreshResponseSchema
     from .auth_config_response_schema import AuthConfigResponseSchema
     from .auth_config_response_schema_config_type_0 import AuthConfigResponseSchemaConfigType0
     from .auth_config_response_schema_metadata_type_0 import AuthConfigResponseSchemaMetadataType0
@@ -652,10 +655,8 @@ if TYPE_CHECKING:
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
     from .connect_request_response_schema import ConnectRequestResponseSchema
-    from .connect_request_response_schema_attributes_type_0 import ConnectRequestResponseSchemaAttributesType0
     from .connected_account_summary import ConnectedAccountSummary
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
-    from .connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations import ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
     from .connector_kind import ConnectorKind
@@ -826,6 +827,8 @@ if TYPE_CHECKING:
     from .operation_details_batch_request import OperationDetailsBatchRequest
     from .operation_details_batch_response import OperationDetailsBatchResponse
     from .operation_discover_response import OperationDiscoverResponse
+    from .operation_discovery_schema import OperationDiscoverySchema
+    from .operation_discovery_status import OperationDiscoveryStatus
     from .operation_execution_request import OperationExecutionRequest
     from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
@@ -845,6 +848,7 @@ if TYPE_CHECKING:
     from .organization_role import OrganizationRole
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
+    from .partial_apply_response import PartialApplyResponse
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
@@ -1164,6 +1168,7 @@ __all__ = [
     'AuthConfigCreateSchema',
     'AuthConfigCreateSchemaConfigType0',
     'AuthConfigListResponseSchema',
+    'AuthConfigOperationsRefreshResponseSchema',
     'AuthConfigResponseSchema',
     'AuthConfigResponseSchemaConfigType0',
     'AuthConfigResponseSchemaMetadataType0',
@@ -1185,10 +1190,8 @@ __all__ = [
     'ColumnSchemaTypeParamsType0',
     'ConnectRequestInitiateSchema',
     'ConnectRequestResponseSchema',
-    'ConnectRequestResponseSchemaAttributesType0',
     'ConnectedAccountSummary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
-    'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
     'ConnectorKind',
@@ -1359,6 +1362,8 @@ __all__ = [
     'OperationDetailsBatchRequest',
     'OperationDetailsBatchResponse',
     'OperationDiscoverResponse',
+    'OperationDiscoverySchema',
+    'OperationDiscoveryStatus',
     'OperationExecutionRequest',
     'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
@@ -1378,6 +1383,7 @@ __all__ = [
     'OrganizationRole',
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
+    'PartialApplyResponse',
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',

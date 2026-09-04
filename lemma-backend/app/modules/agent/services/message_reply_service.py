@@ -7,8 +7,9 @@ meantime. The agent sends, finishes its turn, and the conversation goes quiet.
 What was missing was the other half — nothing brought it back. This is that
 half, and it is deliberately *not* a wait. The asking run declares nothing and
 holds nothing open; the replies are simply input, and input starts a turn. Same
-rule as a person typing, and the same one ``composition.workflow_agent`` already
-uses to hand a system-triggered run its prompt.
+rule as a person typing, and the same one this module's own
+``infrastructure.adapters.workflow_control`` already uses to hand a
+system-triggered run its prompt.
 
 Which is why an agent no longer has any reason to ``snooze`` after
 ``message_user``. Snooze is a timer for work with a real gap in it — a build, a
@@ -114,8 +115,8 @@ class MessageReplyService:
         )
 
     def _conversation_service(self):
-        from app.composition.agent_usage import build_usage_service
-        from app.composition.authorization import create_authorization_service
+        from app.modules.usage.contracts.execution import build_usage_service
+        from app.core.authorization.factory import create_authorization_data_service
         from app.modules.agent.infrastructure.repositories import AgentRepository
         from app.modules.agent.services.conversation_service import ConversationService
 
@@ -123,6 +124,6 @@ class MessageReplyService:
             uow=self.uow,
             conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
-            authorization_service=create_authorization_service(self.uow),
+            authorization_service=create_authorization_data_service(self.uow),
             usage_service=build_usage_service(self.uow),
         )

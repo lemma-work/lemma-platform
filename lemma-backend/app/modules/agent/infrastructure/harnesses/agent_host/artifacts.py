@@ -10,7 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.composition.agent_datastore import build_file_service
+from app.modules.datastore.contracts.agent_tools import build_file_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger

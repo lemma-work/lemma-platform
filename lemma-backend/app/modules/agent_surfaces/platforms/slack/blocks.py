@@ -151,13 +151,6 @@ CHANNEL_SETUP_VIEW_CALLBACK_ID = "lemma_channel_setup_view"
 CHANNEL_SETUP_BLOCK_ID = "lemma_channel_agent"
 CHANNEL_SETUP_SELECT_ACTION_ID = "lemma_channel_agent_select"
 
-# Value used for the pod's default responder — the surface default, which is
-# What the pod's default responder is called wherever a person can read it. See
-# `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
-# picking a responder in Slack and someone picking one in the app are choosing
-# the same thing and must see it under the same name.
-DEFAULT_RESPONDER_NAME = "Lem"
-
 
 def channel_setup_modal(
     *,

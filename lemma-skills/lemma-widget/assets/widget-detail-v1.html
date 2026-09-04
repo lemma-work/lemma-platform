@@ -29,6 +29,10 @@
     function field(row,key){ return row&&row.data&&row.data[key]!=null?row.data[key]:row&&row[key]; }
     function esc(value){ return String(value==null?"—":value).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
     function fail(message){ stateEl.hidden=false;stateEl.textContent=message||"Unable to load details.";cardEl.hidden=true; }
+    // Separate from `fail` for its wording, not its styling: the widget is a
+    // cross-site iframe and the browser SDK authenticates by cookie, which some
+    // browsers withhold. The person is usually signed in — do not say otherwise.
+    function notice(message){ stateEl.hidden=false;stateEl.textContent=message;cardEl.hidden=true; }
     function render(row){
       titleEl.textContent=field(row,"__TITLE_FIELD__")||"Untitled";
       var fields=__FIELD_CONFIG__;
@@ -39,7 +43,7 @@
       try{
         var client=new window.LemmaClient.LemmaClient();
         var auth=await client.initialize();
-        if(!auth||auth.status!=="authenticated"){fail("Sign in to Lemma to view this record.");return;}
+        if(!auth||auth.status!=="authenticated"){notice("This view can't load pod data in this browser.");return;}
         render(await client.records.get("__TABLE_NAME__","__RECORD_ID__"));
       }catch(error){fail(error&&error.message);}
     }

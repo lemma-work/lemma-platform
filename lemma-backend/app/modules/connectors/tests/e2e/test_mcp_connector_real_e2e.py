@@ -29,6 +29,7 @@ from app.modules.connectors.domain.connector_operation import ResolvedOperation
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
     OperationExecutionTimeoutError,
+    OperationExecutionValidationError,
 )
 from app.modules.connectors.infrastructure.adapters.mcp_executor import McpExecutor
 from app.modules.connectors.infrastructure.kinds import build_kind_registry
@@ -108,13 +109,39 @@ def _build_server():
         await asyncio.sleep(300)
         return "unreachable"
 
+    # A group-gated tool, as Arize Phoenix has: absent from `tools/list` until
+    # something in the same session turns it on. This is the shape the session
+    # preamble exists for, and it can only be proved over the wire -- an
+    # in-memory client shares too much with the server to distinguish "the
+    # setup call ran first" from "the tool was always there".
+    @server.tool
+    def enable_tool_group(group: str) -> dict:
+        """Reveal a group of tools for this session."""
+        server.enable(names={"traces_for"})
+        return {"enabled": group}
+
+    @server.tool
+    def traces_for(project: str) -> dict:
+        """Only listed once `enable_tool_group` has run."""
+        return {"project": project, "traces": 3}
+
+    server.disable(names={"traces_for"})
+
     return server
+
+
+#: The running server object, so a test can put its gated tool back the way it
+#: found it. `FastMCP.enable` is server-wide, not session-scoped, so without
+#: this the "invisible until enabled" assertion would pass or fail depending on
+#: which test in the class ran first.
+_RUNNING_SERVER: list[Any] = []
 
 
 @pytest_asyncio.fixture(scope="module")
 async def mcp_server():
     """A real MCP server on a real port for the duration of the module."""
     server = _build_server()
+    _RUNNING_SERVER[:] = [server]
     port = _free_port()
     task = asyncio.create_task(
         server.run_async(
@@ -222,21 +249,90 @@ class TestExecution:
         assert payload["type"] == "binary_content"
         assert base64.b64decode(payload["content_base64"]) == _PNG
 
-    async def test_a_failing_tool_becomes_a_domain_error(self, connection_config):
-        with pytest.raises(OperationExecutionInfrastructureError):
+    async def test_a_failing_tool_is_the_server_refusing_this_call(
+        self, connection_config
+    ):
+        """Not an outage, and calling it one cost twice over.
+
+        The breaker counts infrastructure errors, so five bad-argument calls
+        inside its window disabled a healthy MCP server for a whole
+        organization. And `OperationExecutionInfrastructureError` hardcodes its
+        own message, so the tool's explanation was replaced by "Connector
+        provider is temporarily unavailable" -- which tells an agent nothing it
+        can act on and everything it needs to retry.
+
+        This test asserted the wrong classification for as long as the bug
+        existed. It runs against a real server, so unlike the unit stand-in it
+        did reach the true path; it simply agreed with it.
+        """
+        with pytest.raises(OperationExecutionValidationError) as caught:
             await _call(connection_config, "explode")
+
+        assert "tool blew up" in caught.value.details["upstream_message"]
+        assert caught.value.details["operation_name"] == "explode"
 
     async def test_calling_a_tool_that_does_not_exist_fails_cleanly(
         self, connection_config
     ):
-        with pytest.raises(OperationExecutionInfrastructureError):
+        """A name the server does not have is a bad request, not a bad server."""
+        with pytest.raises(OperationExecutionValidationError) as caught:
             await _call(connection_config, "no_such_tool")
+
+        assert "no_such_tool" in caught.value.details["upstream_message"]
 
     async def test_an_unreachable_server_fails_rather_than_hanging(self):
         # A closed port on localhost: the connection is refused immediately, so
         # this asserts the error mapping, not the timeout.
         with pytest.raises(OperationExecutionInfrastructureError):
             await _call({"server_url": f"http://127.0.0.1:{_free_port()}/mcp"}, "add")
+
+
+class TestSessionSetup:
+    """A session here lasts exactly one call, so setup has to be replayed.
+
+    Without it a server that gates tools behind a session-scoped switch is
+    unusable: the gated tools are absent from `tools/list` on a virgin session,
+    so they are never discovered, never stored as operations, and never
+    addressable by name -- and calling the switch as its own operation has no
+    effect on the next call, because that opens a different session.
+    """
+
+    SETUP = [{"tool_name": "enable_tool_group", "arguments": {"group": "traces"}}]
+
+    @pytest.fixture(autouse=True)
+    def _gate_closed(self, mcp_server):
+        """Start every test from the gate shut.
+
+        `FastMCP.enable` is server-wide where Phoenix's is session-scoped, so
+        one test in this class enabling the tool would otherwise decide the
+        answer for whichever ran next.
+        """
+        _RUNNING_SERVER[0].disable(names={"traces_for"})
+
+    async def test_a_gated_tool_is_invisible_without_it(self, connection_config):
+        found = await discover_mcp(connection_config=connection_config)
+
+        assert "traces_for" not in {op.name for op in found}
+
+    async def test_the_preamble_makes_a_gated_tool_a_real_operation(
+        self, connection_config
+    ):
+        found = await discover_mcp(
+            connection_config={**connection_config, "session_setup": self.SETUP}
+        )
+
+        assert "traces_for" in {op.name for op in found}
+
+    async def test_the_preamble_runs_before_the_call_it_precedes(
+        self, connection_config
+    ):
+        result = await _call(
+            {**connection_config, "session_setup": self.SETUP},
+            "traces_for",
+            {"project": "lemma"},
+        )
+
+        assert result == {"project": "lemma", "traces": 3}
 
 
 class TestDeadlines:

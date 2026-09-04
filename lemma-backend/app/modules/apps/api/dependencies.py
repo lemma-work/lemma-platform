@@ -19,7 +19,9 @@ from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.ports.widget_content import WidgetContentReader
-from app.composition.widget_content import create_widget_content_reader
+from app.modules.agent.contracts.widget_content import (
+    build_widget_content_reader,
+)
 from app.modules.apps.application.app_use_cases import AppUseCases
 from app.modules.apps.infrastructure.repositories import AppRepository
 from app.modules.apps.services.app_file_manager import AppFileManager
@@ -27,7 +29,7 @@ from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.app_branding_provider import (
     build_app_branding_entitlement_port,
 )
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 
 
 def _get_app_storage_factory():
@@ -52,7 +54,7 @@ def build_app_service(uow) -> AppService:
     return AppService(
         app_repository=AppRepository(uow, message_bus=message_bus),
         file_manager_factory=_get_app_storage_factory(),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         app_branding_entitlement=build_app_branding_entitlement_port(uow),
     )
 
@@ -80,10 +82,13 @@ AppUseCasesDep = Annotated[AppUseCases, Depends(get_app_use_cases)]
 
 
 def get_widget_content_reader(uow: UoWDep) -> WidgetContentReader:
-    # DI wiring edge: the agent module owns widget content, but the app module's
-    # business logic depends only on the core WidgetContentReader port — this
-    # provider is the single place the two modules are wired together.
-    return create_widget_content_reader(uow)
+    """Bind the port `apps` depends on to the module that implements it.
+
+    `apps` names `WidgetContentReader` and nothing about `agent`; `agent`
+    publishes a factory and nothing about `apps`. This line is the only place
+    the two meet, which is what the port is for.
+    """
+    return build_widget_content_reader(uow)
 
 
 WidgetContentReaderDep = Annotated[

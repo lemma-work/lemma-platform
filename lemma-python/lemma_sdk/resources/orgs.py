@@ -18,12 +18,25 @@ from ..openapi_client.models.organization_member_list_response import (
     OrganizationMemberListResponse,
 )
 from ..openapi_client.models.organization_response import OrganizationResponse
+from ..openapi_client.types import UNSET
 from .base import BoundResource, Resource, as_uuid
 
 
 class Orgs(Resource):
-    def list(self, *, limit: int = 100) -> OrganizationListResponse:
-        return self._call(org_list, limit=limit)
+    def list(
+        self, *, limit: int = 100, page_token: str | None = None
+    ) -> OrganizationListResponse:
+        """One page of the organizations you belong to.
+
+        ``next_page_token`` is the only way past ``limit``; a caller resolving a
+        name against this list sees a prefix without it, and reports "not found"
+        for something that is there.
+        """
+        return self._call(
+            org_list,
+            limit=limit,
+            page_token=page_token if page_token is not None else UNSET,
+        )
 
     def create(self, *, name: str) -> OrganizationResponse:
         return self._call(

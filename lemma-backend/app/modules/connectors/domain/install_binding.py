@@ -26,6 +26,7 @@ decode for Teams). Only the *extraction* is declared here.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 # Where each connector's upstream tenant id lands in the stored credentials,
 # most specific first. A connector absent from this table has no tenant of its
@@ -49,11 +50,27 @@ _TENANT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
 }
 
+# Connectors whose *callback* names the tenant outright, as a query parameter
+# on the redirect back. GitHub's App install redirect carries `installation_id`,
+# and it is the authority rather than a hint: the credentials that come back are
+# the authorizing user's own and say nothing about which installation was just
+# authorized -- the same user, in two organizations, gets two installations and
+# one indistinguishable pair of tokens.
+_CALLBACK_PARAMS: dict[str, tuple[str, ...]] = {
+    "github": ("installation_id",),
+}
+
 # Composio owns the connection rather than us, and names it the same way for
 # every toolkit, so it needs no per-connector entry.
 _BROKERED_PATHS: tuple[tuple[str, ...], ...] = (("connection_id",),)
 
 _MAX_REF_LENGTH = 255
+
+#: A stored credential in either shape it actually arrives in: a typed
+#: `OAuthCredentials` on the OAuth paths, a plain mapping on the
+#: credential-managed ones. Only the mapping is walked; see
+#: `resolve_external_ref`, which learned that the hard way.
+CredentialBlob = Any
 
 
 def _dig(source: Any, path: tuple[str, ...]) -> str | None:
@@ -69,7 +86,7 @@ def _dig(source: Any, path: tuple[str, ...]) -> str | None:
     return text if text and len(text) <= _MAX_REF_LENGTH else None
 
 
-def resolve_external_ref(connector_id: str, credentials: Any) -> str | None:
+def resolve_external_ref(connector_id: str, credentials: CredentialBlob) -> str | None:
     """The upstream tenant this account's events will arrive under, if any.
 
     Takes a credential in either shape it actually arrives in. Callers hold a
@@ -92,3 +109,40 @@ def resolve_external_ref(connector_id: str, credentials: Any) -> str | None:
         if found is not None:
             return found
     return None
+
+
+def _from_callback(connector_id: str, callback_url: str | None) -> str | None:
+    """The tenant the provider named on the way back, if it named one."""
+    if not callback_url:
+        return None
+    names = _CALLBACK_PARAMS.get((connector_id or "").strip().lower(), ())
+    if not names:
+        return None
+    try:
+        query = parse_qs(urlsplit(callback_url).query)
+    except ValueError:
+        return None
+    for name in names:
+        for value in query.get(name, ()):
+            text = (value or "").strip()
+            if text and len(text) <= _MAX_REF_LENGTH:
+                return text
+    return None
+
+
+def bind_external_ref(
+    connector_id: str,
+    credentials: CredentialBlob,
+    callback_url: str | None = None,
+) -> str | None:
+    """The tenant to bind an account to, from either place it can be stated.
+
+    A callback that names the tenant outranks one dug out of credentials. It is
+    a stronger statement: the provider is telling us which tenant *this
+    authorization* was for, where the credential blob can only be inspected for
+    traces of one. For every connector without a callback param -- all of them
+    but GitHub today -- this is exactly `resolve_external_ref`.
+    """
+    return _from_callback(connector_id, callback_url) or resolve_external_ref(
+        connector_id, credentials
+    )

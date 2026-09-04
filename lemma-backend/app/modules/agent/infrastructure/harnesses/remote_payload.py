@@ -16,7 +16,7 @@ from pydantic_ai.usage import RunUsage
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     user_prompt_text,
 )
-from app.composition.agent_workspace import WorkspaceSandboxService
+from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message

@@ -30,8 +30,15 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.surface_connectors import (
     SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
 )
-from app.composition.surface_connectors import Account, ConnectorService
-from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.contracts import AuthConfigSource
+from app.modules.connectors.contracts.surfaces import (
+    SurfaceAccount,
+    account,
+    account_with_secrets,
+    app_signing_secret,
+    auth_config,
+    refreshed_credentials,
+)
 
 logger = get_logger(__name__)
 
@@ -135,9 +142,8 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
 
 
 class SurfaceCredentialResolver:
-    def __init__(self, *, session, connector_service: ConnectorService):
-        self._session = session
-        self._connector_service = connector_service
+    def __init__(self, *, uow):
+        self._uow = uow
 
     async def for_surface(
         self,
@@ -186,36 +192,19 @@ class SurfaceCredentialResolver:
         *,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
-        account_model = await self._session.get(Account, UUID(str(account_id)))
-        if account_model is None:
+        found = await account_with_secrets(self._uow, UUID(str(account_id)))
+        if found is None:
             return {}
-        raw_stored = account_model.credentials or {}
-        if not isinstance(raw_stored, dict) or raw_stored.get("_encrypted"):
-            raw_stored = {}
+        connected, stored = found
 
-        account = await self._connector_service.get_account(
-            account_model.id,
-            account_model.user_id,
-        )
-        stored = account.credentials or {}
-        if hasattr(stored, "model_dump"):
-            stored = stored.model_dump(exclude_none=True)
-        for key, value in raw_stored.items():
-            stored.setdefault(key, value)
-
-        if account.connector_id in _SELF_MANAGED_CREDENTIAL_APPS:
+        if connected.connector_id in _SELF_MANAGED_CREDENTIAL_APPS:
             payload = dict(stored)
         else:
             try:
-                refreshed = await self._connector_service.get_account_credentials(
-                    account.id,
-                    account.user_id,
-                    force_refresh=force_refresh,
-                )
-                payload = (
-                    refreshed.model_dump(exclude_none=True)
-                    if hasattr(refreshed, "model_dump")
-                    else {}
+                payload = dict(
+                    await refreshed_credentials(
+                        self._uow, connected.id, force_refresh=force_refresh
+                    )
                 )
             except Exception:
                 logger.debug(
@@ -228,7 +217,7 @@ class SurfaceCredentialResolver:
             if key not in payload and stored.get(key):
                 payload[key] = stored[key]
 
-        provider = await self._provider_for_account(account)
+        provider = await self._provider_for_account(connected)
         if provider:
             # Platform adapters branch on this to choose Composio operations vs
             # native provider API calls (Composio never exposes a usable token).
@@ -248,17 +237,10 @@ class SurfaceCredentialResolver:
         account_id = getattr(surface, "account_id", None)
         if account_id is None:
             return None
-        account = await self._connector_service.account_repository.get(account_id)
-        auth_config_id = getattr(account, "auth_config_id", None)
-        if auth_config_id is None:
+        connected = await account(self._uow, account_id)
+        if connected is None or connected.auth_config_id is None:
             return None
-        auth_config = await self._connector_service.auth_config_repository.get(
-            auth_config_id
-        )
-        if auth_config is None:
-            return None
-        secret = (auth_config.config or {}).get("signing_secret")
-        return str(secret).strip() or None if secret else None
+        return await app_signing_secret(self._uow, connected.auth_config_id)
 
     async def slack_webhook_credentials(
         self, surface: AgentSurfaceEntity
@@ -270,18 +252,19 @@ class SurfaceCredentialResolver:
                 signing_secret=surface_settings.slack_signing_secret,
                 uses_custom_app=False,
             )
-        account = await self._connector_service.account_repository.get(account_id)
-        if account is None:
+        found = await account_with_secrets(self._uow, account_id)
+        if found is None:
             return SlackWebhookCredentials(
                 app_id=None,
                 signing_secret=None,
                 uses_custom_app=False,
             )
-        app_id = self._slack_app_id(account.credentials)
-        auth_config = await self._slack_auth_config(account.auth_config_id)
-        uses_custom_app = self._is_org_custom_auth_config(auth_config)
-        signing_secret = self._slack_secret_for_auth_config(
-            auth_config, uses_custom_app=uses_custom_app
+        connected, credentials = found
+        app_id = self._slack_app_id(credentials)
+        install = await self._slack_auth_config(connected.auth_config_id)
+        uses_custom_app = self._is_org_custom_install(install)
+        signing_secret = await self._slack_secret_for_install(
+            install, uses_custom_app=uses_custom_app
         )
         if app_id is None and not uses_custom_app:
             # An account on this deployment's own app that never stored an app id
@@ -298,13 +281,10 @@ class SurfaceCredentialResolver:
         )
 
     @staticmethod
-    def _slack_app_id(credentials: Any) -> str | None:
-        stored = credentials or {}
-        if hasattr(stored, "model_dump"):
-            stored = stored.model_dump(exclude_none=True)
-        raw_response = (
-            stored.get("raw_response") if isinstance(stored, dict) else None
-        ) or {}
+    def _slack_app_id(credentials: dict[str, Any]) -> str | None:
+        raw_response = credentials.get("raw_response") or {}
+        if not isinstance(raw_response, dict):
+            return None
         return (
             str(
                 raw_response.get("app_id") or raw_response.get("api_app_id") or ""
@@ -312,42 +292,35 @@ class SurfaceCredentialResolver:
             or None
         )
 
-    async def _slack_auth_config(self, auth_config_id):
+    async def _slack_auth_config(self, auth_config_id: UUID | None):
         if auth_config_id is None:
             return None
-        return await self._connector_service.auth_config_repository.get(auth_config_id)
+        return await auth_config(self._uow, auth_config_id)
 
     @staticmethod
-    def _is_org_custom_auth_config(auth_config) -> bool:
-        source = getattr(auth_config, "config_source", None)
-        source_value = str(getattr(source, "value", source) or "").upper()
-        return source_value == AuthConfigSource.ORG_CUSTOM.value
+    def _is_org_custom_install(install) -> bool:
+        source = getattr(install, "config_source", None)
+        return str(source or "").upper() == AuthConfigSource.ORG_CUSTOM.value
 
-    @staticmethod
-    def _slack_secret_for_auth_config(
-        auth_config, *, uses_custom_app: bool
+    async def _slack_secret_for_install(
+        self, install, *, uses_custom_app: bool
     ) -> str | None:
-        if uses_custom_app:
-            configured = (getattr(auth_config, "config", None) or {}).get(
-                "signing_secret"
-            )
-            return str(configured).strip() or None if configured else None
-        return surface_settings.slack_signing_secret
+        if not uses_custom_app:
+            return surface_settings.slack_signing_secret
+        if install is None:
+            return None
+        return await app_signing_secret(self._uow, install.id)
 
-    async def _provider_for_account(self, account: Any) -> str | None:
-        auth_config_id = getattr(account, "auth_config_id", None)
-        if auth_config_id is None:
+    async def _provider_for_account(self, connected: SurfaceAccount) -> str | None:
+        if connected.auth_config_id is None:
             return None
         try:
-            auth_config = await self._connector_service.auth_config_repository.get(
-                auth_config_id
-            )
+            install = await auth_config(self._uow, connected.auth_config_id)
         except Exception:
             logger.debug(
                 "agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic"
             )
             return None
-        if auth_config is None:
+        if install is None:
             return None
-        kind = auth_config.kind
-        return str(getattr(kind, "value", kind) or "").lower() or None
+        return install.kind.lower() or None

@@ -13,8 +13,9 @@ documents auto-indexed for built-in RAG), **functions**, **agents**, **workflows
 **schedules**, and **connectors** (automation), and **apps** and **surfaces**
 (interfaces) — under one permission boundary. Two rules run through all of it: every
 workload starts with **zero access** and is granted resources explicitly by name,
-and a workload acts under the **delegated identity** of the user who invoked it (so
-RLS and the personal `/me` area resolve to that user). Good pod scope = one team,
+and a workload acts under the **delegated identity** of the user who invoked it — so
+RLS and the personal `/me` area resolve to that user, and the run can do only what
+that user could do *and* the workload was granted. Good pod scope = one team,
 one operating loop, one coherent data model.
 
 > **Read `references/pod-model.md` first.** It is the canonical model every other
@@ -33,7 +34,7 @@ one operating loop, one coherent data model.
 | **Workflows** | Node graphs of FORM / AGENT / FUNCTION / DECISION / LOOP / WAIT_UNTIL steps with durable runs | The process layer — orchestrates functions, agents, **and humans** (form nodes are assigned to pod members) |
 | **Schedules** | Time-based (TIME cron) or event-based — DATASTORE (table row events) and WEBHOOK (connector events) | Starting agents or workflows automatically |
 | **Connectors** | Third-party apps (Gmail, Slack, …) via org auth configs, accounts, and executable operations | Acting on external systems |
-| **Surfaces** | A pod agent exposed on Slack/Teams/Telegram/WhatsApp/Gmail/Outlook | Meeting users where they already chat |
+| **Surfaces** | One pod agent exposed on Slack/Teams/Telegram/WhatsApp/email | Meeting users where they already chat |
 | **Apps** | Custom browser apps deployed into the pod — single-file HTML (no build) for one page, or Vite + lemma-sdk for multi-page apps | The product UI: dashboards, queues, detail views, workflow inboxes |
 
 **Choosing among them — six heuristics** (full text in `references/pod-model.md` → "Choosing a primitive"; `pod-design.md` turns them into decision tables):
@@ -111,12 +112,12 @@ my-pod/
 
 Build order follows dependencies: **tables → files → functions → agents → workflows → schedules → connectors/surfaces → app → seed**. Verify each layer with realistic data before adding the next.
 
-**Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Rows and file bytes *can* travel — `pods export --with-data --with-files`, `pods import --with-data --with-files` — but a `seed/seed.sh` is still the better demo path: it is re-runnable and readable. Record it in the README.)
+**Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Rows and file bytes *can* travel — `pods export --data-table <t> --folder <path>` names them one at a time on the way out, and `pods import --with-data --with-files` applies them on the way in — but a `seed/seed.sh` is still the better demo path: it is re-runnable and readable. Record it in the README.)
 
 Three rules that bite everyone:
 
-1. **Zero access by default, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or, against a live pod, `lemma functions|agents permissions add <name> <resource>:<perms>`. Import and `lemma pods doctor` both flag a workload that ends up with **no grants at all** — the usual reason a fresh pod 403s. A named workload's grant is standalone authority (grant-first). `MISSING_WORKLOAD_RESOURCE_GRANT` at runtime means a grant is missing; `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs either an explicit destructive grant or a user's session approval. Full 403 decoder + the complete model in `references/authorization-model.md`.
-2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask: `--with-files` / `--with-data` on both export and import.
+1. **Zero access by default, capped by whoever invoked it, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or, against a live pod, `lemma functions|agents permissions add <name> <resource>:<perms>`. Import and `lemma pods doctor` both flag a workload that ends up with **no grants at all** — the usual reason a fresh pod 403s. A grant is a **ceiling on the workload, not a promotion for the person**: a run does the *intersection* of the workload's grants and the invoking member's own access, so a `VIEWER` running a write-granted agent still cannot write. `MISSING_WORKLOAD_RESOURCE_GRANT` means the workload half is missing (grant it); `DELEGATION_EXCEEDS_INVOKER` means the person half is (fix their role — more grants change nothing); `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs an explicit destructive grant or a user's session approval, which opens the gate without conferring authority. Full 403 decoder + the complete model in `references/authorization-model.md`.
+2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask, and the two ends spell it differently: **export** names each one (`--data-table <table>`, `--folder <path>`, repeatable — there is deliberately no "everything" flag), while **import** takes `--with-data` / `--with-files`.
 3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, connector auth configs/accounts, verification payloads, and the final end-to-end smoke test.
 
 **Last step: report what got in your way.** When the pod is built — or when you gave up — send one `lemma feedback`. Report anything that cost you a detour: a command whose error didn't say what to fix, a flag that didn't behave as documented, missing information you had to discover by trial and error, or a place where *these skills* were wrong, stale, or silent. This is the only channel by which the build experience improves, so file it even if you worked around the problem, and be specific — the exact command, what you expected, what happened.
@@ -134,7 +135,7 @@ lemma feedback --category cli --subject "pods import doesn't say why a grant was
 Read what the task needs:
 
 - `references/pod-model.md` — **the canonical model. Read this first.** Identity & permissions, the data/automation/interface layers, how the resources interact, how a pod is authored.
-- `references/authorization-model.md` — the two ledgers, grant-first rule, delegated identity, destructive-action gate + session approvals, the 403-code decoder, agent/function-as-tool grants, connector account modes, import/export grant semantics. Read when a workload hits a 403 or you're wiring grants.
+- `references/authorization-model.md` — the two ledgers, the grants ∩ invoker rule, delegated identity, destructive-action gate + session approvals, the 403-code decoder, agent/function-as-tool grants, connector account modes, import/export grant semantics. Read when a workload hits a 403 or you're wiring grants.
 - `references/pod-design.md` — problem statement → pod architecture; decision tables; worked example; testing strategy. **Start here for new pods.**
 - `references/cli-and-bundles.md` — auth/context, exact bundle format, a minimal quickstart bundle, import/export semantics and limits, command cheatsheet.
 - `references/tables.md` — column types, schema JSON, records, RLS, design guidance.
@@ -144,6 +145,6 @@ Read what the task needs:
 - `references/workflows.md` — every node type, expressions, human-in-the-loop patterns, run debugging.
 - `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`package`/`composio`/`http`/`sql`/`mcp`); delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
-- `references/surfaces.md` — exposing a pod agent on Slack/Teams/Telegram/WhatsApp/Gmail/Outlook.
+- `references/surfaces.md` — exposing one pod agent on Slack/Teams/Telegram/WhatsApp/email (Gmail/Outlook are connectors, not surfaces).
 - `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.
 - `references/app-recipes/*.md` — copy-paste app patterns: agent chat, RLS tables, workflow forms, file viewer, connector actions (load the one you need).

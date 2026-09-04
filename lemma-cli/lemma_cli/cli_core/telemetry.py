@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -37,6 +38,7 @@ _TIMEOUT_SECONDS = 2.0
 _CONFIG_KEY = "telemetry"
 _INSTALL_ID_KEY = "install_id"
 _ENABLED_KEY = "enabled"
+_NOTICE_KEY = "notice_shown"
 
 
 def _config_path() -> Path:
@@ -95,6 +97,33 @@ def install_id() -> str:
     minted = str(uuid.uuid4())
     _write_telemetry_block({_INSTALL_ID_KEY: minted})
     return minted
+
+
+#: Printed once, to stderr, on the first invocation that actually reports. The
+#: alternative — telemetry that simply starts arriving — is the version that
+#: becomes a public complaint, and "discoverable by running `lemma telemetry`"
+#: is not disclosure. Not printed at all when nothing is being sent, which is
+#: every self-hosted and locally built CLI.
+_FIRST_RUN_NOTICE = (
+    "Lemma sends anonymous usage telemetry: the command group you ran, whether "
+    "it succeeded, the CLI version, and your OS — never arguments, paths, names "
+    "or ids. Turn it off with `lemma telemetry off` (or LEMMA_TELEMETRY=0)."
+)
+
+
+def _announce_once() -> None:
+    """Disclose telemetry the first time this installation reports.
+
+    Printed before the flag is stored, not after: on a home directory we cannot
+    write, the notice then repeats rather than never appearing at all. Noisy is
+    a complaint; undisclosed is the one that matters.
+    """
+    if (_read_config().get(_CONFIG_KEY) or {}).get(_NOTICE_KEY):
+        return
+    # stderr, never stdout: `--output json` promises a parseable stream, and a
+    # one-time notice is exactly the kind of line that breaks every `| jq`.
+    print(_FIRST_RUN_NOTICE, file=sys.stderr)  # noqa: T201 — stderr disclosure
+    _write_telemetry_block({_NOTICE_KEY: True})
 
 
 def is_enabled() -> bool:
@@ -157,6 +186,7 @@ def record_command(command: str | None, *, exit_status: str) -> None:
         return
     if command is None:
         return
+    _announce_once()
     payload = {
         "event": "cli.command_invoked",
         "distinct_id": install_id(),

@@ -158,6 +158,14 @@ over a single resource is [Sharing and permissions](sharing-and-permissions.md).
   shall refuse rather than creating a request that cannot do anything.
 - If someone attempts to decide a request that has already been decided, then
   the system shall refuse and shall say what it was decided as.
+- The system shall accept a request from someone outside the pod's
+  organization, since asking to be let in is the one thing an outsider is
+  supposed to be able to do. This is a deliberate exception to PS-ACCESS-031:
+  a pod that answered identically whether it existed or not could not be asked
+  to join at all. What the exception costs — that a stranger can learn a pod id
+  is real, and put a pending request in front of its admins — is bounded by the
+  request being visible, decidable and refusable, and by there being nothing
+  behind it to read.
 
 **Contracts:** `pod.join_request.create`, `pod.join_request.approve`, `pod.join_request.list`, `pod.join_request.me`
 

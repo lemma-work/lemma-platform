@@ -13,21 +13,32 @@ You address operations by the **auth-config name**, which you find with
 
 ## Discover, then execute
 
+Every `connectors.operations.*` call takes a **scope** first — `{ organizationId,
+authConfigName }` — because auth configs are org-scoped, not pod-scoped. The pod knows
+its org, so resolve it once:
+
 ```ts
-// 1. operations available for an installed auth config (kind-specific):
-const ops = await client.connectors.operations.list({ authConfigName: "my-gmail" });
+const pod = await client.pods.get(client.podId!);
+const scope = { organizationId: pod.organization_id, authConfigName: "my-gmail" };
+
+// 1. operations available for this installed auth config (kind-specific):
+const ops = await client.connectors.operations.list(scope);           // → array
+//   ...or narrow by intent: operations.list(scope, { query: "send email", limit: 5 })
 
 // 2. the operation's input schema (drive your form / validate the payload):
-const detail = await client.connectors.operations.get({ authConfigName: "my-gmail", operation: "send_email" });
+const detail = await client.connectors.operations.get(scope, "gmail_send_email");
 
-// 3. execute on the user's account (account auto-resolves; pass accountId to pin):
-const result = await client.connectors.operations.execute({
-  authConfigName: "my-gmail",
-  operation: "send_email",
-  payload: { to: "bob@example.com", subject: "Update", body: "…" },
-  // accountId: optional,
-});
+// 3. execute on the user's account (account auto-resolves; 4th arg pins one):
+const result = await client.connectors.operations.execute(
+  scope,
+  "gmail_send_email",
+  { recipient_email: "bob@example.com", subject: "Update", body: "…" },
+  // accountId,   // optional — omit to use the signed-in user's own account
+);
 ```
+
+`operations.list` returns the items array directly; `discover` is the same call
+returning the full response. `details(scope, names?)` fetches several schemas at once.
 
 ## Make it a safe action
 

@@ -49,7 +49,14 @@ from app.modules.workspace.providers.lemma_local import (
     LemmaLocalSandboxProvider,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+# Needs the bridge binary from `cargo build -p lemma-runtime`, so it can
+# only skip anywhere it is not built -- which is every CI lane, and every
+# checkout until somebody builds it.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.local_host,
+    pytest.mark.asyncio,
+]
 
 PINNED = "lemma-workspace@sha256:" + "d" * 64
 

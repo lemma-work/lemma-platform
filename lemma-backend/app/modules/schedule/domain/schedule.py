@@ -30,7 +30,9 @@ class ScheduleType(str, Enum):
 #: the same thing.
 INSTRUCTION_REQUIRED = (
     "This agent has no standing instruction of its own, so a schedule that "
-    "wakes it must say what it should do when it fires."
+    "wakes it must say what it should do when it fires. Set the schedule's "
+    "`instruction` field (CLI: --instruction). No other field carries it: a "
+    "payload under a different key is dropped, not used."
 )
 
 

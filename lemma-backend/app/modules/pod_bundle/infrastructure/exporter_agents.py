@@ -10,7 +10,7 @@ is never in a bundle.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from lemma_pod_bundle.layout import _write_json
@@ -22,6 +22,22 @@ from lemma_pod_bundle.normalize import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 
 
+class GrantsPayload(Protocol):
+    """``exporter._resource_grants_payload``, injected rather than imported so
+    this module stays free of the cycle back into :mod:`exporter`."""
+
+    async def __call__(
+        self,
+        uow,
+        *,
+        pod_id: UUID,
+        grantee_type: str,
+        grantee_id: UUID,
+        warnings: list[str],
+        grantee_name: str,
+    ) -> dict[str, object] | None: ...
+
+
 async def export_agents(
     uow,
     *,
@@ -29,21 +45,19 @@ async def export_agents(
     pod_id: UUID,
     user_id: UUID,
     ctx: Any,
-    grants_payload,
+    grants_payload: GrantsPayload,
+    warnings: list[str],
 ) -> None:
     """Write one directory per agent somebody made."""
     # Imported here rather than at module load: `exporter` imports this module,
     # so naming it at the top would be a cycle.
-    from app.composition.pod_bundle_resources import get_agent_service
+    from app.modules.agent.contracts.provisioning import list_agents, require_agent
     from app.modules.pod_bundle.infrastructure.exporter import (
         _agent_response_dict,
         _extract_large_text,
     )
 
-    agent_service = get_agent_service(uow)
-    agents, _ = await agent_service.list_agents(
-        pod_id=pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
-    )
+    agents = await list_agents(uow, pod_id=pod_id, user_id=user_id, ctx=ctx)
     exportable = sorted(
         (agent for agent in agents if is_exportable_agent(agent)),
         key=lambda agent: str(agent.name or ""),
@@ -51,11 +65,8 @@ async def export_agents(
 
     for summary in exportable:
         agent_name = str(summary.name or "")
-        agent = await agent_service.get_agent_by_name(
-            pod_id=pod_id,
-            name=agent_name,
-            requester_user_id=user_id,
-            ctx=ctx,
+        agent = await require_agent(
+            uow, pod_id=pod_id, name=agent_name, user_id=user_id, ctx=ctx
         )
         dir_ = root / "agents" / agent_name
         dir_.mkdir(parents=True, exist_ok=True)
@@ -67,6 +78,8 @@ async def export_agents(
                 pod_id=pod_id,
                 grantee_type="AGENT",
                 grantee_id=grantee_id,
+                warnings=warnings,
+                grantee_name=agent_name,
             )
             # Attach even an EMPTY grant list — see _resource_grants_payload
             # for why None differs from [].

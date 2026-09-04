@@ -32,6 +32,7 @@ from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.runtime_history import (
     apply_surface_history_window,
 )
+from app.modules.agent.services.runtime_history import bound_runtime_history
 from app.modules.agent.services.runtime_history import runtime_full_run_ids
 from app.modules.agent.services.runtime_history import select_runtime_history
 
@@ -170,9 +171,9 @@ def test_bounded_history_selects_what_the_full_load_selected() -> None:
 
 def test_bounded_history_matches_on_surface_conversations(monkeypatch) -> None:
     """The surface budget counts messages, so it must count unloaded ones too."""
-    import app.composition.agent_surface_runtime as surface_runtime
+    import app.modules.agent_surfaces.contracts.platforms as surface_contract
 
-    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (40, 24))
+    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (40, 24))
     runner = _runner()
     conversation = _surface_conversation()
     for index, runs in enumerate(_shapes()):
@@ -195,9 +196,9 @@ def test_an_old_run_that_is_still_active_keeps_all_of_its_messages(monkeypatch) 
     because the trimmed list is short, the elision branch never runs and no
     notice is emitted. Silent loss, which is the part that matters.
     """
-    import app.composition.agent_surface_runtime as surface_runtime
+    import app.modules.agent_surfaces.contracts.platforms as surface_contract
 
-    monkeypatch.setattr(surface_runtime, "surface_history_limits", lambda: (0, 24))
+    monkeypatch.setattr(surface_contract, "surface_history_limits", lambda: (0, 24))
     conversation_id = uuid4()
     now = datetime.now(timezone.utc)
 
@@ -674,3 +675,57 @@ class TestElisionNoticesStayOutOfTheSystemChannel:
         ]
         assert notices
         assert all(m.role is MessageRole.USER for m in notices)
+
+
+class TestTheWindowIsAppliedBeforeMessagesAreLoaded:
+    """The loader trimmed after attaching messages, so a long conversation read
+    every user message of every run it was about to discard -- per turn, on the
+    interactive path, on exactly the conversations the run cap protects.
+
+    Trimming first is only correct if the notice announcing the dropped runs
+    survives the move: the window is idempotent, so a pre-trimmed list looks to
+    `select_runtime_history` like a conversation that lost nothing.
+    """
+
+    def _long_conversation(self, run_count: int) -> list[AgentRun]:
+        conversation_id = uuid4()
+        return [
+            _run(conversation_id, index, message_count=4) for index in range(run_count)
+        ]
+
+    def test_only_the_runs_that_survive_the_window_are_asked_for(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        assert len(bounded) == MAX_HISTORY_AGENT_RUNS
+        assert dropped == 12
+        assert bounded[-1] is runs[-1]
+
+    def test_trimming_first_selects_what_trimming_last_selected(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        trimmed_first = select_runtime_history(
+            _as_bounded(bounded), None, already_dropped=dropped
+        )
+        trimmed_last = select_runtime_history(_as_bounded(runs), None)
+
+        assert _fingerprint(trimmed_first) == _fingerprint(trimmed_last)
+
+    def test_the_dropped_runs_are_still_announced(self) -> None:
+        runs = self._long_conversation(MAX_HISTORY_AGENT_RUNS + 12)
+        bounded, dropped = bound_runtime_history(runs, None)
+
+        selected = select_runtime_history(
+            _as_bounded(bounded), None, already_dropped=dropped
+        )
+
+        notices = [
+            message
+            for message in selected
+            if (message.metadata or {}).get("summary_kind")
+            == "conversation_runs_dropped"
+        ]
+        assert len(notices) == 1
+        assert notices[0].metadata["dropped_run_count"] == 12

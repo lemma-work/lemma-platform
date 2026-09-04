@@ -4,9 +4,9 @@
 without one, nothing finalized and nothing raised — so the run and its
 conversation were both left RUNNING with nothing that would ever move them.
 `reconcile_orphaned_agent_runs` is no backstop: it waits an hour, and until now
-only repaired the run. Meanwhile `schedule_run_recovery` and `workflow_agent`
-both decide an outcome from `conversation.status`, so one of these wedges the
-schedule run and the workflow step waiting on it.
+only repaired the run. Meanwhile the schedule ledger's recovery sweep and the
+workflow control adapter both decide an outcome from `conversation.status`, so
+one of these wedges the schedule run and the workflow step waiting on it.
 """
 
 from __future__ import annotations

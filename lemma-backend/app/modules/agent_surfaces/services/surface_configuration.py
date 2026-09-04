@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.modules.agent.contracts import AgentKind
-from app.modules.agent_surfaces.platforms.slack.blocks import (
-    DEFAULT_RESPONDER_NAME,
+from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
 )
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -31,7 +31,7 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceChannelRoute,
 )
-from app.composition.surface_identity import Pod
+from app.modules.pod.contracts.members import pod_name
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
@@ -234,20 +234,20 @@ class SurfaceConfigurationMixin(
         agents = await self._visible_agents(
             surface=surface, ctx=ctx, action=Permissions.AGENT_READ
         )
-        pod = await self.uow.session.get(Pod, surface.pod_id)
+        name_of_pod = await pod_name(self.uow.session, surface.pod_id)
         # Egress: the pod and agent rows are read above; the connection
         # goes back before the view is pushed to the platform.
         async with connection_released(self.uow.session):
             await adapter.publish_home_view(
                 credentials=credentials,
                 user_id=external_user_id,
-                pod_name=str(getattr(pod, "name", "") or "") or None,
+                pod_name=name_of_pod or None,
                 agent_name=await self._surface_agent_name(surface),
-                # The channels this bot answers in. The second element used to
-                # be the agent routed to that channel; there is one agent now,
-                # so it is the same for every row and the Home tab says it once.
-                channel_routes=[
-                    (route.channel_id, None)
+                # The channels this bot answers in. Ids alone: each entry used
+                # to name the agent routed to that channel, and there is one
+                # agent now, so the Home tab states it once above the list.
+                channel_ids=[
+                    route.channel_id
                     for route in surface.config.channels
                     if route.channel_id
                 ],
@@ -323,8 +323,10 @@ class SurfaceConfigurationMixin(
 
     async def _surface_agent_name(self, surface) -> str:
         """What this surface's agent is called in front of a person."""
-        agent = await self.conversation_service.agent_repository.get(surface.agent_id)
-        if agent is None or agent.kind is AgentKind.POD_DEFAULT:
+        agent = await agent_conversations.surface_agent_identity(
+            self.uow, surface.agent_id
+        )
+        if agent is None or agent.is_pod_default:
             return DEFAULT_RESPONDER_NAME
         return agent.name
 

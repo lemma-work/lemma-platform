@@ -76,6 +76,31 @@ with Pod.from_env() as pod:
     pod.functions.run("triage_ticket", {"ticket_id": "rec-1"})
 ```
 
+`lemma.pod(...)` and `lemma.for_org(...)` are *views* of the client they come
+from: same endpoint, same credential, same connection pool, so closing the
+parent closes everything. Only a directly constructed `Pod`/`Lemma` owns a
+transport of its own.
+
+### Every call is synchronous
+
+There is no async client. Each method makes a blocking HTTP request, and a
+retried request sleeps (up to a few seconds) on the calling thread. That is what
+you want in a script, a function handler doing one thing at a time, or a worker
+thread — and it is not what you want on an event loop. From `async def` code
+that also serves other work, hand each call to a thread:
+
+```python
+import asyncio
+
+row = await asyncio.to_thread(pod.table("tickets").get, ticket_id)
+
+# Fanning out? to_thread + gather runs the round trips concurrently; a plain
+# loop of SDK calls serializes them and freezes the loop for the whole batch.
+rows = await asyncio.gather(*(
+    asyncio.to_thread(pod.table("tickets").get, tid) for tid in ticket_ids
+))
+```
+
 ## Authentication & configuration
 
 The SDK resolves settings from explicit arguments first, then environment, then
@@ -177,6 +202,12 @@ rows = pod.records.list(
     sort=[{"field": "created_at", "direction": "desc"}],
 ).to_dict()["items"]
 
+# `list` returns one page — `limit` defaults to 20 and the rest is behind
+# `next_page_token`. When the answer has to be complete, page to exhaustion:
+every_open = pod.records.list_all(
+    "tickets", filter=[{"field": "status", "op": "eq", "value": "new"}]
+)   # -> list of plain row dicts; t.list_all() is the same walk for one table
+
 totals = pod.query(
     "select status, count(*) as total from tickets group by status"
 ).to_dict()["items"]
@@ -184,7 +215,8 @@ totals = pod.query(
 
 The `pod.records` / `pod.table(...)` create/get/update helpers return the bare
 record as a plain dict (no `.to_dict()`, no `["data"]` unwrap). `list` and
-`query` return response objects; call `.to_dict()` and read `["items"]`.
+`query` return response objects; call `.to_dict()` and read `["items"]`;
+`list_all` returns the rows themselves.
 
 Record data is dynamic because table schemas are user-defined.
 
@@ -322,7 +354,7 @@ results = lemma.tools.web_search("vendor SLA policy", max_results=5)
 ```
 
 Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
-`lemma.connectors` · `lemma.tools` · `lemma.runtime` · `lemma.org_runtime`.
+`lemma.connectors` · `lemma.tools` · `lemma.agent_hosts` · `lemma.org_runtime`.
 
 ## Writing a function
 

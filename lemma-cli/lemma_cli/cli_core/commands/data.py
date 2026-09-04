@@ -448,9 +448,11 @@ def run_query(
 ) -> None:
     """Run a read-only SQL query against the pod datastore.
 
-    A single SELECT only (no writes); returns {items, total}. Joins, aggregates,
-    and subqueries across tables are allowed, including RLS tables — rows of an
-    RLS table are scoped to you unless you administer it.
+    A single SELECT only (no writes); returns {items, total, truncated}. `total`
+    counts the rows that came back, not the rows that matched — the result is
+    capped, and `truncated` says whether more exist. Joins, aggregates, and
+    subqueries across tables are allowed, including RLS tables — rows of an RLS
+    table are scoped to you unless you administer it.
     """
     state = state_from_ctx(ctx)
     result = run_with_client(

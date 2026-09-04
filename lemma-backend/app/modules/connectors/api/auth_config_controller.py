@@ -13,10 +13,12 @@ from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AuthConfigCreateSchema,
     AuthConfigListResponseSchema,
+    AuthConfigOperationsRefreshResponseSchema,
     AuthConfigResponseSchema,
     AuthConfigUpdateResponseSchema,
     AuthConfigUpdateSchema,
     ConnectorStatusResponse,
+    OperationDiscoverySchema,
 )
 
 router = APIRouter(
@@ -55,6 +57,15 @@ _REDACTED = "********"
 # come back masked.
 _PUBLIC_SUFFIXES = ("_endpoint", "_url", "_uri")
 
+# Maps whose *keys* the tenant chooses. The MCP install schema offers
+# `extra_headers` and the OpenAPI one `default_headers`, both described as
+# "anything the server needs beyond the token below" -- so `X-Auth`,
+# `X-Signature-Key` or `Cookie2` are all legitimate names, and no allowlist of
+# secret-sounding key names can ever be complete over them. Their values are
+# masked by position instead: the reader sees which headers are set, never what
+# they are set to.
+_TENANT_KEYED_MAPS = ("extra_headers", "default_headers")
+
 
 def _is_secret_field(key: object) -> bool:
     name = str(key).strip().lower()
@@ -71,12 +82,14 @@ def _redact_config(value: dict | None) -> dict | None:
     something adds a third, and something did: RFC 7591 registration writes a
     `client_secret` under `oauth`, which the list did not visit, so the OAuth
     client credential the deployment registered with a tenant's authorization
-    server was returned in full to any org member -- including a read-only one,
-    since reading an install needs no role while creating one needs owner or
-    editor.
+    server was returned in full to any org member.
 
     Recursing over the sensitive-key set instead means the next nesting is
-    covered before it is written, rather than after someone notices.
+    covered before it is written, rather than after someone notices. Two maps
+    are exempt from the key-name rule entirely -- see `_TENANT_KEYED_MAPS` --
+    and the config as a whole now goes only to the roles that may write it,
+    because a heuristic over names the tenant chooses cannot be the only
+    control.
     """
     if value is None:
         return None
@@ -92,6 +105,8 @@ def _redacted(value: Any) -> Any:
 
 
 def _redacted_entry(key: object, value: Any) -> Any:
+    if str(key).strip().lower() in _TENANT_KEYED_MAPS and isinstance(value, dict):
+        return {name: _masked_wholesale(item) for name, item in value.items()}
     # A container under a secret-sounding key is not itself the secret --
     # `oauth2_credentials` holds a client id worth showing next to a client
     # secret worth hiding. Mask the leaves, keep the shape.
@@ -100,10 +115,41 @@ def _redacted_entry(key: object, value: Any) -> Any:
     return _REDACTED if _is_secret_field(key) and value else value
 
 
-def _response_from_entity(entity) -> AuthConfigResponseSchema:
+def _masked_wholesale(value: object) -> object:
+    """Every leaf replaced, whatever the key above it was called."""
+    if isinstance(value, dict):
+        return {name: _masked_wholesale(item) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_masked_wholesale(item) for item in value]
+    return _REDACTED if value else value
+
+
+def _response_from_entity(
+    entity, *, include_config: bool = True, auth_scheme: str | None = None
+) -> AuthConfigResponseSchema:
+    """The install as a client sees it.
+
+    `include_config` is off for a plain member. Creating an install requires
+    owner or editor, and for the mcp/http/sql kinds the config is entirely
+    tenant-written -- the server they talk to, the database host, the headers
+    they send. Redaction masks the secrets it can name; levelling the read with
+    the write is what covers the ones it cannot. Which installs exist, and
+    whether they are healthy, stays visible to everyone.
+    """
     data = entity.model_dump(mode="json")
-    data["config"] = _redact_config(data.get("config"))
+    data["config"] = _redact_config(data.get("config")) if include_config else None
+    # The install's own scheme, resolved by the service. Not derivable from the
+    # entity: an MCP install is OAuth when its server said so at create time,
+    # and `config` -- the only place that is written down -- is withheld from
+    # plain members, who still need to know whether signing in is what connects
+    # this install.
+    data["auth_scheme"] = auth_scheme
     return AuthConfigResponseSchema.model_validate(data)
+
+
+async def _one_auth_scheme(connector_service, auth_config) -> str | None:
+    schemes = await connector_service.install_auth_schemes([auth_config])
+    return schemes.get(auth_config.id)
 
 
 @router.post(
@@ -126,7 +172,10 @@ async def create_auth_config(
         config=data.config,
         name=data.name,
     )
-    return _response_from_entity(auth_config)
+    return _response_from_entity(
+        auth_config,
+        auth_scheme=await _one_auth_scheme(connector_service, auth_config),
+    )
 
 
 @router.get(
@@ -151,8 +200,19 @@ async def list_auth_configs(
         limit=limit,
         cursor=cursor,
     )
+    include_config = await connector_service.may_read_install_config(
+        user_id=user.id, organization_id=organization_id
+    )
+    schemes = await connector_service.install_auth_schemes(items)
     return AuthConfigListResponseSchema(
-        items=[_response_from_entity(item) for item in items],
+        items=[
+            _response_from_entity(
+                item,
+                include_config=include_config,
+                auth_scheme=schemes.get(item.id),
+            )
+            for item in items
+        ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -174,7 +234,13 @@ async def get_auth_config(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
     )
-    return _response_from_entity(auth_config)
+    return _response_from_entity(
+        auth_config,
+        include_config=await connector_service.may_read_install_config(
+            user_id=user.id, organization_id=organization_id
+        ),
+        auth_scheme=await _one_auth_scheme(connector_service, auth_config),
+    )
 
 
 @router.patch(
@@ -201,7 +267,7 @@ async def update_auth_config(
     data: AuthConfigUpdateSchema,
     connector_service: ConnectorServiceDep,
 ) -> AuthConfigUpdateResponseSchema:
-    auth_config, discovered, marked = await connector_service.update_auth_config(
+    auth_config, discovery, marked = await connector_service.update_auth_config(
         user_id=user.id,
         organization_id=organization_id,
         auth_config_name=auth_config_name,
@@ -211,20 +277,30 @@ async def update_auth_config(
         is_default=data.is_default,
     )
     return AuthConfigUpdateResponseSchema(
-        auth_config=_response_from_entity(auth_config),
-        operations_discovered=discovered,
+        auth_config=_response_from_entity(
+            auth_config,
+            auth_scheme=await _one_auth_scheme(connector_service, auth_config),
+        ),
+        operations_discovered=discovery.operation_count,
+        operations_discovery=OperationDiscoverySchema.model_validate(
+            discovery, from_attributes=True
+        ),
         accounts_marked_for_reauth=marked,
     )
 
 
 @router.post(
     "/{auth_config_name}/operations/refresh",
+    response_model=AuthConfigOperationsRefreshResponseSchema,
     operation_id="connector.auth_config.refresh_operations",
     summary="Refresh Auth Config Operations",
     description=(
         "Re-discover the operations exposed by a discovery-based install "
         "(MCP server, OpenAPI URL). Use after the upstream server changes its "
-        "tools, or to retry a discovery that failed when the install was created."
+        "tools, or to retry a discovery that failed when the install was "
+        "created. Answers 200 whether or not the server responded -- the "
+        "install is deliberately kept either way -- so read `status`: `failed` "
+        "means the server refused and the retry is still outstanding."
     ),
 )
 async def refresh_auth_config_operations(
@@ -232,13 +308,18 @@ async def refresh_auth_config_operations(
     organization_id: UUID,
     auth_config_name: str,
     connector_service: ConnectorServiceDep,
-) -> dict:
-    count = await connector_service.refresh_auth_config_operations(
+) -> AuthConfigOperationsRefreshResponseSchema:
+    discovery = await connector_service.refresh_auth_config_operations(
         user_id=user.id,
         organization_id=organization_id,
         auth_config_name=auth_config_name,
     )
-    return {"auth_config_name": auth_config_name, "operation_count": count}
+    return AuthConfigOperationsRefreshResponseSchema(
+        auth_config_name=auth_config_name,
+        status=discovery.status.value,
+        operation_count=discovery.operation_count,
+        reason=discovery.reason,
+    )
 
 
 @router.delete(

@@ -141,7 +141,24 @@ def _as_float(value: object) -> float:
 
 
 class UsageReservation(BaseModel):
-    """A monetary reservation created by an injected limit policy."""
+    """A monetary reservation created by an injected limit policy.
+
+    A hold against every applicable limit window, so concurrent runs cannot each
+    pass a check the other is about to spend through. The holder owns settlement
+    and every one of them settles: the agent run finalizer releases on each
+    terminal path, on a graceful worker shutdown, and from its own ``except``;
+    ``UsageService.record_*`` consumes on success and releases when the run
+    produced no usage.
+
+    Not covered: a process that dies between the two -- an OOM kill or SIGKILL.
+    Nothing tracks individual reservations (only a per-window sum in
+    ``reserved_usd``), so nothing can tell a leaked hold from an in-flight one.
+    The leak is bounded rather than permanent -- reserved spend is read for one
+    exact ``(organization, user, window_kind, window_start)``, so it stops
+    counting when its window rolls over -- but until then it counts against the
+    limit. Closing that needs a row per reservation with a timestamp; a sum
+    cannot express it.
+    """
 
     organization_id: UUID | None = None
     user_id: UUID

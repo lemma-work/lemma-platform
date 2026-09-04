@@ -57,18 +57,35 @@ AN_APPROVAL = {
 A_NEW_INSTRUCTION = "Create a table called approvals_probe with a column named note."
 
 
-def _service(pending: dict, *, free_text_wanted_for: str | None = None):
+#: `agent`'s published conversation operations, doubled where they are defined
+#: rather than where this module imports them. They are a collaborator of the
+#: code under test, not a part of it, and the real ones reach a database.
+_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+
+
+def _pending_interaction(spec: dict):
+    """One paused call, in the shape the published operation returns it."""
+    return SimpleNamespace(
+        tool_call_id=spec["tool_call_id"],
+        kind=spec["kind"],
+        tool_args=spec["tool_args"],
+        agent_run_id=spec["agent_run_id"],
+        is_approval=spec["kind"] == "request_approval",
+    )
+
+
+def _service(monkeypatch, pending: dict, *, free_text_wanted_for: str | None = None):
     """A conversation waiting on `pending`, on a surface that renders buttons."""
     conversation_id = uuid4()
-    service = AsyncMock()
-    service.get_pending_user_interaction.return_value = dict(pending)
-    service.conversation_repository.get_conversation.return_value = SimpleNamespace(
-        id=conversation_id
+    operations = SimpleNamespace(
+        pending_interaction=AsyncMock(return_value=_pending_interaction(pending)),
+        conversation_metadata_value=AsyncMock(return_value=free_text_wanted_for),
+        set_conversation_metadata_value=AsyncMock(),
+        resolve_pending_interaction=AsyncMock(return_value=True),
     )
-    service.conversation_repository.get_conversation_metadata_key.return_value = (
-        free_text_wanted_for
-    )
-    return service, conversation_id
+    for name, double in vars(operations).items():
+        monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
+    return operations, conversation_id
 
 
 def _context(conversation_id, platform: str = "TELEGRAM"):
@@ -82,24 +99,24 @@ def _context(conversation_id, platform: str = "TELEGRAM"):
 
 
 @pytest.mark.asyncio
-async def test_typing_past_a_question_is_a_new_message() -> None:
+async def test_typing_past_a_question_is_a_new_message(monkeypatch) -> None:
     """The bug, in one assertion.
 
     A question is on screen with two buttons. Somebody ignores it and asks for
     something else. That instruction is theirs, not an answer to "Which report?".
     """
-    service, conversation_id = _service(A_QUESTION)
+    service, conversation_id = _service(monkeypatch, A_QUESTION)
 
     consumed = await maybe_resume_pending_interaction(
-        _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
+        _context(conversation_id), A_NEW_INSTRUCTION, uow=object()
     )
 
     assert consumed is ResumeOutcome.NOT_A_DECISION
-    service.resolve_user_approval_internal.assert_not_awaited()
+    service.resolve_pending_interaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_typing_past_an_approval_is_a_new_message() -> None:
+async def test_typing_past_an_approval_is_a_new_message(monkeypatch) -> None:
     """Same for an approval card, and it matters more.
 
     Anything that is not an approval word was read as a denial, so an unrelated
@@ -107,55 +124,57 @@ async def test_typing_past_an_approval_is_a_new_message() -> None:
     Falling through denies it too — but through the path that also tells the
     agent and runs what was asked.
     """
-    service, conversation_id = _service(AN_APPROVAL)
+    service, conversation_id = _service(monkeypatch, AN_APPROVAL)
 
     consumed = await maybe_resume_pending_interaction(
-        _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
+        _context(conversation_id), A_NEW_INSTRUCTION, uow=object()
     )
 
     assert consumed is ResumeOutcome.NOT_A_DECISION
-    service.resolve_user_approval_internal.assert_not_awaited()
+    service.resolve_pending_interaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_an_answer_typed_after_tapping_other_still_answers() -> None:
+async def test_an_answer_typed_after_tapping_other_still_answers(monkeypatch) -> None:
     """The affordance this must not break.
 
     "Other" means "I will type it", so the next message *is* the answer.
     """
     service, conversation_id = _service(
-        A_QUESTION, free_text_wanted_for="call-the-question"
+        monkeypatch, A_QUESTION, free_text_wanted_for="call-the-question"
     )
 
     consumed = await maybe_resume_pending_interaction(
-        _context(conversation_id), "Weekly summary", conversation_service=service
+        _context(conversation_id), "Weekly summary", uow=object()
     )
 
     assert consumed is ResumeOutcome.CONSUMED
-    resolved = service.resolve_user_approval_internal.await_args.kwargs
+    resolved = service.resolve_pending_interaction.await_args.kwargs
     assert resolved["approval_id"] == "call-the-question"
 
 
 @pytest.mark.asyncio
-async def test_other_tapped_on_a_different_question_is_not_spent_here() -> None:
+async def test_other_tapped_on_a_different_question_is_not_spent_here(
+    monkeypatch,
+) -> None:
     """The intent belongs to one call, not to the conversation.
 
     Otherwise an "Other" tapped two turns ago would go on making every later
     message an answer — the same bug with more steps.
     """
     service, conversation_id = _service(
-        A_QUESTION, free_text_wanted_for="call-some-other-question"
+        monkeypatch, A_QUESTION, free_text_wanted_for="call-some-other-question"
     )
 
     consumed = await maybe_resume_pending_interaction(
-        _context(conversation_id), A_NEW_INSTRUCTION, conversation_service=service
+        _context(conversation_id), A_NEW_INSTRUCTION, uow=object()
     )
 
     assert consumed is ResumeOutcome.NOT_A_DECISION
 
 
 @pytest.mark.asyncio
-async def test_typing_an_offered_option_still_answers() -> None:
+async def test_typing_an_offered_option_still_answers(monkeypatch) -> None:
     """Buttons on screen, and they typed one of the options anyway.
 
     That is answering, and reading it as a new instruction would be perverse.
@@ -163,17 +182,17 @@ async def test_typing_an_offered_option_still_answers() -> None:
     parser's own fallback treats *any* text as a free-form answer, which is the
     behaviour being fixed.
     """
-    service, conversation_id = _service(A_QUESTION)
+    service, conversation_id = _service(monkeypatch, A_QUESTION)
 
     for typed in ("Full ledger", "2"):
         consumed = await maybe_resume_pending_interaction(
-            _context(conversation_id), typed, conversation_service=service
+            _context(conversation_id), typed, uow=object()
         )
         assert consumed is ResumeOutcome.CONSUMED, typed
 
 
 @pytest.mark.asyncio
-async def test_typing_a_decision_still_answers_an_approval() -> None:
+async def test_typing_a_decision_still_answers_an_approval(monkeypatch) -> None:
     """ "approve" and "deny" are answers wherever they are typed.
 
     Both directions, because only approve-words were ever recognised — anything
@@ -181,15 +200,15 @@ async def test_typing_a_decision_still_answers_an_approval() -> None:
     pending action silently.
     """
     for typed in ("approve", "deny"):
-        service, conversation_id = _service(AN_APPROVAL)
+        service, conversation_id = _service(monkeypatch, AN_APPROVAL)
         consumed = await maybe_resume_pending_interaction(
-            _context(conversation_id), typed, conversation_service=service
+            _context(conversation_id), typed, uow=object()
         )
         assert consumed is ResumeOutcome.CONSUMED, typed
 
 
 @pytest.mark.asyncio
-async def test_a_card_that_arrived_as_text_is_answered_by_typing() -> None:
+async def test_a_card_that_arrived_as_text_is_answered_by_typing(monkeypatch) -> None:
     """Nothing to tap, so a typed reply has to be read as the answer.
 
     This is the text fallback, and it is the reason the resume path exists.
@@ -201,13 +220,13 @@ async def test_a_card_that_arrived_as_text_is_answered_by_typing() -> None:
     rule instead, and prove nothing about this one.
     """
     service, conversation_id = _service(
-        A_QUESTION, free_text_wanted_for="call-the-question"
+        monkeypatch, A_QUESTION, free_text_wanted_for="call-the-question"
     )
 
     consumed = await maybe_resume_pending_interaction(
         _context(conversation_id),
         "whichever you think is best",
-        conversation_service=service,
+        uow=object(),
     )
 
     assert consumed is ResumeOutcome.CONSUMED

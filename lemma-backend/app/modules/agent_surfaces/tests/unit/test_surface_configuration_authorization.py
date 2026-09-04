@@ -5,13 +5,20 @@ from uuid import uuid4
 import pytest
 
 from app.core.authorization.permissions import Permissions
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
+    SurfaceConfig,
+    SurfaceMode,
+    SurfacePlatform,
+)
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.services.surface_configuration import (
     SurfaceConfigurationMixin,
 )
+from app.modules.agent_surfaces.services.surface_consent import SurfaceConsentMixin
+from app.modules.agent_surfaces.services.surface_setup_read import SurfaceSetupReadMixin
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,7 +33,7 @@ def _surface(*, pod_id, surface_id=None):
         pod_id=pod_id,
         surface_type=SurfacePlatform.SLACK,
         external_workspace_id="T1",
-        agent_id=None,
+        agent_id=uuid4(),
         name="slack",
     )
 
@@ -159,3 +166,83 @@ async def test_explicit_or_default_surface_replaces_first_row_selection():
 
     assert explicit[0].id == first.id
     assert default[0].id == second.id
+
+
+def _whatsapp_surface(*, pod_id):
+    return AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=pod_id,
+        name="whatsapp",
+        agent_id=uuid4(),
+        surface_type=SurfacePlatform.WHATSAPP,
+        mode=SurfaceMode.DM,
+        account_id=uuid4(),
+        config=SurfaceConfig(),
+        is_active=True,
+    )
+
+
+class _SetupHarness(SurfaceSetupReadMixin, SurfaceConsentMixin):
+    pass
+
+
+def _setup_harness(surface):
+    harness = _SetupHarness()
+    harness.get_surface_by_name_in_pod = AsyncMock(return_value=surface)
+    harness.get_platform_setup_guide = lambda platform: None
+    harness._surface_admin_consent = AsyncMock(return_value=None)
+    harness._surface_uses_org_custom_app = AsyncMock(return_value=True)
+    harness._credential_resolver = SimpleNamespace(
+        for_account=AsyncMock(return_value={"verify_token": _A_VERIFY_TOKEN})
+    )
+    return harness
+
+
+_A_VERIFY_TOKEN = "verify-token-under-test"
+
+
+def _copyable_values(setup) -> list[str]:
+    return [field.value for action in setup["actions"] for field in action.fields]
+
+
+async def test_a_reader_who_cannot_change_the_surface_is_not_given_its_verify_token(
+    monkeypatch,
+):
+    """``secret=True`` on a setup field is a rendering hint, not a gate.
+
+    The WhatsApp verify token gates the subscription handshake, so anyone
+    holding it can re-point the org's webhook somewhere else. It was returned in
+    the setup body to every holder of ``AGENT_READ`` on the pod.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.common.public_https_api_url_available",
+        lambda: True,
+    )
+    pod_id = uuid4()
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+
+    setup = await harness.get_surface_setup_by_name(
+        pod_id=pod_id, name="whatsapp", reveal_secrets=False
+    )
+
+    assert _A_VERIFY_TOKEN not in _copyable_values(setup)
+    # The rest of the checklist still arrives: this withholds one value, it does
+    # not refuse the request.
+    assert setup["actions"]
+
+
+async def test_a_reader_who_can_change_the_surface_still_gets_the_verify_token(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.common.public_https_api_url_available",
+        lambda: True,
+    )
+    pod_id = uuid4()
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+
+    setup = await harness.get_surface_setup_by_name(
+        pod_id=pod_id, name="whatsapp", reveal_secrets=True
+    )
+
+    assert _A_VERIFY_TOKEN in _copyable_values(setup)

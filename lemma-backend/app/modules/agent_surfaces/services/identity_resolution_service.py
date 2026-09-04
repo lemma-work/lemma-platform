@@ -14,7 +14,10 @@ from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.composition.surface_identity import UserRepository
+from app.modules.agent_surfaces.domain.ports import SurfaceUserDirectoryPort
+from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
+    IdentityUserDirectoryAdapter,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -135,10 +138,16 @@ class SurfaceIdentityResolutionService:
     If no match is found the caller sends a signup link.
     """
 
-    def __init__(self, uow, external_user_repository: ExternalSurfaceUserRepository):
+    def __init__(
+        self,
+        uow,
+        external_user_repository: ExternalSurfaceUserRepository,
+        *,
+        user_directory: SurfaceUserDirectoryPort | None = None,
+    ):
         self.uow = uow
-        self._users = UserRepository(uow)
         self.external_user_repository = external_user_repository
+        self._users = user_directory or IdentityUserDirectoryAdapter(uow)
 
     async def resolve(
         self,
@@ -249,7 +258,7 @@ class SurfaceIdentityResolutionService:
                 return _UserMatch(user_id)
 
         if email:
-            user_id = await self._users.get_id_by_email_insensitive(email)
+            user_id = await self._users.user_id_by_email(email)
             if user_id:
                 return _UserMatch(user_id)
 
@@ -264,7 +273,10 @@ class SurfaceIdentityResolutionService:
         cleaned = str(username or "").strip().lstrip("@").lower()
         if not cleaned:
             return None
-        return await self._users.get_id_by_telegram_lower(cleaned)
+        # The *live*-user lookup, not the "is this handle taken" one beside it:
+        # a match here is what the run then executes as, so a deactivated or
+        # deleted holder of the handle must resolve to nobody.
+        return await self._users.user_id_by_telegram_username(cleaned)
 
     async def _match_user_by_phone(self, phone: str) -> _UserMatch:
         candidates = _phone_lookup_candidates(phone)
@@ -272,7 +284,7 @@ class SurfaceIdentityResolutionService:
             return _UserMatch(None)
         # Prefer verified ownership. If verification is optional or has not yet
         # happened, a single eligible profile match still routes the surface.
-        ids = await self._users.get_ids_by_mobile_numbers(candidates, verified=True)
+        ids = await self._users.user_ids_by_mobile_numbers(candidates, verified=True)
         if len(ids) == 1:
             return _UserMatch(ids[0])
         if len(ids) > 1:
@@ -283,7 +295,7 @@ class SurfaceIdentityResolutionService:
             )
             return _UserMatch(None)
 
-        unverified_ids = await self._users.get_ids_by_mobile_numbers(
+        unverified_ids = await self._users.user_ids_by_mobile_numbers(
             candidates, verified=False
         )
         if len(unverified_ids) == 1:

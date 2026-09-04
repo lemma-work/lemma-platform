@@ -16,7 +16,7 @@ async def _report_system_model_pricing(
     from app.modules.agent.services.runtime_system_profiles import (
         system_lemma_openai_catalog_model_names,
     )
-    from app.composition.agent_usage import (
+    from app.modules.usage.contracts.execution import (
         UsageService,
         assert_system_pricing_covers_catalog,
     )
@@ -61,8 +61,11 @@ def _routers():
 
 def _event_routers():
     from app.modules.agent.events.handlers import router
+    from app.modules.agent.events.notification_settled import (
+        router as notification_settled_router,
+    )
 
-    return [router]
+    return [router, notification_settled_router]
 
 
 module = LemmaModule(
@@ -79,5 +82,10 @@ module = LemmaModule(
         # an undeclared group silently misses everything published before its
         # first read.
         ("datastore.events", "agent-memory-brief-invalidation"),
+        # A group on surfaces' stream, so the last answer to an agent's asks
+        # starts the asking conversation's next turn. Declared for the same
+        # reason as the one above: a group nobody declared misses everything
+        # published before it first reads.
+        ("surface_events", "agent-notification-settled"),
     ),
 )

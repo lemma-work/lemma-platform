@@ -11,25 +11,36 @@ Use LiteParse (`lit`) to parse documents that **aren't in the pod** — a PDF an
 
 Decide by **where the document lives** — that's the first question, not an afterthought:
 
-- **It's a pod file (or going into the pod) → use the pod, not `lit`.** `lemma files upload <file> /knowledge/<name>` and the pod **auto-converts and indexes** it: semantic+keyword search (`lemma files search`), page-marked markdown (`lemma files cat --pages`), rendered page images and figures (`lemma files child …/pages/page_0001.jpg`) — no local parsing. The pod *is* the RAG system; don't re-implement extraction for documents you're putting there. (See `lemma-builder/references/files.md` and the `lemma-user` skill.)
+- **It's a pod file (or going into the pod) → use the pod, not `lit`.** `lemma files upload <file> /knowledge/<name>` and the pod **auto-converts and indexes** it: semantic+keyword search (`lemma files search`), page-marked markdown (`lemma files cat --pages`), rendered page images and figures (`lemma files child …/pages/page_0001.jpg`) — no local parsing. The pod *is* the RAG system; don't re-implement extraction for documents you're putting there. (See `lemma-builder/references/files.md` and the `lemma-user` skill.) The auto-conversion is an allow-list — PDF, DOC/DOCX, ODT, RTF, Markdown, plain text, HTML, EPUB — so uploading a **spreadsheet, presentation, image or email** stores the bytes and produces nothing to read (`lemma files stat` reports `NOT_REQUIRED`). Those are `lit`'s lane even when they live in the pod: download and parse locally.
 - **It's outside the pod, or the pod artifact is missing/insufficient → use `lit`.** A PDF fetched from the web, a local file you won't upload, a scanned PDF needing OCR, bounding-box/layout extraction, or screenshotting pages to decide what's worth keeping — and the **fallback** when a pod file lacks its derived markdown/images. That's LiteParse's lane.
 
 Common flow: `lit screenshot` or `lit parse` an outside file to inspect it, then `lemma files upload` the ones worth keeping so the pod converts and indexes them.
 
 ## Tooling
 
-The workspace image should provide:
-
-- `lit` from `@llamaindex/liteparse`
-- LibreOffice for Office document conversion
-- ImageMagick for image conversion
-- English Tesseract trained data at `$TESSDATA_PREFIX`
-
-Check availability with:
+The workspace image installs `lit` (and the `liteparse` alias) from
+`@llamaindex/liteparse`, alongside Node and a headed Chromium. That is what you
+can count on:
 
 ```bash
 lit --help
 ```
+
+**Everything else is a probe, not a promise.** LibreOffice, ImageMagick and
+Tesseract language data are *not* installed by the workspace image, and nothing
+sets `$TESSDATA_PREFIX`. Some runtimes inherit them from their base image and
+some do not, so check before you plan around them rather than after a parse
+fails:
+
+```bash
+command -v libreoffice soffice magick convert tesseract
+echo "${TESSDATA_PREFIX:-<unset>}"
+```
+
+When one is missing, say so and take the other route rather than trying to
+install it: an Office file can go through `lemma files upload` and be read back
+as the pod's converted markdown, and a scanned PDF can be rendered with
+`lit screenshot` and read with the image-viewing capability instead of OCR.
 
 ## Workflow
 
@@ -88,9 +99,9 @@ lit batch-parse input-directory output-directory --recursive --format json
 
 ## Troubleshooting
 
-- If Office files fail to parse, verify LibreOffice is installed with `libreoffice --version`.
-- If image inputs fail, verify ImageMagick is installed with `magick --version` or `convert --version`.
-- If OCR needs another language, pass `--ocr-language <lang>` and ensure the matching `.traineddata` file exists in `$TESSDATA_PREFIX`.
+- If Office files fail to parse, check `libreoffice --version` (or `soffice`). The workspace image does not install it; when it is absent, upload the file and read the pod's converted markdown instead.
+- If image inputs fail, check `magick --version` or `convert --version`. Same story — not installed by the workspace image.
+- OCR needs Tesseract and its language data, neither of which the workspace image installs. If `tesseract --version` works, pass `--ocr-language <lang>` and make sure the matching `.traineddata` file exists in `$TESSDATA_PREFIX`. If it does not, render pages with `lit screenshot` and read them with the image-viewing capability rather than reaching for OCR.
 - If the document is password protected, use `--password <password>` only when the user has provided the password.
 
 ## See also

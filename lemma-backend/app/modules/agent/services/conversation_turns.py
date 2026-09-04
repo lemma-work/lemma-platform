@@ -21,8 +21,8 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.composition.agent_snooze_scheduler import cancel_snooze_wake
-from app.composition.agent_usage import UsageLimitExceededError, UsageService
+from app.modules.usage.contracts import UsageLimitExceededError
+from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
@@ -366,11 +366,12 @@ class TurnCoordinator:
             await self.uow.commit()
             return conversation
 
-        # No active run, but the conversation may still be suspended. A snoozed
-        # turn has *no* run by construction — it ended cleanly when the tool
-        # paused it — so without this, Stop silently did nothing and the timer
-        # still fired later.
+        # No active run, but the conversation may still be suspended. Neither
+        # pause has a run by construction — both ended cleanly when the tool
+        # paused them — so without these, Stop silently did nothing: the snooze
+        # timer still fired later, and the approval card stayed up.
         await self._cancel_active_snooze(conversation=conversation)
+        await self._deny_unresolved_pauses(conversation=conversation, user_id=user_id)
         return conversation
 
     @property
@@ -411,8 +412,54 @@ class TurnCoordinator:
                 note_to_self=(wait.spec or {}).get("note_to_self"),
             ),
         )
-        if wait.external_ref:
-            await cancel_snooze_wake(wait.external_ref)
+        # Nothing to cancel. The wait row is the timer: the poller's due query
+        # filters on ACTIVE, and `find_active_by_external_ref` ignores anything
+        # that is not, so completing the wait above is what stops it firing.
+        # This used to call through `app/composition/agent_snooze_scheduler.py`,
+        # whose `cancel_snooze_wake` had already been reduced to `del timer_id`.
+
+    async def _deny_unresolved_pauses(
+        self, *, conversation: Conversation, user_id: UUID
+    ) -> None:
+        """Close an ask_user/request_approval the person decided not to answer.
+
+        A conversation paused this way has no active run either — the run that
+        asked finished when the tool paused it — so the branch above found
+        nothing and Stop returned the conversation untouched, on the one state
+        where someone most wants to abandon a turn.
+
+        DENY, never approve, for the reason
+        ``supersede_stale_pending_interactions`` gives: this is a response
+        synthesized on the user's behalf, not a decision they made. And, as with
+        a snooze, no resume run follows.
+        """
+        superseded = await self.approvals.supersede_stale_pending_interactions(
+            conversation=conversation,
+            user_id=user_id,
+        )
+        if not superseded:
+            return
+
+        await self.conversation_repository.set_conversation_status(
+            conversation_id=conversation.id,
+            status=ConversationStatus.STOPPED,
+        )
+        conversation.status = ConversationStatus.STOPPED
+
+        # Published after the commit, not inside it: these are live UI frames
+        # and sending them from here would hold a pooled connection across a
+        # Redis round trip. Same arrangement as `start`.
+        frames = [
+            message_payload(item.agent_run_id, message_to_payload(item))
+            for item in superseded
+        ]
+
+        async def _publish_frames() -> None:
+            for frame in frames:
+                await publish_conversation_event(conversation.id, frame)
+
+        self.uow.after_commit(_publish_frames)
+        await self.uow.commit()
 
     async def assert_usage_preflight_allowed(
         self,

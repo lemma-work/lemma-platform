@@ -80,6 +80,7 @@ from lemma_pod_bundle.normalize import (
     _sanitize_table_payload_for_import,
     _split_resource_permissions_payload,
     _strip_keys,
+    _surface_name_from_payload,
     _surface_platform_from_payload,
     _validate_function_payload,
 )
@@ -1216,7 +1217,9 @@ def export_pod_bundle(
 
     surfaces: list[dict[str, Any]] = []
     if should_export("surfaces"):
-        seen_platforms: set[str] = set()
+        # Keyed by the surface's pod-unique name. Deduping by platform here is
+        # what silently dropped every surface after the first Slack one.
+        seen_names: set[str] = set()
         for surface in list_items(pod_sdk.surfaces.list(limit=100)):
             raw_surface = to_plain(surface)
             account_id = raw_surface.get("account_id")
@@ -1228,11 +1231,12 @@ def export_pod_bundle(
                 raw_surface["connector_kind"] = connector_kind
             payload = _normalize_surface_payload(raw_surface)
             platform = str(payload.get("platform") or "")
-            if not platform or platform in seen_platforms:
+            surface_key = str(payload["name"]).lower()
+            if not platform or surface_key in seen_names:
                 continue
             if not should_export_name(surface, payload["name"]):
                 continue
-            seen_platforms.add(platform)
+            seen_names.add(surface_key)
             surfaces.append(payload)
             surface_name = str(payload["name"])
             resource_dir = bundle_root / "surfaces" / surface_name
@@ -1584,9 +1588,11 @@ def _build_import_plan(
             summary["schedules"].append(f"created:{schedule_name}")
 
     surface_dirs = _resource_dirs(source_dir, "surfaces")
-    existing_surface_platforms = (
+    # Surfaces are addressed by their pod-unique name (defaulting to the
+    # lowercased platform), the same key the server-side applier upserts on.
+    existing_surface_names = (
         {
-            str(item.get("platform") or item.get("surface_type") or "").upper()
+            _surface_name_from_payload(to_plain(item), "")
             for item in list_items(pod_sdk.surfaces.list(limit=100))
         }
         if surface_dirs
@@ -1598,15 +1604,15 @@ def _build_import_plan(
             payload = load_resource_payload(resource_dir, surface_name)
         except Exception:
             continue
-        platform = _surface_platform_from_payload(payload, surface_name)
-        if platform in existing_surface_platforms:
+        surface_key = _surface_name_from_payload(payload, surface_name)
+        if surface_key in existing_surface_names:
             if upsert:
                 summary["surfaces"].append(f"updated:{surface_name}")
             else:
                 issues.append(
                     BundleValidationIssue(
                         path=str(resource_dir),
-                        message=f"Surface already exists for platform: {platform}",
+                        message=f"Surface already exists: {surface_key}",
                     )
                 )
         else:
@@ -2835,9 +2841,11 @@ def import_pod_bundle(
             _progress_done("schedule", schedule_name, "created")
 
     surface_dirs = _resource_dirs(source_dir, "surfaces")
-    existing_surface_platforms = (
+    # Surfaces are addressed by their pod-unique name (defaulting to the
+    # lowercased platform), the same key the server-side applier upserts on.
+    existing_surface_names = (
         {
-            str(item.get("platform") or item.get("surface_type") or "").upper()
+            _surface_name_from_payload(to_plain(item), "")
             for item in list_items(pod_sdk.surfaces.list(limit=100))
         }
         if surface_dirs
@@ -2847,14 +2855,17 @@ def import_pod_bundle(
         surface_name = resource_dir.name
         payload = apply_variables(load_resource_payload(resource_dir, surface_name))
         platform = _surface_platform_from_payload(payload, surface_name)
-        exists = platform in existing_surface_platforms
+        surface_key = _surface_name_from_payload(payload, surface_name)
+        exists = surface_key in existing_surface_names
         if exists and not upsert:
             raise ValueError(
-                f"Surface already exists for platform and --no-upsert was requested: {platform}"
+                f"Surface already exists and --no-upsert was requested: {surface_key}"
             )
         action = "updated" if exists else "created"
         _progress_start("surface", surface_name, "upserting")
-        pod_sdk.surfaces.upsert(platform, _surface_upsert_body(payload))
+        pod_sdk.surfaces.upsert(
+            surface_key, {**_surface_upsert_body(payload), "platform": platform}
+        )
         summary["surfaces"].append(f"{action}:{surface_name}")
         _progress_done("surface", surface_name, action)
 

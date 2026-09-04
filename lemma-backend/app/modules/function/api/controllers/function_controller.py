@@ -1,15 +1,14 @@
 """Function API controller."""
 
+from functools import partial
 from uuid import UUID
-from typing import Any, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
-    apply_inline_workload_grants,
-    list_grantee_resource_grants,
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
     validate_pod_resource_grant_permissions,
@@ -48,7 +47,12 @@ from app.modules.function.api.dependencies import (
     FunctionResourceEditorDep,
     FunctionResourceViewerDep,
 )
-from app.composition.function_workspace import (
+from app.modules.function.api.controllers.function_grants import (
+    apply_function_grants,
+    function_permissions_response,
+    grants_for_functions,
+)
+from app.modules.workspace.contracts.tooling import (
     invalidate_function_workspace_env_cache,
 )
 
@@ -62,39 +66,6 @@ router = APIRouter(
 def _to_function_response(function: FunctionEntity) -> FunctionResponse:
     payload = function.model_dump()
     return FunctionResponse.model_validate(payload)
-
-
-async def _apply_function_grants(
-    uow,
-    *,
-    pod_id: UUID,
-    function: FunctionEntity,
-    data,
-    user: UserEntity,
-) -> None:
-    """Apply a create/update payload's inline ``permissions`` block.
-
-    Functions accepted this block on neither verb while agents accepted it on
-    create, so the same bundle payload wired an agent and silently left a
-    function with nothing.
-    """
-
-    assert function.id is not None
-    applied = await apply_inline_workload_grants(
-        uow.session,
-        pod_id=pod_id,
-        grantee_type="FUNCTION",
-        grantee_id=function.id,
-        permissions=getattr(data, "permissions", None),
-        created_by_user_id=user.id,
-    )
-    if applied:
-        # The sandbox reads its grants from a cached environment, so skipping
-        # this leaves the function running with the access it had before.
-        await invalidate_function_workspace_env_cache(
-            pod_id=pod_id,
-            function_id=function.id,
-        )
 
 
 async def _function_action_response(
@@ -134,7 +105,7 @@ async def create_function(
     pod_id: UUID,
     data: CreateFunctionRequest,
     use_cases: FunctionUseCasesDep,
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionActionResponse:
     """Create a new function in a pod."""
     user: UserEntity = request.state.user
@@ -151,8 +122,8 @@ async def create_function(
     function = await use_cases.create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
-    await _apply_function_grants(
-        uow, pod_id=pod_id, function=function, data=data, user=user
+    await apply_function_grants(
+        uow_factory, pod_id=pod_id, function=function, data=data, user=user
     )
     return await _function_action_response(function)
 
@@ -194,7 +165,7 @@ async def list_functions(
         pod_id, user_id, limit, page_token, ctx=ctx
     )
 
-    grants_by_function = await _grants_for_functions(uow, pod_id, functions, include)
+    grants_by_function = await grants_for_functions(uow, pod_id, functions, include)
     return FunctionListResponse(
         items=[
             _function_summary_response(
@@ -208,34 +179,6 @@ async def list_functions(
         limit=limit,
         next_page_token=next_cursor,
     )
-
-
-async def _grants_for_functions(
-    uow: Any,
-    pod_id: UUID,
-    functions: list[Any],
-    include: list[str],
-) -> dict[UUID, list[FunctionResourcePermissionResponse]] | None:
-    """Grants for a whole page of functions, or None when not requested."""
-    if not any(part.strip().lower() == "permissions" for part in include):
-        return None
-    from app.core.authorization.grants import list_grants_for_grantees
-
-    ids = [f.id for f in functions if f.id is not None]
-    grouped = await list_grants_for_grantees(
-        uow.session, pod_id=pod_id, grantee_type="FUNCTION", grantee_ids=ids
-    )
-    return {
-        function_id: [
-            FunctionResourcePermissionResponse(
-                resource_type=resource_type,
-                resource_name=resource_name,
-                permission_ids=sorted(set(permission_ids)),
-            )
-            for (resource_type, resource_name), permission_ids in grants.items()
-        ]
-        for function_id, grants in grouped.items()
-    }
 
 
 @router.get(
@@ -267,7 +210,7 @@ async def get_function(
     response = await _function_action_response(function)
     return FunctionDetailResponse(
         **response.model_dump(),
-        permissions=await _function_permissions_response(
+        permissions=await function_permissions_response(
             uow,
             pod_id=pod_id,
             function=function,
@@ -302,7 +245,7 @@ async def get_function_permissions(
         ctx=ctx,
     )
     assert function is not None
-    return await _function_permissions_response(uow, pod_id=pod_id, function=function)
+    return await function_permissions_response(uow, pod_id=pod_id, function=function)
 
 
 @router.put(
@@ -362,11 +305,19 @@ async def replace_function_permissions(
         grants=grants,
         created_by_user_id=user.id,
     )
-    await invalidate_function_workspace_env_cache(
-        pod_id=pod_id,
-        function_id=function.id,
+    # After the commit, not inside it. Inline, this held a pooled connection
+    # across a Redis round trip, and ran in the wrong order besides: a
+    # concurrent reader could repopulate the cache from the pre-commit state
+    # between the invalidation and the commit. `get_uow` commits in its
+    # teardown, before the response goes out.
+    uow.after_commit(
+        partial(
+            invalidate_function_workspace_env_cache,
+            pod_id=pod_id,
+            function_id=function.id,
+        )
     )
-    return await _function_permissions_response(uow, pod_id=pod_id, function=function)
+    return await function_permissions_response(uow, pod_id=pod_id, function=function)
 
 
 @router.patch(
@@ -387,7 +338,7 @@ async def update_function(
     function_name: str,
     data: UpdateFunctionRequest,
     use_cases: FunctionUseCasesDep,
-    uow: UoWDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionActionResponse:
     """Update a function."""
     user: UserEntity = request.state.user
@@ -402,8 +353,8 @@ async def update_function(
         user_id=user.id,
         request=request,
     )
-    await _apply_function_grants(
-        uow, pod_id=pod_id, function=function, data=data, user=user
+    await apply_function_grants(
+        uow_factory, pod_id=pod_id, function=function, data=data, user=user
     )
     return await _function_action_response(function)
 
@@ -461,9 +412,10 @@ async def execute_function(
     user_email = getattr(user, "email", None)
     if user_email is None:
         async with uow_factory() as uow:
-            from app.composition.identity_notifications import resolve_user_email
+            from app.modules.identity.contracts.profiles import user_profile
 
-            user_email = await resolve_user_email(uow, user_id)
+            profile = await user_profile(uow.session, user_id)
+            user_email = profile.email if profile else None
 
     run = await use_cases.execute_function(
         pod_id=pod_id,
@@ -508,33 +460,6 @@ async def list_runs(
         items=[FunctionRunSummaryResponse.model_validate(r) for r in runs],
         limit=limit,
         next_page_token=next_cursor,
-    )
-
-
-async def _function_permissions_response(
-    uow: UoWDep,
-    *,
-    pod_id: UUID,
-    function: FunctionEntity,
-) -> FunctionPermissionsResponse:
-    assert function.id is not None
-    grouped = await list_grantee_resource_grants(
-        uow.session,
-        pod_id=pod_id,
-        grantee_type="FUNCTION",
-        grantee_id=function.id,
-    )
-    return FunctionPermissionsResponse(
-        function_id=function.id,
-        function_name=function.name,
-        grants=[
-            FunctionResourcePermissionResponse(
-                resource_type=resource_type,
-                resource_name=resource_name,
-                permission_ids=sorted(set(permission_ids)),
-            )
-            for (resource_type, resource_name), permission_ids in grouped.items()
-        ],
     )
 
 

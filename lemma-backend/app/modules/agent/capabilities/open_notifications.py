@@ -23,6 +23,7 @@ from uuid import UUID
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.toolsets import AbstractToolset
 
+from app.modules.agent.tools.graceful_toolset import GracefulToolset
 from app.modules.agent.tools.messaging.respond import respond_toolset
 
 
@@ -115,7 +116,18 @@ class OpenNotificationsCapability(AbstractCapability[object]):
         return "open_notifications"
 
     def get_toolset(self) -> AbstractToolset[object]:
-        return respond_toolset
+        """The respond tools, wrapped so a refusal cannot end the run.
+
+        Every other toolset reaches the model through the assembler, which
+        wraps it in `GracefulToolset`. This one does not -- the capability
+        hands its toolset over directly -- so it was the single tool surface
+        where a raising body aborted the whole conversation instead of
+        returning an error the model could read. `respond_to_notification`
+        carries no try/except precisely because it expects this wrapper, and
+        the transitions it calls raise by design: answering something already
+        answered, or answered by a form, or that asked nothing at all.
+        """
+        return GracefulToolset(respond_toolset)
 
     def get_instructions(self) -> str:
         return self._instructions
@@ -130,7 +142,7 @@ async def build_open_notifications_capability(
     this changes the moment somebody answers, and a stale copy would have an
     agent chasing a question that is already closed.
     """
-    from app.composition.agent_notifications import (
+    from app.modules.agent_surfaces.contracts.notifications import (
         open_notifications_for_conversation,
     )
 

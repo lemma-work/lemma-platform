@@ -107,7 +107,7 @@ def apply_surface_history_window(
     if not metadata.get("surface_platform"):
         return runs
 
-    from app.composition.agent_surface_runtime import surface_history_limits
+    from app.modules.agent_surfaces.contracts.platforms import surface_history_limits
 
     max_messages, window_hours = surface_history_limits()
 
@@ -140,6 +140,25 @@ def apply_surface_history_window(
         trimmed = result or trimmed[-1:]
 
     return trimmed
+
+
+def bound_runtime_history(
+    runs: list[AgentRun], conversation: Conversation | None = None
+) -> tuple[list[AgentRun], int]:
+    """The runs the prompt will carry, and how many were dropped to get there.
+
+    Exists so the trim can happen *before* messages are fetched. The loader used
+    to attach messages to every run of the conversation and let
+    ``select_runtime_history`` discard what fell outside the window -- so a
+    conversation with hundreds of runs paid, on every turn, to read the user
+    messages plus the first and last of the runs it was about to throw away.
+
+    The dropped count comes back because it is the one thing the trimmed list no
+    longer knows about itself, and the notice announcing those runs to the model
+    is built from it.
+    """
+    bounded = apply_surface_history_window(runs, conversation)
+    return bounded, len(runs) - len(bounded)
 
 
 def runtime_full_run_ids(
@@ -184,12 +203,19 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
 
 
 def select_runtime_history(
-    runs: list[AgentRun], conversation: Conversation | None = None
+    runs: list[AgentRun],
+    conversation: Conversation | None = None,
+    *,
+    already_dropped: int = 0,
 ) -> list[Message]:
     # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
     # history reaches the model by age + count. Trim at run granularity first
     # so tool-call/tool-return pairs (which live within a run) stay intact.
-    original_count = len(runs)
+    #
+    # `already_dropped` is what a caller that trimmed before loading messages
+    # (see `bound_runtime_history`) took out. The window below is idempotent, so
+    # such a list loses nothing here and would silently lose its notice too.
+    original_count = len(runs) + already_dropped
     runs = apply_surface_history_window(runs, conversation)
     prefix: list[Message] = []
     if runs and len(runs) < original_count:

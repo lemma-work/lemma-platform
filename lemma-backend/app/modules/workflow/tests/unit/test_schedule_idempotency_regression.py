@@ -60,7 +60,57 @@ def _engine_with_mocks() -> WorkflowEngine:
         agent_adapter=Mock(),
         function_adapter=Mock(),
         schedule_adapter=Mock(),
+        notification_adapter=AsyncMock(),
     )
+
+
+def _stub_schedule_operations(monkeypatch, schedule_repo):
+    """The schedule-side companion of `_stub_run_operations`."""
+    for operation, method in (("get_schedule", "get"), ("record_fire", "record_fire")):
+        behaviour = getattr(schedule_repo, method, None)
+        if behaviour is None:
+            continue
+        monkeypatch.setattr(
+            f"app.modules.workflow.services.schedule_start_service.{operation}",
+            behaviour if operation == "get_schedule" else _ignoring_uow(behaviour),
+        )
+
+
+def _stub_run_operations(monkeypatch, run_repo):
+    """Point every schedule-run operation at one repository-shaped double.
+
+    These used to come free: the test replaced `ScheduleRunRepository` itself,
+    so all of its methods were mocked at once. The operations are named
+    individually now, which is the point — a test says which ones it stands in
+    for — but the three always move together for one fire, so they are stubbed
+    together here rather than three times in every test.
+    """
+    for operation, method in (
+        ("claim_schedule_run", "claim"),
+        ("mark_run_dispatched", "mark_dispatched"),
+        ("mark_run_failed", "mark_failed"),
+    ):
+        behaviour = getattr(run_repo, method, None)
+        if behaviour is None:
+            continue
+        monkeypatch.setattr(
+            f"app.modules.workflow.services.schedule_start_service.{operation}",
+            _ignoring_uow(behaviour),
+        )
+
+
+def _ignoring_uow(behaviour):
+    """Adapt a repository-method double to a contract operation's signature.
+
+    The operations take the unit of work first; the methods they replaced were
+    bound to a repository that already held it. Every assertion below — call
+    counts, arguments — is still made against `behaviour`.
+    """
+
+    async def call(_uow, *args, **kwargs):
+        return await behaviour(*args, **kwargs)
+
+    return call
 
 
 @pytest.mark.anyio
@@ -173,18 +223,13 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     # Schedule lookup returns our agent-target schedule.
     import app.modules.workflow.services.schedule_start_service as repo_mod
 
-    monkeypatch.setattr(
-        repo_mod,
-        "ScheduleRepository",
-        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
-    )
+    monkeypatch.setattr(repo_mod, "get_schedule", AsyncMock(return_value=schedule))
 
     # The durable dedup claim reports "already delivered".
-    import app.modules.workflow.services.schedule_start_service as run_repo_mod
 
     run_repo = Mock()
     run_repo.claim = AsyncMock(return_value=None)
-    monkeypatch.setattr(run_repo_mod, "ScheduleRunRepository", lambda uow: run_repo)
+    _stub_run_operations(monkeypatch, run_repo)
 
     await svc.handle_schedule_fired(
         schedule_id=str(schedule.id),
@@ -215,14 +260,8 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
     )
     schedule_repo = Mock(get=AsyncMock(return_value=schedule))
     run_repo = Mock(claim=AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
 
     await ScheduleStartService(engine).handle_schedule_fired(
         schedule_id=str(schedule.id),
@@ -303,14 +342,8 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     context = AsyncMock()
     service = ScheduleStartService(engine)
     service._build_user_context = AsyncMock(return_value=context)
@@ -361,14 +394,8 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     service = ScheduleStartService(engine)
     service._start_workflow_for_schedule = AsyncMock(return_value="workflow-run-1")
     service._record_fire = AsyncMock()
@@ -417,14 +444,8 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
         claim=AsyncMock(return_value=schedule_run),
         mark_failed=AsyncMock(return_value=ScheduleRunStatus.FAILED),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     context = AsyncMock()
     context.require.side_effect = PermissionError("agent.execute denied")
     service = ScheduleStartService(engine)
@@ -492,13 +513,12 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         is_active=True,
         schedule_type=SimpleNamespace(value="TIME"),
     )
-    import app.modules.workflow.services.schedule_start_service as svc_mod
 
     schedule_repo = Mock(
         get=AsyncMock(return_value=schedule),
         record_fire=AsyncMock(),
     )
-    monkeypatch.setattr(svc_mod, "ScheduleRepository", lambda uow: schedule_repo)
+    _stub_schedule_operations(monkeypatch, schedule_repo)
     schedule_run = SimpleNamespace(
         id=uuid4(),
         user_id=schedule.user_id,
@@ -509,7 +529,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(svc_mod, "ScheduleRunRepository", lambda uow: run_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     service = ScheduleStartService(engine)
     service._start_workflow_for_schedule = AsyncMock(
         return_value=schedule_run.target_run_id
@@ -628,14 +648,8 @@ async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     context = AsyncMock()
     service = ScheduleStartService(engine)
     service._build_user_context = AsyncMock(return_value=context)
@@ -688,15 +702,16 @@ async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
         target_run_id=str(uuid4()),
     )
     monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
+        "app.modules.workflow.services.schedule_start_service.get_schedule",
+        AsyncMock(return_value=schedule),
     )
     monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: Mock(
-            claim=AsyncMock(return_value=schedule_run),
-            mark_dispatched=AsyncMock(),
-        ),
+        "app.modules.workflow.services.schedule_start_service.claim_schedule_run",
+        AsyncMock(return_value=schedule_run),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.mark_run_dispatched",
+        AsyncMock(),
     )
     context = AsyncMock()
     service = ScheduleStartService(engine)
@@ -736,14 +751,10 @@ async def test_a_schedule_whose_target_was_deleted_records_the_firing_as_failed(
         record_fire=AsyncMock(),
     )
     outcome_service = Mock(record_pre_dispatch_failure=AsyncMock(return_value=True))
+    _stub_schedule_operations(monkeypatch, schedule_repo)
     monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service."
-        "ScheduleRunOutcomeService",
-        lambda uow: outcome_service,
+        "app.modules.workflow.services.schedule_start_service.record_pre_dispatch_failure",
+        _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
     await ScheduleStartService(engine).handle_schedule_fired(
@@ -776,14 +787,10 @@ async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch
 
     schedule_repo = Mock(get=AsyncMock(return_value=schedule), record_fire=AsyncMock())
     outcome_service = Mock(record_pre_dispatch_failure=AsyncMock())
+    _stub_schedule_operations(monkeypatch, schedule_repo)
     monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service."
-        "ScheduleRunOutcomeService",
-        lambda uow: outcome_service,
+        "app.modules.workflow.services.schedule_start_service.record_pre_dispatch_failure",
+        _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
     await ScheduleStartService(engine).handle_schedule_fired(

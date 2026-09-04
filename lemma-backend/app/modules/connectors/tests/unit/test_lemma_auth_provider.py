@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -91,10 +92,25 @@ def _install(connector_id: str = "slack") -> ResolvedAuthInstall:
     )
 
 
-async def test_exchange_code_uses_clean_redirect_uri_for_token_exchange():
-    provider = LemmaAuthProvider(oauth_session_factory=FakeOAuth2Session)
+async def test_the_token_exchange_sends_the_redirect_uri_that_authorized():
+    """`redirect_uri` at the token endpoint must be byte-identical to the one
+    sent at authorize time, so it comes from the same producer.
+
+    Deriving it from the inbound callback URL instead -- Starlette's
+    reconstruction from the request's scheme and Host header -- made the two
+    disagree wherever the externally observed URL is not `API_URL`: TLS
+    terminated at a proxy that sets no forwarded headers, an internal Host, a
+    path prefix. Providers answer `redirect_uri_mismatch`, and the person sees
+    only the generic "Unable to complete the OAuth flow."
+    """
+    configured = "https://lemma.example.com/connectors/connect-requests/oauth/callback"
+    provider = LemmaAuthProvider(
+        oauth_session_factory=FakeOAuth2Session,
+        redirect_uri_builder=Mock(build=Mock(return_value=configured)),
+    )
+    # What the proxy actually handed us: a different scheme and host.
     callback_url = (
-        "https://example.ngrok.app/connectors/connect-requests/oauth/callback"
+        "http://api.internal:8000/connectors/connect-requests/oauth/callback"
         "?code=abc&state=xyz"
     )
 
@@ -104,10 +120,9 @@ async def test_exchange_code_uses_clean_redirect_uri_for_token_exchange():
         user_id=uuid4(),
     )
 
-    expected_redirect_uri = (
-        "https://example.ngrok.app/connectors/connect-requests/oauth/callback"
-    )
-    assert FakeOAuth2Session.last_init["redirect_uri"] == expected_redirect_uri
+    assert FakeOAuth2Session.last_init["redirect_uri"] == configured
+    # The raw URL is still what authlib parses the code out of -- it is the
+    # only thing carrying one.
     assert FakeOAuth2Session.last_fetch_token["authorization_response"] == callback_url
     assert "redirect_uri" not in FakeOAuth2Session.last_fetch_token
     assert credentials.access_token == "access-token"

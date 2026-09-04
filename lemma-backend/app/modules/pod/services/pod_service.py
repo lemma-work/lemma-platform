@@ -88,7 +88,9 @@ class PodService:
         # assistant has no row cannot be talked to at all, and the symptom
         # arrives at the first message rather than at creation.
         if self._uow is not None:
-            from app.composition.pod_default_agent import provision_pod_default_agent
+            from app.modules.agent.contracts.provisioning import (
+                provision_pod_default_agent,
+            )
 
             # `pod.user_id`, not `creator_user_id`: the migration that backfilled
             # every existing pod read the owner off the pod row, and the two have
@@ -110,7 +112,7 @@ class PodService:
         # caller built the service without one -- the same guard `delete_pod`
         # uses for its role-cache hook.
         if self._uow is not None:
-            from app.composition.agent_email_surface import (
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
                 provision_pod_assistant_email_surface,
             )
 
@@ -329,7 +331,7 @@ class PodService:
         # and `_sync_email_schedule` returns early. Bounded by the number of
         # agents in the pod, and the rest still waits for the worker.
         if self._uow is not None:
-            from app.composition.agent_email_surface import (
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
                 release_pod_inbound_addresses,
             )
 

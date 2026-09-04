@@ -154,11 +154,16 @@ Two ledgers decide everything:
    actors.
 2. **Workload grants** — named agents/functions/workflows start with ZERO
    access and act on exactly the resources granted to them
-   (`resource_permission_grants`, name-keyed in bundles). **Grant-first**: a
-   workload's explicit grant is standalone authority; the invoking user's role
-   is consulted only for PERSONAL ownership, org-scoped resources, and
-   data-layer scoping (RLS, `/me`). The default pod agent is the opposite — it
-   mirrors the invoking user's pod permissions and holds no grants.
+   (`resource_permission_grants`, name-keyed in bundles). A workload's
+   effective authority is its grants **intersected with the invoking user's**:
+   a grant says what the workload may ever do, and the invoker's own
+   permissions bound what it may do *for this person*. Neither alone is
+   enough. A workload therefore cannot be used to reach past the person who
+   ran it (`DELEGATION_EXCEEDS_INVOKER`), and granting one broadly does not
+   make it a privilege ladder. The default pod agent is the degenerate case —
+   it holds no grants and mirrors the invoking user's pod permissions exactly.
+   The invoker's role also still decides PERSONAL ownership, org-scoped
+   resources, and data-layer scoping (RLS, `/me`).
 
 **Destructive actions** (`DESTRUCTIVE_ACTIONS`,
 `app/core/authorization/delegation.py`) are the carve-out: no workload —
@@ -169,6 +174,8 @@ user session approval (`APPROVE_FOR_SESSION` → Redis store in
 `session_approval_ttl_seconds`).
 
 Frequent deny codes: `MISSING_WORKLOAD_RESOURCE_GRANT` (grant the workload),
+`DELEGATION_EXCEEDS_INVOKER` (the workload is granted it, the person who ran
+it is not — raise the person's role, not the grant),
 `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (approve or grant),
 `INSUFFICIENT_PERMISSION` (human role problem), `DELEGATION_SCOPE_VIOLATION`
 (minimal-scope token used outside its operation), `PERSONAL_RESOURCE_DENIED`

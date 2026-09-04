@@ -39,10 +39,12 @@ from app.modules.workflow.execution.form_submission import (
     validate_form_inputs,
 )
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
-from app.composition.workflow_agent import AgentControlAdapter
-from app.composition.workflow_function import FunctionControlAdapter
-from app.composition.workflow_notifications import WorkflowNotificationAdapter
-from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.workflow.domain.ports import (
+    AgentPort,
+    FunctionPort,
+    SchedulePort,
+    WorkflowNotificationPort,
+)
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
@@ -60,25 +62,31 @@ logger = get_logger(__name__)
 
 
 class WorkflowEngine:
+    """Advances runs. Every collaborator arrives already bound.
+
+    The four adapters have no defaults on purpose: resolving them here made the
+    deepest file in this module choose which agent, function, scheduler and
+    notifier the application runs on. `build_workflow_engine` decides instead.
+    """
+
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        agent_adapter=None,
-        function_adapter=None,
-        schedule_adapter=None,
-        notification_adapter=None,
+        *,
+        agent_adapter: AgentPort,
+        function_adapter: FunctionPort,
+        schedule_adapter: SchedulePort,
+        notification_adapter: WorkflowNotificationPort,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
         self.run_repo = SqlAlchemyWorkflowRunRepository(uow)
         self.wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
 
-        self.agent_adapter = agent_adapter or AgentControlAdapter(uow)
-        self.function_adapter = function_adapter or FunctionControlAdapter(uow)
-        self.schedule_adapter = schedule_adapter or ScheduleControlAdapter(uow)
-        self.notification_adapter = notification_adapter or WorkflowNotificationAdapter(
-            uow
-        )
+        self.agent_adapter = agent_adapter
+        self.function_adapter = function_adapter
+        self.schedule_adapter = schedule_adapter
+        self.notification_adapter = notification_adapter
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(

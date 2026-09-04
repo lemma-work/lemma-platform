@@ -7,7 +7,8 @@ from sqlalchemy import func, or_, select
 
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.identity.contracts import UserPreferences
-from app.composition.surface_identity import OrganizationMember, PodMember, User
+from app.modules.pod.contracts.orm import PodMember
+from app.modules.identity.contracts.orm import OrganizationMember, User
 
 
 class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
@@ -149,7 +150,9 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
             return None
         first_name, last_name, email = row
         name = " ".join(part for part in (first_name, last_name) if part).strip()
-        # Falls back to the email rather than to None: attribution is mandatory
-        # on every delivered message, so "on behalf of <someone>" must always
-        # have a someone.
+        # Falls back to the email rather than to None: the header is omitted
+        # for a message to its own asker, and mandatory otherwise, so
+        # "on behalf of <someone>" must always have a someone. A member who
+        # never set a name is not that exception -- they are the colleague whose
+        # authority the line exists to name.
         return name or email

@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.net.domains import host_is_within, hostname_of
 from app.core.net.http_client import get_shared_http_client
 
@@ -317,7 +317,7 @@ class BraveSearchClient(BaseSearchClient):
     }
 
     def __init__(self) -> None:
-        self.api_key = (settings.brave_search_api_key or "").strip()
+        self.api_key = (reveal_secret(settings.brave_search_api_key) or "").strip()
 
     def is_available(self) -> bool:
         return bool(self.api_key)

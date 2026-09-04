@@ -17,6 +17,7 @@ from app.modules.datastore.api.dependencies import (
     TableServiceDep,
 )
 from app.modules.datastore.api.record_query import (
+    RECORD_FILTER_DESCRIPTION,
     parse_record_filters,
     parse_record_sorts,
 )
@@ -142,15 +143,7 @@ async def list_records(
     ),
     filter: list[str] | None = Query(
         default=None,
-        description=(
-            "Optional repeated JSON filters for advanced comparisons. "
-            "Each `filter` value must be a JSON object with shape "
-            '`{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. '
-            "Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. "
-            "Repeat the query parameter to combine multiple filters with AND semantics. "
-            'Examples: `filter={"field":"amount","op":"gt","value":100}` and '
-            '`filter={"field":"status","op":"eq","value":"OPEN"}`.'
-        ),
+        description=RECORD_FILTER_DESCRIPTION,
     ),
     sort: list[str] | None = Query(
         default=None,
@@ -251,7 +244,12 @@ async def get_record(
     status_code=status.HTTP_200_OK,
     operation_id="record.update",
     summary="Update Record",
-    description="Patch a record by primary key. Returns the updated record object (no envelope).",
+    description=(
+        "Patch a record by primary key. Returns the updated record object (no "
+        "envelope). Pass `expected_updated_at` to make the patch conditional on "
+        "the row not having changed since it was read; the request then answers "
+        "409 rather than overwriting another client's edit."
+    ),
 )
 async def update_record(
     pod_id: UUID,
@@ -280,6 +278,7 @@ async def update_record(
         data.data,
         user.id,
         admin_mode=mode == RecordAccessMode.ADMIN,
+        expected_updated_at=data.expected_updated_at,
     )
     return updated.data
 

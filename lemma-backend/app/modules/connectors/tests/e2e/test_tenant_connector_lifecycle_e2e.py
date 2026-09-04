@@ -24,6 +24,7 @@ from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.connectors.services.install_provisioning import DiscoveryStatus
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
@@ -307,13 +308,16 @@ class TestInstallingAnMcpServer:
             name=f"mcp-refresh-{uuid4().hex[:8]}",
         )
         # The recovery path: without it, a failed first discovery could only be
-        # fixed by deleting the install, which cascades away its accounts.
-        count = await service.refresh_auth_config_operations(
+        # fixed by deleting the install, which cascades away its accounts. It
+        # answers with an outcome rather than a count so a refused retry is not
+        # reported as a successful one that found nothing.
+        discovery = await service.refresh_auth_config_operations(
             user_id=fixed_test_user["id"],
             organization_id=fixed_test_org["id"],
             auth_config_name=install.name,
         )
-        assert count >= 2
+        assert discovery.status is DiscoveryStatus.OK
+        assert discovery.operation_count >= 2
 
 
 class TestSqlInstallTargetsAreVetted:
@@ -500,8 +504,10 @@ class TestUpdatingAnInstallInPlace:
             config={"server_url": second_mcp_server},
         )
         assert updated.config["server_url"] == second_mcp_server
-        # The new server's tools replaced the old ones.
-        assert discovered >= 1
+        # The new server's tools replaced the old ones -- and the update says
+        # so, rather than reporting a refused re-discovery as "found nothing".
+        assert discovered.status is DiscoveryStatus.OK
+        assert discovered.operation_count >= 1
         assert marked == 1
 
         # The whole point: the account still exists, with the same id.

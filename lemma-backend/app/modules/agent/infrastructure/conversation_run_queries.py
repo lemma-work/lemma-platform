@@ -137,6 +137,36 @@ class ConversationRunQueriesMixin:
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
 
+    async def list_active_runs_pending_liveness(
+        self,
+        *,
+        cutoff_seconds: int,
+        decided_after_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]:
+        """Active runs whose age alone settles nothing.
+
+        Older than ``cutoff_seconds``, so anything still executing has had
+        several chances to renew its job heartbeat, and younger than
+        ``decided_after_seconds``, where `list_stale_active_runs` takes over
+        and fails them on age alone. A band rather than an open-ended window so
+        every run is decided in exactly one place, and so the caller never asks
+        the job layer about a run it has already reclaimed.
+        """
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            .where(
+                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
+                AgentRunModel.started_at < now - timedelta(seconds=cutoff_seconds),
+                AgentRunModel.started_at
+                >= now - timedelta(seconds=decided_after_seconds),
+            )
+            .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [StaleAgentRunRef(*row) for row in result.all()]
+
     async def list_runs_stuck_stopping(
         self,
         *,

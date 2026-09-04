@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Awaitable, Callable
 from uuid import UUID
 
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
@@ -29,6 +30,11 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.ports import AgentRepository
+
+#: What `create_agent` does besides making the row. Both default to the real
+#: thing; both are here so a test can watch one without patching this module.
+MemoryGrantDeriver = Callable[..., Awaitable[None]]
+EmailSurfaceProvisioner = Callable[..., Awaitable[object]]
 
 
 def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
@@ -66,10 +72,18 @@ class AgentService:
         uow: SqlAlchemyUnitOfWork,
         agent_repository: AgentRepository,
         authorization_service: object,
+        memory_grant_deriver: MemoryGrantDeriver | None = None,
+        email_surface_provisioner: EmailSurfaceProvisioner | None = None,
     ):
         self.uow = uow
         self.agent_repository = agent_repository
         self.authorization_service = authorization_service
+        # Two things that happen when an agent is made, taken as collaborators
+        # rather than resolved by name at the call site: a test that wants to
+        # watch either one used to patch it inside this module, which is a
+        # double in front of half of this service's own behaviour.
+        self._derive_memory_grant_for = memory_grant_deriver
+        self._provision_email_surface = email_surface_provisioner
 
     async def _require_action(
         self,
@@ -155,9 +169,17 @@ class AgentService:
         # Give it a mailbox so the UI can offer "email this agent at …" from the
         # moment it exists. Best-effort by design: a deployment with no mail
         # domain still gets a perfectly good agent, just not an emailable one.
-        from app.composition.agent_email_surface import provision_agent_email_surface
+        provision = self._provision_email_surface
+        if provision is None:
+            # Deferred, and measured: `agent_surfaces.contracts.email_surfaces`
+            # reaches the surface service, which every process importing this
+            # one would otherwise pay for whether or not it ever creates an
+            # agent. Injectable above it because that is the seam the tests use.
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
+                provision_agent_email_surface as provision,
+            )
 
-        await provision_agent_email_surface(
+        await provision(
             self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
@@ -174,7 +196,7 @@ class AgentService:
         This used to be the agent controller's job alone, so an agent created
         straight through this service -- which is what the pod bundle applier
         does -- got the toolset and no folder to write to. See
-        `app.composition.agent_memory` for what that cost.
+        `app.modules.agent.services.agent_memory_grant` for what that cost.
 
         A floor, not the whole story: an inline `permissions` list replaces
         every grant a grantee holds, so the callers that do one still have to
@@ -182,9 +204,13 @@ class AgentService:
         """
         if ctx is None:
             return
-        from app.composition.agent_memory import derive_agent_memory_grant
+        derive = self._derive_memory_grant_for
+        if derive is None:
+            from app.modules.agent.services.agent_memory_grant import (
+                derive_agent_memory_grant as derive,
+            )
 
-        await derive_agent_memory_grant(
+        await derive(
             self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
@@ -341,7 +367,10 @@ class AgentService:
         # ON DELETE SET NULL, so once the agent is deleted its surfaces are no
         # longer identifiable as its own — they read as the pod assistant's,
         # and the pod starts answering from a deleted agent's address.
-        from app.composition.agent_email_surface import teardown_agent_surfaces
+        # Deferred for the same reason as the provisioner above.
+        from app.modules.agent_surfaces.contracts.email_surfaces import (
+            teardown_agent_surfaces,
+        )
 
         await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
         await self.agent_repository.delete(agent.id)

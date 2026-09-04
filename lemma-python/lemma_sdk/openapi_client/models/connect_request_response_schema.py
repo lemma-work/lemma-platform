@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
-
-if TYPE_CHECKING:
-    from ..models.connect_request_response_schema_attributes_type_0 import (
-        ConnectRequestResponseSchemaAttributesType0,
-    )
-
 
 T = TypeVar("T", bound="ConnectRequestResponseSchema")
 
@@ -22,20 +16,26 @@ T = TypeVar("T", bound="ConnectRequestResponseSchema")
 class ConnectRequestResponseSchema:
     """Schema for connect request response.
 
-    Attributes:
-        attributes (ConnectRequestResponseSchemaAttributesType0 | None):
-        auth_config_id (UUID):
-        authorization_url (None | str):
-        connector_id (str):
-        created_at (datetime.datetime):
-        id (UUID):
-        organization_id (UUID):
-        status (str):
-        updated_at (datetime.datetime):
-        user_id (UUID):
+    `attributes` is deliberately absent. The row carries the live OAuth
+    `state`, the provider's own handle on the authorization, and the PKCE
+    verifier -- the three things that have to survive the redirect and the
+    three the caller has no use for. Returning them put the verifier and the
+    `state` into browser memory, client-side logs and any HAR capture, which is
+    the exposure PKCE exists to survive. The client needs `authorization_url`
+    and `id`.
+
+        Attributes:
+            auth_config_id (UUID):
+            authorization_url (None | str):
+            connector_id (str):
+            created_at (datetime.datetime):
+            id (UUID):
+            organization_id (UUID):
+            status (str):
+            updated_at (datetime.datetime):
+            user_id (UUID):
     """
 
-    attributes: ConnectRequestResponseSchemaAttributesType0 | None
     auth_config_id: UUID
     authorization_url: None | str
     connector_id: str
@@ -48,16 +48,6 @@ class ConnectRequestResponseSchema:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.connect_request_response_schema_attributes_type_0 import (
-            ConnectRequestResponseSchemaAttributesType0,
-        )
-
-        attributes: dict[str, Any] | None
-        if isinstance(self.attributes, ConnectRequestResponseSchemaAttributesType0):
-            attributes = self.attributes.to_dict()
-        else:
-            attributes = self.attributes
-
         auth_config_id = str(self.auth_config_id)
 
         authorization_url: None | str
@@ -81,7 +71,6 @@ class ConnectRequestResponseSchema:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "attributes": attributes,
                 "auth_config_id": auth_config_id,
                 "authorization_url": authorization_url,
                 "connector_id": connector_id,
@@ -98,31 +87,7 @@ class ConnectRequestResponseSchema:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.connect_request_response_schema_attributes_type_0 import (
-            ConnectRequestResponseSchemaAttributesType0,
-        )
-
         d = dict(src_dict)
-
-        def _parse_attributes(
-            data: object,
-        ) -> ConnectRequestResponseSchemaAttributesType0 | None:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, dict):
-                    raise TypeError()
-                attributes_type_0 = (
-                    ConnectRequestResponseSchemaAttributesType0.from_dict(data)
-                )
-
-                return attributes_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(ConnectRequestResponseSchemaAttributesType0 | None, data)
-
-        attributes = _parse_attributes(d.pop("attributes"))
-
         auth_config_id = UUID(d.pop("auth_config_id"))
 
         def _parse_authorization_url(data: object) -> None | str:
@@ -147,7 +112,6 @@ class ConnectRequestResponseSchema:
         user_id = UUID(d.pop("user_id"))
 
         connect_request_response_schema = cls(
-            attributes=attributes,
             auth_config_id=auth_config_id,
             authorization_url=authorization_url,
             connector_id=connector_id,

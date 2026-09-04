@@ -149,8 +149,9 @@ def _operation_runner(
     user_id: UUID,
 ):
     async def run(operation_name: str, payload: dict) -> dict:
-        from app.composition.pod_bundle_resources import (
-            build_connector_operation_service,
+        from app.modules.connectors.contracts.provisioning import (
+            execute_resolved,
+            resolve_operation,
         )
 
         # Phase 1 (short scope): authorize and resolve the execution plan,
@@ -160,7 +161,8 @@ def _operation_runner(
             actor = await AuthorizationDataService(uow.session).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
-            resolved = await build_connector_operation_service(uow).resolve_execution(
+            resolved = await resolve_operation(
+                uow,
                 connector_id="github",
                 operation_name=operation_name,
                 payload=payload,
@@ -177,9 +179,7 @@ def _operation_runner(
         # issues no DB I/O, so the short scope below never checks a connection
         # out across the call -- it only supplies the service collaborator.
         async with uow_scope(worker_ctx.uow_factory) as uow:
-            response = await build_connector_operation_service(uow).execute_resolved(
-                resolved
-            )
+            response = await execute_resolved(uow, resolved)
 
         if hasattr(response, "model_dump"):
             return response.model_dump()

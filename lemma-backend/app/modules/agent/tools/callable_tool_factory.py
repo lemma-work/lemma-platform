@@ -28,6 +28,7 @@ from app.modules.agent.domain.entities import Agent
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
+from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.function.contracts import (
@@ -37,11 +38,7 @@ from app.modules.function.contracts import (
     FunctionStatus,
     FunctionType,
 )
-from app.composition.agent_functions import (
-    create_function_repository,
-    create_function_run_repository,
-    create_function_use_cases,
-)
+from app.modules.function.contracts import agent_tools as function_tools
 
 
 logger = get_logger(__name__)
@@ -146,7 +143,6 @@ class AgentCallableToolFactory:
 
         tools: list[Tool] = []
         async with self.uow_factory() as uow:
-            function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
             if grants is None:
                 grants = await self._load_grant_summary(
@@ -155,7 +151,7 @@ class AgentCallableToolFactory:
             function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
             for function_id in function_ids:
-                function = await function_repo.get(function_id)
+                function = await function_tools.get_function_by_id(uow, function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 with suppress(Exception):
@@ -271,18 +267,17 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            use_cases = create_function_use_cases(self.uow_factory)
-            run = await use_cases.execute_function_as_workload(
+            run = await function_tools.execute_function_for_agent(
+                self.uow_factory,
                 pod_id=function.pod_id,
                 name=function.name,
                 input_data=dict(request),
                 user_id=ctx.deps.user_id,
-                principal_type="AGENT",
-                principal_id=parent_agent_id,
+                agent_id=parent_agent_id,
+                agent_name=parent_agent_name,
                 # Minimal single-operation scope; implication-expanded, so the
                 # implied function.read is admitted (see delegation.py).
                 delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
-                delegation_actor_name=parent_agent_name,
             )
 
             # JOB functions enqueue a background run and return PENDING; await it.
@@ -401,7 +396,12 @@ class AgentCallableToolFactory:
         )
 
     async def _await_function_run(self, run_id: UUID) -> FunctionRunEntity:
-        """Poll a JOB function run until it reaches a terminal state (bounded)."""
+        """Poll a JOB function run until it reaches a terminal state (bounded).
+
+        A deadline rather than a fixed attempt count, because the pause grows:
+        at the configured interval a five-minute wait was six hundred unit-of-
+        work checkouts, all of them asking the same question.
+        """
         terminal = {
             FunctionRunStatus.COMPLETED,
             FunctionRunStatus.FAILED,
@@ -409,13 +409,24 @@ class AgentCallableToolFactory:
         }
         run: FunctionRunEntity | None = None
         interval = agent_settings.function_run_poll_interval_seconds
-        attempts = max(1, int(_SUBAGENT_TOOL_TIMEOUT_SECONDS / interval))
-        for _ in range(attempts):
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + _SUBAGENT_TOOL_TIMEOUT_SECONDS
+        attempt = 0
+        while True:
             async with self.uow_factory() as uow:
-                run = await create_function_run_repository(uow).get_run(run_id)
+                run = await function_tools.get_function_run(uow, run_id)
             if run is not None and run.status in terminal:
                 return run
-            await asyncio.sleep(interval)
+            if loop.time() >= deadline:
+                break
+            attempt += 1
+            await asyncio.sleep(
+                poll_delay(
+                    attempt,
+                    base_seconds=interval,
+                    remaining_seconds=deadline - loop.time(),
+                )
+            )
         if run is None:
             raise RuntimeError(f"Function run {run_id} not found")
         return run

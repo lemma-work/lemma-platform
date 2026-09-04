@@ -59,8 +59,8 @@ def _event_routers():
         schedule_consumer,
         schedule_lifecycle_consumer,
         schedule_notification_consumer,
+        target_outcome_consumer,
     )
-    from app.composition import schedule_target_outcome_consumer
 
     return [
         schedule_consumer.router,
@@ -68,7 +68,7 @@ def _event_routers():
         datastore_consumer.router,
         pod_lifecycle_consumer.router,
         schedule_notification_consumer.router,
-        schedule_target_outcome_consumer.router,
+        target_outcome_consumer.router,
     ]
 
 

@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from pydantic import HttpUrl, SecretStr
 
 from app.core.config import reveal_secret, settings
@@ -52,10 +52,26 @@ _system_openai_catalog_customizer: SystemOpenAICatalogCustomizer | None = None
 
 
 def _load_runtime_env() -> None:
+    """Make the operator's ``LEMMA_*`` runtime-profile variables readable here.
+
+    Only those. `load_dotenv` on the whole file writes every variable in a
+    developer's `.env` into `os.environ` for the life of the process, and a
+    pydantic `Settings` reads `os.environ` even when told to ignore env files —
+    so a local `DEBUG=true` made `Settings(environment="production").debug` come
+    back true, and the test asserting that cannot happen failed on a developer's
+    machine while passing in CI, where there is no `.env`. A local run that
+    disagrees with CI is worse than either being wrong on its own.
+
+    Every value this module reads is `LEMMA_`-prefixed, so nothing else needs to
+    be in scope. `setdefault` keeps `override=False`: a variable already in the
+    environment wins.
+    """
     root = Path(__file__).resolve().parents[5]
     backend = Path(__file__).resolve().parents[4]
-    load_dotenv(backend / ".env", override=False)
-    load_dotenv(root / ".env", override=False)
+    for path in (backend / ".env", root / ".env"):
+        for key, value in dotenv_values(path).items():
+            if key.startswith("LEMMA_") and value is not None:
+                os.environ.setdefault(key, value)
 
 
 def _openai_compat_vision_model_names() -> set[str]:

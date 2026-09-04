@@ -388,7 +388,7 @@ class RunResumeService:
         return True
 
     async def _apply_function_status(
-        self, wait: WorkflowRunWaitEntity, status: dict
+        self, wait: WorkflowRunWaitEntity, status: dict[str, object]
     ) -> bool:
         if status["status"] == "COMPLETED":
             logger.warning(

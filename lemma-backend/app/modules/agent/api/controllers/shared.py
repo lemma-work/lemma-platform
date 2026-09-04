@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Iterable
 from typing import Annotated
@@ -9,8 +10,8 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 
-from app.composition.agent_usage import build_usage_service
-from app.composition.authorization import create_authorization_service
+from app.modules.usage.contracts.execution import build_usage_service
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
@@ -32,13 +33,26 @@ from app.modules.agent.services.realtime import (
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 _TERMINAL_STREAM_EVENTS = {"completed", "stopped", "error"}
 
+#: An SSE comment: ignored by every client, visible as traffic to everything in
+#: between. Emitted below during silence.
+KEEPALIVE_FRAME = ": keepalive\n\n"
+
+#: How long a stream may say nothing before the comment above is sent. Under the
+#: 60s idle timeout intermediaries commonly apply, and it has to be: the module
+#: publishes nothing while a tool runs (arguments stream as tokens *before* the
+#: call, and the next frame is the return), so a shell command or a sub-agent
+#: await bounded at 300s is minutes of silence on a healthy connection. A client
+#: whose proxy closed it sees a dead socket rather than the `stream_error` frame
+#: the code takes such care to distinguish from a failed run.
+STREAM_KEEPALIVE_SECONDS = 15.0
+
 
 def _build_conversation_service(uow) -> ConversationService:
     return ConversationService(
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
@@ -48,7 +62,7 @@ def _build_conversation_retry_service(uow) -> ConversationRetryService:
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
@@ -135,3 +149,46 @@ async def iter_subscription(
         )
         if event_type in _TERMINAL_STREAM_EVENTS:
             break
+
+
+async def with_keepalive(
+    chunks: AsyncGenerator[str, None],
+    *,
+    interval_seconds: float = STREAM_KEEPALIVE_SECONDS,
+) -> AsyncGenerator[str, None]:
+    """Re-yield ``chunks``, sending a comment frame through a long silence.
+
+    The pending pull is held across a timeout rather than cancelled. Cancelling
+    an async generator's ``__anext__`` closes the generator, so the naive
+    ``wait_for`` version would end the stream on the first quiet interval —
+    which is the failure it was added to prevent.
+    """
+    pending: asyncio.Task[str] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(chunks))
+            done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
+            if not done:
+                yield KEEPALIVE_FRAME
+                continue
+            try:
+                chunk = pending.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                pending = None
+            yield chunk
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.wait({pending})
+            if not pending.cancelled():
+                # The pull finished as the stream was torn down. Reading the
+                # outcome is what stops the loop reporting an exception nobody
+                # retrieved; there is nothing left to do with it.
+                pending.exception()
+        # Closed here rather than left to the loop's async-generator finalizer,
+        # which runs at an unrelated moment and, for a subscription iterator,
+        # after the client has already gone.
+        await chunks.aclose()

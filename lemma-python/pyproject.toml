@@ -6,6 +6,17 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Lemma" }]
 requires-python = ">=3.14,<3.15"
+keywords = ["lemma", "sdk", "agents", "pods", "ai", "api-client"]
+# Mirrors lemma-cli and the npm package: a PyPI page with no source link, no
+# issue tracker and no supported-Python row leaves a stranger nowhere to go.
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "requests>=2.31.0",
   "httpx>=0.28.0",
@@ -13,6 +24,12 @@ dependencies = [
   "pydantic>=2.11.0",
   "python-dateutil>=2.9.0.post0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lemma-work/lemma-platform"
+Repository = "https://github.com/lemma-work/lemma-platform"
+Documentation = "https://github.com/lemma-work/lemma-platform/tree/main/lemma-python"
+Issues = "https://github.com/lemma-work/lemma-platform/issues"
 
 # Dev-only; PEP 735 groups are not part of the published distribution, so this
 # cannot reach Requires-Dist on PyPI.
@@ -26,6 +43,9 @@ dependencies = [
 # Lift this bound for lemma-backend, lemma-cli and lemma-python together.
 [dependency-groups]
 dev = [
+  # A package that ships py.typed asserts that its annotations are true, and
+  # nothing here had ever checked one. Same floor as lemma-backend.
+  "basedpyright>=1.39.9",
   "ruff>=0.14.8,<0.16",
   "pytest>=8.3.0",
   # tests/test_function_runtime_context.py is an async test, and the property it
@@ -79,3 +99,30 @@ ignore = ["G201"]
 # Codegen helpers and integration scenarios are programs a person runs and reads.
 "scripts/**" = ["T20"]
 "tests/**" = ["T20"]
+
+# This package ships `py.typed`, which is a promise: it tells every consumer's
+# type checker to believe these annotations instead of falling back to `Any`.
+# Until now nothing checked that the promise was true -- no type checker ran
+# here at all, and `resources/base.py:_call` returns `Any`, so each typed
+# resource method is an annotation sitting over an unchecked transport. A
+# consumer's checker cannot tell the difference, which is the whole problem:
+# a wrong annotation here is a wrong answer in someone else's build.
+#
+# Settings copied from lemma-backend/pyproject.toml. `standard` rather than
+# basedpyright's `recommended` default for the reason given there -- it is the
+# bar the backend is held to, and the number is only useful if it is comparable.
+#
+# The gate that runs this (`make typecheck-clients-record`) is advisory: it
+# records the count, it does not defend it.
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+exclude = [
+    # Generated from the OpenAPI spec, and already excluded from ruff and the
+    # formatter for the same reason: a fix here is reverted by the next
+    # generation run and reads as codegen drift. The hand-written layer on top
+    # is the part this package is responsible for.
+    "lemma_sdk/openapi_client/**",
+    "build/**",
+    "tests/**",
+]

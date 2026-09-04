@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
 import logging
 import time
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -48,11 +46,16 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
+from app.core.infrastructure.jobs.job_liveness import (
+    register_job_liveness_middleware,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
     get_streaq_job_queue,
-    job_context_key,
+    load_job_observability_context,
 )
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
@@ -140,46 +143,6 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
         await asyncio.Event().wait()  # until the lane's task group unwinds
 
     worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
-
-
-def _install_task_dump_handler() -> None:
-    """Print every pending coroutine's stack on SIGQUIT.
-
-    A worker that stops responding to SIGTERM shows nothing useful in a thread
-    dump: `faulthandler` reports the event loop sitting in `select()`, which is
-    what an idle loop always looks like. The question is always *which awaited
-    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
-    free — neither streaq nor anything else here uses it.
-
-    Windows has no SIGQUIT at all, so `signal.SIGQUIT` raises `AttributeError`
-    there rather than the errors the guard below anticipates. That was harmless
-    while only `python -m app.worker` reached here, because Desktop never ran
-    it; the moment the embedded app runs its lanes, this is the first thing a
-    Windows backend would execute, and it would fail before serving anything.
-    """
-    import signal
-
-    sigquit = getattr(signal, "SIGQUIT", None)
-    if sigquit is None:  # pragma: no cover - platform
-        return
-
-    def _dump(*_args: object) -> None:
-        for task in asyncio.all_tasks():
-            frames = "".join(
-                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
-                if getattr(task.get_coro(), "cr_frame", None)
-                else []
-            )
-            logger.warning(
-                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
-                task_name=task.get_name(),
-                frames=frames[-2000:],
-            )
-
-    try:
-        asyncio.get_running_loop().add_signal_handler(sigquit, _dump)
-    except NotImplementedError, RuntimeError:  # pragma: no cover - platform
-        pass
 
 
 async def _stop_secondary_lanes() -> None:
@@ -356,12 +319,8 @@ class AppWorkerContext:
         return build_function_use_cases(self.uow_factory)
 
     def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
-        from app.modules.agent.api.dependencies import get_conversation_service
         from app.modules.agent_surfaces.api.dependencies import (
             surface_repository_factory,
-        )
-        from app.modules.connectors.api.dependencies import (
-            get_connector_service,
         )
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
@@ -377,8 +336,6 @@ class AppWorkerContext:
             uow=uow,
             surface_repository=surface_repository_factory(uow),
             conversation_link_repository=SurfaceConversationLinkRepository(uow),
-            conversation_service=get_conversation_service(uow),
-            connector_service=get_connector_service(uow),
             pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         )
 
@@ -389,18 +346,17 @@ class AppWorkerContext:
         external I/O (platform APIs, file ingest, voice transcription) that must
         NOT hold a pooled DB connection. The service resolves credentials and
         writes the inbound message in separate short UoWs from this factory.
+
+        The factory is the whole of it now. It used to carry a second one for
+        the conversation service, because that service is bound to a session and
+        the short-scoped one is not the session it was built with; the
+        conversation operations take the unit of work per call.
         """
-        from app.modules.agent.api.dependencies import get_conversation_service
-        from app.modules.connectors.api.dependencies import get_connector_service
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
         )
 
-        return AgentSurfaceIngressService(
-            uow_factory=self.uow_factory,
-            conversation_service_factory=get_conversation_service,
-            connector_service_factory=get_connector_service,
-        )
+        return AgentSurfaceIngressService(uow_factory=self.uow_factory)
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
@@ -829,7 +785,11 @@ async def run_worker_lanes(
         "worker.lanes.starting",
         lanes=",".join(lane.value for lane in selected),
     )
-    _install_task_dump_handler()
+    install_task_dump_handler()
+    # Before any lane consumes: a cron removed from the code stops firing only
+    # when its schedule is removed from Redis too.
+    for lane in selected:
+        await prune_orphaned_crons_safely(LANE_WORKERS[lane], redis=get_redis())
     primary, *secondary = selected
     if not secondary:
         await LANE_WORKERS[primary].run_async(task_status=task_status)
@@ -862,22 +822,6 @@ async def run_worker_lanes(
         # Repeated here for the paths that never reach it — a primary that
         # fails during startup still has to take the other lanes with it.
         await _stop_secondary_lanes()
-
-
-async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
-    """Best-effort read of the rolling-deployment-compatible sidecar."""
-    try:
-        raw = await redis.get(job_context_key(job_id))
-        parsed = json.loads(raw) if raw else {}
-        if not isinstance(parsed, dict):
-            return {}
-        return {
-            str(key): str(value)
-            for key, value in parsed.items()
-            if isinstance(key, str) and isinstance(value, str | int)
-        }
-    except Exception:
-        return {}
 
 
 def _register_observability_middleware(
@@ -965,10 +909,11 @@ def _register_observability_middleware(
     registered = worker.middleware(observability_context_middleware)
 
 
-# Every lane gets the same observability wrapper — a job must be traced the same
-# way regardless of which queue carried it.
+# Every lane gets the same two wrappers — a job must be traced the same way, and
+# must report the same liveness, regardless of which queue carried it.
 for _lane_worker in LANE_WORKERS.values():
     _register_observability_middleware(_lane_worker)
+    register_job_liveness_middleware(_lane_worker)
 
 
 def _register_lane(name: str | None, lane: Lane) -> None:

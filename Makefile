@@ -26,7 +26,7 @@ SHELL := /bin/bash
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
-        version-check local-domain-check script-portability-check \
+        version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -38,7 +38,8 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint lint-clients lint-lockfiles quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
+        quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ LLM_OTEL      ?= 0
 # and the harness refuses to delete anything outside it.
 E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 
-UNIT_MARKERS  ?= not e2e and not local_guest and not desktop_e2e and not provider
+UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -228,6 +229,24 @@ BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
 BACKEND_TELEGRAM_POLLING        ?= true
 BACKEND_SLACK_SOCKET_MODE       ?= true
 
+# The auth gates a local install turns off, and why each one is here.
+#
+# `lemma-stack` already renders exactly this set for the Docker local stack and
+# the desktop install (`lemma_stack/config/render.py`), and its own tests pin
+# them. `make dev` set only the first, so the documented way to run Lemma on
+# your own machine behaved differently from every other local path -- and worse
+# than all of them: signing up refused an `@example.com` address, and the sixth
+# account in fifteen minutes locked the developer out of their own laptop for
+# four minutes. None of these gates protects anything on localhost; they exist
+# to stop strangers abusing a public deployment.
+DEV_LOCAL_AUTH_ENV := \
+	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
+	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
+	AUTH_ABUSE_PROTECTION_ENABLED=false \
+	AUTH_ALTCHA_ENABLED=false
+DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
+
 BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
@@ -256,7 +275,7 @@ BACKEND_DEV_ENV := \
 	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
 	EMAIL_TRANSPORT=filesystem \
 	EMAIL_OUTPUT_DIR=$(abspath .local/emails) \
-	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	$(DEV_LOCAL_AUTH_ENV) \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
@@ -376,10 +395,12 @@ help:
 	@echo "    make pre-push           alias for quality — run this on every push"
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
+	@echo "    make measure-clients    ADVISORY: size/complexity/typing in lemma-cli + lemma-python"
 	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
 	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
+	@echo "    make local-auth-gate-check  make dev and the local stack relax the same auth gates"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -467,7 +488,7 @@ _init-backend-env:
 			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
 			echo "EMAIL_TRANSPORT=filesystem"; \
 			echo "EMAIL_OUTPUT_DIR=$(abspath .local/emails)"; \
-			echo "AUTH_EMAIL_VERIFICATION_REQUIRED=false"; \
+			for pair in $(DEV_LOCAL_AUTH_ENV); do echo "$$pair"; done; \
 			echo "ENABLE_TELEGRAM_POLLING_MODE=true"; \
 			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -492,7 +513,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
+	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR $(DEV_LOCAL_AUTH_KEYS) ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -525,7 +546,9 @@ _ensure-backend-env-keys:
 		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
 		append EMAIL_TRANSPORT filesystem; \
 		append EMAIL_OUTPUT_DIR '$(abspath .local/emails)'; \
-		append AUTH_EMAIL_VERIFICATION_REQUIRED false; \
+		for pair in $(DEV_LOCAL_AUTH_ENV); do \
+			append "$${pair%%=*}" "$${pair#*=}"; \
+		done; \
 		append ENABLE_TELEGRAM_POLLING_MODE true; \
 		append ENABLE_SLACK_SOCKET_MODE true; \
 		append CORS_ORIGINS '["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -1341,6 +1364,10 @@ local-domain-check:
 	@echo "→ Local domain lists…"
 	@python3 scripts/check_local_domain_consistency.py
 
+local-auth-gate-check:
+	@echo "→ Local auth gates…"
+	@python3 scripts/check_local_auth_gates.py
+
 # CI runs scripts/ with a bare `python`, which on the Windows and macOS runners
 # is not the 3.14 the backend pins. Syntax they cannot parse is not a failing
 # step, it is a SyntaxError before the first line -- which is how one
@@ -1796,6 +1823,10 @@ quality:
 	@$(MAKE) --no-print-directory lint-clients
 	@echo "→ Lockfiles…"
 	@$(MAKE) --no-print-directory lint-lockfiles
+	@echo "→ Client structure (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-structure-record
+	@echo "→ Client types (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-typecheck-record
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
 	@echo "→ Connector package (ruff, excludes generated clients)…"
@@ -1806,6 +1837,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ In-subject test doubles…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"
@@ -1825,6 +1858,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
 	@echo "→ Local domain lists…"
 	@$(MAKE) --no-print-directory local-domain-check
+	@echo "→ Local auth gates…"
+	@$(MAKE) --no-print-directory local-auth-gate-check
 	@echo "→ Script portability…"
 	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
@@ -1842,6 +1877,40 @@ quality:
 # of them mentioned that it exists solely inside lemma-backend.
 architecture:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+
+# ── Client measurement (advisory) ─────────────────────────────────────────────
+#
+# `quality` runs twenty-odd gates and fifteen of them begin `cd lemma-backend`.
+# The two packages a user actually installs got three: `format-check`, a bare
+# `ruff check`, and the lockfile sweep. Nothing counted a file's length, a
+# function's branchiness or an annotation that gave up -- so all three grew with
+# no number attached, and the first measurement found nine CLI files over the
+# backend's 600-line ceiling and a command function scoring 103 against a
+# backend worst case of 56.
+#
+# Both targets below are ADVISORY: they compare against a recorded baseline,
+# print anything that grew, and exit 0. That is deliberate and temporary. A
+# baseline this size arms into a gate that fails a hundred unrelated branches on
+# the day it is taken, and a gate people have to route around teaches that gates
+# can be routed around. Drop `--advisory` from each line to arm the ratchet;
+# nothing else has to change.
+measure-clients: client-structure-record client-typecheck-record
+
+# Size, complexity and untyped escapes, at lemma-backend's own thresholds.
+# Through `uv run` from lemma-cli rather than a bare `python3`: it parses 3.14
+# source, and macOS's system interpreter reports valid PEP 758 syntax as a
+# SyntaxError.
+client-structure-record:
+	@cd $(CLI_DIR) && uv run python ../scripts/check_client_structure.py --advisory
+
+# basedpyright over lemma_cli and lemma_sdk. Runs in each project's own
+# environment -- outside it, every `typer`/`textual`/`httpx` import is an error
+# that says nothing about this code. That has a price worth stating: this is
+# the only step in `quality` that installs an environment other than the
+# backend's, so the CI job now syncs lemma-cli and lemma-python too. Locally
+# they are already synced and it costs about four seconds.
+client-typecheck-record:
+	@python3 scripts/check_client_types.py --advisory
 
 # The tight loop before pushing: the gates that catch the most per second.
 # `quality` is the full pre-PR pass, but two of its steps import the whole app

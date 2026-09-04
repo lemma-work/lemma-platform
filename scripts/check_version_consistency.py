@@ -105,9 +105,11 @@ SOURCES: tuple[Source, ...] = (
         re.compile(r"VERSION: '([^']+)'"),
     ),
     Source(
+        # The floor alone: the specifier also carries a `,<next-minor` ceiling,
+        # and it is the floor that has to equal everything else.
         "lemma-cli lemma-sdk dependency floor",
         REPO_ROOT / "lemma-cli/pyproject.toml",
-        re.compile(r'"lemma-sdk>=([^"]+)"'),
+        re.compile(r'"lemma-sdk>=([^",<]+)'),
     ),
     # lemma-cli/pyproject.toml reads its own version from this attribute
     # (``version = { attr = "lemma_cli.__version__" }``), so the package version
@@ -169,6 +171,34 @@ def workspace_member_problems() -> list[str]:
     return problems
 
 
+def sdk_ceiling_problems(baseline: str | None) -> list[str]:
+    """The CLI's `lemma-sdk` specifier must keep the ceiling beside its floor.
+
+    The floor is checked with everything else, by equality. The ceiling is
+    checked here because nothing else would notice it going missing — and the
+    thing most likely to remove it is the release workflow's own rewrite, which
+    replaces the whole specifier on every tagged build. A CLI published without
+    it resolves against whatever SDK exists at install time.
+    """
+    if baseline is None:
+        return []
+    text = (REPO_ROOT / "lemma-cli/pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'"lemma-sdk>=[^",]+,<([^"]+)"', text)
+    major, minor, *_ = baseline.split(".")
+    expected = f"{major}.{int(minor) + 1}" if major == "0" else f"{int(major) + 1}"
+    if match is None:
+        return [
+            f"  lemma-cli lemma-sdk dependency: no upper bound — expected "
+            f'"lemma-sdk>={baseline},<{expected}"'
+        ]
+    if match.group(1) != expected:
+        return [
+            f"  lemma-cli lemma-sdk dependency: ceiling <{match.group(1)} does "
+            f"not match the {baseline} floor — expected <{expected}"
+        ]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -205,6 +235,8 @@ def main() -> int:
             if value is not None:
                 rel = source.path.relative_to(REPO_ROOT)
                 problems.append(f"  {source.label}: {value} — {rel}")
+
+    problems.extend(sdk_ceiling_problems(baseline))
 
     if problems:
         header = (

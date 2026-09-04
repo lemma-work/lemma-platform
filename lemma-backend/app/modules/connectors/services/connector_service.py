@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime
+from collections.abc import Sequence
 from typing import Any, Optional
 from uuid import UUID
 
@@ -12,10 +13,9 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.auth_config import (
-    COMPOSIO_ORG_CUSTOM_REASON,
-    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
     AuthConfigEntity,
     AuthConfigSource,
+    reject_if_disabled,
 )
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import (
@@ -29,17 +29,15 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
     KindSpec,
-    OAuth2CredentialConfig,
 )
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
     ConnectorNotFoundError,
     ConnectorValidationError,
-    ConnectRequestNotFoundError,
-    ConnectRequestStateRequiredError,
     CredentialsNotFoundError,
     OAuthWorkflowError,
+    OrganizationConnectorsNotFoundError,
     UnsupportedAuthProviderError,
 )
 from app.modules.connectors.domain.install_binding import resolve_external_ref
@@ -76,32 +74,35 @@ from app.modules.connectors.services.auth_config_schemas import (
     default_auth_config_schema,
 )
 from app.modules.connectors.services.auth_install_resolver import (
+    install_auth_schemes,
+    validate_auth_config_request,
     composio_capability,
     lemma_capability,
     provider_value,
     resolve_auth_install,
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
-    oldest_claimable_connect_request,
     pkce_verifier_for,
-    stored_code_verifier,
-    stored_provider_state,
-    without_spent_secrets,
 )
 from app.modules.connectors.services.install_provisioning import (
+    DiscoveryOutcome,
     discover_install_operations,
-    discover_operations_for_new_account,
     org_has_install,
     refresh_install_operations,
     resolve_install_kind,
     validate_install_config,
 )
 from app.modules.connectors.services.install_update import update_install
+from app.modules.connectors.services.oauth_callback import handle_oauth_callback
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
 )
 
 logger = get_logger(__name__)
+
+# Who may install a connector, and -- since an install config is entirely
+# tenant-written for the mcp/http/sql kinds -- who may read one back.
+INSTALL_MANAGER_ROLES = ["ORG_OWNER", "ORG_EDITOR"]
 
 
 class ConnectorService:
@@ -155,51 +156,6 @@ class ConnectorService:
     def _profile_to_dict(self, profile: object) -> dict | None:
         return profile_to_dict(profile)
 
-    def _extract_account_email(
-        self,
-        connector_id: str,
-        credentials: OAuthCredentials,
-        profile: dict | None,
-    ) -> str | None:
-        raw_response = credentials.raw_response or {}
-        sources = [profile or {}, credentials.user_data or {}, raw_response]
-        candidate_paths = [
-            "email",
-            "emailAddress",
-            "email_address",
-            "emailaddress",
-            "authed_user.email",
-            "user.email",
-            "user.profile.email",
-            "profile.email",
-            "user_info.user.profile.email",
-            "user_info.user.email",
-            # Microsoft Graph (Outlook/Teams): `mail` can be null for some
-            # accounts, in which case userPrincipalName carries the address.
-            "mail",
-            "userPrincipalName",
-        ]
-        for source in sources:
-            for path in candidate_paths:
-                value = self._extract_nested_value(source, path)
-                if isinstance(value, str) and "@" in value:
-                    return value
-        if connector_id == "gmail":
-            value = self._extract_nested_value(profile or {}, "email_address")
-            if isinstance(value, str) and "@" in value:
-                return value
-        return None
-
-    def _extract_nested_value(self, data: dict | None, path: str) -> str | None:
-        if not isinstance(data, dict):
-            return None
-        current: object = data
-        for part in path.split("."):
-            if not isinstance(current, dict):
-                return None
-            current = current.get(part)
-        return current if isinstance(current, str) else None
-
     async def _fetch_account_profile(
         self,
         connector: ConnectorEntity,
@@ -209,7 +165,12 @@ class ConnectorService:
         """Fetch the account holder's own profile via the catalog-curated
         profile operation(s) for this connector+kind, so identity fields
         (email, name, workspace, ...) are populated the same way for any app
-        the catalog has a profile operation for, not just a hardcoded few."""
+        the catalog has a profile operation for, not just a hardcoded few.
+
+        Every operation row is read first and the connection handed back before
+        the first of them runs. Interleaving the two put a provider round trip
+        between two repository reads, which is a pooled connection held across
+        external I/O however short the reads are."""
         if self.operation_gateway is None or self.operation_repository is None:
             return None
         connector_id = connector.id
@@ -218,12 +179,22 @@ class ConnectorService:
         except ValueError:
             return None
         kind = connector.default_kind_for_provider(provider).value
-        for operation_name in capability.profile_operation_names or ():
-            operation = await self.operation_repository.get_by_connector_kind_and_name(
-                connector_id, kind, operation_name
+        operation_names = list(capability.profile_operation_names or ())
+        operations = [
+            (
+                name,
+                await self.operation_repository.get_by_connector_kind_and_name(
+                    connector_id, kind, name
+                ),
             )
-            if operation is None:
-                continue
+            for name in operation_names
+        ]
+        runnable = [(name, op) for name, op in operations if op is not None]
+        if not runnable:
+            return None
+        await self.uow.commit()
+
+        for operation_name, operation in runnable:
             try:
                 result = await execute_profile_operation(
                     connector_id=connector_id,
@@ -235,8 +206,13 @@ class ConnectorService:
                     get_dispatcher=self._profile_dispatcher,
                 )
             except Exception:
-                logger.debug(
-                    "connectors.connector_service.profile_operation_s_s_s.diagnostic",
+                # Warning, not debug: production runs at INFO, and the account
+                # this was meant to label is about to be stored with no email,
+                # no display name and -- for the kinds whose identity comes
+                # only from here -- no provider account id at all. Once per
+                # connect, so the volume is a person's clicks.
+                logger.warning(
+                    "connectors.connector_service.account_profile_operation.degraded",
                     operation_name=operation_name,
                     connector_id=connector_id,
                     exc_info=True,
@@ -267,31 +243,6 @@ class ConnectorService:
             self._kind_dispatcher = build_dispatcher(self.operation_gateway)
         return self._kind_dispatcher
 
-    def _extract_provider_account_id_from_profile(
-        self,
-        connector_id: str,
-        profile: dict | None,
-    ) -> str | None:
-        if not isinstance(profile, dict):
-            return None
-        candidate_paths_by_app = {
-            "gmail": ("email_address", "emailAddress", "email"),
-            "slack": (
-                "user_id",
-                "auth_test.user_id",
-                "user_info.user.id",
-                "user",
-                "bot_id",
-            ),
-            "google_drive": ("user.permission_id", "user.email_address"),
-            "github": ("login",),
-        }
-        for path in candidate_paths_by_app.get(connector_id, ()):
-            value = self._extract_nested_value(profile, path)
-            if value:
-                return value
-        return None
-
     def _get_auth_provider_by_name(self, provider_name: str) -> AuthProviderPort:
         provider = self.auth_provider_registry.get(provider_name)
         if not provider:
@@ -307,14 +258,33 @@ class ConnectorService:
     ) -> None:
         exists = await self.organization_access.organization_exists(organization_id)
         if not exists:
-            raise AccountNotFoundError(str(organization_id))
+            raise OrganizationConnectorsNotFoundError(str(organization_id))
         has_access = await self.organization_access.user_has_organization_role(
             user_id=user_id,
             organization_id=organization_id,
             allowed_roles=allowed_roles,
         )
         if not has_access:
-            raise AccountNotFoundError(str(organization_id))
+            raise OrganizationConnectorsNotFoundError(str(organization_id))
+
+    async def may_read_install_config(
+        self, *, user_id: UUID, organization_id: UUID
+    ) -> bool:
+        """Whether this member may see an install's configuration, not just
+        that it exists.
+
+        Creating an install needs owner or editor; reading one needed only
+        membership, and the config is where the tenant put its MCP server URL,
+        its database host and its request headers. Masking secrets by key name
+        cannot close that on its own, because the tenant chooses the key names
+        in `extra_headers`/`default_headers` -- so the read is levelled with
+        the write and the mask is a second line, not the only one.
+        """
+        return await self.organization_access.user_has_organization_role(
+            user_id=user_id,
+            organization_id=organization_id,
+            allowed_roles=INSTALL_MANAGER_ROLES,
+        )
 
     def _provider_value(self, auth_config: AuthConfigEntity) -> str:
         return provider_value(auth_config)
@@ -363,13 +333,10 @@ class ConnectorService:
                     capability.auth_scheme != AuthScheme.OAUTH2
                     or self.system_oauth_config.has_default_oauth_config(connector)
                 )
-                # Surface the runtime-resolved OAuth defaults (native registry)
-                # for apps that don't store their own, so the read API matches
-                # what the connect flow will actually use.
+                # Resolved, not read, so the API matches the connect flow: a
+                # stored URL may still carry an env placeholder to fill.
                 resolved_oauth2_defaults = (
-                    capability.oauth2_defaults
-                    if capability.oauth2_defaults is not None
-                    else self.system_oauth_config.resolve_oauth2_defaults(connector)
+                    self.system_oauth_config.resolve_oauth2_defaults(connector)
                 )
                 capabilities.append(
                     capability.model_copy(
@@ -416,47 +383,13 @@ class ConnectorService:
         config_source: AuthConfigSource,
         provider_config: dict | None,
     ) -> None:
-        provider_config = provider_config or {}
-        spec = connector.spec_for(kind)
-
-        if kind is ConnectorKind.COMPOSIO:
-            if config_source != AuthConfigSource.SYSTEM_DEFAULT:
-                raise ConnectorValidationError(
-                    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
-                    details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
-                )
-            return
-
-        # Everything below is about who issued the OAuth tokens. A kind that
-        # does not use OAuth -- sql, mcp, most http installs -- has nothing to
-        # answer here, and its config is checked by its own install schema.
-        if spec.auth_scheme != AuthScheme.OAUTH2:
-            return
-        if (
-            config_source == AuthConfigSource.ORG_CUSTOM
-            and not spec.supports_org_custom_oauth
-        ):
-            raise ConnectorValidationError(
-                f"Org custom OAuth credentials are not supported for '{connector.id}'."
-            )
-        if config_source == AuthConfigSource.SYSTEM_DEFAULT:
-            if not self.system_oauth_config.has_default_oauth_config(connector):
-                raise ConnectorValidationError(
-                    "System default OAuth credentials are not configured for this app. "
-                    "Create an org custom auth config with OAuth credentials instead."
-                )
-            return
-
-        credential_config = (
-            provider_config.get("oauth2_credentials")
-            if isinstance(provider_config, dict)
-            else None
-        ) or provider_config
-        if not isinstance(credential_config, dict):
-            raise ConnectorValidationError(
-                "Org custom OAuth configs require oauth2_credentials."
-            )
-        OAuth2CredentialConfig.model_validate(credential_config)
+        validate_auth_config_request(
+            connector=connector,
+            kind=kind,
+            config_source=config_source,
+            provider_config=provider_config,
+            system_oauth_config=self.system_oauth_config,
+        )
 
     async def create_auth_config(
         self,
@@ -472,7 +405,7 @@ class ConnectorService:
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=["ORG_OWNER", "ORG_EDITOR"],
+            allowed_roles=INSTALL_MANAGER_ROLES,
         )
         connector = await self.get_connector(connector_id)
         config_source_enum = AuthConfigSource(config_source)
@@ -487,7 +420,19 @@ class ConnectorService:
         # No single-install check: an org may hold many installs of one
         # connector -- two Slack apps, several MCP servers. They are told apart
         # by name, and the first one becomes the default that a bare
-        # connector_id lookup resolves to.
+        # connector_id lookup resolves to. Answered here rather than inline in
+        # the entity below so the last database read happens before the network
+        # work, not after it.
+        is_first_install = not await org_has_install(
+            self.auth_config_repository, organization_id, connector_id
+        )
+        # Nothing is written yet, so this only hands the pooled connection back
+        # -- which is the point. Validation resolves DNS inside the SSRF guard
+        # and MCP negotiation is up to three 15s round trips to a server the
+        # tenant names, and neither may be waited on holding one. Same shape as
+        # `delete_auth_config` below.
+        await self.uow.commit()
+
         # Every kind validates its own config here, including the three whose
         # config is entirely tenant-written. The previous validator returned
         # early for exactly those, so `additionalProperties: false` was
@@ -515,9 +460,7 @@ class ConnectorService:
             config=validated_config or None,
             name=name or connector_id,
             # First install of a connector answers a bare connector_id lookup.
-            is_default=not await org_has_install(
-                self.auth_config_repository, organization_id, connector_id
-            ),
+            is_default=is_first_install,
             created_by_user_id=user_id,
             updated_by_user_id=user_id,
         )
@@ -533,7 +476,7 @@ class ConnectorService:
 
     async def refresh_auth_config_operations(
         self, *, user_id: UUID, organization_id: UUID, auth_config_name: str
-    ) -> int:
+    ) -> DiscoveryOutcome:
         """Re-discover an install's operations. See ``install_provisioning``."""
         return await refresh_install_operations(
             self,
@@ -552,7 +495,7 @@ class ConnectorService:
         config: dict | None = None,
         status: str | None = None,
         is_default: bool | None = None,
-    ) -> tuple[AuthConfigEntity, int, int]:
+    ) -> tuple[AuthConfigEntity, DiscoveryOutcome, int]:
         """Update an install in place. See ``install_update`` for the rules."""
         return await update_install(
             self,
@@ -581,6 +524,25 @@ class ConnectorService:
         )
         return list(configs), next_cursor
 
+    async def install_auth_schemes(
+        self, auth_configs: Sequence[AuthConfigEntity]
+    ) -> dict[UUID, str]:
+        """How each install actually authenticates, keyed by install id.
+
+        Batched over the page: the answer needs each install's catalog kinds,
+        and reading whole connector rows one at a time is a round trip per
+        install on the connectors page's single call.
+        """
+        if not auth_configs:
+            return {}
+        return install_auth_schemes(
+            auth_configs,
+            kinds_by_connector=await self.connector_repository.kinds_for(
+                [config.connector_id for config in auth_configs]
+            ),
+            system_oauth_config=self.system_oauth_config,
+        )
+
     async def _resolve_auth_config(
         self,
         *,
@@ -588,7 +550,22 @@ class ConnectorService:
         connector_id: str | None = None,
         auth_config_id: UUID | None = None,
         auth_config_name: str | None = None,
+        require_active: bool = True,
     ) -> AuthConfigEntity:
+        """The install a caller named, however they named it.
+
+        ``require_active`` is on by default and off only for the two callers
+        that manage an install rather than use one -- deleting an install, and
+        deleting an account on it, both of which have to keep working after an
+        admin has switched it off. Every other caller is connecting to it or
+        executing against it, which a DISABLED install must not allow.
+
+        The name and connector-id lookups filter on ACTIVE in SQL; the id
+        lookup did not, so `status: DISABLED` -- the only way short of deletion
+        to stop an install being used -- stopped nothing that addressed it by
+        id, which is what the connect-request, account and execution paths all
+        do.
+        """
         auth_config = None
         if auth_config_id is not None:
             auth_config = await self.auth_config_repository.get(auth_config_id)
@@ -606,6 +583,8 @@ class ConnectorService:
             raise ConnectorNotFoundError(
                 connector_id or auth_config_name or str(auth_config_id)
             )
+        if require_active:
+            reject_if_disabled(auth_config)
         return auth_config
 
     async def get_auth_config_by_name(
@@ -650,11 +629,11 @@ class ConnectorService:
             user_id, organization_id, limit=200
         )
 
+        # One query for every title, not one per distinct connector: this is
+        # the connectors landing page's single call, and an org with installs
+        # of a dozen connectors was paying a round trip each on every load.
         app_ids = {c.connector_id for c in configs} | {a.connector_id for a in accounts}
-        app_titles: dict[str, str | None] = {}
-        for app_id in app_ids:
-            app = await self.connector_repository.get(app_id)
-            app_titles[app_id] = app.title if app else None
+        app_titles = await self.connector_repository.titles_for(sorted(app_ids))
 
         return {
             "installed": [
@@ -796,14 +775,20 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider = AuthProvider(self._provider_value(auth_config))
-        if provider == AuthProvider.LEMMA:
-            auth_scheme = self._lemma_capability(connector).auth_scheme
-        elif provider == AuthProvider.COMPOSIO:
-            auth_scheme = self._composio_capability(connector).auth_scheme
-        else:
+        if provider not in (AuthProvider.LEMMA, AuthProvider.COMPOSIO):
             raise UnsupportedAuthProviderError(provider.value)
 
-        if auth_scheme == AuthScheme.OAUTH2:
+        # Composio credential-managed apps must establish a connected account on
+        # Composio's side; native (Lemma) apps store the credentials verbatim.
+        auth_install = self._resolve_auth_install(connector, auth_config)
+
+        # The *install's* scheme, matching `initiate_connect_request`. Reading
+        # the catalog's instead let an MCP install that had negotiated OAuth at
+        # create time still accept an empty credential POST, because the `mcp`
+        # entry says API_KEY -- so the person got an account that looked
+        # connected, held no token, and 401'd every call. The two gates
+        # disagreeing is what made that state reachable at all.
+        if auth_install.auth_scheme == AuthScheme.OAUTH2:
             raise ConnectorValidationError(
                 "OAuth2 accounts must be connected with an OAuth connect request."
             )
@@ -819,10 +804,12 @@ class ConnectorService:
         # tokens for different agents); the first connected becomes the default.
         is_default = existing_account is None
 
-        # Composio credential-managed apps must establish a connected account on
-        # Composio's side; native (Lemma) apps store the credentials verbatim.
-        auth_install = self._resolve_auth_install(connector, auth_config)
         auth_provider = self._get_auth_provider_by_name(provider.value)
+        # Resolve, release, call, persist -- the rule in `docs/development.md`.
+        # Everything above was a read, and everything below until the create is
+        # a provider round trip, so the connection goes back here rather than
+        # being held across a Composio connect and a profile fetch.
+        await self.uow.commit()
         stored_credentials = await auth_provider.connect_with_credentials(
             install=auth_install,
             user_id=user_id,
@@ -908,175 +895,10 @@ class ConnectorService:
         redirect_uri: str,
         state: Optional[str] = None,
     ) -> AccountEntity:
-        if not state:
-            raise ConnectRequestStateRequiredError()
-
-        # Claimed, not merely read: the status check and the write that spends
-        # it used to be separated by the whole provider exchange, so two
-        # callbacks with the same `state` both passed. See
-        # `claim_pending_by_state`.
-        pending_request = await self.connect_request_repository.claim_pending_by_state(
-            state, not_before=oldest_claimable_connect_request()
-        )
-        if not pending_request:
-            raise ConnectRequestNotFoundError()
-
-        user_id = pending_request.user_id
-        auth_config = await self._resolve_auth_config(
-            organization_id=pending_request.organization_id,
-            auth_config_id=pending_request.auth_config_id,
-        )
-        connector = await self.get_connector(pending_request.connector_id)
-        auth_install = self._resolve_auth_install(connector, auth_config)
-        auth_provider = self._get_auth_provider_by_name(
-            self._provider_value(auth_config)
-        )
-
-        try:
-            credentials = await auth_provider.exchange_code_for_credentials(
-                install=auth_install,
-                redirect_uri=redirect_uri,
-                user_id=user_id,
-                # What we recorded when this flow was started, not what the
-                # caller put in the URL. A scheme that identifies the resulting
-                # connection by a query parameter has no other way to tell
-                # whether the callback belongs to the flow it is completing.
-                state=stored_provider_state(pending_request),
-                code_verifier=stored_code_verifier(pending_request),
-            )
-        except DomainError:
-            raise
-        except Exception as exc:
-            logger.debug(
-                "connectors.connector_service.exchange_connector_authorization_code.propagated",
-                error_type=type(exc).__name__,
-                exc_info=True,
-            )
-            pending_request.status = ConnectRequestStatus.ERROR
-            await self.connect_request_repository.update(pending_request)
-            await self.uow.commit()
-            raise OAuthWorkflowError(
-                "Unable to complete the OAuth flow.",
-                details=self._exception_details(exc),
-            ) from exc
-        provider_account_id = self._extract_provider_account_id(
-            connector.id, credentials
-        )
-        native_profile = await self._load_native_account_profile(connector, credentials)
-        if native_profile:
-            credentials = credentials.model_copy(
-                update={
-                    "user_data": {
-                        **(credentials.user_data or {}),
-                        "profile": native_profile,
-                    }
-                }
-            )
-        email_profile = await self._fetch_account_profile(
-            connector,
-            self._provider_value(auth_config),
-            credentials,
-        )
-        # The one profile this app actually populates. The catalog-driven
-        # fetch works for any connector with a profile operation configured;
-        # the Lemma-native one covers Gmail/Drive/Slack alone, and only one of
-        # the two is ever populated for a given app.
-        #
-        # Reading the identity from `native_profile` only meant every
-        # `http`-kind connector with a profile operation -- GitHub, and every
-        # native connector after it -- stored an account with no provider
-        # identity. That is the value the duplicate-connect guard and re-auth
-        # matching key on, so without it a second identity's re-auth is matched
-        # to the user's default account and overwrites its credentials.
-        account_profile = email_profile or native_profile
-        provider_account_id = (
-            provider_account_id
-            or self._extract_provider_account_id_from_profile(
-                connector.id, account_profile
-            )
-        )
-        email = self._extract_account_email(
-            connector.id, credentials, email_profile
-        ) or self._extract_account_email(connector.id, credentials, native_profile)
-
-        # Human-friendly label for the account list (team name / mailbox / …),
-        # falling back to the email when the app has no better label.
-        display_name = (
-            await resolve_account_identity(
-                connector_id=connector.id,
-                credentials=credentials,
-                profile=account_profile,
-            )
-        ).display_name or email
-
-        # Match the re-authing identity to an existing account:
-        #  - provider account id known → the account with exactly that id. A new
-        #    identity has none yet, so `account` stays None and the create branch
-        #    below runs — we must NOT fall back to the default here, or a second
-        #    identity's re-auth would clobber the default account's credentials
-        #    (which may itself have a null provider_account_id).
-        #  - provider account id absent → the user's default for this auth config
-        #    (a plain re-auth of the existing/only account; can't disambiguate
-        #    identities without an id).
-        if provider_account_id:
-            account = await self.account_repository.get_by_user_auth_config_and_provider_account(
-                user_id, auth_config.id, provider_account_id
-            )
-            # A healthy account for this identity blocks a duplicate connect; an
-            # unhealthy one is updated in place below (a genuine reconnect).
-            if account is not None and account.status == AccountStatus.CONNECTED:
-                raise AccountAlreadyConnectedError(connector.id)
-        else:
-            account = await self.account_repository.get_by_user_and_auth_config(
-                user_id, auth_config.id
-            )
-
-        if account:
-            account.credentials = credentials
-            # Re-derived on every re-auth: a reconnect is how an account moves
-            # to a different workspace or installation, and a stale routing key
-            # would keep sending that account another tenant's events.
-            account.external_ref = resolve_external_ref(connector.id, credentials)
-            if provider_account_id:
-                account.provider_account_id = provider_account_id
-            if email:
-                account.email = email
-            if display_name:
-                account.display_name = display_name
-            # A successful (re-)auth restores the account to a usable state.
-            account.status = AccountStatus.CONNECTED
-            account = await self.account_repository.update(account)
-        else:
-            # A new identity is the default only if the user has no account yet.
-            has_existing = await self.account_repository.get_by_user_and_auth_config(
-                user_id, auth_config.id
-            )
-            account = await self.account_repository.create(
-                AccountEntity(
-                    user_id=user_id,
-                    organization_id=pending_request.organization_id,
-                    auth_config_id=auth_config.id,
-                    connector_id=connector.id,
-                    is_default=has_existing is None,
-                    credentials=credentials,
-                    provider_account_id=provider_account_id,
-                    external_ref=resolve_external_ref(connector.id, credentials),
-                    email=email,
-                    display_name=display_name,
-                )
-            )
-
-        pending_request.status = ConnectRequestStatus.SUCCESS
-        pending_request.attributes = without_spent_secrets(pending_request)
-        await self.connect_request_repository.update(pending_request)
-        await self.uow.commit()
-
-        # After the commit: an install whose token lives on the account can only
-        # be discovered now, and a discovery failure must not undo the
-        # connection the person just made.
-        await discover_operations_for_new_account(self, auth_config)
-
-        return account
+        """See `oauth_callback`, which owns the resolve/release/call/persist
+        split this path needs and the request-scoped session cannot express
+        inline."""
+        return await handle_oauth_callback(self, redirect_uri=redirect_uri, state=state)
 
     async def list_accounts(
         self,
@@ -1187,10 +1009,19 @@ class ConnectorService:
                         ) from exc
                     if isinstance(exc, DomainError):
                         raise
-                    logger.debug(
-                        "connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic",
+                    # The stored token has not expired yet, so the account
+                    # keeps working -- for now. But a provider that rejects a
+                    # refresh has usually revoked the grant, which is exactly
+                    # the case an expiry check cannot see, and at debug this
+                    # left no trace at all in production: the first signal was
+                    # the account flipping to REAUTH_REQUIRED hours later, with
+                    # nothing saying when it actually broke.
+                    logger.warning(
+                        "connectors.connector_service.credential_refresh_rejected.degraded",
                         account_id=str(account_id),
+                        connector_id=account.connector_id,
                         error_type=type(exc).__name__,
+                        exc_info=True,
                     )
                 else:
                     account.credentials = new_credentials
@@ -1246,21 +1077,39 @@ class ConnectorService:
         account = await self.get_account(account_id, user_id, organization_id)
         connector = await self.connector_repository.get(account.connector_id)
         resolved_organization_id = organization_id or account.organization_id
+        # Disconnecting from an install an admin has switched off is the one
+        # thing that must still work while it is off.
         auth_config = await self._resolve_auth_config(
             organization_id=resolved_organization_id,
             auth_config_id=account.auth_config_id,
+            require_active=False,
         )
         auth_install = (
             self._resolve_auth_install(connector, auth_config) if connector else None
         )
 
-        if account.credentials and self._should_revoke_account(
-            connector=connector, auth_config=auth_config
-        ):
+        revocable_credentials = (
+            self._to_oauth_credentials(account.credentials)
+            if account.credentials
+            and self._should_revoke_account(
+                connector=connector, auth_config=auth_config
+            )
+            else None
+        )
+        auth_provider = self._get_auth_provider_by_name(
+            self._provider_value(auth_config)
+        )
+        # Revoke with no connection held, then delete -- what
+        # `delete_auth_config` twenty lines below already does, and for the
+        # same reason: a provider round trip on a request-scoped session pins a
+        # pooled connection for as long as the provider takes.
+        await self.uow.commit()
+
+        if revocable_credentials is not None:
             await revoke_one(
-                self._get_auth_provider_by_name(self._provider_value(auth_config)),
+                auth_provider,
                 install=auth_install,
-                credentials=self._to_oauth_credentials(account.credentials),
+                credentials=revocable_credentials,
                 user_id=user_id,
             )
 
@@ -1287,12 +1136,13 @@ class ConnectorService:
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=["ORG_OWNER", "ORG_EDITOR"],
+            allowed_roles=INSTALL_MANAGER_ROLES,
         )
         auth_config = await self._resolve_auth_config(
             organization_id=organization_id,
             auth_config_id=auth_config_id,
             auth_config_name=auth_config_name,
+            require_active=False,
         )
         accounts = await self.account_repository.list_by_auth_config(auth_config.id)
         connector = await self.connector_repository.get(auth_config.connector_id)
@@ -1356,52 +1206,3 @@ class ConnectorService:
                 user_data=credentials.get("user_data"),
             )
         return OAuthCredentials(access_token="")
-
-    def _extract_provider_account_id(
-        self, connector_id: str, credentials: object
-    ) -> str | None:
-        oauth_credentials = self._to_oauth_credentials(credentials)
-        raw_response = (
-            oauth_credentials.raw_response
-            if isinstance(oauth_credentials.raw_response, dict)
-            else {}
-        )
-        user_data = (
-            oauth_credentials.user_data
-            if isinstance(oauth_credentials.user_data, dict)
-            else {}
-        )
-
-        def _nested(data: dict, *path: str) -> str | None:
-            cur: object = data
-            for key in path:
-                if not isinstance(cur, dict):
-                    return None
-                cur = cur.get(key)
-            if cur is None:
-                return None
-            value = str(cur).strip()
-            return value or None
-
-        app = (connector_id or "").lower()
-        if app == "slack":
-            # Slack user events use authed_user.id as external user identity.
-            return (
-                _nested(raw_response, "authed_user", "id")
-                or _nested(raw_response, "user", "id")
-                or _nested(raw_response, "user_id")
-            )
-
-        # Generic fallbacks across providers.
-        return (
-            _nested(raw_response, "provider_account_id")
-            or _nested(raw_response, "user", "id")
-            or _nested(raw_response, "user_id")
-            or _nested(raw_response, "id")
-            or _nested(user_data, "provider_account_id")
-            or _nested(user_data, "user", "id")
-            or _nested(user_data, "user_id")
-            or _nested(user_data, "id")
-            or _nested(user_data, "sub")
-            or _nested(user_data, "oid")
-        )

@@ -99,6 +99,12 @@ class _FakeListRepo:
         return ([], None)
 
 
+async def _no_functions(uow, pod_id, *, limit):
+    """What `list_pod_functions` answers for a pod with no functions."""
+    del uow, pod_id, limit
+    return ([], None)
+
+
 class _FakeAuthzService:
     async def build_user_context(self, **kwargs):
         return object()
@@ -126,13 +132,14 @@ class _FakeFileService:
 def stubbed(monkeypatch):
     monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
+    # `function`'s published operation, not a name bound in the subject: a
+    # double inside the module under test certifies the half you did not write.
     monkeypatch.setattr(
-        brief_mod,
-        "create_function_repository",
-        lambda uow: _FakeListRepo(uow),
+        "app.modules.function.contracts.agent_tools.list_pod_functions",
+        _no_functions,
     )
     monkeypatch.setattr(
-        brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        brief_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         brief_mod, "build_table_service", lambda uow: _FakeTableService()
@@ -158,7 +165,7 @@ def stubbed(monkeypatch):
     # its own stubs -- patching the brief module alone would leave the real
     # authorization service and datastore wired in behind the memory section.
     monkeypatch.setattr(
-        memory_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        memory_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         memory_mod, "build_file_service", lambda uow: _FakeFileService(agents_md)

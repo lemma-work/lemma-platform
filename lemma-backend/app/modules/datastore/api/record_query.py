@@ -13,6 +13,25 @@ from app.modules.datastore.domain.errors import DatastoreValidationError
 
 _ALLOWED_FILTER_OPS = [op.value for op in RecordFilterOperator]
 
+#: The `filter` query parameter's documentation, derived from the enum above
+#: rather than written out. The hand-written list omitted `in` for as long as it
+#: had existed, so the generated clients, both SDKs and the docs all said an
+#: implemented operator was not allowed -- while the error message for a bad
+#: operator, built from the same enum, listed it.
+RECORD_FILTER_DESCRIPTION = (
+    "Optional repeated JSON filters for advanced comparisons. "
+    "Each `filter` value must be a JSON object with shape "
+    '`{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. '
+    f"Allowed operators are: {', '.join(f'`{op}`' for op in _ALLOWED_FILTER_OPS)}. "
+    "`in` takes an array `value` and matches any of its members; an empty array "
+    "matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches "
+    "any run of characters and `_` matches exactly one — to match either "
+    "literally, escape it with a backslash (`price\\_usd`). "
+    "Repeat the query parameter to combine multiple filters with AND semantics. "
+    'Examples: `filter={"field":"amount","op":"gt","value":100}`, '
+    '`filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.'
+)
+
 
 def _parse_record_filter_item(item: str) -> tuple[str, str, object]:
     payload = json.loads(item)

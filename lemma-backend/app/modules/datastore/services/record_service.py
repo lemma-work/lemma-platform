@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -327,6 +328,7 @@ class RecordService:
         user_id: UUID,
         *,
         admin_mode: bool = False,
+        expected_updated_at: datetime | None = None,
     ):
         await self._require_record_write(user_id=user_id, ctx=ctx)
         enforce_user_scope = await self._should_enforce_user_scope(
@@ -340,6 +342,7 @@ class RecordService:
             data,
             user_id,
             enforce_user_scope=enforce_user_scope,
+            expected_updated_at=expected_updated_at,
         )
         if ctx.events_enabled:
             await self.events.dispatch()
@@ -354,6 +357,7 @@ class RecordService:
         *,
         enforce_user_scope: bool,
         checked_user_ids: set[UUID] | None = None,
+        expected_updated_at: datetime | None = None,
     ):
         """Validate and write one row, without the per-caller preamble.
 
@@ -384,6 +388,7 @@ class RecordService:
             user_id,
             enforce_user_scope=enforce_user_scope,
             event_factory=event_factory,
+            expected_updated_at=expected_updated_at,
         )
 
     async def delete_record(

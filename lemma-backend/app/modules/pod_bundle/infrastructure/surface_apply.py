@@ -18,7 +18,6 @@ from app.modules.pod_bundle.domain.state import PlanStep
 from app.modules.pod_bundle.infrastructure.account_binding import (
     validate_account_binding,
 )
-from app.modules.pod_bundle.infrastructure.existing_resources import _get_agent
 
 
 async def apply_surface(
@@ -36,18 +35,19 @@ async def apply_surface(
     upsert keyed by that name — mirroring the surface create/update
     controllers (reusing their config helpers) so an imported connector
     behaves exactly like a hand-configured one."""
-    from app.composition.pod_bundle_resources import get_agent_service
-    from app.composition.pod_bundle_resources import (
-        _merge_surface_config,
-        _resolve_surface_config,
-    )
-    from app.composition.pod_bundle_resources import get_surface_service
-    from app.modules.agent_surfaces.contracts import SurfaceCreateRequest
+    from app.modules.agent.contracts.provisioning import get_agent
     from app.modules.agent_surfaces.contracts import (
         AgentSurfaceEntity,
+        SurfaceCreateRequest,
         SurfacePlatform,
     )
-    from app.modules.agent_surfaces.contracts import AgentSurfaceNotFoundError
+    from app.modules.agent_surfaces.contracts.provisioning import (
+        apply_surface_config,
+        build_surface_config,
+        create_surface,
+        get_surface_by_name,
+        update_surface,
+    )
 
     payload = load("surfaces", step.name)
     platform_raw = payload.get("platform")
@@ -104,34 +104,27 @@ async def apply_surface(
         resource_label=f"Surface '{resolved_name}'",
     )
 
-    agent_service = get_agent_service(uow)
-    service = get_surface_service(uow)
-
     agent = (
-        await _get_agent(agent_service, pod_id, request.default_agent_name, ctx)
+        await get_agent(uow, pod_id=pod_id, name=request.default_agent_name, ctx=ctx)
         if request.default_agent_name
         else None
     )
 
-    try:
-        existing = await service.get_surface_by_name_in_pod(
-            pod_id=pod_id, name=resolved_name
-        )
-    except AgentSurfaceNotFoundError:
-        existing = None
+    existing = await get_surface_by_name(uow, pod_id=pod_id, name=resolved_name)
 
     if existing is None:
-        config = await _resolve_surface_config(
-            uow=uow,
+        config = await build_surface_config(
+            uow,
             pod_id=pod_id,
             platform=platform,
             config_input=request.config,
-            agent_service=agent_service,
             ctx=ctx,
         )
-        surface = await service.create_surface_minting_address(
+        surface = await create_surface(
+            uow,
             pod_id=pod_id,
-            agent=agent,
+            agent_id=agent.id if agent else None,
+            agent_name=agent.name if agent else None,
             platform=platform,
             name=resolved_name,
             config=config,
@@ -140,21 +133,19 @@ async def apply_surface(
             ctx=ctx,
         )
         if not request.is_enabled:
-            await service.update_surface(
-                surface_id=surface.id, is_active=False, ctx=ctx
-            )
+            await update_surface(uow, surface_id=surface.id, is_active=False, ctx=ctx)
         return
 
-    config = await _merge_surface_config(
-        uow=uow,
+    config = await apply_surface_config(
+        uow,
         pod_id=pod_id,
         platform=platform,
         existing=existing.config,
         config_input=request.config,
-        agent_service=agent_service,
         ctx=ctx,
     )
-    await service.update_surface(
+    await update_surface(
+        uow,
         surface_id=existing.id,
         agent_id=agent.id if agent else None,
         update_agent_id="default_agent_name" in request.model_fields_set,

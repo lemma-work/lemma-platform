@@ -97,9 +97,11 @@ async def apply_grants(
     """Validate + normalize (resource_name -> id) + replace a grantee's resource
     grants. Mirrors the function/agent controllers' inline-grants path so an
     imported workload gets the same executable permissions a hand-authored one
-    would."""
-    if not grants:
-        return
+    would.
+
+    An empty ``grants`` is a real write — "this workload holds nothing" — and
+    clears the grantee's existing grants; callers decide whether the manifest
+    said anything at all by asking :func:`has_grants` first."""
     from app.core.authorization.grants import (
         normalize_pod_resource_grants,
         replace_grantee_resource_grants,

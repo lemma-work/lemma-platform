@@ -829,3 +829,75 @@ def test_schedule_scaffold_passes_the_importer_s_own_validation(tmp_path):
     }
     assert _validate_schedule_config(datastore, "nightly", str(path)) == []
     assert json.dumps(datastore)  # serializable, for good measure
+
+
+# --------------------------------------------------------------------------- #
+# scaffold <-> API drift
+# --------------------------------------------------------------------------- #
+#: Fields a scaffold deliberately does not mention, and why. Everything else on
+#: a create-request model must appear in the scaffold for its resource.
+#:
+#: This exists because `instruction` was added to schedules — required whenever
+#: the target is the pod's assistant — and the scaffold was not touched. The
+#: scaffold is what `lemma <resource> schema` prints, and it is what the CLI's
+#: own unrecognized-field warning tells you to go read. Missing from there, the
+#: field was unreachable to anyone working from the tooling: the API refused the
+#: schedule, named no field, and the reference it pointed at did not list one.
+#:
+#: Adding an entry here is a decision to leave a field undocumented. Prefer
+#: documenting it — a commented-out line in the scaffold costs nothing.
+UNDOCUMENTED_SCAFFOLD_FIELDS: dict[str, set[str]] = {
+    # Presentation only; carrying a TODO icon URL into every scaffold is noise.
+    "function": {"icon_url"},
+    "agent": {"icon_url"},
+    "workflow": {"icon_url"},
+}
+
+SCAFFOLD_REQUEST_MODELS: list[tuple[str, str, str]] = [
+    ("table", "create_table_request", "CreateTableRequest"),
+    ("function", "create_function_request", "CreateFunctionRequest"),
+    ("agent", "create_agent_request", "CreateAgentRequest"),
+    ("workflow", "workflow_create_request", "WorkflowCreateRequest"),
+    ("schedule", "create_schedule_request", "CreateScheduleRequest"),
+]
+
+
+@pytest.mark.parametrize(("resource", "module", "model"), SCAFFOLD_REQUEST_MODELS)
+def test_every_api_field_reaches_the_scaffold(resource, module, model):
+    """A field the API accepts but the scaffold never names is unreachable.
+
+    The scaffold is the canonical "what fields exist" reference — printed by
+    `lemma <resource> schema`, written by `lemma init`, and pointed at by the
+    warning the CLI emits when a payload names something unrecognized. A field
+    absent from it can only be found by guessing.
+    """
+    import importlib
+
+    import attrs
+
+    from lemma_cli.cli_app.scaffold import resource_example
+
+    request_model = getattr(
+        importlib.import_module(f"lemma_sdk.openapi_client.models.{module}"), model
+    )
+    fields = {
+        # The generated client suffixes Python keywords with `_`; the wire name
+        # (and so the name a hand-written payload uses) is the bare one.
+        field.name.rstrip("_")
+        for field in attrs.fields(request_model)
+        if field.name != "additional_properties"
+    }
+    scaffold = resource_example(resource)
+
+    undocumented = {
+        name
+        for name in fields - UNDOCUMENTED_SCAFFOLD_FIELDS.get(resource, set())
+        if name not in scaffold
+    }
+
+    assert not undocumented, (
+        f"`lemma {resource} schema` never mentions {sorted(undocumented)}, so "
+        f"nobody working from the CLI can discover {'it' if len(undocumented) == 1 else 'them'}. "
+        f"Add a line (commented out is fine) to the scaffold in cli_app/scaffold.py, "
+        f"or record a reason in UNDOCUMENTED_SCAFFOLD_FIELDS."
+    )

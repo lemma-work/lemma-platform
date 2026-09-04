@@ -10,7 +10,15 @@ lemma auth status
 lemma servers list          # multiple backends (cloud/local) supported
 lemma orgs list             # select default org
 lemma pods list             # marks the currently active pod
+
+lemma doctor                # client/server version skew + duplicate installs
+lemma update                # upgrade this CLI in place (--version to pin one)
 ```
+
+**When a command behaves nothing like this document, check the CLI's own version
+first** — `lemma doctor` names a skew between the client and the server it is talking
+to, and `lemma update` fixes it in place. That is a cheaper first move than
+re-reading a payload shape.
 
 Config lives in `~/.lemma/config.json` (active server, token, default org/pod). Resolution precedence for org/pod: CLI flags (`--org`, `--pod`) → env vars → project `.lemma.<server>.env` → project `.lemma.env` → stored defaults → interactive selection.
 
@@ -29,6 +37,9 @@ Scripting conventions:
 - Payloads everywhere take `--data '<json>'` (`-d`) or `--file path.json` (`-f`).
 - `--pod <id-or-slug>` overrides the target pod per command.
 - Destructive commands prompt; pass `--yes` for agent/CI runs.
+- **Errors go to stderr, results to stdout.** So `lemma --json … > out.json` leaves a
+  file that is either valid JSON or empty — a failure never lands in it as prose. When
+  a script's output is empty, read stderr before assuming the pod is empty.
 
 ## Bundle Format
 
@@ -42,12 +53,12 @@ my-pod/
   agents/<name>/instruction.md
   workflows/<name>/<name>.json
   schedules/<name>/<name>.json
-  surfaces/<platform>/<platform>.json   # e.g. surfaces/slack/slack.json
+  surfaces/<name>/<name>.json     # name defaults to the lowercased platform: surfaces/slack/slack.json
   apps/<name>/<name>.json
   apps/<name>/source/            # Vite app project (built on import/deploy), OR a
                                  #   no-build site (index.html, no package.json)
   apps/<name>/html.html          # OR a single no-build HTML app (uploaded as-is)
-  files/<folder>/.folder.json     # folder metadata (file bytes travel with --with-files)
+  files/<folder>/.folder.json     # folder metadata (bytes travel only if you exported --folder)
   payloads/                        # local test fixtures, not imported as pod resources
   README.md                        # setup, seed, and verification runbook
 ```
@@ -61,7 +72,7 @@ Rules:
   - `"code": {"$file": "code.py"}` — raw text file
   - `"instruction": {"$file": "instruction.md"}`
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
-- `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows and round-trips through export/import.
+- `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
 - `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`.
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, account setup JSON, seed records, and the end-to-end smoke test there.
 
@@ -86,7 +97,7 @@ Rules:
 // agents/triage-agent/triage-agent.json — same permissions semantics as functions
 { "name": "triage-agent", "description": "Classifies tickets.",
   "instruction": {"$file": "instruction.md"},
-  "toolsets": ["POD", "WEB_SEARCH"],
+  "toolsets": ["WEB_SEARCH"],   // POD is DERIVED from the grants below — don't list it
   "permissions": { "grants": [ /* exported + upserted like functions */ ] } }
 
 // workflows/intake/intake.json
@@ -97,7 +108,8 @@ Rules:
 { "name": "nightly", "schedule_type": "TIME", "config": {"cron": "0 2 * * *"},
   "workflow_name": "intake", "is_active": true }
 
-// surfaces/slack/slack.json — folder name is the lowercased platform; one surface per platform
+// surfaces/slack/slack.json — folder name is the surface's own name (default: the
+// lowercased platform). `platform` is required; a bundle without it is rejected.
 { "name": "slack", "platform": "SLACK",
   "default_agent_name": "triage-agent",
   "credential_mode": "CUSTOM", "account_id": "${slack_account}",
@@ -150,7 +162,7 @@ demo/
   ], "config": {} }
 // agents/triage/triage.json
 { "name": "triage", "description": "Answers questions about tickets.",
-  "instruction": { "$file": "instruction.md" }, "toolsets": ["POD"],
+  "instruction": { "$file": "instruction.md" }, "toolsets": [],
   "permissions": { "grants": [
     { "resource_type": "datastore_table", "resource_name": "tickets",
       "permission_ids": ["datastore.table.read", "datastore.record.read", "datastore.record.write"] }
@@ -173,11 +185,11 @@ lemma pods export ./bundles <pod> --resource functions --name score_ticket
 lemma pods export ./bundles --exclude apps
 ```
 
-- **Matching is by `name`** (schedules also match by id; surfaces by platform; files by path). Renaming a resource in the bundle creates a new one — it does not rename.
-- **Upsert behavior per resource:** tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was used; table rows last, when `--with-data` was used.
+- **Matching is by `name`** (schedules also match by id; surfaces by their own pod-unique name, which defaults to the lowercased platform — and the CLI importer keys them on the *platform*; files by path). Renaming a resource in the bundle creates a new one — it does not rename.
+- **Upsert behavior per resource:** tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was passed to *import*; table rows last, when `--with-data` was (and only into new tables).
 - **Permissions travel with the bundle.** Export always embeds each function's and agent's `permissions.grants`; import applies them with replace semantics on every upsert — the bundle is the source of truth for what a workload may access. **Present vs absent matters:** a `permissions` block (even `{"grants": []}`) replaces the grants with exactly that list, while omitting the key leaves the workload's existing grants alone. Grants apply in a deferred pass after every resource exists, so cross-references resolve.
 - **Import order is dependency order:** tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
-- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface platform must be one of SLACK/TEAMS/TELEGRAM/WHATSAPP/GMAIL/OUTLOOK; a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
+- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface `platform` must be present and one of SLACK/TEAMS/TELEGRAM/WHATSAPP/RESEND (Gmail and Outlook are connectors, not surfaces); a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
 - **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: an agent/function **created with NO grants** (it has zero access and will 403 at runtime — the most common way a fresh pod arrives broken), **connector grants** being environment-specific (verify a connected account exists in the target pod), **destructive grants** (e.g. `datastore.table.delete`) giving standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants being able to spawn only copies of itself. `lemma pods doctor` re-checks all of these against the live pod.
 - After import, verify grants landed with `lemma functions permissions get <name>` / `lemma agents permissions get <name>`, or `lemma pods doctor` for the whole pod at once.
 - **Unrecognized fields fail the import.** A key the API has no slot for (a typo, or a field that resource type doesn't accept) aborts with the offending name instead of being dropped silently. Outside a bundle the same check warns — `lemma <resource> schema` prints the accepted shape.
@@ -223,10 +235,10 @@ So a surface bundle looks like this, not like a literal uuid:
   writes back the form you authored: a Vite project comes back as `source/`, and a
   single-file app comes back as `html.html` — re-importable as-is. An app deployed
   before its source was stored has only built output, and exports as `dist.zip`.
-- **File bytes and table rows travel only on request.** `pods export --with-files --with-data` (or `--data-table <t>` for specific tables) writes them into the bundle; `pods import --with-files --with-data` applies them. Without those flags you get structure only, and you upload bytes with `lemma files upload` after import.
+- **File bytes and table rows travel only on request, and export and import ask differently.** On the way out you **name them**: `pods export --data-table tickets --folder /knowledge` (both repeatable). There is no flag for every table or the whole file tree — rows and bytes leave the pod only where you asked for them. On the way in it is a single switch each: `pods import --with-data --with-files`. `--with-data` seeds **new tables only**. Without any of this you get structure only, and you upload bytes with `lemma files upload` after import.
 - **Connectors are not bundle resources.** Auth configs, accounts, and connect state are org runtime state — script their setup (`lemma connectors ...`) in the pod README.
 - **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the connector id (`gmail`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there (they do, when they're part of the same bundle). The **one exception is a pinned `connector_account` grant**, whose `resource_name` is an account id: export turns it into a `${…}` variable, and an import that doesn't supply it drops the grant with a warning (the workload falls back to the invoking user's own account). See `authorization-model.md` §4b.
-- **Surface bundles carry config, not credentials or platform state.** `account_id` is exported as a `${variable}`, not a literal id (see *Portability variables*); webhook secrets, identities, and setup status are server-managed and re-derived. Modes/event modes use platform defaults on create.
+- **Surface bundles carry config, not credentials or platform state.** `account_id` is exported as a `${variable}`, not a literal id (see *Portability variables*); webhook secrets, resolved identities, setup status, and an email surface's provisioned address are server-managed and re-derived. Leave `mode`/`event_mode` out — they are derived per platform, and `event_mode` has only one value.
 - **No transactions.** Import fails fast on the first error and leaves prior resources applied. Always `--dry-run` first.
 - App `public_slug` conflicts are auto-resolved by suffixing a pod-id fragment. The slug is also a portability variable, so you can pin it at import with `--var`.
 - System columns `created_at`, `updated_at`, and `user_id` are stripped on import — never declare them. Your primary key (`id`) is yours to declare via `primary_key_column`.
@@ -272,6 +284,8 @@ lemma agents init triage [--runtime <profile-id>]     # scaffold; pin a runtime 
 lemma agents grant triage tickets:read /knowledge:read connector:gmail:use   # name:perms | /path:perms | type:name:perms
 lemma agents chat triage-agent "Classify this"        # interactive/one-shot chat
 lemma agents run triage-agent "Classify this"         # waits + streams result (--no-wait to detach)
+lemma chat "what can you do in this pod?"             # the pod's default assistant; a quoted
+                                                      # multi-word arg is the MESSAGE, not an agent name
 
 # grants on a LIVE pod (same spec grammar; the API only replaces, so add/remove read-merge-write)
 lemma agents permissions get <name>
@@ -280,6 +294,14 @@ lemma agents permissions remove triage tickets:write
 lemma functions permissions add score_ticket function:write_lesson:execute
 lemma functions permissions replace <name> --from-bundle ./my-pod   # push what the bundle declares
 lemma conversations list|get|messages|send|stream|stop   # each agent run is a conversation
+
+# an agent parked on request_approval / ask_user — resolve it without the frontend
+lemma conversations approvals <conversation-id>          # what is pending
+lemma conversations approve <approval-id> -c <conversation-id>          # approve once
+lemma conversations approve -c <conversation-id> --session              # for the whole session
+lemma conversations approve -c <conversation-id> --yes                  # ALL pending; without
+#   --yes it lists them and asks first, so a stray `approve` cannot rubber-stamp a queue
+lemma conversations approve <approval-id> -c <conversation-id> --deny   # reject
 
 # workflows / schedules
 lemma workflows list|get|create|update|update-graph|delete|run|init|validate
@@ -298,7 +320,7 @@ lemma connectors accounts list|get|create|delete
 lemma connectors connect-requests create <connector> --auth-config-id <id>
 lemma connectors operations search|list|get|details|execute [<auth-config-or-connector>] [...]
 lemma connectors triggers list|get [<auth-config-or-connector>] [...]
-lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|delete   # keyed by PLATFORM (slack, gmail, …)
+lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|delete   # keyed by PLATFORM (slack, telegram, resend, …)
 lemma feedback --category cli|skill|platform|docs|other --subject … --issue-encountered … --expected-behavior … --actual-behavior …
 
 # apps

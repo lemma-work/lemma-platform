@@ -274,6 +274,13 @@ class AccountRepository(
         holds after the current default is removed. No-op when none remain."""
         stmt = (
             select(Account)
+            # Eager, like every other select in this file. Without it
+            # `_to_entity` touches `instance.connector` after the greenlet that
+            # could have loaded it is gone, and SQLAlchemy raises
+            # `MissingGreenlet` -- so deleting an account that happened to be
+            # the default answered 500 and left the "exactly one default"
+            # invariant unrepaired. This was the one select that omitted it.
+            .options(selectinload(Account.connector))
             .where(
                 Account.user_id == user_id,
                 Account.auth_config_id == auth_config_id,

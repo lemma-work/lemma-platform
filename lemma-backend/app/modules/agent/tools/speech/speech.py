@@ -171,7 +171,7 @@ def _resolve_output(
 def _voice_note_format_for(platform: str | None) -> str:
     if not platform:
         return "mp3"
-    from app.composition.agent_surface_runtime import voice_note_format
+    from app.modules.agent_surfaces.contracts.platforms import voice_note_format
 
     return voice_note_format(platform)
 
@@ -199,13 +199,15 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     conversation_id = getattr(deps, "conversation_id", None)
     if not platform or not conversation_id:
         return False
-    from app.composition.agent_surface_runtime import (
+    from app.modules.agent_surfaces.contracts.platforms import (
         platform_delivers_one_reply,
         platform_supports_chat_delivery,
     )
 
     if platform_delivers_one_reply(platform):
-        from app.composition.agent_surface_runtime import hold_display_for_one_reply
+        from app.modules.agent_surfaces.contracts.egress import (
+            hold_display_for_one_reply,
+        )
 
         # Attached to the reply rather than sent as a second one: a surface that
         # gets one message gets one message, audio included.
@@ -213,7 +215,7 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     if not platform_supports_chat_delivery(platform):
         return False
     try:
-        from app.composition.agent_surface_runtime import deliver_voice_note
+        from app.modules.agent_surfaces.contracts.egress import deliver_voice_note
 
         return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
     except Exception:

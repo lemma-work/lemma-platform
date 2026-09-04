@@ -77,60 +77,100 @@ async def test_function_step_not_dispatched_by_applier(tmp_path):
         await applier.apply_step(_step(StepKind.FUNCTION, "triage"))
 
 
-class FakeTableService:
+_DATASTORE = "app.modules.datastore.contracts.provisioning"
+_AGENTS = "app.modules.agent.contracts.provisioning"
+_FUNCTIONS = "app.modules.function.contracts.provisioning"
+_WORKFLOWS = "app.modules.workflow.contracts.provisioning"
+_SCHEDULES = "app.modules.schedule.contracts.provisioning"
+_SURFACES = "app.modules.agent_surfaces.contracts.provisioning"
+_CONNECTORS = "app.modules.connectors.contracts.provisioning"
+
+
+class FakeTableOperations:
+    """The four table operations the applier names when it upserts a table."""
+
     def __init__(self):
         self.created = []
         self.added = []
         self.removed = []
         self._existing = {}
 
-    async def get_table(self, pod_id, name, ctx):
+    async def get_table(self, uow, *, pod_id, name, ctx):
         return self._existing.get(name)
 
     async def create_table(
         self,
+        uow,
+        *,
         pod_id,
         name,
-        pk,
+        primary_key_column,
         columns,
         config,
         enable_rls,
-        *,
-        visibility=None,
-        ctx=None,
+        visibility,
+        ctx,
     ):
         self.created.append((name, [c.name for c in columns]))
 
+    async def add_table_column(self, uow, *, pod_id, table_name, column, ctx):
+        self.added.append(column.name)
 
-class _FakeFileService:
+    async def remove_table_column(self, uow, *, pod_id, table_name, column_name, ctx):
+        self.removed.append(column_name)
+
+    def patch(self, monkeypatch) -> "FakeTableOperations":
+        for name in (
+            "get_table",
+            "create_table",
+            "add_table_column",
+            "remove_table_column",
+        ):
+            monkeypatch.setattr(f"{_DATASTORE}.{name}", getattr(self, name))
+        return self
+
+
+class FakeFileOperations:
+    """The three file operations the applier names.
+
+    ``file_exists`` answers the question directly. It used to be a
+    ``get_file_by_path`` the applier wrapped in a bare ``except Exception``, so
+    a double had to raise *something* to mean absence -- and the real service
+    raising for any other reason meant "absent" too.
+    """
+
     def __init__(self, existing=()):
         self.existing = set(existing)
         self.created_folders = []
         self.created_files = []
 
-    async def get_file_by_path(self, pod_id, path, ctx):
-        if path in self.existing:
-            return object()
-        raise RuntimeError("not found")  # applier treats any raise as "absent"
+    async def file_exists(self, uow, *, pod_id, path, ctx):
+        return path in self.existing
 
-    async def create_folder(self, pod_id, path, ctx, description=None, visibility=None):
+    async def create_folder(self, uow, *, pod_id, path, ctx, description, visibility):
         self.created_folders.append((path, description, visibility))
 
     async def create_file(
         self,
+        uow,
+        *,
         pod_id,
         name,
         content,
         ctx,
-        description=None,
-        metadata=None,
-        directory_path="/",
-        search_enabled=True,
-        visibility=None,
+        description,
+        directory_path,
+        search_enabled,
+        visibility,
     ):
         self.created_files.append(
             (name, content, directory_path, visibility, search_enabled)
         )
+
+    def patch(self, monkeypatch) -> "FakeFileOperations":
+        for name in ("file_exists", "create_folder", "create_file"):
+            monkeypatch.setattr(f"{_DATASTORE}.{name}", getattr(self, name))
+        return self
 
 
 def _file_step(name, *, is_folder):
@@ -163,10 +203,7 @@ async def test_file_apply_creates_folder_and_file(tmp_path, monkeypatch):
             ]
         },
     )
-    fake = _FakeFileService()
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service", lambda uow: fake
-    )
+    fake = FakeFileOperations().patch(monkeypatch)
 
     applier = _applier(root)
     await applier.apply_step(_file_step("docs", is_folder=True))
@@ -180,10 +217,7 @@ async def test_file_apply_is_idempotent_when_path_exists(tmp_path, monkeypatch):
     root = tmp_path / "bundle"
     (root / "files" / "guide.md").parent.mkdir(parents=True, exist_ok=True)
     (root / "files" / "guide.md").write_text("hi", encoding="utf-8")
-    fake = _FakeFileService(existing={"/guide.md"})
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_file_service", lambda uow: fake
-    )
+    fake = FakeFileOperations(existing={"/guide.md"}).patch(monkeypatch)
     await _applier(root).apply_step(_file_step("guide.md", is_folder=False))
     assert fake.created_files == []  # already present → no re-create
 
@@ -202,10 +236,7 @@ async def test_table_create_calls_service(tmp_path, monkeypatch):
             ],
         },
     )
-    fake = FakeTableService()
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_table_service", lambda uow: fake
-    )
+    fake = FakeTableOperations().patch(monkeypatch)
     await _applier(root).apply_step(_step(StepKind.TABLE, "leads"))
     # System column dropped; only user columns created.
     assert fake.created == [("leads", ["id", "title"])]
@@ -234,16 +265,8 @@ async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
             ],
         },
     )
-    fake = FakeTableService()
+    fake = FakeTableOperations().patch(monkeypatch)
     fake._existing["leads"] = Existing()
-
-    async def _add_column(pod_id, name, column, ctx):
-        fake.added.append(column.name)
-
-    fake.add_column = _add_column
-    monkeypatch.setattr(
-        "app.modules.datastore.api.dependencies.build_table_service", lambda uow: fake
-    )
     # Non-destructive update: adds `score`, never creates or removes.
     await _applier(root).apply_step(
         _step(StepKind.TABLE, "leads", action=StepAction.UPDATE)
@@ -315,10 +338,7 @@ def _patch_grant_layer(monkeypatch) -> dict:
             {"agent_id": agent_id, "toolsets": list(toolsets or [])}
         )
 
-    monkeypatch.setattr(
-        "app.modules.agent.services.agent_memory_grant.sync_memory_folder_grant",
-        _sync_memory,
-    )
+    monkeypatch.setattr(f"{_AGENTS}.sync_agent_memory_grant", _sync_memory)
     return calls
 
 
@@ -382,8 +402,14 @@ class FakeAgentService:
         # asserting the fake's own gap.
         name = "Reporter"
 
-    async def get_agent_by_name(self, *, pod_id, name, ctx=None):
+    async def get_agent(self, uow, *, pod_id, name, ctx=None):
         return self._Agent()
+
+
+def _patch_agent_lookup(monkeypatch) -> FakeAgentService:
+    double = FakeAgentService()
+    monkeypatch.setattr(f"{_AGENTS}.get_agent", double.get_agent)
+    return double
 
 
 async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
@@ -403,10 +429,7 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
             },
         },
     )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
     await _grant_applier(root).apply_step(
@@ -421,12 +444,12 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
 _FUNCTION_ID = uuid4()
 
 
-class FakeFunctionService:
+class FakeFunctionLookup:
     class _Function:
         id = _FUNCTION_ID
 
-    async def get_function_by_name(
-        self, pod_id, name, user_id, *, include_code=True, ctx=None, **kwargs
+    async def get_function(
+        self, uow, *, pod_id, name, user_id, ctx=None, include_code=True
     ):
         return self._Function()
 
@@ -443,7 +466,7 @@ async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     pod and importing it back died on `Unknown resource name(s): folder:/memory`.
 
     The floor now lives in `AgentService.create_agent` (see
-    `app.composition.agent_memory`), so what is left for the applier to get
+    `app.modules.agent.services.agent_memory_grant`), so what is left for the applier to get
     right is passing the toolsets through at all -- without them the service has
     nothing to derive from and the same bug returns by a different route.
     """
@@ -457,17 +480,16 @@ async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     class _CreatingAgentService:
         """A pod that does not have this agent yet -- an import's own case."""
 
-        async def get_agent_by_name(self, *, pod_id, name, ctx=None):
+        async def get_agent(self, uow, *, pod_id, name, ctx=None):
             return None
 
-        async def create_agent(self, **kwargs):
+        async def create_agent(self, uow, **kwargs):
             seen.update(kwargs)
             return FakeAgentService._Agent()
 
-    monkeypatch.setattr(
-        "app.composition.pod_bundle_resources.get_agent_service",
-        lambda uow: _CreatingAgentService(),
-    )
+    creating = _CreatingAgentService()
+    monkeypatch.setattr(f"{_AGENTS}.get_agent", creating.get_agent)
+    monkeypatch.setattr(f"{_AGENTS}.create_agent", creating.create_agent)
     _patch_grant_layer(monkeypatch)
 
     await _grant_applier(root).apply_step(
@@ -507,10 +529,7 @@ async def test_the_grants_step_puts_the_derived_memory_grant_back(
             },
         },
     )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
     await _grant_applier(root).apply_step(
@@ -559,10 +578,7 @@ async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
             },
         },
     )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_agent_lookup(monkeypatch)
     _patch_grant_layer(monkeypatch)
 
     async def _unresolvable(session, *, pod_id, grants):
@@ -609,17 +625,19 @@ async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
             },
         },
     )
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: FakeFunctionService(),
-    )
+    monkeypatch.setattr(f"{_FUNCTIONS}.get_function", FakeFunctionLookup().get_function)
     invalidated: dict = {}
 
     async def _invalidate(*, pod_id, function_id):
         invalidated["function_id"] = function_id
 
+    # On the contract the applier imports, not on the service module behind it:
+    # `workspace/contracts/tooling.py` binds the name at import time, so patching
+    # the service module is a patch nothing reads. It only worked while the
+    # applier reached this through `app/composition/pod_bundle_apps.py`, whose
+    # own import was deferred to the call.
     monkeypatch.setattr(
-        "app.modules.workspace.services.workspace_tool_runtime."
+        "app.modules.workspace.contracts.tooling."
         "invalidate_function_workspace_env_cache",
         _invalidate,
     )
@@ -641,19 +659,20 @@ async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
 # --- workflows + schedules ---------------------------------------------------
 
 
-class FakeWorkflowService:
+class FakeWorkflowOperations:
     def __init__(self):
         self.created = []
 
-    async def get_workflow_by_name(
-        self, pod_id, name, requester_user_id=None, ctx=None
-    ):
-        # A missing flow returns None (does NOT raise) — the applier must treat
-        # that as "create", not "already exists".
-        return None
+    async def workflow_exists(self, uow, *, pod_id, name, ctx=None):
+        return False
 
-    async def create_workflow(self, **kwargs):
+    async def create_workflow(self, uow, **kwargs):
         self.created.append(kwargs["name"])
+
+    def patch(self, monkeypatch) -> "FakeWorkflowOperations":
+        monkeypatch.setattr(f"{_WORKFLOWS}.workflow_exists", self.workflow_exists)
+        monkeypatch.setattr(f"{_WORKFLOWS}.create_workflow", self.create_workflow)
+        return self
 
 
 async def test_workflow_apply_creates_when_absent(tmp_path, monkeypatch):
@@ -667,24 +686,28 @@ async def test_workflow_apply_creates_when_absent(tmp_path, monkeypatch):
             "edges": [],
         },
     )
-    fake = FakeWorkflowService()
-    monkeypatch.setattr(
-        "app.modules.workflow.api.dependencies.get_workflow_service", lambda uow: fake
-    )
+    fake = FakeWorkflowOperations().patch(monkeypatch)
     await _grant_applier(root).apply_step(_step(StepKind.WORKFLOW, "score_flow"))
-    # Regression: get_workflow_by_name returning None must not be read as "exists".
+    # Regression: an absent workflow must not be read as "exists".
     assert fake.created == ["score_flow"]
 
 
-class FakeScheduleService:
+class FakeScheduleOperations:
     def __init__(self):
         self.created = []
 
-    async def list_schedules(self, *, pod_id, name=None, ctx=None, **kwargs):
-        return [], None
+    async def get_schedule_by_name(self, uow, *, pod_id, name, ctx=None):
+        return None
 
-    async def create_schedule(self, entity, ctx):
-        self.created.append(entity)
+    async def create_schedule(self, uow, schedule, *, ctx=None):
+        self.created.append(schedule)
+
+    def patch(self, monkeypatch) -> "FakeScheduleOperations":
+        monkeypatch.setattr(
+            f"{_SCHEDULES}.get_schedule_by_name", self.get_schedule_by_name
+        )
+        monkeypatch.setattr(f"{_SCHEDULES}.create_schedule", self.create_schedule)
+        return self
 
 
 async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
@@ -698,11 +721,7 @@ async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
             "config": {"cron": "0 2 * * *"},
         },
     )
-    fake = FakeScheduleService()
-    monkeypatch.setattr(
-        "app.modules.schedule.api.dependencies.get_schedule_service",
-        lambda uow: fake,
-    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
     await _grant_applier(root).apply_step(_step(StepKind.SCHEDULE, "nightly"))
     assert len(fake.created) == 1
     entity = fake.created[0]
@@ -730,11 +749,7 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
             "filter_output_schema": {"type": "object"},
         },
     )
-    fake = FakeScheduleService()
-    monkeypatch.setattr(
-        "app.modules.schedule.api.dependencies.get_schedule_service",
-        lambda uow: fake,
-    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
     applier = _applier(root, replacements={"on_ticket_account": str(account)})
     await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
 
@@ -766,11 +781,7 @@ async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeyp
             "instruction": "Check the overnight queue.",
         },
     )
-    fake = FakeScheduleService()
-    monkeypatch.setattr(
-        "app.modules.schedule.api.dependencies.get_schedule_service",
-        lambda uow: fake,
-    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
     await _grant_applier(root).apply_step(_step(StepKind.SCHEDULE, "overnight"))
 
     assert len(fake.created) == 1
@@ -822,7 +833,7 @@ class FakeSurfaceService:
         }
         return SimpleNamespace(id=_uuid4(), config=config)
 
-    async def create_surface_minting_address(self, *, agent, **kwargs):
+    async def create_surface_minting_address(self, *, agent_id, agent_name, **kwargs):
         """What the applier calls, routed through the real minting function.
 
         Delegating straight to `create_surface` was simpler and tested nothing:
@@ -831,6 +842,10 @@ class FakeSurfaceService:
         function decides the name and whether to adopt an existing mailbox,
         which is exactly the part the applier depends on and the part that
         broke.
+
+        The agent arrives as an id and a name, as it now does through
+        `agent_surfaces/contracts/provisioning.py::create_surface`: the entity
+        used to travel this far so two `getattr` calls could take it apart here.
         """
         from types import SimpleNamespace
 
@@ -842,8 +857,8 @@ class FakeSurfaceService:
         return await create_surface_on_minted_address(
             self,
             SimpleNamespace(session=session),
-            agent_id=getattr(agent, "id", None),
-            agent_name=getattr(agent, "name", None),
+            agent_id=agent_id,
+            agent_name=agent_name,
             **kwargs,
         )
 
@@ -856,6 +871,32 @@ class FakeSurfaceService:
 
         self.updated = kwargs
         return SimpleNamespace(id=kwargs.get("surface_id"), config=None)
+
+
+def _patch_surface_operations(monkeypatch, service) -> None:
+    """Bind the surface operations the applier names to a stand-in service.
+
+    The double stays service-shaped because one of its methods routes through
+    the real address-minting function -- the part the applier depends on -- so
+    these adapters do what the contract does and nothing more.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
+
+    async def _get(uow, *, pod_id, name):
+        try:
+            return await service.get_surface_by_name_in_pod(pod_id=pod_id, name=name)
+        except AgentSurfaceNotFoundError:
+            return None
+
+    async def _create(uow, **kwargs):
+        return await service.create_surface_minting_address(**kwargs)
+
+    async def _update(uow, **kwargs):
+        return await service.update_surface(**kwargs)
+
+    monkeypatch.setattr(f"{_SURFACES}.get_surface_by_name", _get)
+    monkeypatch.setattr(f"{_SURFACES}.create_surface", _create)
+    monkeypatch.setattr(f"{_SURFACES}.update_surface", _update)
 
 
 def _null_savepoint():
@@ -882,14 +923,8 @@ async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch
         },
     )
     surface_fake = FakeSurfaceService()
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
-        lambda uow: surface_fake,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_surface_operations(monkeypatch, surface_fake)
+    _patch_agent_lookup(monkeypatch)
     # The account variable resolves the surface's ${slack_account} placeholder.
     applier = _applier(root, replacements={"slack_account": str(account)})
     await applier.apply_step(_step(StepKind.SURFACE, "slack"))
@@ -911,14 +946,8 @@ def _patch_resend_minting(monkeypatch, surface_fake, *, pod_name="Acme"):
         "pod_name_for",
         AsyncMock(return_value=pod_name),
     )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
-        lambda uow: surface_fake,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_surface_operations(monkeypatch, surface_fake)
+    _patch_agent_lookup(monkeypatch)
 
 
 async def test_a_bundle_s_email_surface_gets_a_readable_address(tmp_path, monkeypatch):
@@ -995,14 +1024,8 @@ async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):
         root / "surfaces" / "slack" / "slack.json",
         {"name": "slack", "account_id": str(uuid4()), "is_enabled": True},
     )
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
-        lambda uow: FakeSurfaceService(),
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
+    _patch_surface_operations(monkeypatch, FakeSurfaceService())
+    _patch_agent_lookup(monkeypatch)
     with pytest.raises(PodBundleDomainError, match="platform"):
         await _applier(root).apply_step(_step(StepKind.SURFACE, "slack"))
 
@@ -1035,18 +1058,17 @@ class _FakeConnectorService:
 
 
 def _patch_surface_deps(monkeypatch, surface_service, connector_service) -> None:
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
-        lambda uow: surface_service,
-    )
-    monkeypatch.setattr(
-        "app.modules.agent.api.dependencies.get_agent_service",
-        lambda uow: FakeAgentService(),
-    )
-    monkeypatch.setattr(
-        "app.modules.connectors.api.dependencies.get_connector_service",
-        lambda uow: connector_service,
-    )
+    _patch_surface_operations(monkeypatch, surface_service)
+    _patch_agent_lookup(monkeypatch)
+
+    async def _account(uow, account_id):
+        return await connector_service.account_repository.get(account_id)
+
+    async def _kind(uow, account):
+        return await connector_service.get_account_kind(account)
+
+    monkeypatch.setattr(f"{_CONNECTORS}.get_account", _account)
+    monkeypatch.setattr(f"{_CONNECTORS}.get_account_kind", _kind)
 
 
 async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkeypatch):
@@ -1206,3 +1228,95 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
     applier = _applier(root, replacements={"teams_account": str(account)})
     await applier.apply_step(_step(StepKind.SURFACE, "teams"))
     assert surface_fake.created is not None
+
+
+async def test_an_explicitly_empty_grant_list_clears_the_target_s_grants(
+    tmp_path, monkeypatch
+):
+    """`{"grants": []}` is a write meaning "this workload holds nothing".
+
+    The exporter goes out of its way to keep it distinct from an absent
+    `permissions` key ("leave the target's grants alone"), because collapsing
+    the two lets an export silently change an imported workload's access. The
+    applier discarded the distinction at the other end: it parsed the manifest
+    first and returned on an empty list, so importing a bundle that says an
+    agent holds nothing into a pod whose same-named agent holds something left
+    those grants in place."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {"name": "support", "permissions": {"grants": []}},
+    )
+    _patch_agent_lookup(monkeypatch)
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    # The replace ran with nothing to write, which is what clears the row set;
+    # `grants` on the call is the normalize stub's sentinel, so the empty input
+    # is what the assertion has to look at.
+    assert calls["replace"]["grantee_id"] == _AGENT_ID
+    assert calls["normalized"] == []
+
+
+async def test_an_agent_manifest_without_permissions_leaves_grants_alone(
+    tmp_path, monkeypatch
+):
+    """The other half of the distinction: no `permissions` key is not a write."""
+    root = tmp_path / "bundle"
+    _write(root / "agents" / "support" / "support.json", {"name": "support"})
+    _patch_agent_lookup(monkeypatch)
+    calls = _patch_grant_layer(monkeypatch)
+
+    await _grant_applier(root).apply_step(
+        _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
+    )
+
+    assert "replace" not in calls
+
+
+async def test_an_unreadable_files_manifest_is_reported_not_silently_defaulted(
+    tmp_path, monkeypatch
+):
+    """A malformed `.files.json` imports every file with default description,
+    `visibility="POD"` and search on.
+
+    POD is the conservative direction, so the import is not wrong -- but it is a
+    silent default on a visibility field, and returning `{}` mutely left nobody
+    with any way to know the bundle had said otherwise. Reported once for the
+    manifest, not once per file it describes."""
+    root = tmp_path / "bundle"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / ".files.json").write_text("{ not json", encoding="utf-8")
+    for name in ("guide.md", "notes.md"):
+        (root / "files" / name).write_text("hi", encoding="utf-8")
+    fake = FakeFileOperations().patch(monkeypatch)
+
+    warnings: list[str] = []
+    applier = _applier(root, warnings=warnings)
+    await applier.apply_step(_file_step("guide.md", is_folder=False))
+    await applier.apply_step(_file_step("notes.md", is_folder=False))
+
+    assert len(fake.created_files) == 2
+    assert len(warnings) == 1
+    assert ".files.json" in warnings[0]
+
+
+async def test_a_bundle_with_no_files_manifest_warns_about_nothing(
+    tmp_path, monkeypatch
+):
+    """Absent is normal -- a bundle need not carry layout metadata at all."""
+    root = tmp_path / "bundle"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / "guide.md").write_text("hi", encoding="utf-8")
+    fake = FakeFileOperations().patch(monkeypatch)
+
+    warnings: list[str] = []
+    await _applier(root, warnings=warnings).apply_step(
+        _file_step("guide.md", is_folder=False)
+    )
+
+    assert fake.created_files == [("guide.md", b"hi", "/", "POD", True)]
+    assert warnings == []

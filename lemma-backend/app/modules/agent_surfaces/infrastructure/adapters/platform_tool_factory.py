@@ -30,7 +30,6 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
     native_credentials,
 )
-from app.composition.surface_connectors import get_connector_service
 
 # Email is absent on purpose. Its surfaces used to carry a reply tool, and
 # nothing else -- so with the reply moved to the run observer there is no
@@ -78,10 +77,7 @@ class SurfacePlatformToolFactory:
                 # "Resend send requires api_key, from_address and a recipient".
                 credentials = native_credentials(surface.surface_type, surface=surface)
             else:
-                resolver = SurfaceCredentialResolver(
-                    session=uow.session,
-                    connector_service=get_connector_service(uow),
-                )
+                resolver = SurfaceCredentialResolver(uow=uow)
                 credentials = await resolver.for_surface(surface, force_refresh=True)
             if not credentials:
                 return []

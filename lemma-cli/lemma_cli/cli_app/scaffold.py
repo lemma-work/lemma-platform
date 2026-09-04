@@ -109,6 +109,7 @@ FUNCTION_JSON = _fill_enums("""{
   "description": "TODO: what this function does.",
   "type": "API",         // API = sync request/response; JOB = async background run
   "visibility": "POD",   // __VISIBILITY__
+  // "config": { },      // runtime settings for this function (timeouts, memory)
   "code": { "$file": "code.py" },
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the function's grants, so delete the whole "permissions" key if you
@@ -152,6 +153,11 @@ AGENT_JSON = _fill_enums("""{
   "toolsets": ["POD"],
   "visibility": "POD",   // __VISIBILITY__
   // agent_runtime omitted -> the system runtime profile (system:lemma). Add it to pin a specific model.
+  // Structured I/O. With an output_schema the agent must answer in that shape,
+  // which is what lets a workflow read named fields off its result.
+  // "input_schema": { "type": "object", "properties": { } },
+  // "output_schema": { "type": "object", "properties": { } },
+  // "metadata": { },     // free-form; yours to read, the platform ignores it
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the agent's grants, so delete the whole "permissions" key if you are
   // re-authoring an agent whose live grants you want left alone.
@@ -189,6 +195,7 @@ WORKFLOW_JSON = """{
   "name": "__NAME__",
   "description": "TODO: what this workflow orchestrates.",
   "start": { "type": "MANUAL" },   // MANUAL | SCHEDULED | DATASTORE_EVENT | EVENT
+  // "mode": "DURABLE",            // how runs are executed; omit for the default
   "nodes": [
     // Entry FORM collects the run input. Node types: FORM AGENT FUNCTION DECISION LOOP WAIT_UNTIL END
     { "id": "intake", "type": "FORM", "label": "Intake",
@@ -214,10 +221,24 @@ SCHEDULE_JSON = """{
   "schedule_type": "TIME",          // TIME (cron) | DATASTORE (row events) | WEBHOOK (app events)
   "config": { "cron": "0 9 * * *" },// TIME: cron | scheduled_at
   // DATASTORE: { "table_name": "<table>", "operations": ["INSERT"] }   <- table_name, NOT "datastore"
-  // WEBHOOK:   { "source": "<slack|composio|…>" }
+  // WEBHOOK:   { "source": "<composio|github>" }  // refused at create if the
+  //            deployment does not register it; not read at all when the
+  //            schedule is bound to an account + connector_trigger_id
   // Exactly one target — the agent or workflow to start. It must already exist in the pod.
   "workflow_name": "__TARGET__",
   // "agent_name": "some-agent",   // ...or target an agent instead of a workflow
+  // "agent_name": "POD_DEFAULT",  // ...or the pod's own assistant, which has no name
+  // What the target should DO when this fires. There is no other field for it:
+  // a payload under any other key is not sent. Required for POD_DEFAULT, which
+  // has no standing instruction of its own to fall back on.
+  // "instruction": "Summarise yesterday's tickets and message me the list.",
+  // Decides whether to fire AT ALL, unlike "instruction", which directs the
+  // work afterwards. Optional; omit to fire every time.
+  // "filter_instruction": "Only when the row's status is 'urgent'.",
+  // "filter_output_schema": { "type": "object" },  // shape the filter must answer in
+  // WEBHOOK only — the connector account and trigger this listens on.
+  // "account_id": "TODO-connector-account-uuid",
+  // "connector_trigger_id": "TODO-connector-trigger-uuid",
   "is_active": false,               // flip to true once the target exists and you've imported it
   "visibility": "POD"
 }

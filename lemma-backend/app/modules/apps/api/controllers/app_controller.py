@@ -1,5 +1,6 @@
 """App API controller."""
 
+import re
 from io import BytesIO
 from typing import Optional
 from uuid import UUID
@@ -59,6 +60,20 @@ ZIP_FILE_RESPONSE = {
         },
     }
 }
+
+
+def _archive_disposition(app_name: str, archive_kind: str) -> str:
+    """A `Content-Disposition` for an app archive, built from a sanitized name.
+
+    `app_name` is a path parameter, and the header used to interpolate it raw:
+    the app is only looked up later, inside the use case, so the header trusted
+    something the request had not yet been shown to name. Names are normalized
+    at create time and pod membership gates the route, so nothing hostile should
+    reach here -- but a header built out of an unvalidated path segment is the
+    pattern, not the reachability, that is worth not having.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", app_name)[:100] or "app"
+    return f'attachment; filename="{safe}-{archive_kind}.zip"'
 
 
 async def _app_detail_response(ctx: PodContextDep, app: AppEntity) -> AppDetailResponse:
@@ -382,7 +397,7 @@ async def download_app_source_archive(
     return StreamingResponse(
         BytesIO(archive),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={app_name}-source.zip"},
+        headers={"Content-Disposition": _archive_disposition(app_name, "source")},
     )
 
 
@@ -408,5 +423,5 @@ async def download_app_dist_archive(
     return StreamingResponse(
         BytesIO(archive),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={app_name}-dist.zip"},
+        headers={"Content-Disposition": _archive_disposition(app_name, "dist")},
     )

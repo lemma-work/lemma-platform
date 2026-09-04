@@ -30,7 +30,10 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.resend.inbound import normalize_resend_inbound
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    normalize_resend_inbound,
+    resend_source_event_id,
+)
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
@@ -182,7 +185,19 @@ class ResendPollingReceiverRunner:
             )
             return
 
-        source_event_id = f"resend:native:{normalized.get('email_id')}"
+        # Minted by the same helper the webhook uses. A deployment can be
+        # running both routes, and only a shared id lets the durable inbox see
+        # the two arrivals of one email as one delivery.
+        source_event_id = resend_source_event_id(normalized, receiver=str(surface.id))
+        if source_event_id is None:
+            # Nothing durable to key on, so a redelivery would start a second
+            # agent run every time the poller came round. Skipping loses the
+            # mail; processing it loses the person's inbox.
+            logger.warning(
+                "agent_surfaces.resend_polling_receiver.resend_email_has_no_identifier.degraded",
+                surface_id=str(surface.id),
+            )
+            return
         event = SurfaceWebhookReceivedEvent(
             event_id=stable_event_id({"event_id": source_event_id}),
             source="resend",

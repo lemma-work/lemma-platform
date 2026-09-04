@@ -7,7 +7,7 @@ the conversation's surface metadata in step.
 
 from __future__ import annotations
 
-from app.core.authorization.delegation import effective_agent_id
+from app.core.authorization.delegation import agent_display_name, effective_agent_id
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -18,6 +18,9 @@ from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -204,7 +207,8 @@ class SurfaceConversationLinkMixin:
         )
         token = set_current_context(auth_ctx)
         try:
-            return await self.conversation_service.create_conversation(
+            return await agent_conversations.open_surface_conversation(
+                self.uow,
                 pod_id=surface.pod_id,
                 agent_name=route.agent_name,
                 user_id=resolved_user.internal_user_id,
@@ -260,7 +264,13 @@ class SurfaceConversationLinkMixin:
             "route_key": route_key,
             "conversation_kind": conversation_kind,
             "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            "agent_display_name": await self.agent_name_for_surface(surface) or "Lemma",
+            # `agent_name_for_surface` answers with the *row* name, so the pod's
+            # own agent answers `pod_default`. The `or "Lemma"` that used to sit
+            # here never caught it: a stored name is not falsy, and that guard
+            # was written when the agent had no row and the name really was null.
+            "agent_display_name": agent_display_name(
+                await self.agent_name_for_surface(surface)
+            ),
             "surface_event_metadata": (
                 surface_event_metadata.model_dump(mode="json")
                 if surface_event_metadata

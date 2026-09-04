@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
-from app.composition.surface_datastore import build_file_service
+from app.modules.datastore.contracts.surfaces import create_pod_file
 from app.core.file_types import extension_for_mime, sniff_media_mime
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
@@ -49,11 +50,16 @@ logger = get_logger(__name__)
 
 _AUDIO_CONTENT_TYPES = {"voice", "audio"}
 
-# Given a callable that wants a file service, run it in whatever transaction is
+# Writes one file into a pod and answers with what it stored. Production binds
+# datastore's `create_pod_file` to a transaction; a unit test hands over a
+# stand-in that records the call.
+PodFileWriter = Callable[..., Awaitable[Any]]
+
+# Given a callable that wants a writer, run it in whatever transaction is
 # appropriate and return what it produced. Production opens a fresh one per
-# file; unit tests hand a fake service straight through.
+# file; unit tests hand a fake writer straight through.
 StoreInTransaction = Callable[
-    [Callable[[Any], Awaitable["IngestedAttachment | None"]]],
+    [Callable[[PodFileWriter], Awaitable["IngestedAttachment | None"]]],
     Awaitable["IngestedAttachment | None"],
 ]
 
@@ -109,6 +115,25 @@ def _attachments_from_parsed(parsed: ParsedInboundSurfaceEvent) -> list[dict[str
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, dict)]
+
+
+def every_attachment_failed(
+    parsed: ParsedInboundSurfaceEvent, *, reason: str
+) -> AttachmentIngest:
+    """Report each announced attachment as one that never arrived.
+
+    For the failures that are not per-file: no adapter to download with, or the
+    ingest call coming apart as a whole. The caller cannot enumerate what was
+    lost -- the names live in the parsed event -- and an empty
+    :class:`AttachmentIngest` would tell the agent the message had no files on
+    it at all.
+    """
+    return AttachmentIngest(
+        failed=[
+            AttachmentFailure(name=_attachment_label(item), reason=reason)
+            for item in _attachments_from_parsed(parsed)
+        ]
+    )
 
 
 def _safe_file_name(
@@ -210,14 +235,8 @@ class SurfaceFileIngestService:
             # Nothing can be downloaded without one, and the person still
             # attached something — so this is every attachment failing, not
             # nothing to do.
-            return AttachmentIngest(
-                failed=[
-                    AttachmentFailure(
-                        name=_attachment_label(item),
-                        reason="this surface cannot receive files",
-                    )
-                    for item in attachments
-                ]
+            return every_attachment_failed(
+                parsed, reason="this surface cannot receive files"
             )
 
         # Three phases, and the middle one is the reason for the shape: an
@@ -248,7 +267,7 @@ class SurfaceFileIngestService:
     @staticmethod
     async def _store_in_own_transaction(
         persist_ingested_attachment: Callable[
-            [Any], Awaitable[IngestedAttachment | None]
+            [PodFileWriter], Awaitable[IngestedAttachment | None]
         ],
     ) -> IngestedAttachment | None:
         """Run one file's write in a transaction of its own.
@@ -261,7 +280,7 @@ class SurfaceFileIngestService:
         always a possible outcome.
         """
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            result = await persist_ingested_attachment(build_file_service(uow))
+            result = await persist_ingested_attachment(partial(create_pod_file, uow))
             if result is not None:
                 await uow.commit()
             return result
@@ -398,11 +417,11 @@ class SurfaceFileIngestService:
         file_name = _safe_file_name(name, mime, content)
 
         def _persist_as(candidate: str):
-            async def _persist(file_service: Any) -> IngestedAttachment | None:
-                entity = await file_service.create_file(
+            async def _persist(write_file: PodFileWriter) -> IngestedAttachment | None:
+                entity = await write_file(
                     pod_id=pod_id,
                     name=candidate,
-                    file_content=content,
+                    content=content,
                     ctx=ctx,
                     directory_path=directory,
                     search_enabled=True,

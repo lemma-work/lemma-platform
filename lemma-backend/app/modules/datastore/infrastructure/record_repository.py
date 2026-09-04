@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -25,6 +26,11 @@ from app.modules.datastore.infrastructure.record_errors import (
 )
 from app.modules.datastore.infrastructure.record_filter_sql import (
     build_filter_predicate,
+)
+from app.modules.datastore.infrastructure.record_optimistic_lock import (
+    apply_expected_updated_at,
+    primary_key_scope,
+    raise_missing_or_stale,
 )
 from app.modules.datastore.infrastructure.record_page import (
     order_by_clause,
@@ -465,6 +471,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         *,
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
+        expected_updated_at: datetime | None = None,
     ) -> RecordEntity:
         if event_factory is not None:
             await ensure_datastore_event_outbox()
@@ -489,6 +496,8 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             user_id,
             enforce_user_scope=enforce_user_scope,
         )
+        if expected_updated_at is not None:
+            apply_expected_updated_at(ctx, where_clauses, params, expected_updated_at)
 
         changed_columns = sorted(mutable_data.keys())
         sql, previous_alias = build_update_statement(
@@ -510,6 +519,16 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 result = await session.execute(text(sql), params)
                 row = result.fetchone()
                 if not row:
+                    if expected_updated_at is not None:
+                        scope, scope_params = primary_key_scope(
+                            ctx,
+                            parsed_id,
+                            user_id,
+                            enforce_user_scope=enforce_user_scope,
+                        )
+                        await raise_missing_or_stale(
+                            session, ctx, where_clauses=scope, params=scope_params
+                        )
                     raise DatastoreRecordNotFoundError(
                         "Record not found or update failed"
                     )

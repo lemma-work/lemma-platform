@@ -1,0 +1,31 @@
+{
+  "name": "Lemma",
+  "url": "https://lemma.work",
+  "description": "Lemma connects your pods and agents to GitHub: repositories, issues, pull requests, reviews, releases and Actions, and wakes an agent when something happens.",
+  "public": false,
+  "request_oauth_on_install": true,
+  "setup_on_update": false,
+  "hook_attributes": {
+    "active": true
+  },
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "write",
+    "pull_requests": "write",
+    "issues": "write",
+    "actions": "write",
+    "checks": "read",
+    "deployments": "write",
+    "secrets": "read",
+    "actions_variables": "read"
+  },
+  "default_events": [
+    "push",
+    "pull_request",
+    "issues",
+    "issue_comment",
+    "workflow_run",
+    "check_suite",
+    "release"
+  ]
+}

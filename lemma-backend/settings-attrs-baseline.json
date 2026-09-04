@@ -1,0 +1,9 @@
+{
+  "_comment": "Two different things, both of which a settings rename walks straight past. An 'unknown-field' entry is a name that is already wrong today -- a bug parked here so the gate can be green, not accepted debt. A 'dynamic-name' entry is a name assembled at runtime, so no rename can be checked against it; that list is the checklist for splitting app/core/config.py. This file may shrink freely; growing it means one more field name nothing is watching. See scripts/check_settings_attrs.py.",
+  "violations": {
+    "app/core/observability/telemetry.py::_enabled_signals::dynamic-name::settings.<field>": 1,
+    "app/core/observability/telemetry.py::_otlp_signal_endpoint::dynamic-name::settings.<f'otel_exporter_otlp_{signal}_endpoint'>": 1,
+    "app/core/observability/telemetry.py::_otlp_signal_headers::dynamic-name::settings.<f'otel_exporter_otlp_{signal}_headers'>": 1,
+    "app/core/observability/telemetry.py::_signal_protocol::dynamic-name::settings.<f'otel_exporter_otlp_{signal}_protocol'>": 1
+  }
+}

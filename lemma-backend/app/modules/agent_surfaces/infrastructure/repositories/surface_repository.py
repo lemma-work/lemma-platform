@@ -23,8 +23,10 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
     AgentSurfaceConversationLinkModel,
 )
-from app.composition.surface_identity import Pod
-from app.composition.surface_agent import ConversationModel
+from app.modules.pod.contracts.orm import Pod
+from app.modules.agent.contracts.conversations import (
+    merge_conversation_metadata as merge_agent_conversation_metadata,
+)
 
 
 #: A surface belongs to a pod, and a deleted pod has no business answering on
@@ -54,16 +56,10 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             self.uow.collect_events(events)
 
     async def merge_conversation_metadata(
-        self, conversation_id: UUID, updates: dict
+        self, conversation_id: UUID, updates: dict[str, object]
     ) -> None:
         """Merge ``updates`` into a conversation's metadata blob (no-op if gone)."""
-        model = await self.session.get(ConversationModel, conversation_id)
-        if model is None:
-            return
-        metadata = dict(model.conversation_metadata or {})
-        metadata.update(updates)
-        model.conversation_metadata = metadata
-        await self.session.flush()
+        await merge_agent_conversation_metadata(self.uow, conversation_id, updates)
 
     async def get(self, id: UUID) -> AgentSurfaceEntity | None:
         model = await self.session.get(AgentSurface, id)

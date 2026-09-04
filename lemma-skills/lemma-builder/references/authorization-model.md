@@ -2,15 +2,17 @@
 
 How a pod decides what a workload (agent / function / workflow) may do. Read this
 when a call hits a 403 or you're wiring grants. The one-line version: **named
-workloads start with zero access and act on exactly what they're granted; deletes and
-other destructive actions need an explicit grant or a live user approval.**
+workloads start with zero access and act on the intersection of what they're granted
+and what the person who invoked them could do; deletes and other destructive actions
+additionally need an explicit grant or a live user approval.**
 
 ## §1 Two ledgers
 
-Authorization is two separate ledgers that never mix:
+Authorization reads two ledgers, and a delegated call has to satisfy **both**:
 
 1. **Human roles** — pod members are `VIEWER` < `USER` < `EDITOR` < `ADMIN`. Roles gate
-   member-facing actions in the app/CLI.
+   member-facing actions in the app/CLI, **and they are the ceiling on anything a
+   workload does for that member** (§2).
 2. **Workload grants** — a named agent/function/workflow starts with **zero** access
    and holds a list of explicit resource grants. Grants are **name-based** (a table
    name, a folder path, a connector id, another agent/function name), so they export
@@ -33,20 +35,47 @@ workload's `permissions.grants`:
 }
 ```
 
-## §2 Delegated identity + the grant-first rule
+## §2 Delegated identity + the intersection rule
 
 When a function or agent runs, it acts **as the user who invoked it** — not a service
 account. Row-level security and the personal `/me` area always resolve to *that* user;
 a workload never sees more rows than the invoker would.
 
-**Grant-first**: a named workload may perform exactly the actions for which the
-workload itself holds an explicit grant — inside its own pod. The invoking user's role
-is **not** also required. The user's identity is consulted only for owner checks
-(PERSONAL resources, connector-account ownership) and data-layer scoping (RLS, `/me`).
+**The intersection rule.** A named workload may perform an action only when **both**
+halves hold:
 
-The **default pod agent** (the pod's built-in assistant, no user-created Agent entity)
-is the exception: it *mirrors the invoking user's* pod permissions and holds no grants
-of its own — but it is still subject to the destructive gate (§3).
+1. the **workload** holds an explicit grant for it (or the invoker approved that action
+   for the session, §3), **and**
+2. the **invoking person** could perform the same action on the same resource
+   themselves — the ordinary role/ownership/visibility evaluation, run for them.
+
+A grant is therefore a **ceiling on the workload, never a promotion for the person
+driving it**. A `POD_VIEWER` who chats with an agent granted `datastore.record.write`
+still cannot write through it; the refusal is `DELEGATION_EXCEEDS_INVOKER`, and the fix
+is the *person's* role, not more grants. It is also what makes a delegation expire with
+its person: someone removed from the pod holds nothing, so the intersection is empty on
+their very next request. (Ground truth:
+`lemma-backend/app/core/authorization/workload_authority.py`.)
+
+**Headless runs** — a run with no invoking person — are authorized on the workload's
+grants alone, because there is no second set to intersect with. In practice almost
+nothing is person-less: a `TIME`, `WEBHOOK`, or `DATASTORE` fire runs as a real person
+(the schedule's configured user, or the changed row's owner — see
+`schedules-and-triggers.md`), so **the ceiling applies to automation too**. Design for
+it: a schedule owned by a viewer is a schedule that cannot write.
+
+Two consequences worth designing around:
+
+- **Grants are still mandatory.** Being an admin does not lend a workload access — the
+  workload's own grant half is unchanged, and a missing grant is still
+  `MISSING_WORKLOAD_RESOURCE_GRANT`.
+- **The person's seat is now part of the test.** Test an agent as a normal member and
+  as the member who will actually invoke it in production, not only as yourself.
+
+The **default pod agent** (the pod's built-in assistant) reaches the same place by a
+different route: it holds no grants of its own and *mirrors* the invoking user's pod
+permissions, so it is already bounded by them. It is still subject to the destructive
+gate (§3).
 
 ## §3 Destructive actions & approvals
 
@@ -60,9 +89,11 @@ default. Destructive = `pod.delete`, `pod.role.manage`, `pod.member.manage`,
 Two ways to unlock a destructive action:
 
 - **Explicit grant** — put the destructive permission in the workload's
-  `permissions.grants`. This is **standing authority**: it works with no human present,
-  so it's the path for headless schedules, webhooks, and workflow runs. Import and
-  `doctor` flag these as advisories (a workload that can delete without a prompt).
+  `permissions.grants`. This is **standing authority**: it needs nobody watching, so
+  it's the path for schedules, webhooks, and workflow runs that nobody is sitting in
+  front of. Import and `doctor` flag these as advisories (a workload that can delete
+  without a prompt). It still does not lift the §2 ceiling — the person the run belongs
+  to must be able to do it too.
 - **Session approval** — when a workload hits the gate mid-conversation it can call
   `request_approval`, and the user picks:
   - **Approve once** — the wrapped action runs one time (as the user). The next
@@ -74,20 +105,30 @@ Two ways to unlock a destructive action:
 Because the default pod agent holds no grants, destructive actions from it always route
 through approval — there is no "standing authority" path for it.
 
+**An approval unlocks the gate; it confers no authority.** Passing the destructive gate
+only means the workload may *attempt* the action — the §2 intersection still applies
+afterwards, so a person cannot approve, for a workload, something they could not do
+themselves. An `EDITOR` who approves `pod.member.manage` gets
+`DELEGATION_EXCEEDS_INVOKER`, not a member change.
+
 ## §4 The 403 decoder
 
 Deny codes come back verbatim in the error `code`. Map each to the fix:
 
 | Code | Meaning | Fix |
 | --- | --- | --- |
-| `MISSING_WORKLOAD_RESOURCE_GRANT` | The workload lacks a grant for the resource it touched. | Grant it: `lemma agents grant <name> <spec>` or add to `permissions.grants`. The message names the resource. |
-| `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` | A delete/manage action with no destructive grant and no session approval. | Grant the destructive permission (headless) **or** have the user approve for session. |
-| `INSUFFICIENT_PERMISSION` | A **human role** gap (or an org-scoped resource the invoking user can't reach). | Fix the member's role — not a workload-grant problem. |
+| `MISSING_WORKLOAD_RESOURCE_GRANT` | The **workload** half failed: no grant for the resource it touched. | Grant it: `lemma agents grant <name> <spec>` or add to `permissions.grants`. The message names the resource. |
+| `DELEGATION_EXCEEDS_INVOKER` | The **person** half failed: the workload holds the grant, the person it is acting for does not hold the action. | Fix the **invoker's** role or the resource's visibility. More grants will not help — this is deliberately reported separately so you don't chase the wrong half. |
+| `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` | A delete/manage action with no destructive grant and no session approval. | Grant the destructive permission (headless) **or** have the user approve for session. Clearing this gate still leaves the two halves above to satisfy. |
+| `INSUFFICIENT_PERMISSION` | An **org-scoped** resource (no pod) the invoking user's role can't reach — workload grants are pod rows and have nothing to say here. | Fix the member's role — not a workload-grant problem. |
 | `DELEGATION_SCOPE_VIOLATION` | A minimal-scope token (e.g. a function tool scoped to `function.execute`) was used for an unrelated action. | Usually a bug in how the tool is wired, not a grant to add. |
 | `PERSONAL_RESOURCE_DENIED` | Another user's PERSONAL resource — privacy trumps grants; no grant unlocks it. | Don't target other users' private resources from a workload. |
+| `POD_SCOPE_MISMATCH` / `ORG_SCOPE_MISMATCH` | The resource lives in a different pod/org than the run. | A cross-pod reference that shouldn't exist — fix the name or the target. |
 
-Allow reasons you may see in logs: `POD_VISIBLE` / `WORKLOAD_RESOURCE_GRANT` (grant
-matched), `SESSION_APPROVAL` (an approve-for-session decision covered it).
+Allow reasons you may see in logs: `POD_VISIBLE`, `WORKLOAD_RESOURCE_GRANT`,
+`RESOURCE_OWNER`, `PUBLIC_RESOURCE` (a grant matched, named by the resource's
+visibility), `ORG_VISIBLE` (an org resource the person's role reached), and
+`SESSION_APPROVAL` (an approve-for-session decision stood in for the grant).
 
 ## §4b Authoring grants — the full vocabulary
 
@@ -136,7 +177,8 @@ mail for you and *mine* for me.
 
 **Fixed account (a pinned shared identity).** Two grants — the connector *and*
 the specific account. Every invoker now acts through that one account, which is
-how a "support@" sender or a headless schedule works with no human present.
+how a "support@" sender works, and how a schedule keeps sending after the person
+who set it up stops reading that mailbox.
 
 ```json
 { "resource_type": "connector", "resource_name": "gmail",
@@ -181,6 +223,11 @@ connectors it touches to the **function**, never mirrored onto the parent agent.
 `MISSING_WORKLOAD_RESOURCE_GRANT` from a tool call names what the *function* lacks —
 fix it on the function.
 
+The chain does not widen the ceiling: every link is still delegated to the **same
+invoking person**, so a callee's §2 half is that person's access, not the parent
+agent's. A `DELEGATION_EXCEEDS_INVOKER` from deep in a chain is still about the human
+who started it.
+
 ## §7 Agent as a tool + sub-agents
 
 Grant an agent **`agent.execute`** on another agent and it gains an `agent_<name>` tool
@@ -196,8 +243,11 @@ no agent grant at all (self-spawn is grant-free); to fan out to *other* agents i
   own connected account. `connector.use` on the connector is enough.
 - **Pinned shared account (AGENT-owned)** — a fixed `account_id`; every invoker uses
   that one account. Needs **two** grants on the workload: `connector.use` on the
-  connector and `connector_account.use` on the account. It then works for every
-  invoker, independent of who triggered it — the classic shared-sender setup.
+  connector and `connector_account.use` on the account. It then works whoever
+  triggered it — the classic shared-sender setup — as long as that person clears the
+  §2 ceiling, i.e. is a `POD_USER` or above (both `connector.use` and
+  `connector_account.use` are `POD_USER` permissions; a `POD_VIEWER` holds neither and
+  gets `DELEGATION_EXCEEDS_INVOKER`).
 
 `connector_account.manage` is destructive (§3); plain `connector_account.use` is not.
 See `connectors.md` for the payload.

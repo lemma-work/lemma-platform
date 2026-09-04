@@ -38,7 +38,6 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
     FileSummaryResponse,
     FileSearchRequest,
     FileSearchResponse,
-    FileSearchResultSchema,
     FileSignedUrlRequest,
     FileSignedUrlResponse,
     FileUrlResponse,
@@ -601,12 +600,7 @@ async def search_files(
         include_descendants=data.scope_mode.value == "SUBTREE",
     )
 
-    return FileSearchResponse(
-        items=[FileSearchResultSchema.model_validate(item) for item in results],
-        total=len(results),
-        query=data.query,
-        search_method=data.search_method,
-    )
+    return FileSearchResponse.of(results, request=data)
 
 
 @router.get(

@@ -62,7 +62,7 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
-    apply_surface_history_window,
+    bound_runtime_history,
     runtime_full_run_ids,
     select_runtime_history,
 )
@@ -81,8 +81,8 @@ from app.modules.agent.services.run_observer_delivery import (
     notify_run_started,
 )
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
-from app.composition.agent_usage import (
-    UsageReservation,
+from app.modules.usage.contracts import UsageReservation
+from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
     usage_execution_context,
 )
@@ -543,15 +543,19 @@ class AgentRunnerService:
                     agent_repository=AgentRepository(uow),
                     agent_name=agent_name,
                 )
-                # Which runs survive the trim decides which need every message,
-                # and the trim can keep an old-but-active run while dropping
-                # newer ones -- so it has to run before the messages are asked
-                # for, not after.
+                # The trim decides which runs need every message, and it can
+                # keep an old-but-active run while dropping newer ones -- so it
+                # runs before the messages are asked for, and only what survives
+                # it gets them. Attaching to the untrimmed list meant a long
+                # conversation read hundreds of runs it then discarded.
+                bounded, dropped_runs = bound_runtime_history(runs, conversation)
                 await repo.attach_runtime_history_messages(
-                    runs, full_run_ids=runtime_full_run_ids(runs, conversation)
+                    bounded, full_run_ids=runtime_full_run_ids(bounded, conversation)
                 )
                 agent_run = self._find_agent_run(runs, agent_run_id)
-                messages = self._select_runtime_history(runs, conversation)
+                messages = self._select_runtime_history(
+                    bounded, conversation, already_dropped=dropped_runs
+                )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
 
@@ -561,15 +565,16 @@ class AgentRunnerService:
                 return run
         raise ConversationNotFoundError()
 
-    def _apply_surface_history_window(
-        self, runs: list[AgentRun], conversation: Conversation | None
-    ) -> list[AgentRun]:
-        return apply_surface_history_window(runs, conversation)
-
     def _select_runtime_history(
-        self, runs: list[AgentRun], conversation: Conversation | None = None
+        self,
+        runs: list[AgentRun],
+        conversation: Conversation | None = None,
+        *,
+        already_dropped: int = 0,
     ) -> list[Message]:
-        return select_runtime_history(runs, conversation)
+        return select_runtime_history(
+            runs, conversation, already_dropped=already_dropped
+        )
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

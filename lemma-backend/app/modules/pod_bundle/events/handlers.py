@@ -29,7 +29,6 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.jobs.streaq_runtime import (
     Lane,
     AppWorkerContext,
-    streaq_cron,
     streaq_task,
     streaq_worker,
 )
@@ -47,14 +46,12 @@ from app.modules.pod_bundle.domain.state import (
     ExportStatus,
     ImportState,
     ImportStatus,
-    PublishStatus,
 )
 from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure import github_fetcher
-from app.modules.pod_bundle.infrastructure import publish_lock
 from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
@@ -144,6 +141,17 @@ async def _finalize_import_cancellation(store, staging, state: ImportState) -> N
         if current.committed_steps
         else ImportStatus.CANCELLED
     )
+    if current.status is ImportStatus.PARTIALLY_CANCELLED:
+        # The status name alone was the only signal that the pod had been
+        # modified. Cancelling mid-apply does not undo the steps that landed,
+        # and the person who cancelled is the one who needs to know that.
+        applied = len(current.committed_steps)
+        total = len(current.plan.steps) if current.plan else 0
+        current.error = (
+            f"Cancelled after {applied} of {total} steps had been applied to "
+            f"this pod. Those changes were not undone; import the bundle again "
+            f"to finish, or remove what it created."
+        )
     current.completed_at = _now()
     try:
         await store.save_import(current)
@@ -663,6 +671,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     user_id=user_id,
                                     bundle_root=bundle_root,
                                     replacements=replacements,
+                                    # The live list: a best-effort fallback the
+                                    # applier takes is checkpointed with the step
+                                    # and read back by the status endpoint.
+                                    warnings=state.warnings,
                                 )
                                 await applier.apply_step(step)
                                 await _raise_if_cancelled(store, import_id)
@@ -689,7 +701,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                         store,
                         state,
                         exc,
-                        public_message=f"Step '{step.name}' failed: {exc}",
+                        public_message=_apply_failure_message(state, step, exc),
                     )
                     logger.debug(
                         "pod_bundle.handlers.import_s_step_s_s.diagnostic",
@@ -745,6 +757,27 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         raise
 
 
+def _apply_failure_message(state: ImportState, step, exc: Exception) -> str:
+    """Say what the pod now holds, not just which step broke.
+
+    Apply commits each step in its own unit of work and there is no rollback, so
+    a failure part-way through an approved plan leaves the pod changed. Telling
+    the person only "Step X failed" leaves them with half a pod, no idea that it
+    is half a pod, and no stated way forward -- while re-applying does in fact
+    resume from the failed step rather than duplicating the work already done.
+    """
+    applied = len(state.committed_steps)
+    total = len(state.plan.steps) if state.plan else 0
+    head = f"Step '{step.name}' failed: {exc}"
+    if not applied:
+        return f"{head} Nothing was applied to the pod."
+    return (
+        f"{head} {applied} of {total} steps were already applied to this pod and "
+        f"were not undone; apply this import again to continue from step "
+        f"'{step.name}'."
+    )
+
+
 async def _checkpoint(store, state: ImportState, step) -> None:
     assert state.plan is not None
     done = sum(1 for s in state.plan.steps if s.status.value in ("DONE", "SKIPPED"))
@@ -778,7 +811,7 @@ async def _resolve_importer_pod_member_id(
     Best-effort: returns ``None`` (leaving the placeholder unresolved, so the
     service drops the assignee) if the user has no membership or the lookup
     fails, rather than failing the whole apply over one workflow assignee."""
-    from app.composition.pod_bundle_pod import get_pod_member_service
+    from app.modules.pod.contracts.members import pod_member_id
 
     try:
         async with uow_scope(worker_ctx.uow_factory) as uow:
@@ -786,11 +819,7 @@ async def _resolve_importer_pod_member_id(
                 user_id=user_id, pod_id=pod_id
             )
             async with context_scope(ctx):
-                service = get_pod_member_service(uow)
-                member = await service.get_pod_member_by_user_id(
-                    pod_id, user_id, requester_user_id=user_id
-                )
-                return str(member.id)
+                member_id = await pod_member_id(uow, pod_id, user_id)
     except Exception:  # noqa: BLE001 — assignee auto-resolution is best-effort
         logger.debug(
             "pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic",
@@ -798,21 +827,15 @@ async def _resolve_importer_pod_member_id(
             user_id=user_id,
         )
         return None
+    return str(member_id) if member_id is not None else None
 
 
 async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:
-    """Append a durable :class:`PodRecipe` to the pod's config in a short UoW.
-
-    Copies the existing typed config and overrides only ``recipes`` so the
-    shallow config merge in ``PodService.update_pod`` cannot reset unrelated
-    fields (join_policy, default_runtime) to their defaults."""
+    """Append a durable :class:`PodRecipe` to the pod's config in a short UoW."""
     from datetime import datetime, timezone
 
-    from app.composition.pod_bundle_pod import get_pod_service
-    from app.modules.pod.contracts import (
-        PodRecipe,
-        PodUpdateEntity,
-    )
+    from app.modules.pod.contracts import PodRecipe
+    from app.modules.pod.contracts.provisioning import append_recipe
 
     recipe = PodRecipe(
         kind=state.source.kind.value,
@@ -827,15 +850,10 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
             user_id=state.user_id, pod_id=state.pod_id
         )
         async with context_scope(ctx):
-            pod_service = get_pod_service(uow)
-            pod = await pod_service.get_pod(state.pod_id, state.user_id)
-            assert pod is not None
-            new_config = pod.config.model_copy(
-                update={"recipes": [*pod.config.recipes, recipe]}
-            )
-            await pod_service.update_pod(
-                state.pod_id,
-                PodUpdateEntity(config=new_config),
+            await append_recipe(
+                uow,
+                pod_id=state.pod_id,
+                recipe=recipe,
                 requester_user_id=state.user_id,
                 ctx=ctx,
             )
@@ -871,12 +889,12 @@ def _github_import_operation_runner(
                 user_id=state.user_id,
                 pod_id=state.pod_id,
             )
-            from app.composition.pod_bundle_resources import (
-                build_connector_operation_service,
+            from app.modules.connectors.contracts.provisioning import (
+                execute_operation,
             )
 
-            service = build_connector_operation_service(uow)
-            response = await service.execute_operation(
+            response = await execute_operation(
+                uow,
                 connector_id="github",
                 operation_name=operation_name,
                 payload=payload,
@@ -921,87 +939,3 @@ def _now():
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc)
-
-
-# A non-terminal job untouched for longer than this is presumed dead (worker
-# crash/restart): the apply job's own timeout is 1800s, so ~40min leaves a wide
-# margin before the sweep intervenes.
-_STUCK_AFTER_SECONDS = 40 * 60
-
-
-@streaq_cron("13-59/30 * * * *", name="sweep_pod_bundle_staging", lane=Lane.BULK)
-async def sweep_pod_bundle_staging() -> None:
-    """Reclaim staged archives whose ephemeral state has expired, and mark
-    crashed jobs FAILED so the UI stops showing them as in-progress. Durable
-    recovery scans PostgreSQL first, independently of object-store inventory."""
-    reclaimed, recovered = await _sweep(
-        get_pod_bundle_state_store(), BundleStagingStorage()
-    )
-    if reclaimed or recovered:
-        logger.debug(
-            "pod_bundle.handlers.swept", reclaimed=reclaimed, recovered=recovered
-        )
-
-
-async def _sweep(store, staging) -> tuple[int, int]:
-    # Per-kind retention is driven by the state TTL, not this cron: a READY
-    # export is written with the export TTL (default 24h) while imports use the
-    # default ~6h, so an export's state (and thus its archive, reclaimed only
-    # once the state is gone) naturally outlives an import's.
-    from datetime import timedelta
-
-    cutoff = _now() - timedelta(seconds=_STUCK_AFTER_SECONDS)
-
-    reclaimed = 0
-    recovered_states = await store.recover_stale_jobs(cutoff=cutoff)
-    await publish_lock.release_recovered_publish_locks(recovered_states)
-    recovered = len(recovered_states)
-    for state in recovered_states:
-        job_id = getattr(
-            state,
-            "import_id",
-            getattr(state, "export_id", getattr(state, "publish_id", None)),
-        )
-        if job_id is not None:
-            await publish_bundle_event(
-                job_id,
-                error_payload(state.error or "Job interrupted.", state.seq),
-            )
-    for kind, get_state, save_state, failed_status in (
-        ("pod-imports", store.get_import, store.save_import, ImportStatus.FAILED),
-        ("pod-exports", store.get_export, store.save_export, ExportStatus.FAILED),
-        (
-            "pod-publishes",
-            store.get_publish,
-            store.save_publish,
-            PublishStatus.FAILED,
-        ),
-    ):
-        try:
-            archives = await staging.list_archives(kind)  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001
-            continue
-        for job_id, _ in archives:
-            state = await get_state(job_id)
-            if state is None:
-                # State TTL expired → the job is unreferenceable; reclaim bytes.
-                try:
-                    await staging.delete_archive(kind, job_id)  # type: ignore[arg-type]
-                    reclaimed += 1
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "pod_bundle.handlers.sweep_delete_s_s_s.diagnostic",
-                        job_id=job_id,
-                    )
-                continue
-            if not state.is_terminal and state.updated_at < cutoff:
-                state.status = failed_status
-                state.error = "Interrupted (worker restart or crash); start over."
-                state.completed_at = _now()
-                await save_state(state)  # type: ignore[arg-type]
-                await publish_bundle_event(
-                    job_id, error_payload(state.error, state.seq)
-                )
-                recovered += 1
-
-    return reclaimed, recovered

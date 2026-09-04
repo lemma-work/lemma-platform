@@ -89,17 +89,20 @@ class PodSurfaces(BoundResource):
         """Back-compat create-or-update addressed by surface name (which defaults
         to the lowercased platform). Patches the surface if it exists, else
         creates it. New code should call ``create``/``update`` directly.
+
+        A surface's name is pod-unique and its platform is not, so a caller
+        naming a second Slack surface has to say which platform it is: the
+        platform comes from ``request`` when present, and only falls back to
+        the name for the original ``upsert("slack", ...)`` call shape.
         """
         surface_name = str(name).lower()
         body: dict[str, Any] = dict(request or {})
-        body.pop("platform", None)
+        platform = str(body.pop("platform", None) or name).upper()
         body.pop("name", None)
         try:
             return self.update(surface_name, body)
         except LemmaNotFoundError:
-            return self.create(
-                {**body, "platform": str(name).upper(), "name": surface_name}
-            )
+            return self.create({**body, "platform": platform, "name": surface_name})
 
     def get(self, name: str) -> AgentSurfaceResponse:
         return self._call(agent_surface_get, self._pod_uuid(), name)

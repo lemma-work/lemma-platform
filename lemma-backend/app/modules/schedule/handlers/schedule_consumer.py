@@ -18,7 +18,9 @@ from pydantic_ai.exceptions import UsageLimitExceeded as PydanticAIUsageLimitExc
 
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.log.log import get_logger
-from app.composition.schedule_filter import create_schedule_processor
+from app.modules.schedule.infrastructure.adapters.system_model_filter import (
+    create_schedule_processor,
+)
 
 router = RedisRouter()
 logger = get_logger(__name__)

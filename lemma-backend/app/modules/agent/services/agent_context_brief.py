@@ -45,12 +45,12 @@ from app.modules.agent.infrastructure.context_brief_repository import (
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     build_file_service,
     build_table_service,
 )
-from app.composition.agent_functions import create_function_repository
-from app.composition.authorization import create_authorization_service
+from app.modules.function.contracts import agent_tools as function_tools
+from app.core.authorization.factory import create_authorization_data_service
 
 _MAX_TABLES = 50
 _MAX_RESOURCES = 50
@@ -228,7 +228,7 @@ class AgentContextBriefBuilder:
         # Tables — datastore read needs the authorization context; build ctx in
         # this uow and render the rows (lazy column access) before it closes.
         async with self.uow_factory() as uow:
-            ctx = await create_authorization_service(uow).build_user_context(
+            ctx = await create_authorization_data_service(uow).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
             token = set_current_context(ctx)
@@ -262,9 +262,9 @@ class AgentContextBriefBuilder:
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, function_total = await create_function_repository(
-                uow
-            ).list_by_pod(pod_id, limit=_MAX_RESOURCES)
+            functions, function_total = await function_tools.list_pod_functions(
+                uow, pod_id, limit=_MAX_RESOURCES
+            )
         if functions:
             lines.append("\n## Functions")
             lines.extend(
@@ -279,7 +279,7 @@ class AgentContextBriefBuilder:
         # this uow is the datastore file-service factory-mode refactor.)
         try:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_service(uow).build_user_context(
+                ctx = await create_authorization_data_service(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)
@@ -345,7 +345,7 @@ class AgentContextBriefBuilder:
         table_summaries: dict[str, str] = {}
         if granted_table_names:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_service(uow).build_user_context(
+                ctx = await create_authorization_data_service(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)

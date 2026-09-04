@@ -11,10 +11,10 @@ The distinction that matters, and the one the docstrings spend their words on:
 
 Because nothing pauses, an agent that needs answers fires all its messages and
 then simply ends its turn. It does not sleep, and it does not poll. Once the
-*last* of those asks is answered,
-``composition.agent_notifications.deliver_replies_if_settled`` starts the next
-turn in the asking conversation, and the agent reads the answers with
-``check_messages`` from there.
+*last* of those asks is answered, `agent_surfaces` raises
+``NotificationSettledEvent`` and this module's event handler starts the next
+turn in the asking conversation, where the agent reads the answers with
+``check_messages``.
 
 Waiting for the last one rather than the first is what keeps a four-person
 standup to one turn instead of four full conversation replays.
@@ -27,18 +27,21 @@ abandoned. A finished turn holds nothing.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.core.authorization.delegation import effective_agent_id
-from app.composition.agent_notifications import (
+from app.core.authorization.delegation import agent_display_name, effective_agent_id
+from app.modules.agent_surfaces.contracts import notifications as surfaces
+from app.modules.agent_surfaces.contracts.notifications import (
     check_notifications,
     resolve_recipient,
     send_notification,
 )
-from app.composition.agent_pod_members import list_pod_members as list_members
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.pod.contracts import directory as pod_directory
 from app.modules.agent.tools.messaging.models import (
     MAX_TITLE_LENGTH,
     CheckMessagesRequest,
@@ -167,8 +170,10 @@ async def message_user(
         actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
         # Display name first, but fall back to the pod-unique name: the display
         # name comes from surface metadata and is None for any run that did not
-        # start on a surface, which would silently drop the attribution header.
-        agent_name=deps.agent_display_name or deps.agent_name,
+        # start on a surface -- a schedule, a workflow, the app. That fallback
+        # is why this must be normalised: the pod's own agent stores `pod_default`,
+        # and this value becomes a chat bot's username and an email `From`.
+        agent_name=agent_display_name(deps.agent_display_name or deps.agent_name),
         origin_conversation_id=deps.conversation_id,
         origin_agent_run_id=deps.agent_run_id,
         # Reach out from the surface this run is already on, so the recipient
@@ -269,21 +274,18 @@ async def list_pod_members(
             success=False, error="list_pod_members is only available inside a pod."
         )
 
-    result = await list_members(
+    page = await pod_directory.list_pod_members(
         pod_id=deps.pod_id,
         requester_user_id=deps.user_id,
         search=request.search,
         limit=request.limit,
-        # Whose reach to report. Same sentinel handling as message_user: the pod
-        # assistant is not a row in `agents`, and its surfaces are the ones with
-        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
     )
-    if result is None:
+    if page is None:
         return ListPodMembersResponse(
             success=False, error="You do not have access to this pod's member list."
         )
 
-    members, total_matched, truncated = result
+    members = page.members
     if not members:
         detail = (
             f" Nothing matched '{request.search}'."
@@ -294,17 +296,62 @@ async def list_pod_members(
             success=True, message=f"No members found.{detail}"
         )
 
+    reach = await _reachable_on(members, pod_id=deps.pod_id, deps=deps)
     return ListPodMembersResponse(
         success=True,
-        members=[PodMemberSummary(**member) for member in members],
-        total_matched=total_matched,
-        truncated=truncated,
+        members=[
+            PodMemberSummary(
+                to=member.to,
+                name=member.name,
+                email=member.email,
+                role=member.role,
+                is_you=member.is_you,
+                # `user_id` is the key reachability is computed against and is
+                # deliberately not offered to the model: `to` is the value it
+                # copies, and a second id would only invite it to pass the wrong
+                # one.
+                reachable_on=reach.get(member.user_id, []),
+            )
+            for member in members
+        ],
+        total_matched=page.total_matched,
+        truncated=page.truncated,
         message=(
-            f"{total_matched} match(es); showing {len(members)}. "
+            f"{page.total_matched} match(es); showing {len(members)}. "
             "Pass a member's `to` value to message_user."
-            if truncated
+            if page.truncated
             else f"{len(members)} member(s). Pass a `to` value to message_user."
         ),
+    )
+
+
+async def _reachable_on(
+    members: tuple[pod_directory.PodDirectoryMember, ...],
+    *,
+    pod_id: UUID,
+    deps: BaseAgentContext,
+) -> dict[UUID, list[str]]:
+    """Which channels this agent can reach each listed person on, right now.
+
+    Two lookups rather than one, because they are two modules' answers: `pod`
+    says who is in the pod, `agent_surfaces` says who has a surface this agent
+    can send on. They were one function in the composition root, which is what
+    made the mixture untypeable.
+
+    Only the page that is actually returned: reachability costs queries per
+    surface, and answering it for members nobody will see is work spent on rows
+    the model never reads.
+    """
+    recipients = {member.user_id: member.email for member in members if member.user_id}
+    if not recipients:
+        return {}
+    return await surfaces.reachable_channels(
+        pod_id=pod_id,
+        recipients=recipients,
+        # Whose reach to report. Same sentinel handling as message_user: the pod
+        # assistant is not a row in `agents`, and its surfaces are the ones with
+        # the pod's own id on them.
+        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=pod_id),
     )
 
 

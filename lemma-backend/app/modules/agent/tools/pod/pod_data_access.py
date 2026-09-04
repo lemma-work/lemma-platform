@@ -23,7 +23,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.context import BaseAgentContext
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     DatastoreFileService,
     RecordService,
     TableService,
@@ -31,9 +31,7 @@ from app.composition.agent_datastore import (
     build_record_service,
     build_table_service,
 )
-from app.composition.authorization import (
-    create_authorization_service,
-)
+from app.core.authorization.factory import create_authorization_data_service
 
 
 @dataclass(slots=True)
@@ -54,7 +52,7 @@ async def pod_services(deps: BaseAgentContext) -> AsyncIterator[PodServices]:
     grants are the sole limiter (matching the agent's real workspace token).
     """
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await create_authorization_service(
+        auth_ctx = await create_authorization_data_service(
             uow
         ).build_delegated_workload_context(
             user_id=deps.user_id,

@@ -52,6 +52,13 @@ node (or the agent's instruction) around that exact shape — see *Event payload
 - → **workflow** when each firing runs the same multi-step process ("nightly: load
   batch, loop, write report").
 
+An agent target can also be the pod's own assistant: `--agent POD_DEFAULT` (the wire
+selector, not a name). **A schedule waking an agent that has no standing instruction
+of its own must carry an `instruction`** saying what to do when it fires — that is
+always true for `POD_DEFAULT`, and it is refused at create otherwise. `instruction`
+directs the work; `filter_instruction` (below) decides whether to fire at all. They
+are different fields and not interchangeable.
+
 > **Server-side, not live UI.** A `DATASTORE` schedule reacts to a row change by
 > *doing work* (starting a workload). To keep an **app's UI** fresh on row changes, use
 > `datastore.watchChanges` (a client-side WebSocket) instead — see `apps.md`. Don't
@@ -63,24 +70,28 @@ CLI flags cover the common cases. Exactly one of `--agent` / `--workflow` is
 required:
 
 ```bash
-# TIME — cron (5-field) or one-shot ISO timestamp
+# TIME — cron (5-field) or one-shot ISO timestamp. UTC unless config.timezone says
+# otherwise, and there is no flag for it: merge an IANA zone through --data.
 lemma schedules create --agent triage-agent --cron "0 9 * * 1-5" --name weekday-triage
 lemma schedules create --workflow nightly-review --cron "0 2 * * *"
 lemma schedules create --workflow intake --at "2026-06-14T09:00:00Z"
+lemma schedules create --agent daily-digest --cron "0 9 * * 1-5" \
+  --data '{"config": {"timezone": "Europe/Berlin"}}'
 
 # DATASTORE — table row events; --on is REQUIRED (insert | update | delete | all)
 lemma schedules create --workflow ticket-intake --datastore tickets --on insert --on update
 lemma schedules create --workflow ticket-intake --datastore tickets --on all   # insert+update+delete
 
-# WEBHOOK on an AGENT — carries the trigger id
-# (find it via `lemma connectors triggers list <auth-config>`)
+# WEBHOOK on an AGENT — the trigger id is what picks the app.
+# --webhook-source names the inbound ENDPOINT (composio | github), not the app.
+# (find the trigger id via `lemma connectors triggers list <auth-config>`)
 lemma schedules create --agent mail-triage \
-  --webhook-source gmail --connector-trigger gmail:composio:new_message --account <account-id>
+  --webhook-source composio --connector-trigger gmail:composio:new_message --account <account-id>
 
 # WEBHOOK on a WORKFLOW — the trigger comes from the workflow's EVENT start.
 # Passing --connector-trigger here is rejected.
 lemma schedules create --workflow ticket-intake \
-  --webhook-source gmail --account <account-id>
+  --webhook-source composio --account <account-id>
 ```
 
 Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key:
@@ -98,16 +109,47 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
 **Config shape per type:**
 
 - `TIME` — `{"cron": "0 2 * * *"}` (5-field cron) **or** `{"scheduled_at":
-  "2026-06-14T09:00:00Z"}` (one-shot).
+  "2026-06-14T09:00:00Z"}` (one-shot), plus an optional **`timezone`**.
+
+  **`timezone` is an IANA zone name** (`"Europe/Berlin"`, `"America/New_York"`) and
+  it is the zone the cron expression — or a `scheduled_at` with no offset — is read
+  in. **Omit it and the schedule is UTC**, which is what every schedule written
+  before the field existed already meant, so absence and `"UTC"` behave identically
+  and nothing has to be rewritten to gain it. Set it whenever "9am" means 9am
+  *somewhere*: `{"cron": "0 9 * * 1-5", "timezone": "Europe/Berlin"}` fires at 08:00Z
+  in summer and 07:00Z in winter, which a UTC cron cannot do. An unknown zone is
+  rejected at write time, and there is no CLI flag — pass it through `--data`.
+
+  Daylight saving is settled at write time, not left to the caller: on a
+  spring-forward date a `0 2 * * *` schedule still fires (at the instant 02:00 would
+  have been, which reads locally as 03:00) rather than being skipped, and on a
+  fall-back date a daily schedule fires **once**, on the first of the two 01:00s.
 - `DATASTORE` — `{"table_name": "tickets", "operations": ["INSERT", "UPDATE"]}`.
   `operations` is **required and explicit** — each must be `INSERT`, `UPDATE`, or
   `DELETE` (`--on all` expands to all three). A datastore schedule without
   operations is rejected. Add an optional `when` block to match on column values
   (see *Match conditions*).
-- `WEBHOOK` — `{"source": "<app>"}` plus `account_id`. The trigger id is
+- `WEBHOOK` — an `account_id` plus a connector trigger, and the trigger id is
   **kind-qualified** (`{app}:{kind}:{slug}`, e.g. `gmail:composio:new_message`);
   get it from `lemma connectors triggers list <auth-config>` (see
   `connectors.md`).
+
+  **`source` is not the connector.** It names the **inbound webhook endpoint**
+  (`POST /webhooks/{source}`), and this deployment answers on exactly two:
+  **`composio`** and **`github`**. On a schedule that is bound to an account *and* a
+  connector trigger — every schedule you create the normal way — `source` is
+  **decorative**: provisioning writes the real routing key (a Composio
+  `provider_trigger_id`, or GitHub's `{installation_id, event}` — which overwrites
+  `source` with `"github"` anyway), and nothing ever reads what you typed. So
+  `--webhook-source gmail` is a label, not a subscription: the *trigger id* is what
+  makes it Gmail.
+
+  On an **unprovisioned** schedule — one whose stored config *is* the whole routing
+  key, with no account and trigger to bind — `source` is load-bearing, and a name the
+  registry does not know is **refused at create**: *"No webhook source named 'x'
+  delivers to this deployment, so a schedule listening for it could never fire."*
+  That refusal is the reason to stop thinking of `source` as "which app": the useful
+  values are the two endpoint names, and everything else is chosen by the trigger id.
 
   **Where the trigger id goes depends on the target**, and getting it wrong is a
   hard error, not a warning:
@@ -116,6 +158,26 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
     start and **reject** a `connector_trigger_id` on the schedule. The workflow
     must have an `EVENT` start with a trigger id, or creation fails with
     *"Webhook workflow schedules require an EVENT workflow start"*.
+
+  **A trigger may take parameters of its own**, declared by its `config_schema`
+  and read with `lemma connectors triggers get <auth-config> <trigger-id>`. They
+  go at the **top level** of `config`, alongside `source` — not nested under a
+  `trigger_config` key, where nothing would match them. GitHub's
+  `github:http:pull_request`, for example, takes an optional `repository_id` and
+  `actions`; leaving both out means every repository and every action. Every one
+  of these narrows a trigger that already works, so none is required.
+
+  Some keys are **bound for you** and must not be written by hand. A GitHub
+  schedule's `installation_id` comes from the connected account when the
+  schedule is created — it is not something to copy out of a URL, and a wrong
+  one routes another organization's events at your pod.
+
+  **A triggered agent needs its own connector grant.** Connecting the account
+  authorizes the *person*; a scheduled run is a delegated workload and is
+  refused unless the **agent** also holds `connector.use` on the connector
+  (`PUT /pods/{pod}/agents/{name}/permissions`). Without it the run still
+  starts and the repository is still bound — the sandbox simply has no
+  credentials, and `git clone` fails with `could not read Username`.
 
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
 to `is_active: false` so it won't fire before its target exists).
@@ -230,7 +292,7 @@ that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
 {
   "name": "important-mail",
   "schedule_type": "WEBHOOK",
-  "config": { "source": "gmail" },
+  "config": { "source": "composio" },
   "account_id": "${gmail_account}",
   "workflow_name": "ticket-intake",
   "filter_instruction": "Only process emails from external customers describing a problem or request. Ignore newsletters, receipts, and internal mail.",
@@ -240,7 +302,10 @@ that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
 
 No `connector_trigger_id` here: this targets a **workflow**, so the id comes from
 `ticket-intake`'s `EVENT` start. On an **agent** webhook schedule you would add
-`"connector_trigger_id": "gmail:composio:new_message"` instead.
+`"connector_trigger_id": "gmail:composio:new_message"` instead — and *that* is what
+makes this a Gmail schedule. `source` is the inbound endpoint (`composio` here,
+`github` for a GitHub App trigger), not the app; on a bound schedule like this one it
+is overwritten or ignored by provisioning either way.
 
 On the CLI: `--filter "<predicate>"`.
 

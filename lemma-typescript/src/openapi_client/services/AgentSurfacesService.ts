@@ -242,8 +242,8 @@ export class AgentSurfacesService {
      * Proactively send a message to a pod member on this surface.
      *
      * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread on the surface (bots can't cold-DM), so a 404 means the member has no
-     * reachable conversation here yet.
+     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
+     * reached, in the vocabulary the notification API uses.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -272,8 +272,9 @@ export class AgentSurfacesService {
     /**
      * Get Surface Setup
      * Live setup state for an existing surface: static platform checklist plus
-     * webhook URL and admin-consent status. For the pre-creation checklist (before
-     * any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+     * webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+     * own shared secrets in it are not. For the pre-creation checklist (before any
+     * surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
      * @param podId
      * @param surfaceName
      * @returns SurfaceSetupResponse Successful Response

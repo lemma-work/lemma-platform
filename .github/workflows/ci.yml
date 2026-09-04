@@ -204,6 +204,10 @@ jobs:
       # what it may destroy. They passed locally and were absent here, which is
       # how a sweep that deleted live user workspaces reached production with 24
       # tests written about it.
+      #
+      # The two that need a Docker daemon or a cargo-built bridge are marked
+      # `local_host` and deselected instead: a database this lane can be given,
+      # and those it cannot, so here they could only ever skip.
       postgres:
         image: pgvector/pgvector:0.8.3-pg18
         env:

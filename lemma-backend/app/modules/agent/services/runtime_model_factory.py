@@ -419,20 +419,3 @@ def usage_limits_for(model: Model, limits: UsageLimits) -> UsageLimits:
     if limits.count_tokens_before_request and not supports_token_precount(model):
         return replace(limits, count_tokens_before_request=False)
     return limits
-
-
-async def default_system_runtime():
-    """Resolve the code-defined system default runtime profile."""
-    from uuid import uuid4
-
-    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-    from app.modules.agent.services.runtime_profile_service import (
-        DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-        AgentRuntimeProfileService,
-    )
-
-    return await AgentRuntimeProfileService().resolve(
-        runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
-        organization_id=None,
-        user_id=uuid4(),
-    )

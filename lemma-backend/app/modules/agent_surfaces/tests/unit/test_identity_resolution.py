@@ -59,26 +59,29 @@ class _FakeUsers:
         self._by_unverified_phone_ids = by_unverified_phone_ids or []
         self.telegram_lookups: list[str] = []
 
-    async def get_id_by_email_insensitive(self, email):
+    async def user_id_by_email(self, email):
         return self._by_email
 
-    async def get_id_by_telegram_lower(self, username):
+    async def user_id_by_telegram_username(self, username):
         self.telegram_lookups.append(username)
         return self._by_telegram
 
-    async def get_ids_by_mobile_numbers(self, candidates, *, verified=True):
+    async def user_ids_by_mobile_numbers(self, candidates, *, verified=True):
         return list(self._by_phone_ids if verified else self._by_unverified_phone_ids)
 
 
 def _service(users: _FakeUsers, external: _FakeExternalRepo):
-    # UserRepository(uow) is built in __init__ (needs uow.session); we then swap
-    # in the fake so no real DB is touched.
-    service = SurfaceIdentityResolutionService(
+    """The service with identity's directory port answered by a fake.
+
+    Injected rather than patched: which live person a sender resolves to is the
+    decision this service exists to make, so the directory is a collaborator the
+    test hands over -- and no real database is touched.
+    """
+    return SurfaceIdentityResolutionService(
         uow=SimpleNamespace(session=object()),
         external_user_repository=external,
+        user_directory=users,
     )
-    service._users = users  # type: ignore[assignment]
-    return service
 
 
 def _event(
@@ -173,7 +176,9 @@ async def test_verified_phone_match_has_priority_over_unverified_fallback():
     assert external.calls[-1]["resolved_user_id"] == verified_id
 
 
-async def test_unique_unverified_phone_match_is_cached_for_followup_messages():
+async def test_unique_unverified_phone_match_is_cached_for_followup_messages(
+    monkeypatch,
+):
     unverified_id = uuid4()
     users = _FakeUsers(by_unverified_phone_ids=[unverified_id])
     external = _FakeExternalRepo()

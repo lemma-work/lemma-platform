@@ -67,8 +67,9 @@ def sync_detailed(
     """Get Surface Setup
 
      Live setup state for an existing surface: static platform checklist plus
-    webhook URL and admin-consent status. For the pre-creation checklist (before
-    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+    webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+    own shared secrets in it are not. For the pre-creation checklist (before any
+    surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
 
     Args:
         pod_id (UUID):
@@ -103,8 +104,9 @@ def sync(
     """Get Surface Setup
 
      Live setup state for an existing surface: static platform checklist plus
-    webhook URL and admin-consent status. For the pre-creation checklist (before
-    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+    webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+    own shared secrets in it are not. For the pre-creation checklist (before any
+    surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
 
     Args:
         pod_id (UUID):
@@ -134,8 +136,9 @@ async def asyncio_detailed(
     """Get Surface Setup
 
      Live setup state for an existing surface: static platform checklist plus
-    webhook URL and admin-consent status. For the pre-creation checklist (before
-    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+    webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+    own shared secrets in it are not. For the pre-creation checklist (before any
+    surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
 
     Args:
         pod_id (UUID):
@@ -168,8 +171,9 @@ async def asyncio(
     """Get Surface Setup
 
      Live setup state for an existing surface: static platform checklist plus
-    webhook URL and admin-consent status. For the pre-creation checklist (before
-    any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+    webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+    own shared secrets in it are not. For the pre-creation checklist (before any
+    surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
 
     Args:
         pod_id (UUID):

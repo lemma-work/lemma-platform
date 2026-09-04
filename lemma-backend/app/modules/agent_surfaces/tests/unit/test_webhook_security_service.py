@@ -231,7 +231,7 @@ def test_the_verifier_accepts_svix_s_own_published_vector(monkeypatch):
     # The vector is from 2021; freeze the clock so the replay window is not what
     # this test is measuring.
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.webhook_security_service.time.time",
+        "app.core.webhooks.signatures.time.time",
         lambda: float(timestamp),
     )
 
@@ -256,7 +256,7 @@ def test_the_verifier_rejects_that_vector_under_a_different_secret(monkeypatch):
         core_config, "resend_webhook_secret", "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSx"
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.webhook_security_service.time.time",
+        "app.core.webhooks.signatures.time.time",
         lambda: 1614265330.0,
     )
 

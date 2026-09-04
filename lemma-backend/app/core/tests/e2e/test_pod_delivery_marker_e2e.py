@@ -31,7 +31,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from app.composition.pod_delivery import DELIVERY_CLAIM_SQL, DeliveryVia
+from app.modules.analytics.services.pod_delivery import DeliveryVia
+from app.modules.pod.contracts.delivery import DELIVERY_CLAIM_SQL
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 # Re-bound per file, the way the sibling outbox test does it: these are module
