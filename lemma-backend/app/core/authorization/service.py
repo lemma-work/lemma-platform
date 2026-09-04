@@ -1133,6 +1133,139 @@ class AuthorizationDataService:
         await self._invalidate_snapshots_after_commit(user_id=targets.user_id)
 
 
+#: Where a resource type learns which pod and owner it belongs to:
+#: ``(model, id_column, pod_column, owner_column, visibility_column)``, with a
+#: ``None`` visibility column for a table that has none.
+#:
+#: A dict rather than an `if` ladder, and module-level rather than rebuilt per
+#: call, so that the set of types it covers can be *checked* — see
+#: `_assert_every_resource_type_is_classified` below. `FOLDER`/`DOCUMENT` are
+#: absent on purpose: they are hydrated by `_hydrate_datastore_file`, which also
+#: fetches the path the folder-grant cascade matches on, and entries for them
+#: here were unreachable.
+_RESOURCE_TABLES: dict[ResourceType, tuple] = {
+    ResourceType.AGENT: (
+        AgentModel,
+        AgentModel.id,
+        AgentModel.pod_id,
+        AgentModel.user_id,
+        AgentModel.visibility,
+    ),
+    ResourceType.FUNCTION: (
+        FunctionModel,
+        FunctionModel.id,
+        FunctionModel.pod_id,
+        FunctionModel.user_id,
+        FunctionModel.visibility,
+    ),
+    ResourceType.CONVERSATION: (
+        ConversationModel,
+        ConversationModel.id,
+        ConversationModel.pod_id,
+        ConversationModel.user_id,
+        None,
+    ),
+    ResourceType.DATASTORE_TABLE: (
+        DatastoreTable,
+        DatastoreTable.id,
+        DatastoreTable.pod_id,
+        DatastoreTable.user_id,
+        DatastoreTable.visibility,
+    ),
+    ResourceType.APP: (
+        AppModel,
+        AppModel.id,
+        AppModel.pod_id,
+        AppModel.user_id,
+        AppModel.visibility,
+    ),
+    ResourceType.WORKFLOW: (
+        WorkflowModel,
+        WorkflowModel.id,
+        WorkflowModel.pod_id,
+        WorkflowModel.user_id,
+        WorkflowModel.visibility,
+    ),
+    ResourceType.SCHEDULE: (
+        Schedule,
+        Schedule.id,
+        Schedule.pod_id,
+        Schedule.user_id,
+        Schedule.visibility,
+    ),
+}
+
+#: Types hydrated by a method of their own rather than by a table lookup.
+_HYDRATED_BY_METHOD = frozenset(
+    {
+        # Its own id is its pod.
+        ResourceType.POD,
+        # Also fetch the stored path, for the folder-grant cascade.
+        ResourceType.FOLDER,
+        ResourceType.DOCUMENT,
+        # Org-scoped tables with no pod column; see the methods for why that is
+        # the right answer rather than a gap.
+        ResourceType.CONNECTOR,
+        ResourceType.CONNECTOR_ACCOUNT,
+        ResourceType.CONNECTOR_AUTH_CONFIG,
+    }
+)
+
+#: Types that do not belong to a pod, so the cross-pod clamp has nothing to
+#: compare and its absence is a decision rather than an omission. A delegated
+#: pod agent is refused an org-scoped action before hydration is reached at all,
+#: by `_is_pod_scoped_permission`.
+_NOT_POD_SCOPED = frozenset({ResourceType.ORGANIZATION, ResourceType.ROLE})
+
+#: Pod-scoped types for which nothing builds a `ResourceRef` today. They exist
+#: as permission ids and grant targets, and never reach `authorize` as a
+#: resource. Listed rather than left out: the moment something does build one,
+#: `_pod_is_unknowable` denies instead of waving it through, and the fix is to
+#: give the type a row above.
+_NO_REFS_CONSTRUCTED = frozenset(
+    {ResourceType.POD_MEMBER, ResourceType.DATASTORE_RECORD}
+)
+
+
+def _assert_every_resource_type_is_classified() -> None:
+    """Refuse to import if a `ResourceType` is in none of the sets above.
+
+    The cross-pod clamp in `Authorizer.authorize` only fires when a resource's
+    pod is known, so a type nobody classified was a type the clamp silently
+    skipped. Adding one to `ResourceType` used to be enough to opt it out; now
+    it fails here, at import, with the name of the type.
+    """
+    classified = (
+        set(_RESOURCE_TABLES)
+        | _HYDRATED_BY_METHOD
+        | _NOT_POD_SCOPED
+        | _NO_REFS_CONSTRUCTED
+    )
+    missing = set(ResourceType) - classified
+    if missing:
+        raise RuntimeError(
+            "ResourceType(s) not classified for authorization hydration: "
+            + ", ".join(sorted(t.name for t in missing))
+            + ". Add a row to _RESOURCE_TABLES, or name the type in one of "
+            "_HYDRATED_BY_METHOD / _NOT_POD_SCOPED / _NO_REFS_CONSTRUCTED."
+        )
+
+
+_assert_every_resource_type_is_classified()
+
+
+def _pod_is_unknowable(resource: ResourceRef) -> bool:
+    """Should a pod-scoped check refuse this resource for want of a pod?
+
+    True when the resource belongs to a pod in principle but hydration could not
+    say which. False for types that have no pod at all, whose exemption is
+    recorded in `_NOT_POD_SCOPED`.
+    """
+    if resource.resource_type in _NOT_POD_SCOPED:
+        return False
+    return resource.pod_id is None
+
+
 class Authorizer:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -1229,10 +1362,18 @@ class Authorizer:
             )
 
         hydrated = await self._hydrate_resource(resource)
-        if (
-            clamp_to_pod
-            and hydrated.pod_id is not None
-            and hydrated.pod_id != ctx.pod_id
+        if clamp_to_pod and (
+            hydrated.pod_id != ctx.pod_id
+            if hydrated.pod_id is not None
+            # A pod-scoped resource whose pod could not be established is
+            # refused rather than waved through. This used to read
+            # `pod_id is not None and pod_id != ctx.pod_id`, so a type
+            # hydration did not know skipped the clamp entirely — the guard
+            # confining a pod's default agent to its own pod was opt-out by
+            # omission. `_pod_is_unknowable` exempts the types that genuinely
+            # have no pod, and `_assert_every_resource_type_is_classified`
+            # makes staying silent about a new one impossible.
+            else _pod_is_unknowable(hydrated)
         ):
             return AuthorizationDecision(
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, hydrated
@@ -1538,6 +1679,18 @@ class Authorizer:
             return resource
         # Folder/document hydration also fetches the row's path so folder grants
         # can cascade to descendants in the matcher.
+        if resource.resource_type is ResourceType.POD:
+            # A pod's own id is the pod it belongs to, so this needs no table.
+            # Every caller happens to pass `pod_id` today; deriving it here is
+            # what stops the clamp depending on that continuing to be true.
+            return ResourceRef(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                organization_id=resource.organization_id,
+                pod_id=resource.pod_id or resource.resource_id,
+                owner_user_id=resource.owner_user_id,
+                visibility=resource.visibility,
+            )
         if resource.resource_type in (ResourceType.FOLDER, ResourceType.DOCUMENT):
             return await self._hydrate_datastore_file(resource)
         if resource.resource_type == ResourceType.CONNECTOR:
@@ -1546,76 +1699,14 @@ class Authorizer:
             return await self._hydrate_connector_account(resource)
         if resource.resource_type == ResourceType.CONNECTOR_AUTH_CONFIG:
             return await self._hydrate_connector_auth_config(resource)
-        mapping = {
-            ResourceType.AGENT: (
-                AgentModel,
-                AgentModel.id,
-                AgentModel.pod_id,
-                AgentModel.user_id,
-                AgentModel.visibility,
-            ),
-            ResourceType.FUNCTION: (
-                FunctionModel,
-                FunctionModel.id,
-                FunctionModel.pod_id,
-                FunctionModel.user_id,
-                FunctionModel.visibility,
-            ),
-            ResourceType.CONVERSATION: (
-                ConversationModel,
-                ConversationModel.id,
-                ConversationModel.pod_id,
-                ConversationModel.user_id,
-                None,
-            ),
-            ResourceType.DATASTORE_TABLE: (
-                DatastoreTable,
-                DatastoreTable.id,
-                DatastoreTable.pod_id,
-                DatastoreTable.user_id,
-                DatastoreTable.visibility,
-            ),
-            ResourceType.FOLDER: (
-                DatastoreFile,
-                DatastoreFile.id,
-                DatastoreFile.pod_id,
-                DatastoreFile.owner_user_id,
-                DatastoreFile.visibility,
-            ),
-            ResourceType.DOCUMENT: (
-                DatastoreFile,
-                DatastoreFile.id,
-                DatastoreFile.pod_id,
-                DatastoreFile.owner_user_id,
-                DatastoreFile.visibility,
-            ),
-            ResourceType.APP: (
-                AppModel,
-                AppModel.id,
-                AppModel.pod_id,
-                AppModel.user_id,
-                AppModel.visibility,
-            ),
-            ResourceType.WORKFLOW: (
-                WorkflowModel,
-                WorkflowModel.id,
-                WorkflowModel.pod_id,
-                WorkflowModel.user_id,
-                WorkflowModel.visibility,
-            ),
-            ResourceType.SCHEDULE: (
-                Schedule,
-                Schedule.id,
-                Schedule.pod_id,
-                Schedule.user_id,
-                Schedule.visibility,
-            ),
-        }
-        if resource.resource_type not in mapping:
+        columns = _RESOURCE_TABLES.get(resource.resource_type)
+        if columns is None:
+            # Not a silent pass-through: every type is classified below, and
+            # `_assert_every_resource_type_is_classified` refuses to import this
+            # module if one is not. Reaching here means a type is registered as
+            # unroutable and something built a ref for it anyway.
             return resource
-        _model, id_col, pod_col, owner_col, visibility_col = mapping[
-            resource.resource_type
-        ]
+        _model, id_col, pod_col, owner_col, visibility_col = columns
         if visibility_col is None:
             stmt = select(pod_col, owner_col).where(id_col == resource.resource_id)
         else:

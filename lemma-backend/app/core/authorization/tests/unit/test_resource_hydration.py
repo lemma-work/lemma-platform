@@ -93,20 +93,24 @@ LEARNS_ORG_ONLY = {
     ResourceType.CONNECTOR_AUTH_CONFIG: "org_scoped",
 }
 
+#: A pod's own id *is* its pod, so this one needs no table. Every caller passes
+#: `pod_id` today, which is why the clamp worked; deriving it here is what stops
+#: the clamp depending on that continuing to be true.
+LEARNS_POD_WITHOUT_A_QUERY = {ResourceType.POD}
+
 #: Types hydration does not look up at all.
 #:
-#: `CONNECTOR` is deliberate — its hydrator returns early when there is no pod,
-#: and says why in prose. The other five are simply absent from the literal
-#: mapping, and nothing anywhere records that as a decision. `ORGANIZATION` and
-#: `ROLE` are org-scoped, so a pod-default agent is already refused earlier by
-#: `_is_pod_scoped_permission`. That leaves **POD, POD_MEMBER and
-#: DATASTORE_RECORD**: pod-scoped resources, reachable by a pod-default agent,
-#: for which the cross-pod clamp does not run.
+#: `CONNECTOR` is deliberate — its hydrator returns early without a pod, and
+#: says why in prose. `ORGANIZATION` and `ROLE` have no pod: a pod-default agent
+#: is refused an org-scoped action earlier, by `_is_pod_scoped_permission`.
+#: `POD_MEMBER` and `DATASTORE_RECORD` are pod-scoped but nothing in production
+#: builds a `ResourceRef` for either — they exist as permission ids and grant
+#: targets only. They are named in `_NO_REFS_CONSTRUCTED` so that if something
+#: ever does build one, the clamp denies instead of waving it through.
 NO_LOOKUP = {
     ResourceType.CONNECTOR,
     ResourceType.ORGANIZATION,
     ResourceType.ROLE,
-    ResourceType.POD,
     ResourceType.POD_MEMBER,
     ResourceType.DATASTORE_RECORD,
 }
@@ -117,13 +121,15 @@ def test_every_resource_type_is_accounted_for():
 
     Without it, adding a type silently opts it out of the cross-pod clamp.
     """
-    covered = set(LEARNS_POD) | set(LEARNS_ORG_ONLY) | NO_LOOKUP
+    covered = (
+        set(LEARNS_POD) | set(LEARNS_ORG_ONLY) | NO_LOOKUP | LEARNS_POD_WITHOUT_A_QUERY
+    )
     assert covered == set(ResourceType), (
         f"a ResourceType is in no set: {set(ResourceType) - covered}"
     )
-    assert len(LEARNS_POD) + len(LEARNS_ORG_ONLY) + len(NO_LOOKUP) == len(
-        set(ResourceType)
-    ), "a ResourceType is in more than one set"
+    assert len(LEARNS_POD) + len(LEARNS_ORG_ONLY) + len(NO_LOOKUP) + len(
+        LEARNS_POD_WITHOUT_A_QUERY
+    ) == len(set(ResourceType)), "a ResourceType is in more than one set"
 
 
 @pytest.mark.asyncio
@@ -221,3 +227,70 @@ async def test_a_row_that_is_gone_leaves_the_ref_alone():
 
     assert session.queries == 1
     assert hydrated.pod_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_pod_ref_learns_its_pod_from_its_own_id():
+    """The caller does not have to remember to pass `pod_id`."""
+    session = _RecordingSession(ROWS["generic"])
+    service = Authorizer(session)
+    pod_id = uuid4()
+
+    hydrated = await service._hydrate_resource(
+        ResourceRef(resource_type=ResourceType.POD, resource_id=pod_id)
+    )
+
+    assert session.queries == 0
+    assert hydrated.pod_id == pod_id
+
+
+def test_the_registry_refuses_a_resource_type_nobody_classified():
+    """The check that runs at import, exercised.
+
+    Adding a member to `ResourceType` used to be enough to opt it out of the
+    cross-pod clamp, silently. Now it fails loudly, naming the type.
+    """
+    from app.core.authorization import service as authorization_service
+
+    original = authorization_service._NOT_POD_SCOPED
+    try:
+        authorization_service._NOT_POD_SCOPED = frozenset()
+        with pytest.raises(RuntimeError, match="ORGANIZATION|ROLE"):
+            authorization_service._assert_every_resource_type_is_classified()
+    finally:
+        authorization_service._NOT_POD_SCOPED = original
+
+    # And passes as shipped.
+    authorization_service._assert_every_resource_type_is_classified()
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "expected", "why"),
+    [
+        (ResourceType.AGENT, True, "pod-scoped and its pod was not established"),
+        (ResourceType.ORGANIZATION, False, "has no pod to be outside of"),
+        (ResourceType.ROLE, False, "has no pod to be outside of"),
+        (
+            ResourceType.POD_MEMBER,
+            True,
+            "pod-scoped; nothing builds a ref today, and if it does it is refused",
+        ),
+    ],
+    ids=lambda v: str(v)[:40],
+)
+def test_which_resources_a_pod_scoped_check_refuses_for_want_of_a_pod(
+    resource_type, expected, why
+):
+    from app.core.authorization.service import _pod_is_unknowable
+
+    ref = ResourceRef(resource_type=resource_type, resource_id=uuid4())
+    assert _pod_is_unknowable(ref) is expected, why
+
+
+def test_a_resource_that_knows_its_pod_is_never_refused_for_want_of_one():
+    from app.core.authorization.service import _pod_is_unknowable
+
+    ref = ResourceRef(
+        resource_type=ResourceType.AGENT, resource_id=uuid4(), pod_id=uuid4()
+    )
+    assert _pod_is_unknowable(ref) is False
