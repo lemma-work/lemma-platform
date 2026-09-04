@@ -193,8 +193,8 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
     times it has failed, and whether failures have paused it all belong to the
     pod it ran in, never to the pod it is being copied into.
 
-    `provider_trigger_id` belongs to the same category and hides one level
-    deeper, inside `config`.
+    `provider_trigger_id` and `installation_id` belong to the same category and
+    hide one level deeper, inside `config`.
     """
     stripped = _strip_keys(
         schedule,
@@ -219,16 +219,24 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
             "paused_by_failures",
         },
     )
-    # `provider_trigger_id` names a subscription the *source* org owns, and
-    # webhook matching applies no tenant filter -- so an imported schedule that
-    # kept it would answer to another organization's events. It is re-minted at
-    # import anyway, whenever the new pod's account provisions one.
+    # Both of these name something the *source* organization owns, and an
+    # imported schedule that kept either would answer to that organization's
+    # events rather than the importer's.
+    #
+    # `provider_trigger_id` is a subscription the source org's account
+    # provisioned. `installation_id` is worse: for a GitHub App it *is* the
+    # tenant filter -- webhook matching is containment against
+    # `{source, installation_id, event}` -- so a bundle carrying it hands the
+    # importer schedules wired to the publisher's installation. Observed on a
+    # real round trip: the bundle asked for the account as a variable and then
+    # baked `installation_id` in beside it.
+    #
+    # Neither needs carrying. Both are re-derived when the importing pod's
+    # account provisions the trigger, from that account.
     config = stripped.get("config")
-    if isinstance(config, dict) and "provider_trigger_id" in config:
-        stripped = {
-            **stripped,
-            "config": _strip_keys(config, {"provider_trigger_id"}),
-        }
+    portable = {"provider_trigger_id", "installation_id"}
+    if isinstance(config, dict) and portable & set(config):
+        stripped = {**stripped, "config": _strip_keys(config, portable)}
     return stripped
 
 
