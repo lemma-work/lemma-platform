@@ -204,6 +204,16 @@ lemma-sdk = { path = "../lemma-python", editable = true }
 [tool.ruff.lint]
 select = [
     "F",     # pyflakes
+    # `B015`/`B018` only, not the whole bugbear family: they are the rule
+    # CodeQL's `py/ineffectual-statement` is trying to be, and unlike it they
+    # know that a lone `...` is a `Protocol`/`@overload` stub body rather than a
+    # statement someone forgot to finish. That query has been open against
+    # github/codeql as a labelled false positive since 2022 (issue 11351), and
+    # GitHub Code Quality runs its own workflow with a fixed query list, so
+    # `.github/codeql-config.yml` cannot filter it. Catching the real cases here
+    # instead means they are caught locally, in `make quality`, before a PR.
+    "B015",  # useless comparison
+    "B018",  # useless expression
     "E4",    # imports
     "E7",    # statement-level errors
     "E9",    # runtime errors
