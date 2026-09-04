@@ -19,7 +19,12 @@ from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.domain.entities import CostSource
-from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
+from app.modules.usage.services.cost_resolver import (
+    UsageTokens,
+    resolve_cost,
+    tokens_for_budget,
+)
+from app.modules.usage.services.reservation_sizing import RESERVED_REQUEST
 from app.modules.usage.services.usage_service import (
     ModelPricing,
     UsageService,
@@ -173,7 +178,14 @@ def test_register_model_pricing_hook_works():
     UsageService._SYSTEM_MODEL_PRICING.pop("test-model")
 
 
-async def test_injected_limit_uses_legacy_default_reservation_amount():
+async def test_a_reservation_is_priced_on_the_model_it_admits():
+    """What a run holds is one nominal request on the model it chose.
+
+    A flat few cents was the whole hold however expensive the model, so a
+    hundred runs admitted at once against one allowance could each go on to buy
+    a request nothing had accounted for. `glm-5.2` is registered above, so this
+    resolves through the first pricing layer.
+    """
     repo = AsyncMock()
     repo.get_system_cost.return_value = 0.0
     repo.get_system_cost_by_window.return_value = {"user_week": 0.0, "user_month": 0.0}
@@ -194,7 +206,16 @@ async def test_injected_limit_uses_legacy_default_reservation_amount():
     )
 
     assert reservation is not None
-    assert reservation.amount_usd == UsageService.DEFAULT_RESERVATION_USD
+    assert reservation.amount_usd == pytest.approx(
+        _cost(
+            "glm-5.2",
+            input_tokens=RESERVED_REQUEST.input_tokens,
+            output_tokens=RESERVED_REQUEST.output_tokens,
+        ).cost_usd
+    )
+    # And meaningfully more than the flat token it replaced, which is the
+    # whole point: admission on an expensive model has to cost something.
+    assert reservation.amount_usd > UsageService.DEFAULT_RESERVATION_USD
 
 
 async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
@@ -213,7 +234,13 @@ async def test_unlimited_default_skips_admission_for_unpriced_custom_model():
     repo.reserve_limit_scopes.assert_not_awaited()
 
 
-async def test_injected_limit_does_not_reject_unpriced_custom_model():
+async def test_injected_limit_does_not_reject_a_model_nothing_can_price():
+    """`PS-OPS-011` at the admission boundary.
+
+    The model name is deliberately one no layer resolves. It used to be a
+    Fireworks provider id, which the public dataset now prices perfectly well --
+    so the test was quietly no longer about an unpriced model at all.
+    """
     repo = AsyncMock()
     repo.get_system_cost.return_value = 0.0
     repo.get_system_cost_by_window.return_value = {"user_week": 0.0, "user_month": 0.0}
@@ -230,10 +257,12 @@ async def test_injected_limit_does_not_reject_unpriced_custom_model():
         user_id=uuid4(),
         profile_id="system:limited",
         profile_scope=SYSTEM,
-        model_name="accounts/fireworks/models/minimax-m3",
+        model_name="a-model-no-catalog-and-no-dataset-has-ever-heard-of",
     )
 
     assert reservation is not None
+    # Admission falls back to the flat token rather than refusing the run for
+    # want of a rate.
     assert reservation.amount_usd == UsageService.DEFAULT_RESERVATION_USD
 
 
@@ -476,3 +505,53 @@ async def test_actual_cost_consumes_reservation_without_admission_block():
     )
 
     assert repo.consumed[0]["actual_usd"] > reservation.amount_usd
+
+
+def test_a_budget_buys_what_it_can_afford_at_the_first_tier():
+    """The probe must not price itself into a tier the run has not reached.
+
+    Anthropic's input rate doubles above a 200k-token context. Deriving a
+    per-token rate by pricing a million-token probe answered with the *upper*
+    tier, so every budget came out twice as tight as the allowance actually
+    bought and long runs were cut short at half their money.
+    """
+    budget = tokens_for_budget(
+        model_name="claude-sonnet-4-5",
+        provider_model_name=None,
+        base_url="https://api.anthropic.com",
+        budget_usd=3.0,
+        pricing_table={},
+    )
+
+    assert budget is not None
+    input_tokens, _output_tokens = budget
+    # Whatever the dataset says the first-tier rate is, three dollars of it must
+    # buy twice what the upper tier would -- which is the bug, stated as a
+    # relationship so a price change cannot make this test lie.
+    doubled = tokens_for_budget(
+        model_name="claude-sonnet-4-5",
+        provider_model_name=None,
+        base_url="https://api.anthropic.com",
+        budget_usd=6.0,
+        pricing_table={},
+    )
+    assert doubled is not None
+    assert doubled[0] == pytest.approx(input_tokens * 2, rel=0.01)
+
+
+def test_a_model_nothing_can_price_runs_unbounded():
+    """`PS-OPS-011`: a gap in the pricing table must never refuse work.
+
+    `None` here means the caller leaves its limits alone. Returning a cap of
+    zero instead would turn an unpriced model into a model that cannot run.
+    """
+    assert (
+        tokens_for_budget(
+            model_name="nothing-has-ever-priced-this",
+            provider_model_name=None,
+            base_url=None,
+            budget_usd=10.0,
+            pricing_table={},
+        )
+        is None
+    )

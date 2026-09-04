@@ -265,25 +265,56 @@ def tokens_for_budget(
     the budget; against an allowance that is otherwise unbounded, that is the
     right trade.
     """
-    million = UsageTokens(input_tokens=1_000_000)
-    input_price = resolve_cost(
+    input_rate = _rate_per_token(
+        UsageTokens(input_tokens=_PROBE_TOKENS),
         model_name=model_name,
         provider_model_name=provider_model_name,
         base_url=base_url,
-        tokens=million,
         pricing_table=pricing_table,
-    ).cost_usd
-    output_price = resolve_cost(
+    )
+    output_rate = _rate_per_token(
+        UsageTokens(output_tokens=_PROBE_TOKENS),
         model_name=model_name,
         provider_model_name=provider_model_name,
         base_url=base_url,
-        tokens=UsageTokens(output_tokens=1_000_000),
         pricing_table=pricing_table,
-    ).cost_usd
-    if not input_price or not output_price:
+    )
+    if input_rate is None or output_rate is None:
         return None
     budget = max(0.0, budget_usd)
-    return (
-        int(budget / input_price * 1_000_000),
-        int(budget / output_price * 1_000_000),
-    )
+    return (int(budget / input_rate), int(budget / output_rate))
+
+
+#: How many tokens to price in order to learn what one costs. Small on purpose.
+#: Anthropic's input rate doubles above a 200k-token context, so pricing a
+#: million-token probe to derive a per-token rate answered with the *upper* tier
+#: and halved every budget derived from it -- the cap came out twice as tight as
+#: the allowance actually bought. Small enough to sit inside the first tier of
+#: every model we serve, large enough that a rate quoted per million does not
+#: round away.
+_PROBE_TOKENS = 10_000
+
+
+def _rate_per_token(
+    probe: UsageTokens,
+    *,
+    model_name: str,
+    provider_model_name: str | None,
+    base_url: str | None,
+    pricing_table: dict[str, ModelPricing],
+) -> float | None:
+    """What one token costs at the margin, or ``None`` if the model has no price.
+
+    Marginal rather than average: a budget is spent forward from wherever the
+    run already is, so the rate that matters is the one the next token pays.
+    """
+    priced = resolve_cost(
+        model_name=model_name,
+        provider_model_name=provider_model_name,
+        base_url=base_url,
+        tokens=probe,
+        pricing_table=pricing_table,
+    ).cost_usd
+    if not priced:
+        return None
+    return priced / _PROBE_TOKENS

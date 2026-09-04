@@ -16,6 +16,10 @@ from app.modules.usage.domain.entities import (
     UsageReservation,
 )
 from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
+from app.modules.usage.services.reservation_sizing import (
+    remaining_after,
+    reservation_amount,
+)
 from app.modules.usage.services.limit_windows import (
     counter_scopes,
     limit_scope,
@@ -50,6 +54,10 @@ cost_counter = meter.create_counter("lemma.llm.cost_usd")
 class UsageService(UsagePricing):
     """Service for profile-aware usage recording and system-profile limits."""
 
+    #: What a run holds when nothing can price it. `PS-OPS-011` forbids refusing
+    #: work over a gap in the pricing table, so an unpriceable model still takes
+    #: an admission token -- small, because it is a placeholder for a number
+    #: nobody could compute rather than an estimate of anything.
     DEFAULT_RESERVATION_USD = 0.01
 
     # Per-model rates (USD per 1M tokens). Keyed by both the public model name
@@ -98,7 +106,12 @@ class UsageService(UsagePricing):
         if not self._has_applicable_limit(limit_values, organization_id):
             return None
         now = now or datetime.now(timezone.utc)
-        amount = self.DEFAULT_RESERVATION_USD
+        self._load_environment_metadata()
+        amount = reservation_amount(
+            model_name=model_name,
+            pricing_table=self._SYSTEM_MODEL_PRICING,
+            floor=self.DEFAULT_RESERVATION_USD,
+        )
         limits = await self.get_usage_limits(
             organization_id=organization_id,
             user_id=user_id,
@@ -164,7 +177,7 @@ class UsageService(UsagePricing):
             user_id=user_id,
             amount_usd=amount,
             counter_ids=counter_ids,
-            remaining_usd=_tightest_remaining(limits),
+            remaining_usd=remaining_after(limits, amount),
         )
 
     async def release_reservation(self, reservation: UsageReservation | None) -> None:
@@ -640,22 +653,6 @@ class UsageService(UsagePricing):
                 )
             ]
         )
-
-
-def _tightest_remaining(limits: dict[str, object]) -> float | None:
-    """The smallest remaining allowance across the windows that apply.
-
-    The binding constraint is whichever window runs out first, so a run must
-    bound itself by the minimum -- not by the organization's monthly figure that
-    a weekly per-user cap will stop it reaching.
-    """
-    remaining = [
-        scope["remaining_usd"]
-        for key in ("org_monthly", "user_weekly", "user_monthly")
-        for scope in [limits[key]]
-        if isinstance(scope, dict) and scope.get("remaining_usd") is not None
-    ]
-    return min(remaining) if remaining else None
 
 
 def assert_system_pricing_covers_catalog(

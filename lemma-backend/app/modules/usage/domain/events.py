@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from app.core.domain.events import DomainEvent
@@ -49,6 +50,34 @@ class UsageLimitDeniedEvent(DomainEvent):
     profile_id: str
     model_name: str
     reason: str
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return USAGE_EVENTS_STREAM
+
+
+class UsageLimitApproachingEvent(DomainEvent):
+    """Emitted the first time a window crosses its warning threshold.
+
+    On the crossing, not on every run past it. A person who is over the line
+    starts every subsequent conversation over the line, so "warn while above the
+    threshold" is a warning per run; "warn when it is first passed" is one
+    warning per window, which is what somebody can act on.
+
+    Carries the window rather than only the fraction, because the thing being
+    approached resets: telling somebody they are at 80% is useless without
+    saying 80% of what, and until when.
+    """
+
+    event_type: str = "usage.limit.approaching"
+    organization_id: UUID | None = None
+    user_id: UUID
+    scope: str
+    window_start: datetime
+    reset_at: datetime
+    limit_usd: float
+    consumed_usd: float
+    threshold_fraction: float
 
     @classmethod
     def stream_name(cls) -> str:

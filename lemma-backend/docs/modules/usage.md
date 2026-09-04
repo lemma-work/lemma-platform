@@ -100,6 +100,28 @@ The `units` / `unit_usd` / `UsageKind` machinery exists for all three when that
 stops being true; `UsageKind.EMBEDDING` and `UsageKind.AUDIO` are declared and
 never written for exactly this reason.
 
+## What a reservation is, and what it is not
+
+A reservation is not an estimate of what a run will cost — nothing knows that
+before it starts. It covers the window in which a run can spend without the
+counters seeing it, and it is priced as one nominal request (`RESERVED_REQUEST`)
+on the model the run actually chose. A flat few cents was the whole hold however
+expensive the model, so many runs admitted at once against one allowance could
+each go on to buy a request nothing had accounted for.
+
+Each reading of the remaining allowance nets off the holds outstanding at that
+moment, the run's own included. Two runs starting together therefore no longer
+each believe they have the whole remainder to spend.
+
+**The residual, stated plainly.** A run's token budget is fixed at admission and
+not re-derived as it goes, so spend that lands *after* a run starts is invisible
+to it until it finishes. What bounds the overshoot is the reservation each run
+holds, not a live reading — so a large enough burst of simultaneous runs can
+still collectively exceed a limit by up to one request each. Closing that
+completely means settling each request against the counter as it lands and
+recording only the remainder at the end; the accumulation on `agent_runs` is the
+half of that machinery which exists today.
+
 `UsageLimitPort` lets another composed module supply plan-specific values. The
 OSS/local default is unlimited so an unregistered custom model cannot prevent
 an agent run. OSS does not define environment-backed plans or a fail-closed
