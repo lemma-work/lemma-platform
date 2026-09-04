@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { credentialSchema, type CatalogSurface } from '@/lib/surfaces/catalog';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { Account } from '@/lib/types';
+import { isPodDefaultAgentName } from '@/lib/utils/agents';
 import { cn } from '@/lib/utils';
 
 export type CredentialValues = Record<string, unknown>;
@@ -47,6 +48,12 @@ export function SurfaceConnectStep({
 }) {
     const schema = credentialSchema(catalog);
     const journey = definition.journey;
+    // The row name, not a label: a surface bound to the pod's own agent reports
+    // `agent_name: "pod_default"`, and this value is both shown as prose and
+    // sent as the name of the Slack app the person is about to create. `null`
+    // is what the copy below already means by "the pod's own bot", so the one
+    // identifier resolves to it rather than reaching a workspace.
+    const named = agentName && !isPodDefaultAgentName(agentName) ? agentName : null;
 
     if (journey && schema) {
         return (
@@ -151,13 +158,13 @@ export function SurfaceConnectStep({
             {definition.platform === 'SLACK' ? (
                 <div className="border-t border-[var(--border-subtle)] pt-3">
                     <p className="mb-2 text-xs leading-5 text-[var(--text-secondary)]">
-                        {agentName
-                            ? `Or give ${agentName} a bot of its own — your workspace, your app, answering as ${agentName} and nobody else.`
+                        {named
+                            ? `Or give ${named} a bot of its own — your workspace, your app, answering as ${named} and nobody else.`
                             : 'Or run Lemma under your own name in Slack — your workspace, your app, your bot’s name and icon.'}
                     </p>
                     <CreateSlackAppButton
-                        agentName={agentName}
-                        label={agentName ? `Make ${agentName}’s Slack app` : undefined}
+                        agentName={named}
+                        label={named ? `Make ${named}’s Slack app` : undefined}
                     />
                     {/* The step after the button, which it cannot take for you:
                         Slack has no API that hands a third party another app's
