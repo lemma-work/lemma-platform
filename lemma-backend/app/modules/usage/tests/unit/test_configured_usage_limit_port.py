@@ -8,7 +8,10 @@ decisions down with it: limits gate admission, so a crash here is an outage.
 
 from __future__ import annotations
 
-from app.composition.usage_limits import _limit_for, _parse_overrides
+from app.modules.usage.infrastructure.configured_usage_limit_port import (
+    _limit_for,
+    _parse_overrides,
+)
 
 
 def test_parse_overrides_reads_slug_limit_pairs():

@@ -36,12 +36,12 @@ def _service(monkeypatch, agent):
         uow=AsyncMock(),
         agent_repository=repository,
         authorization_service=AsyncMock(),
+        # The memory grant is `create`/`update`'s own concern and has its own
+        # file. Injected rather than patched: patching it inside this module
+        # would put a double in front of half of the subject under test.
+        memory_grant_deriver=AsyncMock(),
     )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
-    # The memory grant is `create`/`update`'s own concern and has its own file.
-    monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", AsyncMock()
-    )
     return service, repository
 
 

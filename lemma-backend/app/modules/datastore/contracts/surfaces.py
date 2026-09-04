@@ -71,6 +71,23 @@ async def download_pod_file(
     )
 
 
+async def sign_pod_file(
+    uow, *, pod_id: UUID, path: str, ctx: Context
+) -> tuple[DatastoreFileEntity, str]:
+    """The file at this path as a link anyone holding it can open.
+
+    For an outbound attachment too large to inline: the recipient fetches the
+    bytes from the link instead. The expiry and hit cap the store applies are
+    datastore's to choose, so they are not in the signature -- a caller that
+    wanted to set them would be setting a retention policy for a module it does
+    not own.
+    """
+    entity, signed_url, _expires, _hits = await build_file_service(
+        uow
+    ).create_signed_url(pod_id, path, ctx)
+    return entity, signed_url
+
+
 async def render_pod_file_page(
     uow, *, pod_id: UUID, path: str, ctx: Context, page: int
 ) -> bytes | None:
@@ -161,4 +178,5 @@ __all__ = [
     "read_table_preview",
     "render_pod_file_page",
     "run_readonly_query",
+    "sign_pod_file",
 ]

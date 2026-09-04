@@ -16,7 +16,7 @@ from app.modules.connectors.contracts.surfaces import (
     require_account_owner,
     surface_connector,
 )
-from app.composition.surface_agent import AgentServiceDep
+from app.modules.agent.contracts.agents import agent_id_for_name, agent_name_for_id
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
     SurfaceEventHandlerDep,
@@ -94,27 +94,20 @@ async def _resolve_surface_reach(
 
 async def _resolve_agent_id_filter(
     *,
-    agent_service,
+    session,
     pod_id: UUID,
     agent_name: str | None,
 ) -> UUID | None:
     """Resolve an optional ``agent_name`` list filter to an agent id."""
     if not agent_name:
         return None
-    agent = await agent_service.get_agent_by_name(pod_id=pod_id, name=agent_name)
-    return agent.id
+    return await agent_id_for_name(session, pod_id=pod_id, name=agent_name)
 
 
-async def _resolve_agent_display_name(
-    agent_service, agent_id: UUID | None
-) -> str | None:
+async def _resolve_agent_display_name(session, agent_id: UUID | None) -> str | None:
     if agent_id is None:
         return None
-    try:
-        agent = await agent_service.agent_repository.get(agent_id)
-        return agent.name if agent else None
-    except Exception:
-        return None
+    return await agent_name_for_id(session, agent_id)
 
 
 @router.get(
@@ -126,7 +119,6 @@ async def _resolve_agent_display_name(
 async def list_surfaces(
     pod_id: UUID,
     user: CurrentUser,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     uow: UoWDep,
     connection_resolver: SurfaceConnectionResolverDep,
@@ -142,7 +134,7 @@ async def list_surfaces(
     cursor = parse_uuid_page_token(page_token)
 
     agent_id_filter = await _resolve_agent_id_filter(
-        agent_service=agent_service,
+        session=uow.session,
         pod_id=pod_id,
         agent_name=agent_name,
     )
@@ -173,7 +165,7 @@ async def list_surfaces(
             if not allowed:
                 continue
             resolved_agent_name = await _resolve_agent_display_name(
-                agent_service, surface.agent_id
+                uow.session, surface.agent_id
             )
         reach = await _resolve_surface_reach(surface, service=service, uow=uow)
         visible.append((surface, resolved_agent_name, reach))
@@ -211,7 +203,6 @@ async def create_surface(
     request: SurfaceCreateRequest,
     user: CurrentUser,
     uow: UoWDep,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
@@ -225,9 +216,9 @@ async def create_surface(
         organization_id=ctx.organization_id,
         assert_owner=partial(require_account_owner, uow),
     )
-    agent = (
-        await agent_service.get_agent_by_name(
-            pod_id=pod_id, name=request.default_agent_name
+    agent_name_id = (
+        await agent_id_for_name(
+            uow.session, pod_id=pod_id, name=request.default_agent_name
         )
         if request.default_agent_name
         else None
@@ -236,7 +227,7 @@ async def create_surface(
     # A surface belongs to exactly one agent, so "unowned" is not a state it can
     # be created in -- it used to be, and that is what let one column mean both
     # "who answers here" and "whose bot is this".
-    agent_id = agent.id if agent else pod_id
+    agent_id = agent_name_id or pod_id
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
@@ -253,7 +244,8 @@ async def create_surface(
     )
     surface = await service.create_surface_minting_address(
         pod_id=pod_id,
-        agent=agent,
+        agent_id=agent_name_id,
+        agent_name=request.default_agent_name or None,
         platform=request.platform,
         name=request.name,
         config=config,
@@ -275,7 +267,7 @@ async def create_surface(
     )
     return surface_response(
         surface,
-        agent_name=agent.name if agent else None,
+        agent_name=request.default_agent_name or None,
         reach=reach,
         connection=connection,
     )
@@ -291,7 +283,6 @@ async def get_surface(
     surface_name: str,
     user: CurrentUser,
     uow: UoWDep,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
@@ -303,7 +294,7 @@ async def get_surface(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_READ,
     )
-    agent_name = await _resolve_agent_display_name(agent_service, surface.agent_id)
+    agent_name = await _resolve_agent_display_name(uow.session, surface.agent_id)
     reach = await _resolve_surface_reach(surface, service=service, uow=uow)
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
@@ -324,7 +315,6 @@ async def update_surface(
     request: SurfaceUpdateRequest,
     user: CurrentUser,
     uow: UoWDep,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
@@ -342,9 +332,9 @@ async def update_surface(
         assert_owner=partial(require_account_owner, uow),
     )
     update_agent_id = "default_agent_name" in request.model_fields_set
-    agent = (
-        await agent_service.get_agent_by_name(
-            pod_id=pod_id, name=request.default_agent_name
+    agent_name_id = (
+        await agent_id_for_name(
+            uow.session, pod_id=pod_id, name=request.default_agent_name
         )
         if request.default_agent_name
         else None
@@ -353,7 +343,7 @@ async def update_surface(
     # A surface belongs to exactly one agent, so "unowned" is not a state it can
     # be created in -- it used to be, and that is what let one column mean both
     # "who answers here" and "whose bot is this".
-    agent_id = agent.id if agent else pod_id
+    agent_id = agent_name_id or pod_id
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
@@ -397,9 +387,9 @@ async def update_surface(
     ):
         await service.sync_telegram_mini_app(updated)
     resolved_agent_name = (
-        agent.name
-        if agent
-        else await _resolve_agent_display_name(agent_service, updated.agent_id)
+        request.default_agent_name
+        if agent_name_id
+        else await _resolve_agent_display_name(uow.session, updated.agent_id)
     )
     reach = await _resolve_surface_reach(updated, service=service, uow=uow)
     connection = await connection_resolver.for_surface(

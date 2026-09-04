@@ -104,7 +104,8 @@ async def create_surface(
     uow,
     *,
     pod_id: UUID,
-    agent: object | None,
+    agent_id: UUID | None,
+    agent_name: str | None,
     platform: SurfacePlatform,
     name: str,
     config: SurfaceConfig,
@@ -112,10 +113,17 @@ async def create_surface(
     account_id: UUID | None,
     ctx: Context,
 ) -> AgentSurfaceEntity:
-    """Create a surface, minting the address a platform needs one for."""
+    """Create a surface, minting the address a platform needs one for.
+
+    The agent arrives as an id and a name rather than as an entity: this used to
+    take ``agent: object | None`` and read two attributes off it, which made an
+    agent entity cross three modules to deliver two values and left the contract
+    unable to say what it wanted.
+    """
     return await get_surface_service(uow).create_surface_minting_address(
         pod_id=pod_id,
-        agent=agent,
+        agent_id=agent_id,
+        agent_name=agent_name,
         platform=platform,
         name=name,
         config=config,

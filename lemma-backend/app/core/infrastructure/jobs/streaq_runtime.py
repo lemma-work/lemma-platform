@@ -319,7 +319,6 @@ class AppWorkerContext:
         return build_function_use_cases(self.uow_factory)
 
     def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
-        from app.modules.agent.api.dependencies import get_conversation_service
         from app.modules.agent_surfaces.api.dependencies import (
             surface_repository_factory,
         )
@@ -337,7 +336,6 @@ class AppWorkerContext:
             uow=uow,
             surface_repository=surface_repository_factory(uow),
             conversation_link_repository=SurfaceConversationLinkRepository(uow),
-            conversation_service=get_conversation_service(uow),
             pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         )
 
@@ -348,16 +346,17 @@ class AppWorkerContext:
         external I/O (platform APIs, file ingest, voice transcription) that must
         NOT hold a pooled DB connection. The service resolves credentials and
         writes the inbound message in separate short UoWs from this factory.
+
+        The factory is the whole of it now. It used to carry a second one for
+        the conversation service, because that service is bound to a session and
+        the short-scoped one is not the session it was built with; the
+        conversation operations take the unit of work per call.
         """
-        from app.modules.agent.api.dependencies import get_conversation_service
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
         )
 
-        return AgentSurfaceIngressService(
-            uow_factory=self.uow_factory,
-            conversation_service_factory=get_conversation_service,
-        )
+        return AgentSurfaceIngressService(uow_factory=self.uow_factory)
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:

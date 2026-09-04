@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.modules.agent.contracts import AgentKind
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.permissions import Permissions
@@ -321,8 +323,10 @@ class SurfaceConfigurationMixin(
 
     async def _surface_agent_name(self, surface) -> str:
         """What this surface's agent is called in front of a person."""
-        agent = await self.conversation_service.agent_repository.get(surface.agent_id)
-        if agent is None or agent.kind is AgentKind.POD_DEFAULT:
+        agent = await agent_conversations.surface_agent_identity(
+            self.uow, surface.agent_id
+        )
+        if agent is None or agent.is_pod_default:
             return DEFAULT_RESPONDER_NAME
         return agent.name
 

@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
     AgentSurfaceConversationLinkModel,
 )
-from app.composition.surface_identity import Pod
+from app.modules.pod.contracts.orm import Pod
 from app.modules.agent.contracts.conversations import (
     merge_conversation_metadata as merge_agent_conversation_metadata,
 )

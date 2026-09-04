@@ -46,7 +46,7 @@ the recipe:
 |---|---|
 | The port, declared where the consumer can own it | `app/core/ports/widget_content.py:26` |
 | The implementation, in the providing module | `app/modules/agent/services/widget_asset_service.py:21` |
-| The binding, in the composition root | `app/composition/widget_content.py:10` |
+| The binding, published as a factory by the provider | `app/modules/agent/contracts/widget_content.py:26` |
 | The consumer, depending on the type and not the class | `app/modules/apps/api/dependencies.py:82` |
 
 ---
@@ -62,18 +62,18 @@ Not its services, not its repositories, not its ORM models, not its
 making. It survives refactors by preventing them.
 
 *Check:* `uv run python scripts/check_architecture.py` (`forbidden_imports`)
-*Today:* **35** — ratchet
+*Today:* **34** — ratchet
 
 ### DES-02 — the composition root composes; it does not re-export
 
-`app/composition/` exists to build adapters that bind one module's implementation
-to another module's port. A file there whose whole body is `from … import X` with
-an `__all__` is coupling with a nicer address —
-`app/composition/surface_agent.py:8` and `agent_context_models.py:3` are the
-current counter-examples.
+`app/composition/` is being emptied, and DES-03 below is the rule that replaces
+it: a capability belongs to the module that provides it, published from that
+module's `contracts/`. A file there whose whole body is `from … import X` with an
+`__all__` is coupling with a nicer address — `app/composition/surface_agent.py`
+is the last one, and its docstring says what it is waiting on.
 
 *Check:* `check_architecture.py` (`composition_deep_imports`)
-*Today:* **203** of 223 composition→module imports reach past `contracts` — ratchet
+*Today:* **32** composition→module imports reach past `contracts` — ratchet
 
 ### DES-03 — a module must not import the composition root
 
@@ -81,10 +81,10 @@ Dependencies point inward. When a module imports `app.composition`, the root is
 no longer a root; it is a shared middle layer that every module is coupled to.
 
 *Check:* `make architecture` — `module_composition_imports` in the baseline.
-*Today:* **195** — ratchet
+*Today:* **25** — ratchet
 
 Until this rule had a check, the number was a `grep` in this document and nothing
-failed when it rose. Worse, the cycles those 195 edges carry were invisible too:
+failed when it rose. Worse, the cycles those edges carried were invisible too:
 `module_cycles` reads **0** because a file under `app/composition` is excluded
 from the dependency graph, so a cycle with a hop through the root is not a cycle
 as far as the gate is concerned. `induced_module_cycles` inlines that hop.
@@ -103,7 +103,7 @@ which is how the count reached 42 without anyone deciding on it.
 
 *Check:* `check_architecture.py` (`core_module_imports`), which exempts
 `app/core/registry/installed.py`
-*Today:* **42** — ratchet
+*Today:* **40** — ratchet
 
 ### DES-05 — layers point one way
 
@@ -322,8 +322,12 @@ names for "adapter". Pick one and DES-08 becomes a single grep.
 1. Write the port in the consumer, as a `Protocol` with the methods you actually
    call (DES-06, DES-07).
 2. Implement it in the providing module, under `services/` or `infrastructure/`.
-3. Bind it in `app/composition/` — an adapter class, not a re-export (DES-02).
-4. Depend on the type in the consumer; never import the implementation (DES-01).
+3. Publish a factory for it from the provider's `contracts/`, in a named
+   submodule — never a re-export of the implementation (DES-02). A port held for
+   the length of a run is the one case a factory beats free functions; anything
+   else should be operations.
+4. Depend on the type in the consumer, and bind the factory in its
+   `api/dependencies.py`; never import the implementation (DES-01).
 5. If the collaboration can tolerate latency, use a domain event instead of steps
    1–4, and make the consumer idempotent (DES-15).
 

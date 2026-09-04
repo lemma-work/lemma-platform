@@ -1,4 +1,19 @@
-"""Bind identity mobile verification to the global WhatsApp surface config."""
+"""The pod-wide WhatsApp transport, for a module that is not a surface.
+
+`identity` verifies a mobile number by sending a WhatsApp message, and the only
+WhatsApp credentials and client in the platform are this module's. It was
+`app/composition/identity_whatsapp.py`, which put `agent_surfaces.config` and
+`agent_surfaces.platforms.whatsapp.client` into `identity`'s build for one send
+and one settings read.
+
+`GlobalWhatsAppConfiguration` is a snapshot rather than the settings object: it
+names the six fields identity reads -- all six are read -- and keeps the three
+secrets out of a repr. Publishing `surface_settings` itself would have made
+every future WhatsApp setting part of this surface by default.
+
+A submodule rather than `contracts/__init__`, which is a leaf: this reaches the
+platform client.
+"""
 
 from __future__ import annotations
 

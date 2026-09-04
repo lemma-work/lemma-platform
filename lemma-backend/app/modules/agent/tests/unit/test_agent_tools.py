@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -1349,37 +1350,38 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
         instruction="",
     )
 
-    # The tool delegates to FunctionUseCases.execute_function_as_workload (which
-    # owns auth + run creation); patch the use-case builder to capture input_data.
-    class _FakeUseCases:
-        async def execute_function_as_workload(
-            self,
-            *,
-            pod_id,
-            name,
-            input_data,
-            user_id,
-            principal_type,
-            principal_id,
-            delegation_scope,
-            delegation_actor_name,
-            run_as_workload=None,
-        ):
-            captured["input_data"] = input_data
-            captured["user_id"] = user_id
-            captured["run_as_workload"] = run_as_workload
-            captured["principal_type"] = principal_type
-            captured["principal_id"] = principal_id
-            return SimpleNamespace(
-                id=uuid4(),
-                status=FunctionRunStatus.COMPLETED,
-                output_data={"ok": True},
-                error=None,
-            )
+    # The tool delegates to `function`'s published operation, which owns auth and
+    # run creation. Stubbed where `function` publishes it rather than where
+    # `agent` imports it: the latter is a double inside the subject.
+    async def _execute(
+        uow_factory,
+        *,
+        pod_id,
+        name,
+        input_data,
+        user_id,
+        agent_id,
+        agent_name,
+        delegation_scope,
+    ):
+        del uow_factory, pod_id, name, agent_name, delegation_scope
+        captured["input_data"] = input_data
+        captured["user_id"] = user_id
+        captured["agent_id"] = agent_id
+        return SimpleNamespace(
+            id=uuid4(),
+            status=FunctionRunStatus.COMPLETED,
+            output_data={"ok": True},
+            error=None,
+        )
+
+    from app.modules.function.contracts.agent_tools import (
+        execute_function_for_agent as _real_execute_function_for_agent,
+    )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory.create_function_use_cases",
-        lambda uow_factory: _FakeUseCases(),
+        "app.modules.function.contracts.agent_tools.execute_function_for_agent",
+        _execute,
     )
 
     factory = AgentCallableToolFactory(uow_factory=lambda: _FakeUow())
@@ -1402,13 +1404,20 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
     assert result == {"ok": True}
     assert captured["input_data"] == {"apps": ["gmail", "slack"], "query": "x"}
     assert captured["user_id"] == user_id
+    assert captured["agent_id"] == parent_agent.id
     # The agent's function.execute grant is enforced via the AGENT principal,
-    # but the function itself must run under its OWN identity (run_as_workload
-    # unset -> executor defaults to the function principal), same as the
+    # but the function itself must run under its OWN identity, same as the
     # direct-user and JOB paths. No parent-grant mirroring.
-    assert captured["run_as_workload"] is None
-    assert captured["principal_type"] == "AGENT"
-    assert captured["principal_id"] == parent_agent.id
+    #
+    # Asserted on the signature rather than on a captured `None`: the operation
+    # `agent` calls has no `run_as_workload` parameter at all, so mirroring is
+    # not something a caller can express by accident. That is a stronger
+    # guarantee than the value happening to be unset on this one path, and it
+    # is what publishing an operation instead of `FunctionUseCases` bought.
+    assert (
+        "run_as_workload"
+        not in inspect.signature(_real_execute_function_for_agent).parameters
+    )
 
 
 def test_callable_agent_tool_uses_agent_name_prefix():

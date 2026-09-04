@@ -17,7 +17,8 @@ from app.modules.connectors.infrastructure.adapters.auth_provider_registry impor
 from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
     EnvSystemOAuthConfigAdapter,
 )
-from app.composition.connector_identity import (
+from app.modules.connectors.domain.ports import PodFileGatewayPort
+from app.modules.connectors.infrastructure.adapters.organization_access import (
     SqlAlchemyOrganizationAccessAdapter,
 )
 from app.modules.connectors.infrastructure.adapters.routing_operation_gateway import (
@@ -181,10 +182,14 @@ def build_connector_operation_use_cases(
     # Factory mode: the use-case opens its own short UoWs per phase (via
     # build_connector_operation_service as the per-phase builder) so no pooled
     # connection is held across the external operation call.
-    def _pod_file_gateway(uow):
-        # Imported here rather than at module scope: connectors must not depend
-        # on datastore, and this factory is composition wiring, not module code.
-        from app.composition.connector_pod_files import DatastorePodFileGateway
+    def _pod_file_gateway(uow: object) -> PodFileGatewayPort:
+        # Imported here, not at module scope, for the import budget: the adapter
+        # reaches `datastore/contracts/pod_files.py`, which pulls datastore's
+        # service layer into every process that touches a connector route. This
+        # factory runs per operation execution, not per import.
+        from app.modules.connectors.infrastructure.adapters.pod_file_gateway import (
+            DatastorePodFileGateway,
+        )
 
         return DatastorePodFileGateway(uow)
 

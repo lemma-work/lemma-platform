@@ -7,7 +7,10 @@ name the agent that answers, and identify who sent it. Nothing here writes.
 from __future__ import annotations
 
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
-from app.modules.agent.contracts import AgentKind
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts import agents as agent_directory
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -374,11 +377,11 @@ class SurfaceRoutingMixin:
         sending domain already say. See `agent_display_name`.
         """
         agent = (
-            await self.conversation_service.agent_repository.get(agent_id)
+            await agent_conversations.surface_agent_identity(self.uow, agent_id)
             if agent_id
             else None
         )
-        if agent is None or agent.kind is AgentKind.POD_DEFAULT:
+        if agent is None or agent.is_pod_default:
             return DEFAULT_RESPONDER_NAME
         return agent.name
 
@@ -388,8 +391,7 @@ class SurfaceRoutingMixin:
     ) -> str | None:
         if agent_id is None:
             return None
-        agent = await self.conversation_service.agent_repository.get(agent_id)
-        return agent.name if agent else None
+        return await agent_directory.agent_name_for_id(self.uow.session, agent_id)
 
     def _resolve_platform(self, source: str) -> str | None:
         platform = SurfacePlatform.from_source(source)

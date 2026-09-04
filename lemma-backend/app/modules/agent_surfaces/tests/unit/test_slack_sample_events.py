@@ -9,11 +9,9 @@ from uuid import uuid4
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
-from app.modules.agent.contracts import AgentKind
 from app.core.authorization.context import ActorType, Context
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -77,15 +75,48 @@ async def _reply_stream(*chunks: str):
         yield SimpleNamespace(type="token", data=chunk)
 
 
-def _build_service(*, surface, conversation_service, monkeypatch):
+#: Where `agent` publishes what a surface reads about conversations and agents.
+_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_AGENTS = "app.modules.agent.contracts.agents"
+
+_AGENT_NAME = "Slack Surface Assistant"
+
+
+def _conversation_operations(monkeypatch, *, conversation):
+    """`agent`'s published operations, doubled where they are defined.
+
+    On the contract rather than on the surface modules that call it: the
+    operations are another module's, and the real ones reach a database.
+    """
+    operations = SimpleNamespace(
+        open_surface_conversation=AsyncMock(return_value=conversation),
+        surface_conversation=AsyncMock(return_value=conversation),
+        # A real run id, because the caller checks whether one was started.
+        start_surface_turn=AsyncMock(return_value=uuid4()),
+        pending_interaction=AsyncMock(return_value=None),
+        conversation_metadata_value=AsyncMock(return_value=None),
+        set_conversation_metadata_value=AsyncMock(),
+        surface_agent_identity=AsyncMock(
+            return_value=SimpleNamespace(
+                id=conversation.agent_id,
+                name=_AGENT_NAME,
+                is_pod_default=False,
+                icon_url=None,
+            )
+        ),
+    )
+    for name, double in vars(operations).items():
+        monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)
+    monkeypatch.setattr(
+        f"{_AGENTS}.agent_name_for_id", AsyncMock(return_value=_AGENT_NAME)
+    )
+    return operations
+
+
+def _build_service(*, surface, monkeypatch):
     uow = SimpleNamespace(session=AsyncMock())
     surface_repository = AsyncMock()
     surface_repository.list_active_by_type.return_value = [surface]
-    conversation_service.agent_repository.get = AsyncMock(
-        return_value=SimpleNamespace(
-            name="Slack Surface Assistant", kind=AgentKind.USER
-        )
-    )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
     conversation_link_repository.create.side_effect = lambda link: link
@@ -93,7 +124,6 @@ def _build_service(*, surface, conversation_service, monkeypatch):
         uow=uow,
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
-        conversation_service=conversation_service,
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
@@ -196,22 +226,8 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         title="Slack DM Conversation",
         metadata={},
     )
-    conversation_service = AsyncMock()
-    conversation_service.create_conversation.return_value = conversation
-    # A real result, not a bare mock: whether the surface acknowledges depends
-    # on these flags, and a MagicMock is truthy for every one of them.
-    conversation_service.add_user_message_and_start_run = AsyncMock(
-        return_value=AgentRunStartResult(
-            conversation_id=conversation.id,
-            agent_run_id=uuid4(),
-            started_new_run=True,
-        )
-    )
-    service = _build_service(
-        surface=surface,
-        conversation_service=conversation_service,
-        monkeypatch=monkeypatch,
-    )
+    conversations = _conversation_operations(monkeypatch, conversation=conversation)
+    service = _build_service(surface=surface, monkeypatch=monkeypatch)
 
     context = await service.prepare_ingress(
         SurfacePlatformWebhookIngress(source="slack", payload=payload, headers={})
@@ -223,7 +239,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     assert context.message_external_message_id == event["ts"]
     assert "external_context" not in context.message_metadata.event_metadata
 
-    create_kwargs = conversation_service.create_conversation.await_args.kwargs
+    create_kwargs = conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Slack Surface Assistant"
     assert create_kwargs["metadata"]["surface_id"] == str(surface.id)
@@ -232,10 +248,8 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
 
     await service.execute_chat(context)
 
-    conversation_service.add_user_message_and_start_run.assert_awaited_once()
-    message_kwargs = (
-        conversation_service.add_user_message_and_start_run.await_args.kwargs
-    )
+    conversations.start_surface_turn.assert_awaited_once()
+    message_kwargs = conversations.start_surface_turn.await_args.kwargs
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]
     assert status_updates == [
@@ -301,22 +315,8 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
         title="Slack Mention Conversation",
         metadata={},
     )
-    conversation_service = AsyncMock()
-    conversation_service.create_conversation.return_value = conversation
-    # A real result, not a bare mock: whether the surface acknowledges depends
-    # on these flags, and a MagicMock is truthy for every one of them.
-    conversation_service.add_user_message_and_start_run = AsyncMock(
-        return_value=AgentRunStartResult(
-            conversation_id=conversation.id,
-            agent_run_id=uuid4(),
-            started_new_run=True,
-        )
-    )
-    service = _build_service(
-        surface=surface,
-        conversation_service=conversation_service,
-        monkeypatch=monkeypatch,
-    )
+    conversations = _conversation_operations(monkeypatch, conversation=conversation)
+    service = _build_service(surface=surface, monkeypatch=monkeypatch)
 
     context = await service.prepare_ingress(
         SurfacePlatformWebhookIngress(source="slack", payload=payload, headers={})
@@ -328,7 +328,7 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
     assert context.message_external_message_id == event["ts"]
     assert "external_context" not in context.message_metadata.event_metadata
 
-    create_kwargs = conversation_service.create_conversation.await_args.kwargs
+    create_kwargs = conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Slack Surface Assistant"
     assert create_kwargs["metadata"]["external_thread_id"] == event["ts"]
@@ -336,10 +336,8 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
 
     await service.execute_chat(context)
 
-    conversation_service.add_user_message_and_start_run.assert_awaited_once()
-    message_kwargs = (
-        conversation_service.add_user_message_and_start_run.await_args.kwargs
-    )
+    conversations.start_surface_turn.assert_awaited_once()
+    message_kwargs = conversations.start_surface_turn.await_args.kwargs
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]
     assert added_reactions == [

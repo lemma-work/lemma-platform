@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.composition.identity_whatsapp import GlobalWhatsAppDeliveryError
+from app.modules.agent_surfaces.contracts.whatsapp import GlobalWhatsAppDeliveryError
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.modules.agent_surfaces.config import surface_settings

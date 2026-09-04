@@ -20,7 +20,9 @@ from typing import Any
 from uuid import UUID
 
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import MessageDraft
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     SurfaceMode,
@@ -51,11 +53,11 @@ class NotificationEgress:
         self,
         *,
         egress: SurfaceNotificationEgressPort,
-        conversation_service,
+        uow,
         conversation_link_repository,
     ) -> None:
         self.egress = egress
-        self.conversation_service = conversation_service
+        self.uow = uow
         self.links = conversation_link_repository
 
     async def send(
@@ -207,10 +209,8 @@ class NotificationEgress:
             # Cold-open email: no prior thread exists by definition.
             return await self.open_conversation(channel, notification=notification)
 
-        conversation = (
-            await self.conversation_service.conversation_repository.get_conversation(
-                channel.link.conversation_id
-            )
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, channel.link.conversation_id
         )
         if conversation is not None:
             touched = conversation.updated_at
@@ -256,20 +256,19 @@ class NotificationEgress:
         what makes the recipient's agent able to answer "yes" six hours later
         against a question it can actually see.
         """
-        await self.conversation_service.conversation_repository.append_message(
+        await agent_conversations.append_notification_message(
+            self.uow,
             conversation_id=conversation_id,
-            agent_run_id=None,
-            draft=MessageDraft.of_notification(
-                message,
-                metadata={"notification_id": str(notification.id)},
-            ),
+            message=message,
+            notification_id=notification.id,
         )
 
     async def open_conversation(
         self, channel: DeliveryChannel, *, notification: NotificationEntity
     ) -> UUID | None:
         surface = channel.surface
-        conversation = await self.conversation_service.create_conversation(
+        conversation = await agent_conversations.open_surface_conversation(
+            self.uow,
             pod_id=notification.pod_id,
             agent_name=await self.egress.agent_name_for_surface(surface),
             user_id=notification.recipient_user_id,
@@ -286,7 +285,7 @@ class NotificationEgress:
             },
             require_execute_grant=False,
         )
-        return conversation.id if conversation else None
+        return conversation.id
 
 
 __all__ = ["NotificationEgress"]

@@ -11,10 +11,10 @@ The distinction that matters, and the one the docstrings spend their words on:
 
 Because nothing pauses, an agent that needs answers fires all its messages and
 then simply ends its turn. It does not sleep, and it does not poll. Once the
-*last* of those asks is answered,
-``composition.agent_notifications.deliver_replies_if_settled`` starts the next
-turn in the asking conversation, and the agent reads the answers with
-``check_messages`` from there.
+*last* of those asks is answered, `agent_surfaces` raises
+``NotificationSettledEvent`` and this module's event handler starts the next
+turn in the asking conversation, where the agent reads the answers with
+``check_messages``.
 
 Waiting for the last one rather than the first is what keeps a four-person
 standup to one turn instead of four full conversation replays.
@@ -31,7 +31,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.authorization.delegation import agent_display_name, effective_agent_id
-from app.composition.agent_notifications import (
+from app.modules.agent_surfaces.contracts.notifications import (
     check_notifications,
     resolve_recipient,
     send_notification,

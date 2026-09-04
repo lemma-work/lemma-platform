@@ -24,7 +24,6 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.composition.surface_agent import get_conversation_service
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
@@ -78,7 +77,6 @@ def build_surface_event_handler(uow):
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=get_conversation_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 

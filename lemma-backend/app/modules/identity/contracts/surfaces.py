@@ -1,6 +1,6 @@
 """Who a message on a chat surface is from, and what they chose to answer on.
 
-Five operations, not the `UserRepository` `app/composition/surface_identity.py`
+Five operations, not the `UserRepository` the composition root
 published. The port beside them on `contracts/__init__` would have been no
 better: `UserRepositoryPort` carries `create` and `update`, so handing it to a
 chat surface hands it the ability to make a user.

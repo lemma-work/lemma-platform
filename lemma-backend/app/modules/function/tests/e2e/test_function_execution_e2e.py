@@ -1030,7 +1030,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 # (agent-as-tool) and dispatch_function_for_workflow/cancel_function_run
 # (workflow node control) have no HTTP surface at all -- they're built the same
 # way their real callers build them (app/modules/agent/tools/
-# callable_tool_factory.py, app/composition/workflow_function.py) via
+# callable_tool_factory.py, function/infrastructure/workflow_control.py) via
 # `build_function_use_cases`, against the live e2e database and the real Docker
 # sandbox, same pattern as test_function_sandbox_execution_e2e.py's
 # dispatcher-construction tests.
@@ -1197,7 +1197,7 @@ async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_
     authenticated_client, test_pod, fixed_test_user, db_manager, worker
 ):
     """``dispatch_function_for_workflow`` is the workflow-node path
-    (``app/composition/workflow_function.py::FunctionControlAdapter.execute_function``):
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``):
     it forces ASYNCHRONOUS dispatch even for an API function and returns
     PENDING without running the sandbox inline, so the workflow engine can
     suspend on the run id and let the ``FunctionRunCompleted`` event resume
@@ -1257,7 +1257,7 @@ async def test_cancel_function_run_stops_a_dispatched_run_before_it_completes(
 ):
     """``cancel_function_run`` is used when a workflow run that was waiting on
     a dispatched function is itself cancelled
-    (``app/composition/workflow_function.py::FunctionControlAdapter.cancel_run``),
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.cancel_run``),
     so the sandbox stops doing work nobody is waiting for. A run that is still
     PENDING or RUNNING is cancellable; confirm a long JOB run actually ends
     CANCELLED instead of completing."""

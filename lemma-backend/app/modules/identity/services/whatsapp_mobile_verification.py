@@ -23,7 +23,7 @@ from redis.asyncio import Redis
 from app.core.infrastructure.redis.client import get_redis
 from sqlalchemy.exc import IntegrityError
 
-from app.composition.identity_whatsapp import (
+from app.modules.agent_surfaces.contracts.whatsapp import (
     GlobalWhatsAppDeliveryError,
     global_whatsapp_configuration,
     send_global_whatsapp_text,

@@ -42,7 +42,6 @@ def build_agent_surface_ingress_service(
     ``build_surface_event_handler`` dependency; kept here so the tool delivery
     path does not depend on the worker/request context.
     """
-    from app.composition.surface_agent import get_conversation_service
     from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
     from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
         SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -55,7 +54,6 @@ def build_agent_surface_ingress_service(
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=get_conversation_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
