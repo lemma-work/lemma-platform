@@ -21,13 +21,35 @@ def client():
     return TestClient(appmod.app, raise_server_exceptions=False)
 
 
+class _FakeWorkerRedis:
+    """A Redis holding whichever worker-liveness keys the test says exist."""
+
+    def __init__(self, *present: str) -> None:
+        self._present = set(present)
+
+    async def exists(self, name: str) -> int:
+        return 1 if name in self._present else 0
+
+
+def _worker_redis(monkeypatch, *present: str) -> None:
+    monkeypatch.setattr(
+        "app.core.infrastructure.redis.client.get_redis",
+        lambda **_: _FakeWorkerRedis(*present),
+    )
+
+
 @pytest.fixture(autouse=True)
 def healthy_by_default(monkeypatch):
     """Readiness asks five things; each test is about one of them.
 
-    The SuperTokens core and the schema revision are real network and database
-    reads, so without this every test in the file would also be a test of
-    whichever of those happened to be running on the machine.
+    The SuperTokens core, the schema revision and the worker keys are real
+    network and database reads, so without this every test in the file would
+    also be a test of whichever of those happened to be running on the machine.
+
+    No worker key is the honest default here, not a convenient one: this is an
+    API-only process that runs no worker, which `worker_liveness` names as the
+    case `seen` exists to tell apart, and it must not be reported unready for a
+    component it never had. A test about the worker says which keys are there.
     """
     monkeypatch.setattr(
         appmod, "supertokens_core_reachable", AsyncMock(return_value=True)
@@ -35,6 +57,7 @@ def healthy_by_default(monkeypatch):
     monkeypatch.setattr(
         appmod, "schema_migration_state", AsyncMock(return_value="current")
     )
+    _worker_redis(monkeypatch)
 
 
 def test_liveness_endpoints_return_ok(client):
@@ -152,6 +175,10 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     monkeypatch.setattr(
         appmod.settings, "worker_heartbeat_path", str(tmp_path / "never-written")
     )
+    # Said rather than inherited: this test is about the worker, so the Redis
+    # that has never seen one is its arrangement, not the file's background.
+    _worker_redis(monkeypatch)
+
     r = client.get("/health/ready")
     assert r.status_code == 200
     assert "worker" not in r.json()["components"]
@@ -284,23 +311,6 @@ def test_ready_returns_503_when_redis_down(client, monkeypatch):
     body = r.json()
     assert body["components"]["db"] == "ok"
     assert body["components"]["redis"] == "down"
-
-
-class _FakeWorkerRedis:
-    """A Redis holding whichever worker-liveness keys the test says exist."""
-
-    def __init__(self, *present: str) -> None:
-        self._present = set(present)
-
-    async def exists(self, name: str) -> int:
-        return 1 if name in self._present else 0
-
-
-def _worker_redis(monkeypatch, *present: str) -> None:
-    monkeypatch.setattr(
-        "app.core.infrastructure.redis.client.get_redis",
-        lambda **_: _FakeWorkerRedis(*present),
-    )
 
 
 def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
