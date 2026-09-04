@@ -10,7 +10,7 @@ Two properties, neither of which had a test before, and one of which was wrong:
   concurrent reader can repopulate the cache from the pre-commit state between
   the invalidation and the commit.
 
-No doubles here. `_write_then_invalidate` takes both halves as parameters
+No doubles here. `write_then_invalidate` takes both halves as parameters
 precisely so the order can be asserted with plain fakes rather than by patching
 names inside the module under test.
 """
@@ -22,9 +22,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.function.api.controllers.function_controller import (
-    _apply_function_grants,
-    _write_then_invalidate,
+from app.modules.function.api.controllers.function_grants import (
+    apply_function_grants,
+    write_then_invalidate,
 )
 
 pytestmark = pytest.mark.unit
@@ -69,7 +69,7 @@ def _invalidator(log: list[str]):
 async def test_the_cache_is_dropped_only_after_the_grant_write_commits():
     log: list[str] = []
 
-    await _write_then_invalidate(
+    await write_then_invalidate(
         _factory(log),
         write=_writer(log, applied=True),
         invalidate=_invalidator(log),
@@ -87,7 +87,7 @@ async def test_a_write_that_changed_nothing_drops_no_cache():
     environment."""
     log: list[str] = []
 
-    await _write_then_invalidate(
+    await write_then_invalidate(
         _factory(log),
         write=_writer(log, applied=False),
         invalidate=_invalidator(log),
@@ -107,7 +107,7 @@ async def test_a_payload_that_says_nothing_about_permissions_opens_no_connection
     def _explodes():
         raise AssertionError("checked out a connection with nothing to write")
 
-    await _apply_function_grants(
+    await apply_function_grants(
         _explodes,
         pod_id=uuid4(),
         function=SimpleNamespace(id=uuid4()),
