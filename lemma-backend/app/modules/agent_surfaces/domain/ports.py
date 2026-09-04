@@ -430,6 +430,7 @@ class SurfaceUserDirectoryPort(Protocol):
 
     async def user_id_by_email(self, email: str) -> UUID | None:
         """The live user with this address, or nobody."""
+        raise NotImplementedError
 
     async def user_id_by_telegram_username(self, username: str) -> UUID | None:
         """The live user holding this handle, or nobody.
@@ -438,14 +439,17 @@ class SurfaceUserDirectoryPort(Protocol):
         taken by someone else, and a surface resolving it is choosing whose
         authority a run executes with.
         """
+        raise NotImplementedError
 
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool
     ) -> list[UUID]:
         """The live users reachable on any of these numbers."""
+        raise NotImplementedError
 
     async def preferences(self, user_id: UUID) -> "UserPreferences":
         """This person's surface preferences, defaults included."""
+        raise NotImplementedError
 
     async def set_preferences(
         self, user_id: UUID, preferences: "UserPreferences"
