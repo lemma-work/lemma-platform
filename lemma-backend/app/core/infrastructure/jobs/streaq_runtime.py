@@ -30,7 +30,6 @@ from app.core.infrastructure.db.session import (
     get_engine,
     close_engine,
 )
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.events.consumer_groups import (
     consumer_group_reconcile_loop,
@@ -287,76 +286,6 @@ class AppWorkerContext:
 
     def uow(self):
         return self.uow_factory()
-
-    def build_function_storage_factory(self):
-        from app.modules.function.api.dependencies import (
-            get_function_storage_factory,
-        )
-
-        return get_function_storage_factory()
-
-    def build_function_service(self, uow: SqlAlchemyUnitOfWork):
-        from app.core.infrastructure.events.message_bus import get_message_bus
-        from app.modules.function.infrastructure.repositories import (
-            FunctionRepository,
-            FunctionRunRepository,
-        )
-        from app.modules.function.services.function_service import FunctionService
-
-        message_bus = get_message_bus()
-        return FunctionService(
-            function_repository=FunctionRepository(uow, message_bus=message_bus),
-            run_repository=FunctionRunRepository(uow, message_bus=message_bus),
-            storage_factory=self.build_function_storage_factory(),
-        )
-
-    def build_function_use_cases(self):
-        """Build the function use-case layer for the worker (same object the API
-        builds). Used to execute queued runs without holding a pooled connection
-        across the sandbox round-trip."""
-        from app.modules.function.api.dependencies import build_function_use_cases
-
-        return build_function_use_cases(self.uow_factory)
-
-    def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
-        from app.modules.agent_surfaces.api.dependencies import (
-            surface_repository_factory,
-        )
-        from app.modules.agent_surfaces.services.ingress_service import (
-            AgentSurfaceIngressService,
-        )
-        from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-            SqlAlchemySurfaceRoutingResolutionAdapter,
-        )
-        from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-            SurfaceConversationLinkRepository,
-        )
-
-        return AgentSurfaceIngressService(
-            uow=uow,
-            surface_repository=surface_repository_factory(uow),
-            conversation_link_repository=SurfaceConversationLinkRepository(uow),
-            pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-        )
-
-    def build_surface_event_handler_with_factory(self):
-        """Build an AgentSurfaceIngressService that scopes its own short UoWs.
-
-        Used by the process_surface_message worker task: execute_chat runs long
-        external I/O (platform APIs, file ingest, voice transcription) that must
-        NOT hold a pooled DB connection. The service resolves credentials and
-        writes the inbound message in separate short UoWs from this factory.
-
-        The factory is the whole of it now. It used to carry a second one for
-        the conversation service, because that service is bound to a session and
-        the short-scoped one is not the session it was built with; the
-        conversation operations take the unit of work per call.
-        """
-        from app.modules.agent_surfaces.services.ingress_service import (
-            AgentSurfaceIngressService,
-        )
-
-        return AgentSurfaceIngressService(uow_factory=self.uow_factory)
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:

@@ -24,6 +24,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
+from app.modules.agent_surfaces.api import dependencies as surface_dependencies
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
@@ -287,5 +288,7 @@ async def process_surface_message(
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
-    service = worker_ctx.build_surface_event_handler_with_factory()
+    service = surface_dependencies.build_surface_event_handler_with_factory(
+        worker_ctx.uow_factory
+    )
     await service.execute_chat(task_payload.context)
