@@ -6,7 +6,8 @@ from uuid import UUID
 from sqlalchemy import and_, select
 
 from app.core.domain.uow import IUnitOfWork
-from app.composition.surface_identity import OrganizationMember, PodMember, User
+from app.composition.surface_identity import PodMember
+from app.modules.identity.contracts.orm import OrganizationMember, User
 from app.modules.agent_surfaces.domain.ports import SurfaceConnectionOwnerInfo
 
 

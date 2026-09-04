@@ -4,9 +4,9 @@ from app.core.registry import LemmaModule
 
 
 def _event_routers():
-    from app.composition import analytics_consumer
+    from app.modules.analytics import events
 
-    return [analytics_consumer.router]
+    return [events.router]
 
 
 module = LemmaModule(

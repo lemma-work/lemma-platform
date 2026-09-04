@@ -56,7 +56,6 @@ from app.modules.agent_surfaces.services.ingress_service import (
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
 )
-from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 from app.core.log.log import get_logger
@@ -80,7 +79,6 @@ def build_surface_event_handler(uow):
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         conversation_service=get_conversation_service(uow),
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 

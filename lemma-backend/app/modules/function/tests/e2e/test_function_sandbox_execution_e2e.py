@@ -16,11 +16,11 @@ from app.modules.workspace.services.local_sandbox_client import (
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.workspace_identity import (
+from app.modules.function.api.dependencies import (
+    get_function_storage_factory,
     mint_function_session_token,
-    resolve_workspace_organization_id,
+    resolve_function_organization_id,
 )
-from app.modules.function.api.dependencies import get_function_storage_factory
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
 )
@@ -236,7 +236,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
             runtime_http_client_factory=runtime_http_clients.get,
-            organization_resolver=resolve_workspace_organization_id,
+            organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 
@@ -345,7 +345,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
             runtime_http_client_factory=runtime_http_clients.get,
-            organization_resolver=resolve_workspace_organization_id,
+            organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 

@@ -11,6 +11,7 @@ from app.composition import schedule_target_outcome_consumer
 from app.composition.schedule_target_outcomes import AgentConversationOutcome
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.identity.contracts.profiles import UserProfileRef
 from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.handlers import (
@@ -195,11 +196,11 @@ async def test_deactivation_needs_no_job_teardown(schedule_type) -> None:
 @pytest.mark.asyncio
 async def test_deactivation_email_is_sent_to_schedule_owner(monkeypatch) -> None:
     owner_email = "schedule-owner@example.com"
-    resolve_email = AsyncMock(return_value=owner_email)
+    resolve_profile = AsyncMock(return_value=UserProfileRef(email=owner_email))
     send_email = AsyncMock()
     monkeypatch.setattr(
-        "app.composition.identity_notifications.resolve_user_email",
-        resolve_email,
+        "app.modules.identity.contracts.profiles.user_profile",
+        resolve_profile,
     )
     monkeypatch.setattr(
         "app.core.email.email_sender.EmailSender.from_settings",
@@ -227,8 +228,8 @@ async def test_deactivation_email_is_sent_to_schedule_owner(monkeypatch) -> None
         inbox=PassthroughEventInbox(),
     )
 
-    resolve_email.assert_awaited_once()
-    assert resolve_email.await_args.args[1] == owner_id
+    resolve_profile.assert_awaited_once()
+    assert resolve_profile.await_args.args[1] == owner_id
     send_email.assert_awaited_once()
     assert send_email.await_args.kwargs["to_email"] == owner_email
 

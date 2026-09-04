@@ -49,8 +49,9 @@ async def list_conversations_stranded_by_a_finished_run(
     where a run reached a terminal status but its conversation did not, the run
     is no longer active, so no sweep keyed on run status can see it — and
     nothing else will ever move it, because a terminal run is never finalized
-    again. `schedule_run_recovery` and `workflow_agent` both read
-    ``conversation.status``, so one of these wedges whatever waits on it.
+    again. The schedule ledger's recovery sweep and this module's own workflow
+    control adapter both read ``conversation.status``, so one of these wedges
+    whatever waits on it.
 
     The cutoff is applied to the run's ``finished_at``, so a conversation is
     only picked up once its run has been done long enough that no in-flight

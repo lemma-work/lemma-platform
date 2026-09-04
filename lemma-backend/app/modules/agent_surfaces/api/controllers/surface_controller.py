@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -10,6 +11,11 @@ from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
+from app.modules.connectors.contracts.surfaces import (
+    account,
+    require_account_owner,
+    surface_connector,
+)
 from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
@@ -51,7 +57,6 @@ from app.modules.agent_surfaces.services.surface_reach_resolver import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
-from app.composition.surface_connectors import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
 
@@ -73,14 +78,14 @@ async def _resolve_surface_reach(
     surface: AgentSurfaceEntity,
     *,
     service: AgentSurfaceService,
-    connector_service,
+    uow,
 ) -> SurfaceReach | None:
     """Best-effort ``reach`` for a surface (never breaks the response)."""
     try:
         return await SurfaceReachResolver().resolve(
             surface,
             credential_resolver=service._credential_resolver,
-            connector_service=connector_service,
+            find_account=partial(account, uow),
             surface_repository=service.surface_repository,
         )
     except Exception:
@@ -123,7 +128,7 @@ async def list_surfaces(
     user: CurrentUser,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
-    connector_service: ConnectorServiceDep,
+    uow: UoWDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
     limit: int = 100,
@@ -170,9 +175,7 @@ async def list_surfaces(
             resolved_agent_name = await _resolve_agent_display_name(
                 agent_service, surface.agent_id
             )
-        reach = await _resolve_surface_reach(
-            surface, service=service, connector_service=connector_service
-        )
+        reach = await _resolve_surface_reach(surface, service=service, uow=uow)
         visible.append((surface, resolved_agent_name, reach))
 
     # Resolved once for the page, after the per-agent filter, so the two queries
@@ -210,7 +213,6 @@ async def create_surface(
     uow: UoWDep,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
-    connector_service: ConnectorServiceDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
@@ -221,7 +223,7 @@ async def create_surface(
         request.account_id,
         user_id=user.id,
         organization_id=ctx.organization_id,
-        connector_service=connector_service,
+        assert_owner=partial(require_account_owner, uow),
     )
     agent = (
         await agent_service.get_agent_by_name(
@@ -267,9 +269,7 @@ async def create_surface(
             is_active=False,
             ctx=ctx,
         )
-    reach = await _resolve_surface_reach(
-        surface, service=service, connector_service=connector_service
-    )
+    reach = await _resolve_surface_reach(surface, service=service, uow=uow)
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
@@ -290,9 +290,9 @@ async def get_surface(
     pod_id: UUID,
     surface_name: str,
     user: CurrentUser,
+    uow: UoWDep,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
-    connector_service: ConnectorServiceDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
@@ -304,9 +304,7 @@ async def get_surface(
         action=Permissions.AGENT_READ,
     )
     agent_name = await _resolve_agent_display_name(agent_service, surface.agent_id)
-    reach = await _resolve_surface_reach(
-        surface, service=service, connector_service=connector_service
-    )
+    reach = await _resolve_surface_reach(surface, service=service, uow=uow)
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
@@ -328,7 +326,6 @@ async def update_surface(
     uow: UoWDep,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
-    connector_service: ConnectorServiceDep,
     connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
@@ -342,7 +339,7 @@ async def update_surface(
         request.account_id,
         user_id=user.id,
         organization_id=ctx.organization_id,
-        connector_service=connector_service,
+        assert_owner=partial(require_account_owner, uow),
     )
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent = (
@@ -404,9 +401,7 @@ async def update_surface(
         if agent
         else await _resolve_agent_display_name(agent_service, updated.agent_id)
     )
-    reach = await _resolve_surface_reach(
-        updated, service=service, connector_service=connector_service
-    )
+    reach = await _resolve_surface_reach(updated, service=service, uow=uow)
     connection = await connection_resolver.for_surface(
         updated, pod_id=pod_id, viewer_user_id=user.id
     )
@@ -565,7 +560,7 @@ async def get_surface_setup_guide(
 async def list_available_surfaces(
     pod_id: UUID,
     user: CurrentUser,
-    connector_service: ConnectorServiceDep,
+    uow: UoWDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AvailableSurfacesResponse:
     """The connectable-surface catalog: every surface platform with its connector,
@@ -574,7 +569,7 @@ async def list_available_surfaces(
     platform-level — no surface need exist."""
     del user
     return await build_available_surfaces(
-        connector_service=connector_service,
+        read_connector=partial(surface_connector, uow),
         pod_id=pod_id,
         surface_repository=service.surface_repository,
     )

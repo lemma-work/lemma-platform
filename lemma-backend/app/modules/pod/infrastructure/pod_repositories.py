@@ -13,7 +13,7 @@ from app.core.authorization.models import (
     RoleAssignmentModel,
     RoleModel,
 )
-from app.composition.pod_identity_wiring import OrganizationMember, User
+from app.modules.identity.contracts.orm import OrganizationMember, User
 from app.modules.identity.contracts import normalize_identity_email
 from app.modules.pod.domain.ports import (
     PodJoinRequestRepositoryPort,

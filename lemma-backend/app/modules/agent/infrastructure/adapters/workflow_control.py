@@ -1,13 +1,22 @@
-"""Agent execution adapter for workflow nodes."""
+"""Driving an agent conversation on a workflow's behalf.
+
+Implements `workflow`'s own `AgentPort`. Here rather than in a third package
+because every collaborator it uses -- the agent and conversation repositories,
+the wait store, the runtime profile default -- belongs to this module, and a
+build step that lives elsewhere has to know where inside `agent` each of them
+happens to sit.
+
+Values crossing the port are `object`, not `Any`: a workflow's node output is
+JSON whose shape belongs to the workflow's author, and saying `Any` would let a
+caller read a key off it without the type checker asking.
+"""
 
 from __future__ import annotations
 
 import json
-from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
-
+from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
@@ -33,12 +42,10 @@ from app.modules.agent.infrastructure.conversation_idempotency_store import (
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.runtime_profile_service import (
-    DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+from app.modules.agent.services.pod_runtime_defaults import (
+    default_agent_runtime_for_pod,
 )
-from app.modules.pod.domain.pod_entities import PodConfig
-from app.modules.pod.infrastructure.models.pod_models import Pod
-from app.modules.workflow.domain.ports import AgentPort
+from app.modules.workflow.contracts import AgentPort
 
 
 class AgentControlAdapter(AgentPort):
@@ -51,13 +58,13 @@ class AgentControlAdapter(AgentPort):
     async def run_agent(
         self,
         agent_name: str,
-        input_data: dict[str, Any],
+        input_data: dict[str, object],
         pod_id: UUID,
         user_id: UUID,
         conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
-        conversation_metadata: dict[str, Any] | None = None,
+        conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get_by_pod_and_name(
@@ -86,19 +93,22 @@ class AgentControlAdapter(AgentPort):
         agent_id: UUID | None,
         agent_name: str,
         agent_runtime: AgentRuntimeConfig | None,
-        input_data: dict[str, Any],
+        input_data: dict[str, object],
         pod_id: UUID,
         user_id: UUID,
         conversation_id: UUID | None,
         workflow_run_id: UUID | None,
         source: str,
-        conversation_metadata: dict[str, Any] | None,
+        conversation_metadata: dict[str, object] | None,
         instructions: str | None,
     ) -> UUID:
-        metadata = {**(conversation_metadata or {}), "source": source}
+        metadata: dict[str, object] = {
+            **(conversation_metadata or {}),
+            "source": source,
+        }
         if workflow_run_id is not None:
             metadata["workflow_run_id"] = str(workflow_run_id)
-        entity_values: dict[str, Any] = {
+        entity_values: dict[str, object] = {
             "user_id": user_id,
             "pod_id": pod_id,
             "organization_id": await self._get_pod_organization_id(pod_id),
@@ -166,13 +176,13 @@ class AgentControlAdapter(AgentPort):
     async def run_agent_by_id(
         self,
         agent_id: UUID,
-        input_data: dict[str, Any],
+        input_data: dict[str, object],
         pod_id: UUID,
         user_id: UUID,
         conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
-        conversation_metadata: dict[str, Any] | None = None,
+        conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get(agent_id)
@@ -190,7 +200,7 @@ class AgentControlAdapter(AgentPort):
             instructions=instructions,
         )
 
-    async def get_conversation_status(self, conversation_id: UUID) -> dict[str, Any]:
+    async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
         conversation = await self.conversation_repo.get_conversation(conversation_id)
         if conversation is None or conversation.status is None:
             return {"status": "NOT_FOUND"}
@@ -260,24 +270,17 @@ class AgentControlAdapter(AgentPort):
     async def _default_agent_runtime_for_pod(
         self, *, pod_id: UUID
     ) -> AgentRuntimeConfig:
-        result = await self.uow.session.execute(
-            select(Pod.config).where(Pod.id == pod_id)
-        )
-        runtime = PodConfig.from_raw(
-            result.scalar_one_or_none() or {}
-        ).resolved_default_runtime()
-        return runtime or AgentRuntimeConfig(
-            profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-        )
+        # This module's own answer, not a second copy of it. Reading
+        # `Pod.config` here directly is how a workflow-started run could
+        # resolve a different default model than the same agent started from a
+        # conversation.
+        return await default_agent_runtime_for_pod(self.uow, pod_id=pod_id)
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
-        result = await self.uow.session.execute(
-            select(Pod.organization_id).where(Pod.id == pod_id)
-        )
-        return result.scalar_one_or_none()
+        return await pod_organization_id(self.uow, pod_id)
 
     @staticmethod
-    def _normalize_agent_output(output: Any) -> dict[str, Any]:
+    def _normalize_agent_output(output: object) -> dict[str, object]:
         if isinstance(output, dict):
             return output
         if output is None or output == "":
@@ -285,6 +288,6 @@ class AgentControlAdapter(AgentPort):
         return {"answer": output}
 
     @staticmethod
-    def _workflow_input_prompt(input_data: dict[str, Any]) -> str:
+    def _workflow_input_prompt(input_data: dict[str, object]) -> str:
         payload = json.dumps(input_data, ensure_ascii=True, indent=2, default=str)
         return f"Workflow input JSON:\n{payload}"

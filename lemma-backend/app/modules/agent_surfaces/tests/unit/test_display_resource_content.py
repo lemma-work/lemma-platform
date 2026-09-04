@@ -10,6 +10,7 @@ import pytest
 
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
+from app.modules.datastore.contracts.surfaces import TableRows
 from app.modules.agent_surfaces.services import display_resource_content
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
@@ -48,15 +49,14 @@ def _file_entity(*, name: str, size_bytes: int, mime_type: str):
 
 @pytest.fixture
 def pod_files(monkeypatch):
-    """A fake pod filesystem, with the authorization plumbing stubbed out."""
+    """Datastore's published file operations, with authorization stubbed out."""
     service = SimpleNamespace(
-        get_file_by_path=AsyncMock(),
-        download_file_content_by_path=AsyncMock(),
-        render_document_page_images=AsyncMock(),
+        read_pod_file=AsyncMock(),
+        download_pod_file=AsyncMock(),
+        render_pod_file_page=AsyncMock(),
     )
-    monkeypatch.setattr(
-        display_resource_content, "build_file_service", lambda uow: service
-    )
+    for name in ("read_pod_file", "download_pod_file", "render_pod_file_page"):
+        monkeypatch.setattr(display_resource_content, name, getattr(service, name))
     monkeypatch.setattr(
         display_resource_content,
         "create_authorization_data_service",
@@ -71,8 +71,8 @@ def pod_files(monkeypatch):
 
 async def test_a_file_that_fits_is_attached_and_never_becomes_a_card(pod_files):
     entity = _file_entity(name="q3.png", size_bytes=4096, mime_type="image/png")
-    pod_files.get_file_by_path.return_value = entity
-    pod_files.download_file_content_by_path.return_value = (entity, b"pixels")
+    pod_files.read_pod_file.return_value = entity
+    pod_files.download_pod_file.return_value = (entity, b"pixels")
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
@@ -94,12 +94,9 @@ async def test_a_pdf_arrives_with_its_first_page_shown_above_it(pod_files):
     entity = _file_entity(
         name="shiplog.pdf", size_bytes=2_400_000, mime_type="application/pdf"
     )
-    pod_files.get_file_by_path.return_value = entity
-    pod_files.download_file_content_by_path.return_value = (entity, b"%PDF-1.7")
-    pod_files.render_document_page_images.return_value = (
-        entity,
-        [SimpleNamespace(page_number=1, jpeg_bytes=b"jpeg-bytes")],
-    )
+    pod_files.read_pod_file.return_value = entity
+    pod_files.download_pod_file.return_value = (entity, b"%PDF-1.7")
+    pod_files.render_pod_file_page.return_value = b"jpeg-bytes"
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
@@ -125,9 +122,9 @@ async def test_a_page_that_will_not_render_still_sends_the_document(pod_files):
     entity = _file_entity(
         name="broken.pdf", size_bytes=1024, mime_type="application/pdf"
     )
-    pod_files.get_file_by_path.return_value = entity
-    pod_files.download_file_content_by_path.return_value = (entity, b"%PDF-1.7")
-    pod_files.render_document_page_images.side_effect = RuntimeError("corrupt")
+    pod_files.read_pod_file.return_value = entity
+    pod_files.download_pod_file.return_value = (entity, b"%PDF-1.7")
+    pod_files.render_pod_file_page.side_effect = RuntimeError("corrupt")
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
         conversation_service=_conversation_service(),
@@ -151,7 +148,7 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
         size_bytes=64 * 1024 * 1024,
         mime_type="application/zip",
     )
-    pod_files.get_file_by_path.return_value = entity
+    pod_files.read_pod_file.return_value = entity
     adapter = AsyncMock()
 
     resolved = await resolve_pod_file_parts(
@@ -166,7 +163,7 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
     assert resolved.files == [], "an oversize file must not become an attachment"
     assert resolved.facts.fits is False
     # The bytes were never fetched: the size alone decided it.
-    pod_files.download_file_content_by_path.assert_not_awaited()
+    pod_files.download_pod_file.assert_not_awaited()
 
     plan = apply_file_facts(_file_plan(), resolved.facts)
     assert plan.title == "raw-export.zip"
@@ -174,7 +171,7 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
 
 
 async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
-    pod_files.get_file_by_path.side_effect = PermissionError("nope")
+    pod_files.read_pod_file.side_effect = PermissionError("nope")
     adapter = AsyncMock()
 
     resolved = await resolve_pod_file_parts(
@@ -247,19 +244,14 @@ async def test_a_displayed_table_arrives_with_its_own_first_rows(monkeypatch):
         primary_key_column="id",
         enable_rls=False,
     )
-    table_service = SimpleNamespace(
-        get_table=AsyncMock(return_value=table),
-        schema_manager=SimpleNamespace(get_schema_name=lambda pod_id: "pod_x"),
-    )
-    record_service = SimpleNamespace(
-        list_records=AsyncMock(
-            return_value=(
-                [
-                    SimpleNamespace(data={"id": 1, "stage": "won", "value": 4200}),
-                    SimpleNamespace(data={"id": 2, "stage": "open", "value": 900}),
-                ],
-                42,
-            )
+    read_table_preview = AsyncMock(
+        return_value=TableRows(
+            rows=[
+                {"id": 1, "stage": "won", "value": 4200},
+                {"id": 2, "stage": "open", "value": 900},
+            ],
+            total=42,
+            columns=[column.name for column in table.columns],
         )
     )
     monkeypatch.setattr(
@@ -272,10 +264,7 @@ async def test_a_displayed_table_arrives_with_its_own_first_rows(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        display_resource_content, "build_table_service", lambda uow: table_service
-    )
-    monkeypatch.setattr(
-        display_resource_content, "build_record_service", lambda uow: record_service
+        display_resource_content, "read_table_preview", read_table_preview
     )
 
     preview = await resolve_table_preview(
@@ -296,6 +285,5 @@ async def test_a_displayed_table_arrives_with_its_own_first_rows(monkeypatch):
     # The schema's column order is what the block uses, not the dict's.
     assert preview.block.splitlines()[0].split() == ["id", "stage", "value"]
     # The displayed filters are the ones the rows were read under.
-    assert record_service.list_records.await_args.kwargs["filters"] == [
-        ("stage", "eq", "won")
-    ]
+    assert read_table_preview.await_args.kwargs["filters"] == [("stage", "eq", "won")]
+    assert read_table_preview.await_args.kwargs["table_name"] == "deals"

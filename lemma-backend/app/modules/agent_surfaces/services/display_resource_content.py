@@ -30,10 +30,13 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.core.log.log import get_logger
-from app.composition.surface_datastore import (
-    build_file_service,
-    build_record_service,
-    build_table_service,
+from app.modules.datastore.contracts.surfaces import (
+    TableRows,
+    download_pod_file,
+    read_pod_file,
+    read_table_preview,
+    render_pod_file_page,
+    run_readonly_query,
 )
 from app.modules.agent.contracts import DisplayResourceRequest
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
@@ -46,7 +49,6 @@ from app.modules.agent_surfaces.services.display_resource_preview import (
     format_record_table,
 )
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
-from app.modules.datastore.contracts import TableContext
 
 logger = get_logger(__name__)
 
@@ -188,7 +190,12 @@ async def resolve_pod_file_parts(
     if page_preview and _is_pdf(entity):
         preview = await _best_effort(
             lambda: _page_preview_part(
-                uow=uow, target=target, ctx=ctx, path=path, caption=caption
+                uow=uow,
+                target=target,
+                ctx=ctx,
+                path=path,
+                file_name=entity.name,
+                caption=caption,
             ),
             step="page_preview",
             path=path,
@@ -293,12 +300,13 @@ async def _read_table_preview(
     user_id = ctx.user_id
     token = set_current_context(ctx)
     try:
-        rows, total, columns = await _read_table_rows(
+        table = await _read_table_rows(
             uow=uow, pod_id=pod_id, ctx=ctx, user_id=user_id, request=request
         )
     finally:
         reset_current_context(token)
-    block = format_record_table(rows, columns=columns)
+    rows, total = table.rows, table.total
+    block = format_record_table(rows, columns=table.columns)
     if block is None:
         return TablePreview(block="", summary=format_record_count(0, total))
     return TablePreview(block=block, summary=format_record_count(len(rows), total))
@@ -311,39 +319,25 @@ async def _read_table_rows(
     ctx: Context,
     user_id: UUID,
     request: DisplayResourceRequest,
-) -> tuple[list[dict[str, Any]], int | None, list[str] | None]:
+) -> TableRows:
     """Rows for a TABLE resource, by ad-hoc query or by table name + filters."""
-    record_service = build_record_service(uow)
-    table_service = build_table_service(uow)
     if request.query:
-        rows, total, truncated = await record_service.execute_readonly_query(
+        return await run_readonly_query(
+            uow,
             pod_id=pod_id,
             query=request.query,
             user_id=user_id,
-            table_service=table_service,
             ctx=ctx,
-        )
-        # `total` from a read-only query counts rows *returned*, and the query
-        # caps them — so on a truncated result it is a floor, not a total, and
-        # rendering it beside a preview would state a row count that is simply
-        # wrong. The other branch below gets a real count from `list_records`.
-        # No count reads better here than a confident one that is too small.
-        return (
-            [dict(row) for row in rows[:PREVIEW_ROW_LIMIT]],
-            None if truncated else total,
-            None,
+            limit=PREVIEW_ROW_LIMIT,
         )
     if not request.name:
-        return [], None, None
-    table = await table_service.get_table(pod_id, request.name, ctx)
-    table_ctx = TableContext.from_table_entity(
-        table,
-        table_service.schema_manager.get_schema_name(pod_id),
-        events_enabled=False,
-    )
-    records, total = await record_service.list_records(
-        table_ctx,
-        user_id,
+        return TableRows(rows=[], total=None, columns=None)
+    return await read_table_preview(
+        uow,
+        pod_id=pod_id,
+        table_name=request.name,
+        user_id=user_id,
+        ctx=ctx,
         limit=PREVIEW_ROW_LIMIT,
         filters=[
             (item.field, _filter_op(item.op), item.value)
@@ -351,8 +345,6 @@ async def _read_table_rows(
         ]
         or None,
     )
-    columns = [column.name for column in getattr(table, "columns", [])] or None
-    return [dict(record.data) for record in records], total, columns
 
 
 def _filter_op(op: Any) -> str:
@@ -408,8 +400,7 @@ async def _read_pod_file(
         return None
     token = set_current_context(ctx)
     try:
-        file_service = build_file_service(uow)
-        entity = await file_service.get_file_by_path(pod_id, path, ctx)
+        entity = await read_pod_file(uow, pod_id=pod_id, path=path, ctx=ctx)
         # The MIME type decides which ceiling applies on a platform that caps
         # media types separately (WhatsApp: 5 MB an image, 100 MB a document),
         # so pass it rather than let the largest one stand in.
@@ -419,8 +410,8 @@ async def _read_pod_file(
             mime_type=entity.mime_type,
         ):
             return entity, None, ctx
-        _entity, content = await file_service.download_file_content_by_path(
-            pod_id, path, ctx
+        _entity, content = await download_pod_file(
+            uow, pod_id=pod_id, path=path, ctx=ctx
         )
     finally:
         reset_current_context(token)
@@ -456,29 +447,29 @@ async def _page_preview_part(
     target: SurfaceEgressTarget,
     ctx: Context,
     path: str,
+    file_name: str,
     caption: str | None,
 ) -> EnvelopeFile | None:
     """A document's first page as an image part, or None if there is none."""
     token = set_current_context(ctx)
     try:
-        file_service = build_file_service(uow)
-        entity, pages = await file_service.render_document_page_images(
-            target.surface.pod_id,
-            path,
-            ctx,
-            page_start=_PREVIEW_PAGE,
+        image = await render_pod_file_page(
+            uow,
+            pod_id=target.surface.pod_id,
+            path=path,
+            ctx=ctx,
+            page=_PREVIEW_PAGE,
         )
     finally:
         reset_current_context(token)
-    if not pages:
+    if image is None:
         return None
-    image = pages[0].jpeg_bytes
     if not fits_inline(
         target.surface.surface_type.value, len(image), mime_type="image/jpeg"
     ):
         return None
     return EnvelopeFile(
-        file_name=f"{entity.name}-page-{_PREVIEW_PAGE}.jpg",
+        file_name=f"{file_name}-page-{_PREVIEW_PAGE}.jpg",
         content=image,
         mime_type="image/jpeg",
         caption=caption,

@@ -50,14 +50,12 @@ def build_agent_surface_ingress_service(
     from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
         SurfaceConversationLinkRepository,
     )
-    from app.composition.surface_connectors import get_connector_service
 
     return AgentSurfaceIngressService(
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         conversation_service=get_conversation_service(uow),
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 

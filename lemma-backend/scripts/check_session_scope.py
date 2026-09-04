@@ -172,7 +172,7 @@ NON_DB_PATTERNS = tuple(
 # lets other tasks run while the connection is pinned, whereas a sync call
 # pins the connection *and* stops the loop.
 #
-# This is not hypothetical. `ComposioWebhookVerifier.verify` ran the synchronous
+# This is not hypothetical. Composio webhook verification ran the synchronous
 # Composio SDK on the event loop from an unauthenticated route, and no gate in
 # the repo could see it.
 #

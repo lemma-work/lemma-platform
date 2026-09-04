@@ -243,17 +243,3 @@ class ScheduleFilterTaskQueue(ABC):
         source_event_id: str,
     ) -> None:
         """Enqueue background LLM filter work for a schedule."""
-
-
-class WebhookVerifier(ABC):
-    """Port for verifying provider webhook signatures and parsing payloads.
-
-    Async because verification generally runs a provider SDK, and this sits on
-    an unauthenticated path whose rate an external sender chooses. A sync
-    implementation here blocks the event loop once per delivery, so the port
-    makes offloading the implementer's obligation rather than an option.
-    """
-
-    @abstractmethod
-    async def verify(self, payload: str, headers: Dict[str, Any]) -> Dict[str, Any]:
-        """Verify a webhook and return the provider verification result."""

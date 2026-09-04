@@ -32,8 +32,11 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.pod_bundle_pod import PodEditorDep, PodViewerDep
-from app.modules.pod_bundle.api.dependencies import ImportUseCasesDep
+from app.modules.pod_bundle.api.dependencies import (
+    ImportUseCasesDep,
+    PodEditorDep,
+    PodViewerDep,
+)
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.api.schemas import (
     ApplyImportRequest,

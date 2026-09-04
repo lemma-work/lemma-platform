@@ -811,7 +811,7 @@ async def _resolve_importer_pod_member_id(
     Best-effort: returns ``None`` (leaving the placeholder unresolved, so the
     service drops the assignee) if the user has no membership or the lookup
     fails, rather than failing the whole apply over one workflow assignee."""
-    from app.composition.pod_bundle_pod import get_pod_member_service
+    from app.modules.pod.contracts.members import pod_member_id
 
     try:
         async with uow_scope(worker_ctx.uow_factory) as uow:
@@ -819,11 +819,7 @@ async def _resolve_importer_pod_member_id(
                 user_id=user_id, pod_id=pod_id
             )
             async with context_scope(ctx):
-                service = get_pod_member_service(uow)
-                member = await service.get_pod_member_by_user_id(
-                    pod_id, user_id, requester_user_id=user_id
-                )
-                return str(member.id)
+                member_id = await pod_member_id(uow, pod_id, user_id)
     except Exception:  # noqa: BLE001 — assignee auto-resolution is best-effort
         logger.debug(
             "pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic",
@@ -831,21 +827,15 @@ async def _resolve_importer_pod_member_id(
             user_id=user_id,
         )
         return None
+    return str(member_id) if member_id is not None else None
 
 
 async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:
-    """Append a durable :class:`PodRecipe` to the pod's config in a short UoW.
-
-    Copies the existing typed config and overrides only ``recipes`` so the
-    shallow config merge in ``PodService.update_pod`` cannot reset unrelated
-    fields (join_policy, default_runtime) to their defaults."""
+    """Append a durable :class:`PodRecipe` to the pod's config in a short UoW."""
     from datetime import datetime, timezone
 
-    from app.composition.pod_bundle_pod import get_pod_service
-    from app.modules.pod.contracts import (
-        PodRecipe,
-        PodUpdateEntity,
-    )
+    from app.modules.pod.contracts import PodRecipe
+    from app.modules.pod.contracts.provisioning import append_recipe
 
     recipe = PodRecipe(
         kind=state.source.kind.value,
@@ -860,15 +850,10 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
             user_id=state.user_id, pod_id=state.pod_id
         )
         async with context_scope(ctx):
-            pod_service = get_pod_service(uow)
-            pod = await pod_service.get_pod(state.pod_id, state.user_id)
-            assert pod is not None
-            new_config = pod.config.model_copy(
-                update={"recipes": [*pod.config.recipes, recipe]}
-            )
-            await pod_service.update_pod(
-                state.pod_id,
-                PodUpdateEntity(config=new_config),
+            await append_recipe(
+                uow,
+                pod_id=state.pod_id,
+                recipe=recipe,
                 requester_user_id=state.user_id,
                 ctx=ctx,
             )

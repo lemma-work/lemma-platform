@@ -165,9 +165,9 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
 
     monkeypatch.setattr("app.core.config.settings.resend_api_key", "re_test")
 
-    credentials = await SurfaceCredentialResolver(
-        session=None, connector_service=None
-    ).for_surface(surface, prefer_native=True)
+    credentials = await SurfaceCredentialResolver(uow=None).for_surface(
+        surface, prefer_native=True
+    )
 
     assert credentials["api_key"] == "re_test"
     assert credentials["from_address"] == "ops.acme@ops.asur.work"

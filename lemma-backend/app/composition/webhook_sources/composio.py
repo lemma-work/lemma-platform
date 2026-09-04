@@ -1,10 +1,14 @@
 """Composio as a webhook source.
 
-The verification and the payload reshaping are moved here unchanged from
-`ComposioWebhookVerifier` and the controller's `_normalize_composio_payload`.
-Deliberately unchanged: the point of the move is that the controller stops
-knowing which sources exist, and a behaviour change smuggled in alongside it
-would be indistinguishable from a regression in the tests that cover it.
+The payload reshaping moved here unchanged from the controller's
+`_normalize_composio_payload`. Deliberately unchanged: the point of the move is
+that the controller stops knowing which sources exist, and a behaviour change
+smuggled in alongside it would be indistinguishable from a regression in the
+tests that cover it.
+
+Verification is Composio's own, so it is asked of `connectors` rather than
+reimplemented behind a second port: `WebhookSourcePlugin.verify` below is the
+only port a source has to satisfy.
 """
 
 from __future__ import annotations
@@ -23,15 +27,13 @@ class ComposioWebhookSource:
     source = "composio"
 
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
-        from app.composition.schedule_connectors import ComposioWebhookVerifier
+        from app.modules.connectors.contracts.triggers import verify_webhook
 
         payload_text = delivery.raw_body.decode("utf-8", errors="replace")
         # No try/except: a verifier that raises anything at all is a delivery
         # that did not verify, and the controller says so once for every plugin
         # rather than each writing the same broad catch.
-        result = await ComposioWebhookVerifier().verify(
-            payload_text, dict(delivery.headers)
-        )
+        result = await verify_webhook(payload_text, dict(delivery.headers))
         return VerifiedDelivery(delivery=delivery, payload=_reshape(result))
 
     async def observe(self, verified: VerifiedDelivery) -> None:

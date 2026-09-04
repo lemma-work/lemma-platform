@@ -221,16 +221,12 @@ class BundleExporter:
             list_function_names,
             require_function,
         )
+        from app.modules.pod.contracts.provisioning import get_pod
         from app.modules.schedule.contracts.provisioning import list_schedules
         from app.modules.workflow.contracts.provisioning import (
             get_workflow,
             list_workflow_names,
         )
-        from app.composition.pod_bundle_pod import PodRepository
-
-        from app.core.infrastructure.events.message_bus import get_message_bus
-
-        message_bus = get_message_bus()
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-export-") as tmp:
             root = Path(tmp)
@@ -238,7 +234,7 @@ class BundleExporter:
                 (root / resource_dir).mkdir(parents=True, exist_ok=True)
 
             # --- pod.json ------------------------------------------------------
-            pod = await PodRepository(uow, message_bus=message_bus).get(pod_id)
+            pod = await get_pod(uow, pod_id=pod_id)
             if pod is None:
                 # ctx already authorized POD_READ, so this only happens on a race
                 # with a pod delete — treat as an invalid export.

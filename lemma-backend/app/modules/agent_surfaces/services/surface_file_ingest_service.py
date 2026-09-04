@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
-from app.composition.surface_datastore import build_file_service
+from app.modules.datastore.contracts.surfaces import create_pod_file
 from app.core.file_types import extension_for_mime, sniff_media_mime
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
@@ -49,11 +50,16 @@ logger = get_logger(__name__)
 
 _AUDIO_CONTENT_TYPES = {"voice", "audio"}
 
-# Given a callable that wants a file service, run it in whatever transaction is
+# Writes one file into a pod and answers with what it stored. Production binds
+# datastore's `create_pod_file` to a transaction; a unit test hands over a
+# stand-in that records the call.
+PodFileWriter = Callable[..., Awaitable[Any]]
+
+# Given a callable that wants a writer, run it in whatever transaction is
 # appropriate and return what it produced. Production opens a fresh one per
-# file; unit tests hand a fake service straight through.
+# file; unit tests hand a fake writer straight through.
 StoreInTransaction = Callable[
-    [Callable[[Any], Awaitable["IngestedAttachment | None"]]],
+    [Callable[[PodFileWriter], Awaitable["IngestedAttachment | None"]]],
     Awaitable["IngestedAttachment | None"],
 ]
 
@@ -261,7 +267,7 @@ class SurfaceFileIngestService:
     @staticmethod
     async def _store_in_own_transaction(
         persist_ingested_attachment: Callable[
-            [Any], Awaitable[IngestedAttachment | None]
+            [PodFileWriter], Awaitable[IngestedAttachment | None]
         ],
     ) -> IngestedAttachment | None:
         """Run one file's write in a transaction of its own.
@@ -274,7 +280,7 @@ class SurfaceFileIngestService:
         always a possible outcome.
         """
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            result = await persist_ingested_attachment(build_file_service(uow))
+            result = await persist_ingested_attachment(partial(create_pod_file, uow))
             if result is not None:
                 await uow.commit()
             return result
@@ -411,11 +417,11 @@ class SurfaceFileIngestService:
         file_name = _safe_file_name(name, mime, content)
 
         def _persist_as(candidate: str):
-            async def _persist(file_service: Any) -> IngestedAttachment | None:
-                entity = await file_service.create_file(
+            async def _persist(write_file: PodFileWriter) -> IngestedAttachment | None:
+                entity = await write_file(
                     pod_id=pod_id,
                     name=candidate,
-                    file_content=content,
+                    content=content,
                     ctx=ctx,
                     directory_path=directory,
                     search_enabled=True,
