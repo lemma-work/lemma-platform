@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -100,6 +100,7 @@ help:
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
@@ -399,6 +400,14 @@ lint-io-hygiene:
 # Ratcheted against unbounded-baseline.json.
 lint-unbounded:
 	uv run python scripts/check_unbounded.py
+
+# A default argument naming something tests replace by patching a module
+# attribute. Defaults bind at import, so the patch never reaches them -- and
+# the test usually still passes. No baseline: the rule is quiet by
+# construction, and somewhere to hide a finding is the one thing it must not
+# have.
+lint-import-bound-defaults:
+	uv run python scripts/check_import_bound_defaults.py
 
 # Swallowed-error gate (enforced in CI). A broad `except` must leave a trace of
 # what it caught: production runs at INFO, so a debug record with no exc_info
