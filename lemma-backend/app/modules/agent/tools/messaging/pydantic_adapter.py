@@ -32,7 +32,7 @@ from uuid import UUID
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.core.authorization.delegation import effective_agent_id
+from app.core.authorization.delegation import agent_display_name, effective_agent_id
 from app.modules.agent_surfaces.contracts import notifications as surfaces
 from app.modules.agent_surfaces.contracts.notifications import (
     check_notifications,
@@ -170,8 +170,10 @@ async def message_user(
         actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
         # Display name first, but fall back to the pod-unique name: the display
         # name comes from surface metadata and is None for any run that did not
-        # start on a surface, which would silently drop the attribution header.
-        agent_name=deps.agent_display_name or deps.agent_name,
+        # start on a surface -- a schedule, a workflow, the app. That fallback
+        # is why this must be normalised: the pod's own agent stores `pod_default`,
+        # and this value becomes a chat bot's username and an email `From`.
+        agent_name=agent_display_name(deps.agent_display_name or deps.agent_name),
         origin_conversation_id=deps.conversation_id,
         origin_agent_run_id=deps.agent_run_id,
         # Reach out from the surface this run is already on, so the recipient

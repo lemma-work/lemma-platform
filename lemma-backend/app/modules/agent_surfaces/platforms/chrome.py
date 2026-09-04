@@ -60,7 +60,7 @@ class SurfaceChromeMixin:
         user_id: str,
         pod_name: str | None,
         agent_name: str,
-        channel_routes: list,
+        channel_ids: list[str],
         agents: list | None = None,
         apps: list | None = None,
         workspace_url: str | None = None,
@@ -69,7 +69,7 @@ class SurfaceChromeMixin:
         access_message: str | None = None,
     ) -> bool:
         """Render the app's home tab. Default: the platform has no home tab."""
-        del credentials, user_id, pod_name, agent_name, channel_routes
+        del credentials, user_id, pod_name, agent_name, channel_ids
         del agents, apps, workspace_url, logo_url, surface_choices, access_message
         return False
 

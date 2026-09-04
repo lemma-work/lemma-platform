@@ -59,13 +59,10 @@ from app.core.authorization.permissions import (
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.workload_authority import authorize_delegated_workload
 from app.core.authorization.resource_names import resolve_resource_id_by_name
-from app.modules.datastore.infrastructure.models.datastore_models import (
-    DatastoreFile,
-    DatastoreTable,
+from app.core.authorization.resource_tables import (
+    RESOURCE_TABLES,
+    pod_is_unknowable,
 )
-from app.modules.agent.infrastructure.models import AgentModel, ConversationModel
-from app.modules.apps.infrastructure.models import AppModel
-from app.modules.function.infrastructure.models import FunctionModel
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
@@ -76,8 +73,6 @@ from app.modules.pod.domain.visibility import (
     normalize_role_name,
 )
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
-from app.modules.schedule.infrastructure.models.schedule import Schedule
-from app.modules.workflow.infrastructure.models import WorkflowModel
 
 
 async def _session_approval(
@@ -394,30 +389,10 @@ class AuthorizationDataService:
         resource_type: ResourceType,
         resource_id: UUID,
     ) -> UUID | None:
-        if resource_type == ResourceType.AGENT:
-            stmt = select(AgentModel.user_id).where(AgentModel.id == resource_id)
-        elif resource_type == ResourceType.FUNCTION:
-            stmt = select(FunctionModel.user_id).where(FunctionModel.id == resource_id)
-        elif resource_type == ResourceType.APP:
-            stmt = select(AppModel.user_id).where(AppModel.id == resource_id)
-        elif resource_type == ResourceType.DOCUMENT:
-            stmt = select(DatastoreFile.owner_user_id).where(
-                DatastoreFile.id == resource_id
-            )
-        elif resource_type == ResourceType.FOLDER:
-            stmt = select(DatastoreFile.owner_user_id).where(
-                DatastoreFile.id == resource_id
-            )
-        elif resource_type == ResourceType.DATASTORE_TABLE:
-            stmt = select(DatastoreTable.user_id).where(
-                DatastoreTable.id == resource_id
-            )
-        elif resource_type == ResourceType.WORKFLOW:
-            stmt = select(WorkflowModel.user_id).where(WorkflowModel.id == resource_id)
-        elif resource_type == ResourceType.SCHEDULE:
-            stmt = select(Schedule.user_id).where(Schedule.id == resource_id)
-        else:
+        table = RESOURCE_TABLES.get(resource_type)
+        if table is None:
             return None
+        stmt = select(table.owner_column).where(table.id_column == resource_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def assign_roles(
@@ -1133,6 +1108,11 @@ class AuthorizationDataService:
         await self._invalidate_snapshots_after_commit(user_id=targets.user_id)
 
 
+#: Datastore's file columns, via the one table that names them. `FOLDER` and
+#: `DOCUMENT` share a row, so either serves.
+_FILES = RESOURCE_TABLES[ResourceType.FOLDER]
+
+
 class Authorizer:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -1229,10 +1209,18 @@ class Authorizer:
             )
 
         hydrated = await self._hydrate_resource(resource)
-        if (
-            clamp_to_pod
-            and hydrated.pod_id is not None
-            and hydrated.pod_id != ctx.pod_id
+        if clamp_to_pod and (
+            hydrated.pod_id != ctx.pod_id
+            if hydrated.pod_id is not None
+            # A pod-scoped resource whose pod could not be established is
+            # refused rather than waved through. This used to read
+            # `pod_id is not None and pod_id != ctx.pod_id`, so a type
+            # hydration did not know skipped the clamp entirely — the guard
+            # confining a pod's default agent to its own pod was opt-out by
+            # omission. `_pod_is_unknowable` exempts the types that genuinely
+            # have no pod, and `_assert_every_resource_type_is_classified`
+            # makes staying silent about a new one impossible.
+            else pod_is_unknowable(hydrated)
         ):
             return AuthorizationDecision(
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, hydrated
@@ -1538,6 +1526,18 @@ class Authorizer:
             return resource
         # Folder/document hydration also fetches the row's path so folder grants
         # can cascade to descendants in the matcher.
+        if resource.resource_type is ResourceType.POD:
+            # A pod's own id is the pod it belongs to, so this needs no table.
+            # Every caller happens to pass `pod_id` today; deriving it here is
+            # what stops the clamp depending on that continuing to be true.
+            return ResourceRef(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                organization_id=resource.organization_id,
+                pod_id=resource.pod_id or resource.resource_id,
+                owner_user_id=resource.owner_user_id,
+                visibility=resource.visibility,
+            )
         if resource.resource_type in (ResourceType.FOLDER, ResourceType.DOCUMENT):
             return await self._hydrate_datastore_file(resource)
         if resource.resource_type == ResourceType.CONNECTOR:
@@ -1546,86 +1546,25 @@ class Authorizer:
             return await self._hydrate_connector_account(resource)
         if resource.resource_type == ResourceType.CONNECTOR_AUTH_CONFIG:
             return await self._hydrate_connector_auth_config(resource)
-        mapping = {
-            ResourceType.AGENT: (
-                AgentModel,
-                AgentModel.id,
-                AgentModel.pod_id,
-                AgentModel.user_id,
-                AgentModel.visibility,
-            ),
-            ResourceType.FUNCTION: (
-                FunctionModel,
-                FunctionModel.id,
-                FunctionModel.pod_id,
-                FunctionModel.user_id,
-                FunctionModel.visibility,
-            ),
-            ResourceType.CONVERSATION: (
-                ConversationModel,
-                ConversationModel.id,
-                ConversationModel.pod_id,
-                ConversationModel.user_id,
-                None,
-            ),
-            ResourceType.DATASTORE_TABLE: (
-                DatastoreTable,
-                DatastoreTable.id,
-                DatastoreTable.pod_id,
-                DatastoreTable.user_id,
-                DatastoreTable.visibility,
-            ),
-            ResourceType.FOLDER: (
-                DatastoreFile,
-                DatastoreFile.id,
-                DatastoreFile.pod_id,
-                DatastoreFile.owner_user_id,
-                DatastoreFile.visibility,
-            ),
-            ResourceType.DOCUMENT: (
-                DatastoreFile,
-                DatastoreFile.id,
-                DatastoreFile.pod_id,
-                DatastoreFile.owner_user_id,
-                DatastoreFile.visibility,
-            ),
-            ResourceType.APP: (
-                AppModel,
-                AppModel.id,
-                AppModel.pod_id,
-                AppModel.user_id,
-                AppModel.visibility,
-            ),
-            ResourceType.WORKFLOW: (
-                WorkflowModel,
-                WorkflowModel.id,
-                WorkflowModel.pod_id,
-                WorkflowModel.user_id,
-                WorkflowModel.visibility,
-            ),
-            ResourceType.SCHEDULE: (
-                Schedule,
-                Schedule.id,
-                Schedule.pod_id,
-                Schedule.user_id,
-                Schedule.visibility,
-            ),
-        }
-        if resource.resource_type not in mapping:
+        table = RESOURCE_TABLES.get(resource.resource_type)
+        if table is None:
+            # Not a silent pass-through: every type is classified below, and
+            # `_assert_every_resource_type_is_classified` refuses to import this
+            # module if one is not. Reaching here means a type is registered as
+            # unroutable and something built a ref for it anyway.
             return resource
-        _model, id_col, pod_col, owner_col, visibility_col = mapping[
-            resource.resource_type
-        ]
-        if visibility_col is None:
-            stmt = select(pod_col, owner_col).where(id_col == resource.resource_id)
-        else:
-            stmt = select(pod_col, owner_col, visibility_col).where(
-                id_col == resource.resource_id
+        if table.visibility_column is None:
+            stmt = select(table.pod_column, table.owner_column).where(
+                table.id_column == resource.resource_id
             )
+        else:
+            stmt = select(
+                table.pod_column, table.owner_column, table.visibility_column
+            ).where(table.id_column == resource.resource_id)
         row = (await self.session.execute(stmt)).first()
         if row is None:
             return resource
-        if visibility_col is None:
+        if table.visibility_column is None:
             visibility = ResourceVisibility.PERSONAL
         else:
             visibility = self._normalize_visibility(row[2])
@@ -1650,11 +1589,11 @@ class Authorizer:
             return resource
 
         stmt = select(
-            DatastoreFile.pod_id,
-            DatastoreFile.owner_user_id,
-            DatastoreFile.visibility,
-            DatastoreFile.path,
-        ).where(DatastoreFile.id == resource.resource_id)
+            _FILES.pod_column,
+            _FILES.owner_column,
+            _FILES.visibility_column,
+            _FILES.path_column,
+        ).where(_FILES.id_column == resource.resource_id)
         row = (await self.session.execute(stmt)).first()
         if row is None:
             return resource
@@ -1871,9 +1810,9 @@ class Authorizer:
         cached = self._folder_ids_by_paths.get(key)
         if cached is not None:
             return cached
-        stmt = select(DatastoreFile.id).where(
-            DatastoreFile.pod_id == pod_id,
-            DatastoreFile.path.in_(candidate_paths),
+        stmt = select(_FILES.id_column).where(
+            _FILES.pod_column == pod_id,
+            _FILES.path_column.in_(candidate_paths),
         )
         resolved = list((await self.session.execute(stmt)).scalars().all())
         self._folder_ids_by_paths[key] = resolved

@@ -210,7 +210,7 @@ async def test_home_leads_with_value_then_configuration():
     view = app_home_view(
         pod_name="Test1",
         agent_name="triage",
-        channel_routes=[("C1", None)],
+        channel_ids=["C1"],
         agents=[("agent3", "Answers ops questions")],
         apps=[("Dashboard", "https://d.test")],
         workspace_url="https://lemma.test",
@@ -235,7 +235,7 @@ async def test_home_skips_a_logo_slack_cannot_fetch():
     view = app_home_view(
         pod_name=None,
         agent_name="triage",
-        channel_routes=[],
+        channel_ids=[],
         logo_url="http://localhost:3710/logo.png",
     )
     assert view["blocks"][0]["type"] == "header"

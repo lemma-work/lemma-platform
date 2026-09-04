@@ -8,6 +8,7 @@ a voice note to transcribe, recent channel history for a group mention.
 from __future__ import annotations
 
 
+from app.core.authorization.delegation import agent_display_name
 from app.core.infrastructure.db.transaction_locks import connection_released
 
 from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
@@ -292,16 +293,16 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 parsed=parsed,
                 credentials=credentials,
             )
-        agent_display_name = (
+        display_name = agent_display_name(
             (await self.agent_name_for_surface(surface)) if surface else None
-        ) or "Lemma"
+        )
         return await prepare_unrouted_context(
             platform=platform,
             surface=surface,
             parsed=parsed,
             adapter=adapter,
             resolved_user=resolved_user,
-            agent_display_name=agent_display_name,
+            agent_display_name=display_name,
             event_dedup_store=self.event_dedup_store,
         )
 
@@ -321,7 +322,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
 
         credentials = await self._resolve_credentials(surface)
         fallback_agent_name = await self.agent_name_for_surface(surface)
-        fallback_agent_display_name = fallback_agent_name or "Lemma"
+        fallback_agent_display_name = agent_display_name(fallback_agent_name)
 
         # `enrich_or_drop` is module-level: no session of its own to release.
         async with connection_released(self.uow.session):
