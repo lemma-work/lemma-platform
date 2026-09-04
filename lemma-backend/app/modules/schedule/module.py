@@ -108,6 +108,13 @@ async def _schedule_poller(context):
         yield
     finally:
         task.cancel()
+        # `CancelledError` is the only way out. The core worker also catches
+        # `Exception` here and logs it, because it tears down a dozen unrelated
+        # tasks and one of them dying its own way out must not stop the rest.
+        # This tears down exactly one, whose loop already treats every
+        # non-cancel exception as a degraded tick and keeps going -- so an
+        # `except Exception` branch here would be unreachable, and a broad catch
+        # that can never fire is worse than none.
         with suppress(asyncio.CancelledError):
             await task
 
