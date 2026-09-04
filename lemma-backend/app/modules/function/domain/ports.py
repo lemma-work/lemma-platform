@@ -17,6 +17,10 @@ from app.modules.function.domain.entities import (
 
 
 class FunctionRepositoryPort(Protocol):
+    async def get_for_update(self, owner_id: UUID) -> FunctionEntity | None: ...
+
+    async def mark_revisions_purged(self, version_ids: tuple[UUID, ...]) -> None: ...
+
     async def create(self, entity: FunctionEntity) -> FunctionEntity: ...
 
     async def get(self, id: UUID) -> FunctionEntity | None: ...
@@ -51,6 +55,10 @@ class FunctionRepositoryPort(Protocol):
     async def list_revisions(
         self, function_id: UUID
     ) -> list[FunctionRevisionEntity]: ...
+
+    async def revision_hashes_with_runs_in_flight(
+        self, function_id: UUID
+    ) -> set[str]: ...
 
     async def mark_revisions_pruned(self, revision_ids: list[UUID]) -> None: ...
 
@@ -96,7 +104,7 @@ class FunctionStorageDeletionPort(Protocol):
     async def delete_prefix(self, prefix: str) -> None: ...
 
 
-class FunctionStoragePort(Protocol):
+class FunctionStoragePort(FunctionStorageDeletionPort, Protocol):
     async def read_file(self, path: str) -> bytes | str: ...
 
     #: For a caller that knows the content is binary, so it does not pay a

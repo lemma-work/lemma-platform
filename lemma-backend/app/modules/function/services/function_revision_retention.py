@@ -13,11 +13,12 @@ correctly say "build removed" rather than rows that still offer to run.
 
 from __future__ import annotations
 
+from app.modules.function.config import revision_settings
+
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
-from app.core.config import settings
 from obstore.exceptions import BaseError as ObstoreBaseError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -45,9 +46,9 @@ PRUNE_FAILURES = (SQLAlchemyError, ObstoreBaseError, OSError)
 
 def revision_retention_policy() -> RetentionPolicy:
     return RetentionPolicy(
-        keep_last=settings.function_revision_keep_last,
-        keep_days=settings.function_revision_keep_days,
-        max_keep=settings.function_revision_max_keep,
+        keep_last=revision_settings.function_revision_keep_last,
+        keep_days=revision_settings.function_revision_keep_days,
+        max_keep=revision_settings.function_revision_max_keep,
     )
 
 
@@ -57,14 +58,11 @@ class RevisionPrunePlan:
     artifact_paths: tuple[str, ...]
     source_prefixes: tuple[str, ...]
     revision_numbers: tuple[int, ...]
+    version_ids: tuple[UUID, ...] = ()
 
     @property
     def is_empty(self) -> bool:
         return not self.artifact_paths and not self.source_prefixes
-
-
-# Two ticks of the daily cron, matching the app side.
-_RECONCILE_WINDOW = timedelta(days=2)
 
 
 def _unfinished_prunes(
@@ -72,18 +70,13 @@ def _unfinished_prunes(
     live_id: UUID | None,
     moment: datetime,
 ) -> list[FunctionRevisionEntity]:
-    """Revisions stamped ``pruned_at`` whose artifacts may still be there.
-
-    The live revision is excluded even when it carries the stamp: re-saving code
-    whose artifact was pruned rewrites the bytes and clears the tombstone, and a
-    row caught mid-way through that would otherwise have its new bytes deleted.
-    """
+    """Retry every incomplete deletion, regardless of the age of its tombstone."""
     return [
         revision
         for revision in revisions
         if revision.pruned_at is not None
         and revision.id != live_id
-        and moment - revision.pruned_at < _RECONCILE_WINDOW
+        and revision.purged_at is None
     ]
 
 
@@ -104,13 +97,17 @@ class FunctionRevisionRetention:
         now: datetime | None = None,
     ) -> RevisionPrunePlan:
         assert function.id is not None
+        function = await self.repository.get_for_update(function.id)
+        if function is None:
+            raise ValueError("function was deleted before retention could lock it")
         moment = now or datetime.now(timezone.utc)
         revisions = await self.repository.list_revisions(function.id)
         live_id = next(
             (
                 revision.id
                 for revision in revisions
-                if revision.revision_hash == function.revision_hash
+                if not revision.is_pruned
+                and revision.revision_hash == function.revision_hash
             ),
             None,
         )
@@ -121,14 +118,7 @@ class FunctionRevisionRetention:
             now=moment,
         )
         candidates = await self._drop_in_flight(function.id, candidates, moment)
-        # A sweep that died between the tombstone commit and its deletes leaves
-        # bytes nothing will ever come back for, because `select_prunable` skips
-        # rows already stamped. Re-issuing is free; both delete paths swallow a
-        # missing object. Routed through `_drop_in_flight` too, so a revision a
-        # dispatched run is pinned to is never re-deleted under it.
-        unfinished = await self._drop_in_flight(
-            function.id, _unfinished_prunes(revisions, live_id, moment), moment
-        )
+        unfinished = _unfinished_prunes(revisions, live_id, moment)
         doomed = candidates + unfinished
         if not doomed:
             return RevisionPrunePlan(function.id, (), (), ())
@@ -137,6 +127,7 @@ class FunctionRevisionRetention:
             await self.repository.mark_revisions_pruned([r.id for r in candidates])
         return RevisionPrunePlan(
             function_id=function.id,
+            version_ids=tuple(r.id for r in doomed if r.id is not None),
             artifact_paths=tuple(r.artifact_path for r in doomed),
             # `revisions/<hash>/function.py` -- delete the directory, not the
             # single file, so nothing is left behind if the layout ever grows.
@@ -153,17 +144,9 @@ class FunctionRevisionRetention:
         candidates: list[FunctionRevisionEntity],
         now: datetime,
     ) -> list[FunctionRevisionEntity]:
-        """Keep any revision a dispatched run still needs.
-
-        Two guards, because a run row alone is not enough. A PENDING or RUNNING
-        run names the revision it will execute. But a run is created and
-        dispatched in separate steps, so a revision only just recorded could be
-        pinned by a run that does not exist yet -- hence also refusing to prune
-        anything younger than the longest execution deadline.
-        """
+        """The parent lock fences run creation until these tombstones commit."""
         if not candidates:
             return candidates
-        grace = timedelta(seconds=settings.function_job_deadline_seconds)
         in_flight = await self.repository.revision_hashes_with_runs_in_flight(
             function_id
         )
@@ -171,7 +154,6 @@ class FunctionRevisionRetention:
             revision
             for revision in candidates
             if revision.revision_hash not in in_flight
-            and (revision.created_at is None or now - revision.created_at > grace)
         ]
 
     async def execute(self, plan: RevisionPrunePlan) -> None:

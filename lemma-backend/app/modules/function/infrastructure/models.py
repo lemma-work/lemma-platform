@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
+from app.modules.function.domain.types import JsonObject
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRevisionEntity,
@@ -86,8 +87,12 @@ class FunctionRevisionModel(UUIDCreatedBase):
 
     __tablename__ = "function_revisions"
     __table_args__ = (
-        UniqueConstraint(
-            "function_id", "revision_hash", name="uq_function_revision_hash"
+        Index(
+            "uq_function_revision_active_hash",
+            "function_id",
+            "revision_hash",
+            unique=True,
+            postgresql_where=text("pruned_at IS NULL"),
         ),
         UniqueConstraint(
             "function_id", "revision_number", name="uq_function_revision_number"
@@ -105,9 +110,9 @@ class FunctionRevisionModel(UUIDCreatedBase):
     revision_number: Mapped[int] = mapped_column(nullable=False)
     revision_hash: Mapped[str] = mapped_column(String(71), nullable=False)
     code_path: Mapped[str] = mapped_column(String, nullable=False)
-    input_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
-    output_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
-    config_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    input_schema: Mapped[JsonObject] = mapped_column(JSONB, default=dict)
+    output_schema: Mapped[JsonObject] = mapped_column(JSONB, default=dict)
+    config_schema: Mapped[JsonObject | None] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -117,6 +122,10 @@ class FunctionRevisionModel(UUIDCreatedBase):
     pruned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    generation: Mapped[UUID | None] = mapped_column(nullable=True)
 
     def to_entity(self) -> FunctionRevisionEntity:
         return FunctionRevisionEntity.model_validate(self)

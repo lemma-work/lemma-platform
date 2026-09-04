@@ -34,6 +34,7 @@ def _release(app_id, number, *, source="source/aa/archive.zip", age_days=100):
 
 def _retention(app, releases):
     repo = AsyncMock()
+    repo.get_for_update.return_value = app
     repo.list_releases.return_value = releases
     storage = AsyncMock()
     return AppReleaseRetention(repo, Mock(return_value=storage)), repo, storage
@@ -207,12 +208,12 @@ async def test_a_prune_that_died_before_deleting_is_retried():
 
 
 @pytest.mark.asyncio
-async def test_an_old_prune_is_not_re_deleted_forever():
-    """The window is what keeps this bounded: a genuinely stuck release stops
-    costing work rather than costing it on every tick for the life of the app."""
+async def test_completed_deletion_is_not_retried():
+
     app = _app()
     ancient, live = _release(app.id, 1), _release(app.id, 2)
     ancient.pruned_at = NOW - timedelta(days=30)
+    ancient.purged_at = NOW - timedelta(days=29)
     app.current_release_id = live.id
     app.source_archive_path = live.source_archive_path
     retention, _repo, storage = _retention(app, [ancient, live])

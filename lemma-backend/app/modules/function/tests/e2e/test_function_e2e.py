@@ -1259,7 +1259,7 @@ async def {func_name}(ctx: FunctionContext, data: MarkInput) -> MarkResult:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("sandbox_reachable_backend", "worker")
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_revision_history_and_rollback(authenticated_client, test_pod):
     """Save code three times, then go back to the first revision.
 
@@ -1341,7 +1341,7 @@ async def test_function_revision_history_and_rollback(authenticated_client, test
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("sandbox_reachable_backend", "worker")
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_resaving_identical_code_does_not_mint_a_second_revision(
     authenticated_client, test_pod
 ):

@@ -27,6 +27,7 @@ class AppReleaseEntity(BaseModel):
     created_by: UUID | None = None
     label: str | None = None
     pruned_at: datetime | None = None
+    purged_at: datetime | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

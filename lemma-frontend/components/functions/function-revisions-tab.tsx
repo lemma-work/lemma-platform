@@ -34,11 +34,11 @@ export function FunctionRevisionsTab({
     canUpdate,
     onRunRevision,
 }: FunctionRevisionsTabProps) {
-    const { data: revisions, isLoading } = useFunctionRevisions(podId, functionName);
+    const { data: revisions, isLoading, isError, refetch } = useFunctionRevisions(podId, functionName);
     const promote = usePromoteFunctionRevision(podId, functionName);
     const [expandedRef, setExpandedRef] = useState<string | null>(null);
     const [pendingPromote, setPendingPromote] = useState<FunctionRevision | null>(null);
-    const { data: expanded } = useFunctionRevision(podId, functionName, expandedRef);
+    const { data: expanded, isLoading: isLoadingCode, isError: codeError, refetch: retryCode } = useFunctionRevision(podId, functionName, expandedRef);
 
     const confirmPromote = async () => {
         if (!pendingPromote) return;
@@ -68,6 +68,11 @@ export function FunctionRevisionsTab({
                 <StepLoader size="sm" />
             </div>
         );
+    }
+
+    if (isError) {
+        return <EmptyState title="Could not load versions" description="Try again to retrieve this function's history."
+            action={<Button variant="quiet" onClick={() => void refetch()}>Retry</Button>} />;
     }
 
     if (!revisions?.length) {
@@ -162,9 +167,14 @@ export function FunctionRevisionsTab({
                             </div>
                         )}
 
-                        {isExpanded ? (
+                        {isExpanded && codeError ? (
+                            <div role="alert" className="mt-3 text-sm text-[var(--text-secondary)]">
+                                Could not load this version&apos;s code.
+                                <Button variant="quiet" onClick={() => void retryCode()}>Retry</Button>
+                            </div>
+                        ) : isExpanded ? (
                             <pre className="mt-3 max-h-64 overflow-auto rounded-md bg-[var(--bg-subtle)] p-3 text-xs text-[var(--text-secondary)]">
-                                {expanded?.code ?? 'Loading…'}
+                                {isLoadingCode ? 'Loading…' : (expanded?.code ?? 'Source is unavailable for this version.')}
                             </pre>
                         ) : null}
 

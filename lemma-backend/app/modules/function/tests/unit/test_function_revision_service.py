@@ -57,6 +57,7 @@ def _function(**overrides):
 
 def _service(function, revisions):
     repo = AsyncMock()
+    repo.get_for_update.return_value = function
     repo.get_by_name.return_value = function
     repo.list_revisions.return_value = sorted(
         revisions, key=lambda r: r.revision_number, reverse=True
@@ -127,6 +128,26 @@ async def test_list_marks_the_live_revision():
         (2, True),
         (1, False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_redeploying_a_digest_does_not_make_its_pruned_revision_live():
+    function = _function(revision_hash=_hash("a"))
+    pruned = _revision(function.id, 1, seed="a", pruned=True)
+    live = _revision(function.id, 2, seed="a")
+    service, _ = _service(function, [pruned, live])
+    ctx = allow_all_context()
+
+    listings = await service.list_revisions(function.pod_id, function.name, ctx=ctx)
+    assert [(item.revision.revision_number, item.is_live) for item in listings] == [
+        (2, True),
+        (1, False),
+    ]
+    _, is_live = await service.get_revision(
+        function.pod_id, function.name, "r1", ctx=ctx
+    )
+    assert not is_live
+    assert await service.resolve_revision(function, "aaaaaaaa") is live
 
 
 @pytest.mark.asyncio

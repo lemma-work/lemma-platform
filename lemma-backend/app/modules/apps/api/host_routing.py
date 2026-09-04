@@ -142,6 +142,30 @@ def _strip_app_api_prefix(path: str) -> str | None:
     return None
 
 
+def _trusted_routing_headers(
+    incoming: list[tuple[bytes, bytes]],
+) -> tuple[str, bool, list[tuple[bytes, bytes]]]:
+    host = ""
+    proxied = False
+    headers: list[tuple[bytes, bytes]] = []
+    for key, value in incoming:
+        lowered = key.lower()
+        # Dropped unconditionally, on every branch. Nothing upstream sets it
+        # -- neither nginx config does, and the label carries the release now
+        # -- so any that arrives came from the client, and honouring it let
+        # anyone pin the canonical live host to an old build.
+        if lowered == _RELEASE_HEADER:
+            continue
+        if lowered == _SLUG_HEADER:
+            # An upstream proxy resolved the slug and, in cloud, rewrote the
+            # path with it. Remembered rather than obeyed.
+            proxied = True
+        if lowered == b"host":
+            host = value.decode("latin-1")
+        headers.append((key, value))
+    return host, proxied, headers
+
+
 class AppHostRoutingMiddleware:
     """Serve app builds via host-based routing (see module docstring)."""
 
@@ -153,24 +177,7 @@ class AppHostRoutingMiddleware:
             await self.app(scope, receive, send)
             return
 
-        host = ""
-        proxied = False
-        headers: list[tuple[bytes, bytes]] = []
-        for key, value in scope["headers"]:
-            lowered = key.lower()
-            # Dropped unconditionally, on every branch. Nothing upstream sets it
-            # -- neither nginx config does, and the label carries the release now
-            # -- so any that arrives came from the client, and honouring it let
-            # anyone pin the canonical live host to an old build.
-            if lowered == _RELEASE_HEADER:
-                continue
-            if lowered == _SLUG_HEADER:
-                # An upstream proxy resolved the slug and, in cloud, rewrote the
-                # path with it. Remembered rather than obeyed.
-                proxied = True
-            if lowered == b"host":
-                host = value.decode("latin-1")
-            headers.append((key, value))
+        host, proxied, headers = _trusted_routing_headers(scope["headers"])
         scope["headers"] = headers
         path = scope.get("path") or "/"
 

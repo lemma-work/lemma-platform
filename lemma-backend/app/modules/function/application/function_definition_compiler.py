@@ -44,6 +44,21 @@ class FunctionDefinitionCompiler:
     async def write_code(self, function_id: UUID, path: str, code: str) -> None:
         await self._storage_factory(function_id).write_file(path, code)
 
+    async def discard_unused_artifact(self, function: FunctionEntity) -> None:
+        artifact = function.pending_artifact
+        if (
+            function.id is None
+            or artifact is None
+            or function.code_path == artifact.code_path
+        ):
+            return
+        storage = self._storage_factory(function.id)
+        for path in (artifact.artifact_path, artifact.code_path):
+            try:
+                await storage.delete_file(path)
+            except FileNotFoundError:
+                pass
+
     async def build_artifact(
         self,
         function: FunctionEntity,

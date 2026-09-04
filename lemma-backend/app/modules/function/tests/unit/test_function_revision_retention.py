@@ -51,8 +51,9 @@ def _function(**overrides):
     )
 
 
-def _retention(revisions, *, in_flight=frozenset()):
+def _retention(function, revisions, *, in_flight=frozenset()):
     repo = AsyncMock()
+    repo.get_for_update.return_value = function
     repo.list_revisions.return_value = revisions
     repo.revision_hashes_with_runs_in_flight.return_value = set(in_flight)
     storage = AsyncMock()
@@ -64,7 +65,7 @@ async def test_pruning_deletes_the_artifact_and_the_source_directory():
     function = _function()
     old, live = _revision(function.id, 1, seed="a"), _revision(function.id, 2, seed="b")
     function.revision_hash = live.revision_hash
-    retention, repo, storage = _retention([old, live])
+    retention, repo, storage = _retention(function, [old, live])
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
     await retention.execute(plan)
@@ -79,7 +80,7 @@ async def test_the_live_revision_survives_a_tight_policy():
     function = _function()
     live = _revision(function.id, 1)
     function.revision_hash = live.revision_hash
-    retention, _repo, storage = _retention([live])
+    retention, _repo, storage = _retention(function, [live])
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
 
@@ -94,7 +95,9 @@ async def test_a_revision_with_a_run_in_flight_is_kept():
     function = _function()
     old, live = _revision(function.id, 1, seed="a"), _revision(function.id, 2, seed="b")
     function.revision_hash = live.revision_hash
-    retention, _repo, storage = _retention([old, live], in_flight={old.revision_hash})
+    retention, _repo, storage = _retention(
+        function, [old, live], in_flight={old.revision_hash}
+    )
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
 
@@ -103,18 +106,18 @@ async def test_a_revision_with_a_run_in_flight_is_kept():
 
 
 @pytest.mark.asyncio
-async def test_a_revision_younger_than_the_execution_deadline_is_kept():
+async def test_a_young_revision_without_runs_is_subject_to_the_limit():
     """A run is created and dispatched in separate steps, so a just-recorded
     revision can be pinned by a run that does not exist in the table yet."""
     function = _function()
     old = _revision(function.id, 1, seed="a", age_days=0)
     live = _revision(function.id, 2, seed="b", age_days=0)
     function.revision_hash = live.revision_hash
-    retention, _repo, _storage = _retention([old, live])
+    retention, _repo, _storage = _retention(function, [old, live])
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
 
-    assert plan.is_empty
+    assert plan.revision_numbers == (old.revision_number,)
 
 
 @pytest.mark.asyncio
@@ -125,7 +128,7 @@ async def test_a_sweep_never_issues_a_bare_prefix_delete():
     old, live = _revision(function.id, 1, seed="a"), _revision(function.id, 2, seed="b")
     old.code_path = "function.py"  # no directory component
     function.revision_hash = live.revision_hash
-    retention, _repo, storage = _retention([old, live])
+    retention, _repo, storage = _retention(function, [old, live])
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
     await retention.execute(plan)

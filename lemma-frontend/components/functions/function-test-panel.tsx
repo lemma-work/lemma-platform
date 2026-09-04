@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FunctionRevisionsTab } from '@/components/functions/function-revisions-tab';
+import type { FunctionRevision } from '@/lib/hooks/use-function-revisions';
 import { Play, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from '@/components/ui/icons';
 import type { FunctionRun } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -482,7 +483,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
     // Set when the user picks "Run this" on an older revision: the run is pinned
     // to that build instead of the live one. Cleared on a plain run so a pin is
     // never sticky without the banner saying so.
-    const [pinnedRevision, setPinnedRevision] = useState<string | null>(null);
+    const [pinnedRevision, setPinnedRevision] = useState<FunctionRevision | null>(null);
     const [currentRunId, setCurrentRunId] = useState<string | null>(null);
     const [currentRunSource, setCurrentRunSource] = useState<'new' | 'history' | null>(null);
     const [useRawJson, setUseRawJson] = useState(false);
@@ -534,9 +535,10 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
         rootRef: historyScrollRef,
     });
 
+    const inputSchema = pinnedRevision ? pinnedRevision.input_schema : functionData?.input_schema;
     const schemaProperties = useMemo(
-        () => (functionData?.input_schema?.properties || {}) as Record<string, SchemaProperty>,
-        [functionData?.input_schema?.properties]
+        () => (inputSchema?.properties || {}) as Record<string, SchemaProperty>,
+        [inputSchema?.properties]
     );
 
     const hasSchema = Object.keys(schemaProperties).length > 0;
@@ -609,7 +611,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                 functionName: functionData?.name || functionId,
                 input: parsedInput,
                 // Undefined for an ordinary run, so the live revision is used.
-                revision: pinnedRevision ?? undefined,
+                revision: pinnedRevision ? `r${pinnedRevision.revision_number}` : undefined,
             });
 
             pendingHistoryRefreshRunIdRef.current = run.id ?? null;
@@ -676,14 +678,14 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                         // pin has to be visible for as long as it applies.
                         <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2">
                             <p className="text-xs text-[var(--text-secondary)]">
-                                Running <span className="font-medium">{pinnedRevision}</span> instead
+                                Running <span className="font-medium">r{pinnedRevision.revision_number}</span> instead
                                 of the live version.
                             </p>
                             <Button
                                 variant="quiet"
                                 size="sm"
                                 className="h-6 shrink-0 px-2 text-xs"
-                                onClick={() => setPinnedRevision(null)}
+                                onClick={() => { setPinnedRevision(null); setFormData({}); setInputData('{}'); }}
                             >
                                 Use live
                             </Button>
@@ -824,7 +826,11 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                             // Pin the next run to this build and drop the user on
                             // the Run tab with the pin visible, rather than
                             // silently changing what "Run" means.
-                            setPinnedRevision(`r${revision.revision_number}`);
+                            setPinnedRevision(revision);
+                            setCurrentRunId(null);
+                            setCurrentRunSource(null);
+                            setFormData({});
+                            setInputData('{}');
                             setActiveTab('test');
                         }}
                     />

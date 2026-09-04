@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import structlog
 
@@ -72,8 +72,6 @@ class AppService:
             app_repository,
             app_branding_entitlement,
         )
-        # Storage side of the asset/archive/bundle/delete sagas, on an object
-        # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
 
     async def _validate_unique_public_slug(
@@ -91,8 +89,7 @@ class AppService:
             )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
-        """Storage phase: read the asset bytes — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection)."""
+        """Read assets without a DB connection."""
         return await self._storage_phase.read_asset(inputs)
 
     async def _require_pod_permission(
@@ -345,9 +342,7 @@ class AppService:
         )
 
     async def cleanup_app_storage(self, cleanup: _AppDeletionCleanup) -> None:
-        """Delete an app's stored bytes — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection). Call after
-        resolve_delete_app's UoW has committed."""
+        """Delete stored bytes after the deletion transaction commits."""
         await self._storage_phase.cleanup_storage(cleanup)
 
     async def resolve_upload_bundle(
@@ -360,8 +355,7 @@ class AppService:
         dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> _UploadPlan:
-        """Authorize + dedup (DB only). The storage writes happen outside this UoW
-        via write_bundle_storage; finalize_upload_bundle then persists."""
+        """Authorize an upload; its unique storage generation is written outside the UoW."""
         app = await self.repository.get_by_name(pod_id, name)
         if not app:
             raise AppNotFoundError(f"App {name} not found")
@@ -382,25 +376,14 @@ class AppService:
 
         version: str | None = None
         release_root: str | None = None
-        existing_release_id: UUID | None = None
         needs_dist_write = False
-        revives_release = False
         if dist_archive_bytes is not None:
-            # Validate the bundle up front (raises AppValidationError on a missing
-            # root index.html), regardless of dedup — matches prior behavior and
-            # ensures no storage write happens for an invalid bundle.
-            # Both are thread offloads over the whole archive. The method's own
-            # docstring calls this phase "DB only", which it was not.
+            # Validate and hash outside the pooled connection.
             async with connection_released(getattr(self.repository, "session", None)):
                 await run_blocking(load_app_dist_bundle, dist_archive_bytes)
                 version = await run_blocking(upload_source_sha256, dist_archive_bytes)
-            release_root = f"releases/{version}/dist/"
-            existing = await self.repository.get_release_by_version(app.id, version)
-            existing_release_id = existing.id if existing is not None else None
-            # A matching digest is not proof the bytes are still there:
-            # retention deletes them and keeps the row.
-            revives_release = existing is not None and existing.is_pruned
-            needs_dist_write = existing is None or revives_release
+            release_root = f"releases/{version}/{uuid7()}/dist/"
+            needs_dist_write = True
         return _UploadPlan(
             app_id=app.id,
             pod_id=pod_id,
@@ -408,9 +391,7 @@ class AppService:
             has_source=has_source,
             version=version,
             release_root=release_root,
-            existing_release_id=existing_release_id,
             needs_dist_write=needs_dist_write,
-            revives_release=revives_release,
         )
 
     async def write_bundle_storage(
@@ -419,9 +400,7 @@ class AppService:
         source_archive_bytes: bytes | Path | None,
         dist_archive_bytes: bytes | Path | None,
     ) -> _WrittenBundle:
-        """Write uploaded bytes to storage — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection). Call between
-        resolve_upload_bundle and finalize_upload_bundle."""
+        """Write a generation without holding a DB connection."""
         return await self._storage_phase.write_bundle(
             plan, source_archive_bytes, dist_archive_bytes
         )
@@ -430,13 +409,11 @@ class AppService:
         self, plan: _UploadPlan, written: _WrittenBundle, user_id: UUID
     ) -> AppEntity:
         """Persist the release + app pointer (DB only) after the storage writes."""
-        app = await self.repository.get_by_name(plan.pod_id, plan.name)
+        app = await self.repository.get_for_update(plan.app_id)
         if not app:
             raise AppNotFoundError(f"App {plan.name} not found")
-        release_id = plan.existing_release_id
+        release_id = app.current_release_id
         if plan.needs_dist_write:
-            # Upsert: a redeploy of a pruned build revives that release
-            # rather than minting a second row for the same digest.
             release = await self.repository.record_release(
                 AppReleaseEntity(
                     app_id=app.id,
@@ -449,16 +426,7 @@ class AppService:
                 )
             )
             release_id = release.id
-        elif release_id is not None and written.source_path is not None:
-            # Deduped onto an existing release: same dist bytes, same release.
-            # The source can still differ (a comment-only edit compiles to the
-            # same output), and the newest is the better answer to what built it.
-            await self.repository.attach_release_source(
-                release_id,
-                source_archive_path=written.source_path,
-                source_digest=written.source_digest,
-            )
-        if written.source_path is not None:
+        if written.source_path is not None or plan.version is not None:
             app.source_archive_path = written.source_path
         newly_published = plan.version is not None and app.status is not AppStatus.READY
         if plan.version is not None:

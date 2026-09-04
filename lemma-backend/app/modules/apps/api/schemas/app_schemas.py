@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
@@ -46,7 +47,7 @@ class AppResponse(BaseModel):
     current_release_id: Optional[UUID] = None
     status: AppStatus
     visibility: str = "PUBLIC"
-    created_at: Any
+    created_at: datetime | None
     updated_at: Any
 
     model_config = {"from_attributes": True}
@@ -77,12 +78,12 @@ class AppReleaseResponse(BaseModel):
     version: str = Field(description="sha256 digest of the release's dist archive.")
     label: Optional[str] = None
     created_by: Optional[UUID] = None
-    created_at: Any
+    created_at: datetime | None
     is_live: bool = Field(description="True for the release this app currently serves.")
     has_source: bool = Field(
         description="Whether this release's own source archive is still stored."
     )
-    pruned_at: Any = Field(
+    pruned_at: datetime | None = Field(
         default=None,
         description=(
             "Set when retention removed this release's build. The entry stays "

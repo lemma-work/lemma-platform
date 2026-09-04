@@ -47,7 +47,7 @@ export function AppVersionsPanel({
     previewingReleaseNumber,
     canPromote = false,
 }: AppVersionsPanelProps) {
-    const { data: releases, isLoading } = useAppReleases(podId, appName, open);
+    const { data: releases, isLoading, isError, refetch } = useAppReleases(podId, appName, open);
     const promote = usePromoteAppRelease(podId, appName);
     const [pendingPromote, setPendingPromote] = useState<AppRelease | null>(null);
 
@@ -82,7 +82,12 @@ export function AppVersionsPanel({
                     </div>
                 ) : null}
 
-                {!isLoading && !releases?.length ? (
+                {isError ? (
+                    <EmptyState title="Could not load versions" description="Try again to retrieve this app's history."
+                        action={<Button variant="quiet" onClick={() => void refetch()}>Retry</Button>} />
+                ) : null}
+
+                {!isLoading && !isError && !releases?.length ? (
                     <EmptyState
                         variant="region"
                         icon={<History className="h-5 w-5" />}

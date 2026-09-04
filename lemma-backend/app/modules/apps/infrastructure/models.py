@@ -56,14 +56,13 @@ class AppModel(UUIDAuditBase):
 class AppReleaseModel(UUIDCreatedBase):
     __tablename__ = "app_releases"
     __table_args__ = (
-        UniqueConstraint("app_id", "version", name="uq_app_release_version"),
         UniqueConstraint("app_id", "release_number", name="uq_app_release_number"),
         Index("ix_app_release_app_id", "app_id"),
         Index("ix_app_release_app_created", "app_id", text("created_at DESC")),
     )
 
     app_id: Mapped[UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))
-    # The dist digest -- the release's identity, its storage key, and its ETag.
+    # Identical dist bytes share a digest, but each deployment has its own row.
     version: Mapped[str] = mapped_column(String, nullable=False)
     # The per-app counter shown to people and used in preview hosts. A sha256 is
     # too long for a DNS label and unreadable in a list; `v7` is neither.
@@ -78,10 +77,13 @@ class AppReleaseModel(UUIDCreatedBase):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     label: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Set when retention has deleted this release's bytes. The row survives so
+    # Set before retention deletes this release's bytes. The row survives so
     # the history stays legible ("v3 -- build removed") instead of developing
     # unexplained gaps; dist_root_path records where the bytes were.
     pruned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

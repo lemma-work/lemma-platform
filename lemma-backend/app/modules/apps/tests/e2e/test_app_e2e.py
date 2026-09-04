@@ -781,8 +781,9 @@ async def test_redeploying_a_pruned_build_serves_it_again(
     # Now redeploy v1's exact bytes -- a revert, which is when anyone would.
     await deploy(first)
     items = await releases()
-    assert items[1]["is_live"] is True, "the revived release is what serves"
-    assert items[1]["pruned_at"] is None, "and it no longer reads as removed"
+    assert items[3]["is_live"] is True, "the new upload is what serves"
+    assert items[1]["pruned_at"] is not None, "the old generation remains removed"
+    assert items[3]["pruned_at"] is None
 
     releases_root = (
         Path(settings.local_file_storage_root) / "common" / "apps" / app_id / "releases"
@@ -849,3 +850,66 @@ async def test_a_forged_release_header_cannot_serve_an_old_build_on_the_live_hos
     )
     assert preview.status_code == status.HTTP_200_OK, preview.text
     assert old in preview.text
+
+
+async def test_retrying_an_old_prune_cannot_delete_a_new_upload(
+    authenticated_client,
+    test_pod,
+    monkeypatch,
+):
+    from app.modules.apps.config import apps_settings
+    from app.modules.apps.services.app_release_retention import AppReleaseRetention
+
+    monkeypatch.setattr(apps_settings, "app_release_keep_last", 1)
+    monkeypatch.setattr(apps_settings, "app_release_max_keep", 1)
+    monkeypatch.setattr(apps_settings, "app_release_keep_days", 0)
+    monkeypatch.setattr(apps_settings, "app_release_retention_enabled", False)
+    from uuid import UUID
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.apps.api.dependencies import build_app_service
+
+    name = f"app_fenced_{uuid4().hex[:8]}"
+    base = f"/pods/{test_pod['id']}/apps/{name}"
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/apps", json={"name": name}
+    )
+    assert created.status_code == 201, created.text
+    source = build_source_archive("FIRST")
+    first = build_dist_archive("FIRST")
+
+    async def deploy(dist):
+        response = await authenticated_client.post(
+            base + "/bundle",
+            files={
+                "dist_archive": ("dist.zip", dist, "application/zip"),
+                "source_archive": ("source.zip", source, "application/zip"),
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    await deploy(first)
+    await deploy(build_dist_archive("SECOND"))
+    factory = SessionUnitOfWorkFactory(get_session_maker())
+    async with factory() as uow:
+        service = build_app_service(uow)
+        app = await service.repository.get(UUID(created.json()["id"]))
+        assert not any(
+            release.is_pruned
+            for release in await service.repository.list_releases(app.id)
+        )
+        retention = AppReleaseRetention(
+            service.repository, service.file_manager_factory
+        )
+        plan = await retention.plan(app)
+        await uow.commit()
+    assert plan.release_numbers == (1,)
+    await deploy(first)
+    await retention.execute(plan)
+    await retention.execute(plan)
+    asset = await authenticated_client.get(base + "/assets")
+    assert asset.status_code == 200, asset.text
+    assert "FIRST" in asset.text
+    archive = await authenticated_client.get(base + "/source/archive")
+    assert archive.status_code == 200, archive.text
+    assert archive.content == source

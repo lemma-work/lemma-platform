@@ -15,7 +15,8 @@ pooled DB connection is ever held across non-DB work.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 from uuid import UUID
 
 from fastapi import Request
@@ -31,6 +32,14 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.apps.services.app_release_service import (
+        AppReleaseService,
+        ReleaseHistory,
+    )
+
+
 class AppUseCases:
     """Owns the app sagas. Built from a uow_factory + a per-phase service
     builder; holds no DB connection across storage work."""
@@ -38,14 +47,15 @@ class AppUseCases:
     def __init__(
         self,
         uow_factory: UnitOfWorkFactory,
-        service_builder: Callable[[Any], AppService],
-        release_service_builder: Callable[[Any], Any] | None = None,
+        service_builder: Callable[[SqlAlchemyUnitOfWork], AppService],
+        release_service_builder: Callable[[SqlAlchemyUnitOfWork], AppReleaseService]
+        | None = None,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
         self._release_builder = release_service_builder
 
-    def _build_releases(self, uow: Any):
+    def _build_releases(self, uow: SqlAlchemyUnitOfWork) -> AppReleaseService:
         if self._release_builder is not None:
             return self._release_builder(uow)
         from app.modules.apps.services.app_release_service import AppReleaseService
@@ -119,6 +129,11 @@ class AppUseCases:
     async def _prune_releases_quietly(
         self, pod_id: UUID, app_name: str, request: Request, user_id: UUID
     ) -> None:
+        from app.modules.apps.config import apps_settings
+
+        if not apps_settings.app_release_retention_enabled:
+            return
+
         from app.modules.apps.services.app_release_retention import (
             PRUNE_FAILURES,
             AppReleaseRetention,
@@ -141,6 +156,11 @@ class AppUseCases:
             # Storage deletes run outside the unit of work, holding no pooled
             # connection -- pruning can touch many objects.
             await retention.execute(prune_plan)
+            async with self._uow_factory() as completed_uow:
+                await self._build(completed_uow).repository.mark_releases_purged(
+                    prune_plan.version_ids
+                )
+                await completed_uow.commit()
         except PRUNE_FAILURES:
             logger.warning(
                 "apps.app_use_cases.release_retention.degraded",
@@ -206,7 +226,7 @@ class AppUseCases:
 
     async def list_releases(
         self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID
-    ):
+    ) -> ReleaseHistory:
         """List an app's release history (one short UoW, no storage)."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id

@@ -57,6 +57,7 @@ class GatewayClient:
         *,
         function_id: UUID,
         revision_hash: str,
+        generation: UUID | None = None,
     ) -> bytes:
         response = await self._client.get(
             urljoin(
@@ -66,6 +67,7 @@ class GatewayClient:
                     f"{function_id}/artifacts/{revision_hash}"
                 ),
             ),
+            params={"generation": str(generation)} if generation else None,
             headers=self._headers(f"Bearer {function_token}"),
         )
         response.raise_for_status()
@@ -236,6 +238,7 @@ async def _resolve_artifact_root(
     function_id: UUID,
     revision_hash: str,
     deadline_at: datetime,
+    generation: UUID | None = None,
 ) -> Path:
     """Resolve an immutable revision without re-fetching a warm artifact."""
 
@@ -253,6 +256,7 @@ async def _resolve_artifact_root(
             function_token,
             function_id=function_id,
             revision_hash=revision_hash,
+            **({"generation": generation} if generation else {}),
         )
         return _artifact_root(
             artifact,

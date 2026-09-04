@@ -1,21 +1,7 @@
-"""Which owners a retention sweep should look at.
+"""Keyset pages of owners with excess builds or incomplete storage deletion.
 
-Both build-retention sweeps used to take ``ORDER BY id LIMIT 200`` with no
-cursor and no filter, so every tick examined the same lowest-id rows forever and
-the tail -- an app or function that STOPPED being deployed, which is the only
-case the cron exists for -- was never reached.
-
-The fix is not a cursor column. Unlike a sweep over rows that stay eligible
-forever, this candidate set DRAINS: ``select_prunable`` never returns a row whose
-``pruned_at`` is set, and the sweep stamps it in the same unit of work, so a
-pruned version leaves the set permanently. What was missing is a filter precise
-enough that the batch bound stops deciding *which* owners get swept and only
-decides how many per round trip -- and a loop that keeps going until the page
-comes back short.
-
-The filter is :func:`app.core.retention.could_have_prunable` pushed into SQL.
-Keyset, not OFFSET: rows leave the set as the sweep prunes them, so an offset
-would step over owners it never looked at.
+The pending-deletion branch is independent of retained version count and age.
+An owner leaves the candidate set only after its cleanup has been acknowledged.
 """
 
 from __future__ import annotations
@@ -23,21 +9,23 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, or_, select, union
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.retention import RetentionPolicy
 
 
 def owners_with_prunable_versions(
     *,
-    owner_column,
-    created_at_column,
-    pruned_at_column,
+    owner_column: InstrumentedAttribute[UUID],
+    created_at_column: InstrumentedAttribute[datetime],
+    pruned_at_column: InstrumentedAttribute[datetime | None],
+    purged_at_column: InstrumentedAttribute[datetime | None],
     policy: RetentionPolicy,
     now: datetime,
     after: UUID | None = None,
     limit: int,
-) -> Select:
+) -> Select[tuple[UUID]]:
     """One page of owners that could have a prunable version, id-ordered.
 
     Mirrors ``could_have_prunable`` exactly -- ``k > keep_last AND (k > max_keep
@@ -57,9 +45,12 @@ def owners_with_prunable_versions(
                 func.min(created_at_column) < cutoff,
             )
         )
-        .order_by(owner_column)
-        .limit(limit)
+    )
+    pending = select(owner_column).where(
+        pruned_at_column.is_not(None), purged_at_column.is_(None)
     )
     if after is not None:
         statement = statement.where(owner_column > after)
-    return statement
+        pending = pending.where(owner_column > after)
+    candidates = union(statement, pending).subquery()
+    return select(candidates.c[0]).order_by(candidates.c[0]).limit(limit)

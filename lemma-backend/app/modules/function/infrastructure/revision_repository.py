@@ -16,6 +16,7 @@ from uuid import UUID, uuid7
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.function.domain.entities import (
     FunctionEntity,
@@ -31,36 +32,44 @@ from app.modules.function.infrastructure.models import (
 
 
 class FunctionRevisionRepositoryMixin:
-    """Requires ``self.session`` from the host repository."""
+    """Persist revision history within the host repository transaction."""
+
+    session: AsyncSession
+
+    async def get_for_update(self, function_id: UUID) -> FunctionEntity | None:
+        model = (
+            await self.session.execute(
+                select(FunctionModel)
+                .where(FunctionModel.id == function_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def mark_revisions_purged(self, revision_ids: tuple[UUID, ...]) -> None:
+        await self.session.execute(
+            update(FunctionRevisionModel)
+            .where(
+                FunctionRevisionModel.id.in_(revision_ids),
+                FunctionRevisionModel.pruned_at.is_not(None),
+            )
+            .values(purged_at=datetime.now(timezone.utc))
+        )
 
     async def record_revision(
         self, entity: FunctionRevisionEntity
     ) -> FunctionRevisionEntity:
-        """Insert one revision, or revive the existing row for its hash.
-
-        Idempotent on ``(function_id, revision_hash)`` because the artifact is
-        content-addressed: re-saving unchanged code rebuilds to the same hash and
-        must not mint a second revision.
-
-        ``DO UPDATE``, not ``DO NOTHING``, for two reasons. Re-saving code whose
-        artifact retention had already deleted rewrites both the artifact and the
-        source before this runs, so ``pruned_at`` has stopped being true -- left
-        set, the revision reads as "build removed", refuses to promote or pin
-        with a 410, and once superseded is skipped by ``select_prunable``
-        forever, leaking its artifact. And ``DO UPDATE ... RETURNING`` yields a
-        row on both paths, which removes a read-back whose ``assert`` would have
-        fired as an AssertionError if the conflicting transaction rolled back in
-        between.
-
-        Deliberately NOT in the SET: ``revision_number``, ``created_at`` and
-        ``created_by`` (updating them would reorder history), and ``code_path``
-        and the schemas -- the hash covers the artifact, ``code_path`` derives
-        from it, and schema extraction is deterministic per artifact, so the
-        stored values are already the right ones. No ``where=`` either: a false
-        predicate returns no row and would reinstate the read-back.
-        """
+        """Reuse retained code by hash; expired code gets a new row and immutable generation."""
         values = entity.model_dump(
-            exclude={"id", "created_at", "code", "revision_number", "pruned_at"},
+            exclude={
+                "id",
+                "created_at",
+                "code",
+                "revision_number",
+                "pruned_at",
+                "purged_at",
+            },
         )
         # Serializes the max+1 below against a concurrent save of DIFFERENT code,
         # which would otherwise compute the same number and violate
@@ -87,8 +96,12 @@ class FunctionRevisionRepositoryMixin:
                 **values,
             )
             .on_conflict_do_update(
-                constraint="uq_function_revision_hash",
-                set_={"pruned_at": None},
+                index_elements=[
+                    FunctionRevisionModel.function_id,
+                    FunctionRevisionModel.revision_hash,
+                ],
+                index_where=FunctionRevisionModel.pruned_at.is_(None),
+                set_={"revision_hash": entity.revision_hash},
             )
             .returning(FunctionRevisionModel)
         )
@@ -100,6 +113,7 @@ class FunctionRevisionRepositoryMixin:
         statement = select(FunctionRevisionModel).where(
             FunctionRevisionModel.function_id == function_id,
             FunctionRevisionModel.revision_hash == revision_hash,
+            FunctionRevisionModel.pruned_at.is_(None),
         )
         model = (await self.session.execute(statement)).scalar_one_or_none()
         return model.to_entity() if model else None

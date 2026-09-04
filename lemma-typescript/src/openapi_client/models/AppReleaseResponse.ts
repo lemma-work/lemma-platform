@@ -7,7 +7,7 @@
  */
 export type AppReleaseResponse = {
     app_id: string;
-    created_at: any;
+    created_at: (string | null);
     created_by?: (string | null);
     /**
      * Whether this release's own source archive is still stored.
@@ -23,7 +23,7 @@ export type AppReleaseResponse = {
     /**
      * Set when retention removed this release's build. The entry stays in the history, but it can no longer be previewed or promoted.
      */
-    pruned_at?: any;
+    pruned_at?: (string | null);
     release_number: number;
     /**
      * sha256 digest of the release's dist archive.

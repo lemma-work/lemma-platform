@@ -16,13 +16,14 @@ from __future__ import annotations
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
 from app.core.runtime_config import app_api_url, inject_runtime_config
-from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
+from app.modules.apps.domain.entities import AppReleaseEntity
+from app.modules.apps.domain.entities import AppAssetDocument
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
@@ -59,7 +60,7 @@ class _AppDeletionCleanup:
 
     app_id: UUID
     source_archive_path: str | None
-    releases: tuple
+    releases: tuple[AppReleaseEntity, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +73,7 @@ class _UploadPlan:
     has_source: bool
     version: str | None
     release_root: str | None
-    existing_release_id: UUID | None
     needs_dist_write: bool
-    # This upload is bringing back a release retention had already deleted.
-    # Correctness rides on `needs_dist_write`; this names *why* it is set, for
-    # the log line and for the test that would otherwise pass either way.
-    revives_release: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +179,7 @@ class AppStoragePhase:
                 source_version = await run_blocking(
                     upload_source_sha256, source_archive_bytes
                 )
-                source_path = f"source/{source_version}/archive.zip"
+                source_path = f"source/{source_version}/{uuid7()}/archive.zip"
                 await storage.write_file(source_path, source_archive_bytes)
             if plan.needs_dist_write and dist_archive_bytes is not None:
                 bundle = await run_blocking(load_app_dist_bundle, dist_archive_bytes)

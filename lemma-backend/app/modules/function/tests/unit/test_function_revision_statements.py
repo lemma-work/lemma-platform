@@ -75,17 +75,17 @@ def _entity(function_id, *, pruned_at=None):
 
 
 @pytest.mark.asyncio
-async def test_the_upsert_clears_the_tombstone_on_conflict():
+async def test_deduplication_only_targets_retained_revisions():
     function_id = uuid4()
     repository = _repository(_entity(function_id))
 
     await repository.record_revision(_entity(function_id))
 
     upsert = repository.session.statements[-1]
-    assert "on conflict on constraint uq_function_revision_hash" in upsert
+    assert "on conflict (function_id, revision_hash) where pruned_at is null" in upsert
     assert "do update set" in upsert
     set_clause = upsert.split("do update set", 1)[1].split("returning", 1)[0]
-    assert "pruned_at" in set_clause
+    assert "pruned_at" not in set_clause
     # Updating these would reorder the history rather than restore a build; the
     # stored code_path and schemas are already right, because the hash covers
     # the artifact they were extracted from.

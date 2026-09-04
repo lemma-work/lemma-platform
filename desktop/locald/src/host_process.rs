@@ -3815,18 +3815,7 @@ mod tests {
         );
         assert_eq!(backend.restart_count, 1);
         assert!(backend.last_exit.is_some());
-        // A dependent that was already up must survive its dependency's circuit
-        // opening: reconciliation only ever spawns, so nothing here should stop
-        // it. This has failed on CI and never locally, and the bare assertion
-        // could not say why — `last_exit` carries the exit status and how long
-        // the process lived, which separates the three ways it can be false:
-        // killed by a stray signal, a `sleep` that outran the test, or never
-        // started at all (no exit recorded, because there was nothing to exit).
-        let frontend = process_status(&manager, "frontend");
-        assert!(
-            frontend.running,
-            "frontend stopped running while backend's circuit opened: {frontend:?}"
-        );
+        assert!(process_status(&manager, "frontend").running);
         manager.stop_all().unwrap();
     }
 

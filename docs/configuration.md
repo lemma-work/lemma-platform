@@ -326,7 +326,9 @@ in one afternoon would mean fifty retained builds for the next thirty days.
 The live release and the live revision are exempt at any age or rank, as is any
 revision a PENDING or RUNNING run is pinned to. A pruned entry keeps its row and
 shows as "build removed" rather than vanishing, so the history has no
-unexplained gaps — but it can no longer be previewed, promoted or run.
+unexplained gaps — but its source and build are removed, so it can no longer be
+inspected, previewed, promoted or run. Failed storage deletions remain pending
+until cleanup succeeds, even after the retained count reaches its floor.
 
 ```dotenv
 APP_RELEASE_RETENTION_ENABLED=true

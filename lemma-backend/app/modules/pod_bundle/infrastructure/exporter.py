@@ -592,19 +592,6 @@ class BundleExporter:
             await run_blocking(
                 (dest / "dist.zip").write_bytes, dist_bytes, limiter="cpu_bound"
             )
-            # Whether the importer may deploy this build as-is or must rebuild.
-            # Decided here, while the source pod id is known for certain.
-            from lemma_pod_bundle import dist_is_portable
-
-            portable = await run_blocking(
-                dist_is_portable, dist_bytes, pod_id=str(pod_id), limiter="cpu_bound"
-            )
-            await run_blocking(
-                _write_json,
-                dest / "dist.json",
-                {"portable": portable},
-                limiter="cpu_bound",
-            )
 
     async def _export_pod_files(
         self,

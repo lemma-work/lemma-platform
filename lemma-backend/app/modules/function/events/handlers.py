@@ -30,15 +30,16 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
     FunctionRunQueueUnavailable,
 )
+from app.modules.function.config import revision_settings
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
-)
-from app.modules.function.application.runtime_policy import (
-    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
+)
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
 from app.core.log.log import get_logger
 
@@ -175,8 +176,6 @@ async def prune_function_runs() -> None:
 
 
 async def _prune_function_runs() -> None:
-    from app.core.config import settings
-
     budget = settings.function_run_retention_budget_seconds
     if budget <= 0:
         return
@@ -226,7 +225,7 @@ async def _reconcile_function_runs() -> None:
 
 
 @streaq_cron(
-    settings.function_revision_retention_cron,
+    revision_settings.function_revision_retention_cron,
     name="sweep_function_revisions",
     lane=Lane.BULK,
 )
@@ -246,12 +245,12 @@ async def sweep_function_revisions() -> None:
 
 
 async def _sweep_revisions() -> None:
-    if not settings.function_revision_retention_enabled:
+    if not revision_settings.function_revision_retention_enabled:
         return
     outcome = await _sweep_function_revisions(
         provide_uow_factory(),
-        page_size=settings.function_revision_retention_batch,
-        budget_seconds=settings.function_revision_retention_budget_seconds,
+        page_size=revision_settings.function_revision_retention_batch,
+        budget_seconds=revision_settings.function_revision_retention_budget_seconds,
     )
     # Logged even on a no-op tick: "found nothing" and "frozen" looked the same
     # from outside, which is how a sweep stuck on the head of the table went
@@ -296,6 +295,11 @@ async def _prune_one_function(uow_factory: UnitOfWorkFactory, function_id: UUID)
     if plan.is_empty:
         return 0
     await retention.execute(plan)
+    async with uow_factory() as completed_uow:
+        await build_function_service(completed_uow).repository.mark_revisions_purged(
+            plan.version_ids
+        )
+        await completed_uow.commit()
     return len(plan.revision_numbers)
 
 
@@ -341,6 +345,7 @@ async def _sweep_function_revisions(
                             owner_column=FunctionRevisionModel.function_id,
                             created_at_column=FunctionRevisionModel.created_at,
                             pruned_at_column=FunctionRevisionModel.pruned_at,
+                            purged_at_column=FunctionRevisionModel.purged_at,
                             policy=policy,
                             now=moment,
                             after=after,

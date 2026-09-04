@@ -41,6 +41,7 @@ def _release(app_id, number, *, version=None, pruned=False, source="source/aa/a.
 
 def _service(app, releases):
     repo = AsyncMock()
+    repo.get_for_update.return_value = app
     repo.get_by_name.return_value = app
     # Newest first, matching AppRepository.list_releases' ordering.
     repo.list_releases.return_value = sorted(
@@ -182,9 +183,7 @@ async def test_promote_moves_the_pointer_and_the_source_with_it():
 
 
 @pytest.mark.asyncio
-async def test_promote_keeps_working_source_when_the_release_predates_the_column():
-    """Releases backfilled before per-release source existed carry none.
-    Overwriting the app's working pointer with NULL would lose the source."""
+async def test_promote_does_not_export_unrelated_source_for_legacy_release():
     app = _app()
     old = _release(app.id, 1, source=None)
     app.source_archive_path = "source/new/archive.zip"
@@ -193,9 +192,7 @@ async def test_promote_keeps_working_source_when_the_release_predates_the_column
 
     await service.promote_release(app.pod_id, "orders", "v1", ctx=allow_all_context())
 
-    assert (
-        repo.update.await_args.args[0].source_archive_path == "source/new/archive.zip"
-    )
+    assert repo.update.await_args.args[0].source_archive_path is None
 
 
 @pytest.mark.asyncio

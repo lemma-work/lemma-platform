@@ -253,18 +253,20 @@ def _write_dist_bundle(resource: Path, *, portable: bool | None, package_json=Tr
         (resource / "dist.json").write_text(json.dumps({"portable": portable}))
 
 
-async def test_a_portable_bundled_dist_is_deployed_without_rebuilding(tmp_path):
-    """The exported build bakes in nothing pod-specific, so rebuilding it would
-    spend minutes and a sandbox producing the same bytes."""
+@pytest.mark.parametrize("marker", [{"portable": True}, [], None, "invalid"])
+async def test_vite_build_is_rebuilt_even_when_marker_claims_portability(
+    tmp_path, marker
+):
     resource = tmp_path / "apps" / "vite"
     _write_dist_bundle(resource, portable=True)
-
-    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+    (resource / "dist.json").write_text(json.dumps(marker))
+    sandbox = _RecordingSandbox()
+    source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
         resource, "vite", app_slug="vite", pod_id=_POD, user_id=uuid4()
     )
-
-    assert dist_bytes == b"EXPORTED-DIST"
-    assert source_bytes  # source still ships, and is still the primary artifact
+    assert dist_bytes == sandbox.result
+    assert sandbox.calls == 1
+    assert source_bytes
 
 
 async def test_a_non_portable_bundled_dist_is_rebuilt(tmp_path):

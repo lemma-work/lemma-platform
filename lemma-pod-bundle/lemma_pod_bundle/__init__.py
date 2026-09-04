@@ -7,7 +7,6 @@ per-resource payload normalization, and archive pack/extract.
 
 from __future__ import annotations
 
-from .app_dist import dist_is_portable
 from .apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
@@ -46,7 +45,6 @@ __all__ = [
     "SURFACE_APPLY_FIELDS",
     "SYSTEM_TABLE_COLUMNS",
     "TABLE_DATA_FILE",
-    "dist_is_portable",
     "BundleValidationIssue",
     "TableDiff",
     "diff_table_columns",

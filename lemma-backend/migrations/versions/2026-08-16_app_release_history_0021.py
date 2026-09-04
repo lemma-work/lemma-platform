@@ -15,7 +15,7 @@ unreadable in a list. ``v7`` is both, and the digest stays as the identity.
 ``apps`` row -- one column, overwritten by every upload -- so rolling the dist
 back would have paired an old build with the newest source, and an export after
 that rollback would have shipped code that never produced the running build.
-The backfill can only attribute the app's current source to its newest release;
+The backfill can only attribute the app's current source to its live release;
 older releases keep a NULL source, which reads honestly as "we do not know".
 
 ``pruned_at`` marks a release whose bytes retention has deleted. The row stays:
@@ -53,6 +53,11 @@ def upgrade() -> None:
         "app_releases",
         sa.Column("pruned_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "app_releases",
+        sa.Column("purged_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.drop_constraint("uq_app_release_version", "app_releases", type_="unique")
     op.create_foreign_key(
         "fk_app_release_created_by",
         "app_releases",
@@ -79,7 +84,7 @@ def upgrade() -> None:
         """
     )
 
-    # The app's single source archive can only be claimed by its newest release.
+    # The app's single source archive can only be claimed by its live release.
     # Attributing it to any older one would be a guess, and the source path is
     # content-addressed (`source/<sha256>/archive.zip`), so the digest comes
     # straight out of the path rather than needing the bytes.
@@ -91,13 +96,7 @@ def upgrade() -> None:
         FROM apps AS a
         WHERE a.source_archive_path IS NOT NULL
           AND r.app_id = a.id
-          AND r.id = (
-              SELECT newest.id
-              FROM app_releases AS newest
-              WHERE newest.app_id = a.id
-              ORDER BY newest.created_at DESC, newest.id DESC
-              LIMIT 1
-          )
+          AND r.id = a.current_release_id
         """
     )
 
@@ -113,6 +112,28 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The old schema permits one deployment per digest. Preserve the live row
+    # when collapsing identical builds, otherwise prefer the latest usable one.
+    op.execute(
+        """
+        DELETE FROM app_releases
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT r.id, ROW_NUMBER() OVER (
+                    PARTITION BY r.app_id, r.version
+                    ORDER BY (r.id = a.current_release_id) DESC NULLS LAST,
+                             (r.pruned_at IS NULL) DESC,
+                             r.release_number DESC
+                ) AS position
+                FROM app_releases r JOIN apps a ON a.id = r.app_id
+            ) ranked WHERE position > 1
+        )
+        """
+    )
+    op.drop_column("app_releases", "purged_at")
+    op.create_unique_constraint(
+        "uq_app_release_version", "app_releases", ["app_id", "version"]
+    )
     op.drop_index("ix_app_release_app_created", table_name="app_releases")
     op.drop_constraint("uq_app_release_number", "app_releases", type_="unique")
     op.drop_constraint("fk_app_release_created_by", "app_releases", type_="foreignkey")

@@ -228,6 +228,7 @@ async def test_upload_bundle_requires_source_or_dist():
         public_slug="dashboard",
     )
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
 
     with pytest.raises(AppValidationError):
         await service.upload_bundle(
@@ -268,6 +269,7 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
     source_archive = make_dist_zip({"src/index.ts": "export default {}"})
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.update.side_effect = lambda entity: entity
     repo.get_release_by_version.return_value = None
     repo.record_release.return_value = AppReleaseEntity(
@@ -318,6 +320,7 @@ async def test_upload_bundle_rejects_dist_without_root_index_html():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
 
     with pytest.raises(AppValidationError):
         await service.upload_bundle(
@@ -350,6 +353,7 @@ async def test_get_app_asset_missing_release_raises_not_found():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
 
     with pytest.raises(AppNotFoundError):
         await _get_app_asset(
@@ -390,6 +394,7 @@ async def test_get_app_asset_reads_release_contents():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_release.return_value = release
     storage.read_file.return_value = "<html><head></head><body>public-ok</body></html>"
 
@@ -580,6 +585,7 @@ async def test_get_app_asset_serves_static_asset_without_fallback():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_release.return_value = release
     storage.read_file.return_value = b"console.log('asset')"
 
@@ -646,6 +652,7 @@ async def test_get_app_asset_missing_path_raises_without_fallback():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_release.return_value = release
     storage.read_file.side_effect = FileNotFoundError("missing")
 
@@ -688,6 +695,7 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_release.return_value = release
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
@@ -736,6 +744,7 @@ async def test_delete_app_removes_release_manifest_assets():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.list_releases.return_value = [release]
     await _delete_app(
         service,
@@ -778,6 +787,7 @@ async def test_delete_app_ignores_missing_source_archive():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.list_releases.return_value = [release]
     storage.delete_file.side_effect = [FileNotFoundError("missing source archive")]
 
@@ -821,6 +831,7 @@ async def test_get_app_dist_archive_reads_current_release():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_release.return_value = release
     storage.read_file.return_value = b"zip-bytes"
 
@@ -854,6 +865,7 @@ async def test_update_app_public_slug():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.update.side_effect = lambda entity: entity
     repo.get_by_public_slug.return_value = None
 
@@ -885,6 +897,7 @@ async def test_update_app_public_slug_conflict_raises():
     )
 
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     repo.get_by_public_slug.return_value = AppEntity(
         id=uuid4(),
         pod_id=uuid4(),
@@ -921,6 +934,7 @@ def _pruned_release(app_id, version="a" * 64):
 
 async def _resolve_dist_plan(service, repo, pod_id, user_id, app, dist_archive):
     repo.get_by_name.return_value = app
+    repo.get_for_update.return_value = app
     return await service.resolve_upload_bundle(
         pod_id,
         app.name,
@@ -955,9 +969,7 @@ async def test_resolve_upload_bundle_marks_a_pruned_digest_for_rewrite():
 
     plan = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
 
-    assert plan.existing_release_id == pruned.id
     assert plan.needs_dist_write is True
-    assert plan.revives_release is True
 
 
 @pytest.mark.asyncio
@@ -989,37 +1001,26 @@ async def test_redeploying_a_pruned_release_writes_its_bytes_back():
     updated = await service.finalize_upload_bundle(plan, written, user_id)
 
     wrote = [call.args[0] for call in storage.write_file.await_args_list]
-    assert f"{pruned.dist_root_path}index.html" in wrote
-    assert f"{pruned.dist_root_path}assets/app.js" in wrote
-    assert written.dist_archive_path == f"{pruned.dist_root_path}archive.zip"
+    assert plan.release_root != pruned.dist_root_path
+    assert f"{plan.release_root}index.html" in wrote
+    assert f"{plan.release_root}assets/app.js" in wrote
+    assert written.dist_archive_path == f"{plan.release_root}archive.zip"
     # And the app goes live on the revived row rather than a second one.
     assert updated.current_release_id == pruned.id
     assert updated.status is AppStatus.READY
 
 
 @pytest.mark.asyncio
-async def test_redeploying_a_live_digest_still_skips_the_dist_write():
-    """The dedupe is the point of the digest; reviving must not defeat it."""
+async def test_redeploying_a_live_digest_uses_an_independent_storage_generation():
     service, repo, storage = _upload_service()
     pod_id, user_id, app_id = uuid4(), uuid4(), uuid4()
     app = AppEntity(
         id=app_id, pod_id=pod_id, user_id=user_id, name="orders", public_slug="orders"
     )
     dist = make_dist_zip({"index.html": "<html><body>v3</body></html>"})
-    live = _pruned_release(app_id).model_copy(update={"pruned_at": None})
-    repo.get_release_by_version.return_value = live
-    repo.update.side_effect = lambda entity: entity
-
-    plan = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
-    written = await service.write_bundle_storage(plan, None, dist)
-
-    assert plan.needs_dist_write is False
-    assert plan.revives_release is False
-    assert written.dist_archive_path is None
-    assert not [
-        path
-        for call in storage.write_file.await_args_list
-        for path in [call.args[0]]
-        if path.startswith("releases/")
-    ]
-    repo.record_release.assert_not_awaited()
+    first = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
+    second = await _resolve_dist_plan(service, repo, pod_id, user_id, app, dist)
+    assert first.version == second.version
+    assert first.release_root != second.release_root
+    written = await service.write_bundle_storage(second, None, dist)
+    assert written.dist_archive_path == f"{second.release_root}archive.zip"

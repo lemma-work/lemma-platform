@@ -58,13 +58,19 @@ def upgrade() -> None:
         ),
         sa.Column("label", sa.String(), nullable=True),
         sa.Column("pruned_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("purged_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("generation", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint(
-            "function_id", "revision_hash", name="uq_function_revision_hash"
-        ),
         sa.UniqueConstraint(
             "function_id", "revision_number", name="uq_function_revision_number"
         ),
+    )
+    op.create_index(
+        "uq_function_revision_active_hash",
+        "function_revisions",
+        ["function_id", "revision_hash"],
+        unique=True,
+        postgresql_where=sa.text("pruned_at IS NULL"),
     )
     op.create_index(
         "ix_function_revision_function_created",

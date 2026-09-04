@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 383.
+Scenario tests declaring a promise: 385.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 236 | 242 |
+| OpenAPI operations | 241 | 242 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -84,7 +84,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FUNC-001` A person creates a function and runs it | `covered` | `test_a_function_runs_and_returns_its_output`, `test_a_mismatched_input_is_refused`, `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
 | `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox`, `test_a_step_beyond_the_runs_authority_is_refused_readably`, `test_browser_access_is_granted_or_refused_but_never_crashes` |
 | `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_a_functions_reach_can_be_set`, `test_an_outsider_cannot_run_a_function`, `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
-| `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
+| `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_a_pinned_run_uses_its_own_input_contract`, `test_deleting_a_function_removes_it` |
 | `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
 | `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `covered` | `test_a_sleeping_function_is_stopped`, `test_a_spinning_function_is_stopped` |
@@ -188,7 +188,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
-| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
+| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
 | `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
 

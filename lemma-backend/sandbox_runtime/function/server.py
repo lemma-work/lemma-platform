@@ -109,6 +109,7 @@ class FunctionRuntimeService:
         function_id: UUID,
         revision_hash: str,
         gateway_url: str,
+        generation: UUID | None = None,
     ) -> SchemaInspection:
         """Load one immutable revision and retain its serving worker."""
 
@@ -121,6 +122,7 @@ class FunctionRuntimeService:
                 function_id=function_id,
                 revision_hash=revision_hash,
                 deadline_at=deadline_at,
+                **({"generation": generation} if generation else {}),
             )
             schemas = await self._workers.inspect_schemas(
                 function_id=function_id,
@@ -299,6 +301,7 @@ class FunctionRuntimeService:
         function_id: UUID,
         revision_hash: str,
         deadline_at: datetime,
+        generation: UUID | None = None,
     ) -> Path:
         # Fast path avoids even constructing an artifact HTTP request.
         digest = revision_hash.removeprefix("sha256:")
@@ -311,6 +314,7 @@ class FunctionRuntimeService:
             function_id=function_id,
             revision_hash=revision_hash,
             deadline_at=deadline_at,
+            **({"generation": generation} if generation else {}),
         )
 
     @staticmethod
@@ -459,6 +463,11 @@ async def inspect_schemas(request: Request) -> JSONResponse:
                 function_id=function_id,
                 revision_hash=_quoted_digest(request),
                 gateway_url=_gateway_url(request),
+                **(
+                    {"generation": UUID(request.headers["x-lemma-artifact-generation"])}
+                    if "x-lemma-artifact-generation" in request.headers
+                    else {}
+                ),
             )
             return JSONResponse(
                 result.model_dump(mode="json"),

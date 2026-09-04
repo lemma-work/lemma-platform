@@ -810,15 +810,6 @@ def _download_app_assets(
         name=f"apps/{app_name}/dist.zip", size=len(dist_archive)
     ):
         (resource_dir / "dist.zip").write_bytes(dist_archive)
-        # Whether the importer may deploy this build as-is or must rebuild it.
-        from lemma_pod_bundle import dist_is_portable
-
-        (resource_dir / "dist.json").write_text(
-            json.dumps(
-                {"portable": dist_is_portable(dist_archive, pod_id=pod_id)}, indent=2
-            )
-            + "\n"
-        )
 
 
 def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:

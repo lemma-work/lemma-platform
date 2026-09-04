@@ -1,6 +1,8 @@
 """Apps module upload and archive configuration."""
 
-from pydantic import Field
+from typing import Self
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
@@ -30,8 +32,6 @@ class AppsSettings(BaseSettings):
     app_release_keep_days: int = Field(default=30, ge=0)
     app_release_max_keep: int = Field(default=20, ge=1)
     app_release_retention_cron: str = Field(default="20 4 * * *")
-    # How many apps one sweep tick may examine. Bounded so a tick is short and
-    # overlapping ticks cannot pile up.
     app_release_retention_batch: int = Field(
         default=200,
         ge=1,
@@ -52,6 +52,12 @@ class AppsSettings(BaseSettings):
             "stop early. Env: ``APP_RELEASE_RETENTION_BUDGET_SECONDS``."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_retention_bounds(self) -> Self:
+        if self.app_release_max_keep < self.app_release_keep_last:
+            raise ValueError("APP_RELEASE_MAX_KEEP must be >= APP_RELEASE_KEEP_LAST")
+        return self
 
 
 apps_settings = AppsSettings()

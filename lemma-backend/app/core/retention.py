@@ -51,13 +51,13 @@ class RetentionPolicy:
             )
 
 
-def select_prunable(
-    versions: list,
+def select_prunable[V: RetainableVersion](
+    versions: list[V],
     *,
     policy: RetentionPolicy,
     live_id: UUID | None,
     now: datetime,
-) -> list:
+) -> list[V]:
     """Return the entries whose bytes may be deleted, newest-ranked first.
 
     ``versions`` may arrive in any order; ranking is by ``created_at``

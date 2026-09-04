@@ -14,7 +14,7 @@ bytes are half gone.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from obstore.exceptions import BaseError as ObstoreBaseError
@@ -54,6 +54,7 @@ class ReleasePrunePlan:
     dist_archives: tuple[str, ...]
     source_archives: tuple[str, ...]
     release_numbers: tuple[int, ...]
+    version_ids: tuple[UUID, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -71,11 +72,8 @@ def _prunable_source_paths(
 ) -> set[str]:
     """Source blobs no retained release (or the app row) still points at.
 
-    Source is content-addressed at ``source/<sha>/archive.zip``, so two releases
-    built from identical source SHARE one blob -- a dist-only change produces a
-    new release with the same source path. Deleting that blob because the older
-    release was pruned would strip the source from a release that is still
-    listed, and possibly from the live one.
+    Legacy releases may share a source path. Deleting that path while another
+    release retains it would remove code that is still available for rollback.
     """
     still_referenced = {
         release.source_archive_path
@@ -92,33 +90,16 @@ def _prunable_source_paths(
     }
 
 
-# Two ticks of the daily cron. Bounded so a sweep does not re-issue deletes for
-# the whole history on every run, and so a genuinely stuck release stops costing
-# work rather than costing it forever.
-_RECONCILE_WINDOW = timedelta(days=2)
-
-
 def _unfinished_prunes(
     releases: list[AppReleaseEntity], app: AppEntity, moment: datetime
 ) -> list[AppReleaseEntity]:
-    """Releases stamped ``pruned_at`` whose bytes may still be there.
-
-    ``plan`` commits the stamp and then deletes outside the unit of work, so a
-    process that dies in between leaves a row that says "removed" over bytes
-    that are not -- and ``select_prunable`` skips already-pruned rows, so nothing
-    ever reclaimed them. Re-issuing the deletes is free: a missing object is
-    swallowed by both delete paths.
-
-    The live release is excluded even when it carries ``pruned_at``. An install
-    already damaged by the redeploy-onto-a-pruned-digest bug has exactly that
-    shape, and deleting those bytes would turn a stale row into a real outage.
-    """
+    """Retry every incomplete deletion, regardless of the age of its tombstone."""
     return [
         release
         for release in releases
         if release.pruned_at is not None
         and release.id != app.current_release_id
-        and moment - release.pruned_at < _RECONCILE_WINDOW
+        and release.purged_at is None
     ]
 
 
@@ -132,6 +113,7 @@ def _prune_paths(
     """Turn the chosen releases into the paths whose bytes go."""
     return ReleasePrunePlan(
         app_id=app_id,
+        version_ids=tuple(r.id for r in doomed if r.id is not None),
         dist_roots=tuple(r.dist_root_path for r in doomed if r.dist_root_path),
         dist_archives=tuple(
             r.dist_archive_path
@@ -170,6 +152,9 @@ class AppReleaseRetention:
         of work commits.
         """
         assert app.id is not None
+        app = await self.repository.get_for_update(app.id)
+        if app is None:
+            raise ValueError("app was deleted before retention could lock it")
         moment = now or datetime.now(timezone.utc)
         releases = await self.repository.list_releases(app.id)
         prunable = select_prunable(

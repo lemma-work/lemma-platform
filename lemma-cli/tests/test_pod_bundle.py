@@ -402,13 +402,7 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
 
 
 def test_download_app_assets_exports_both_source_and_dist(tmp_path: Path):
-    """An export carries the code AND the build.
-
-    Source alone meant every import rebuilt in a sandbox; the build alone -- the
-    fallback for an app with no source archive -- shipped a bundle whose code
-    was gone. Both ship, and the build is marked with whether the importer may
-    deploy it as-is.
-    """
+    """Preserve source and build without claiming cross-pod portability."""
     resource_dir = tmp_path / "apps" / "support_app"
     resource_dir.mkdir(parents=True)
 
@@ -442,13 +436,11 @@ def test_download_app_assets_exports_both_source_and_dist(tmp_path: Path):
     assert (resource_dir / "source" / "package.json").exists()
     assert (resource_dir / "source" / "src" / "main.ts").exists()
     assert (resource_dir / "dist.zip").exists()
-    # Nothing in the build mentions the source pod, so it can be deployed as-is.
-    assert json.loads((resource_dir / "dist.json").read_text()) == {"portable": True}
+    assert not (resource_dir / "dist.json").exists()
 
 
-def test_download_app_assets_marks_a_pod_specific_build_unportable(tmp_path: Path):
-    """A build that baked the source pod's id in must be rebuilt on import,
-    or the imported app would talk to the pod it was exported from."""
+def test_download_app_assets_preserves_a_dist_only_app(tmp_path: Path):
+    """When source is unavailable, export retains the exact executable bytes."""
     resource_dir = tmp_path / "apps" / "baked_app"
     resource_dir.mkdir(parents=True)
 
@@ -474,7 +466,9 @@ def test_download_app_assets_marks_a_pod_specific_build_unportable(tmp_path: Pat
         app_budget=_ByteBudget(per_item=10_000_000, total=20_000_000, warnings=[]),
     )
 
-    assert json.loads((resource_dir / "dist.json").read_text()) == {"portable": False}
+    assert (resource_dir / "dist.zip").read_bytes() == dist_zip.getvalue()
+    assert not (resource_dir / "source").exists()
+    assert not (resource_dir / "dist.json").exists()
 
 
 def test_export_pod_bundle_rejects_unknown_exclude_value(tmp_path: Path):

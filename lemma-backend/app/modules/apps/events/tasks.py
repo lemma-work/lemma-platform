@@ -24,7 +24,6 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
 from app.modules.apps.config import apps_settings
-from app.modules.apps.services.app_release_retention import PRUNE_FAILURES
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -40,6 +39,8 @@ def _uow_factory() -> UnitOfWorkFactory:
     lane=Lane.BULK,
 )
 async def sweep_app_releases() -> None:
+    from app.modules.apps.services.app_release_retention import PRUNE_FAILURES
+
     if not apps_settings.app_release_retention_enabled:
         return
     try:
@@ -98,6 +99,11 @@ async def _prune_one_app(uow_factory: UnitOfWorkFactory, app_id: UUID) -> int:
     if plan.is_empty:
         return 0
     await retention.execute(plan)
+    async with uow_factory() as completed_uow:
+        await build_app_service(completed_uow).repository.mark_releases_purged(
+            plan.version_ids
+        )
+        await completed_uow.commit()
     return len(plan.release_numbers)
 
 
@@ -124,6 +130,8 @@ async def _sweep(
     ``prune_one`` is the test seam; both this and its function twin were split
     out so a sweep can be driven with a fake factory.
     """
+    from app.modules.apps.services.app_release_retention import PRUNE_FAILURES
+
     from app.core.infrastructure.db.retention_candidates import (
         owners_with_prunable_versions,
     )
@@ -146,6 +154,7 @@ async def _sweep(
                             owner_column=AppReleaseModel.app_id,
                             created_at_column=AppReleaseModel.created_at,
                             pruned_at_column=AppReleaseModel.pruned_at,
+                            purged_at_column=AppReleaseModel.purged_at,
                             policy=policy,
                             now=moment,
                             after=after,

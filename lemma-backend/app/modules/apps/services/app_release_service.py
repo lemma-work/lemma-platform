@@ -13,6 +13,7 @@ architecture ratchet's per-file ceiling. The split is a real seam anyway:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef
@@ -25,6 +26,9 @@ from app.modules.apps.domain.errors import (
 )
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from app.modules.apps.services.app_asset_resolver import AppAssetResolver
 
 logger = get_logger(__name__)
 
@@ -108,12 +112,13 @@ class AppReleaseService:
             ]
             # An ambiguous prefix is refused rather than resolved to "the newest
             # match": promoting the wrong build is not a recoverable mistake.
-            if len(matches) > 1:
+            if len({candidate.version for candidate in matches}) > 1:
                 raise AppReleaseNotFoundError(
                     f"Release '{ref}' is ambiguous -- it matches "
                     f"{len(matches)} releases. Use the full digest or the "
                     "release number."
                 )
+            matches.sort(key=lambda item: (item.is_pruned, -(item.release_number or 0)))
             release = matches[0] if matches else None
         if release is None:
             raise AppReleaseNotFoundError(f"App '{app.name}' has no release '{ref}'")
@@ -156,6 +161,9 @@ class AppReleaseService:
             pod_id, app_name, permission=Permissions.APP_UPDATE, ctx=ctx
         )
         assert app.id is not None
+        app = await self.repository.get_for_update(app.id)
+        if app is None:
+            raise AppNotFoundError(f"App {app_name} not found")
         release = await self.resolve_release(app, ref)
 
         if release.id == app.current_release_id:
@@ -163,11 +171,7 @@ class AppReleaseService:
 
         app.current_release_id = release.id
         app.status = AppStatus.READY
-        # Only follow the release's own source. A release backfilled before this
-        # column existed has none, and overwriting the app's working pointer with
-        # NULL would lose the source entirely.
-        if release.source_archive_path is not None:
-            app.source_archive_path = release.source_archive_path
+        app.source_archive_path = release.source_archive_path
         await self.repository.update(app)
         logger.info(
             "apps.app_release_service.release_promoted",
@@ -179,7 +183,12 @@ class AppReleaseService:
         return release
 
 
-async def resolve_preview(repository, asset_resolver, app, release_ref):
+async def resolve_preview(
+    repository: AppRepositoryPort,
+    asset_resolver: AppAssetResolver,
+    app: AppEntity,
+    release_ref: str,
+) -> tuple[AppReleaseEntity, str]:
     """The release a preview host asks for, plus the URL that names it.
 
     Lives here rather than on ``AppService`` so release-reference parsing stays

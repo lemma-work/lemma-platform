@@ -2527,6 +2527,15 @@
             "type": "array"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "current_release_id": {
@@ -2695,6 +2704,15 @@
             "type": "string"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "created_by": {
@@ -2741,6 +2759,15 @@
             "type": "string"
           },
           "pruned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "Set when retention removed this release's build. The entry stays in the history, but it can no longer be previewed or promoted.",
             "title": "Pruned At"
           },

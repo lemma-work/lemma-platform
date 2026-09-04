@@ -11,6 +11,8 @@ same reason: compiling code is the only part that needs a sandbox.
 
 from __future__ import annotations
 
+from app.modules.function.config import revision_settings
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -102,9 +104,9 @@ async def test_the_sweep_reaches_functions_beyond_the_first_page(
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
     from app.modules.function.events.handlers import _sweep_function_revisions
 
-    monkeypatch.setattr(settings, "function_revision_keep_last", 1)
-    monkeypatch.setattr(settings, "function_revision_max_keep", 1)
-    monkeypatch.setattr(settings, "function_revision_keep_days", 0)
+    monkeypatch.setattr(revision_settings, "function_revision_keep_last", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_max_keep", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_keep_days", 0)
     monkeypatch.setattr(settings, "function_job_deadline_seconds", 1)
 
     pod_id = test_pod["id"]
@@ -139,9 +141,9 @@ async def test_a_settled_install_examines_nothing(
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
     from app.modules.function.events.handlers import _sweep_function_revisions
 
-    monkeypatch.setattr(settings, "function_revision_keep_last", 1)
-    monkeypatch.setattr(settings, "function_revision_max_keep", 1)
-    monkeypatch.setattr(settings, "function_revision_keep_days", 0)
+    monkeypatch.setattr(revision_settings, "function_revision_keep_last", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_max_keep", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_keep_days", 0)
     monkeypatch.setattr(settings, "function_job_deadline_seconds", 1)
 
     pod_id = test_pod["id"]
@@ -156,3 +158,128 @@ async def test_a_settled_install_examines_nothing(
     second = await _sweep_function_revisions(factory, page_size=10)
     assert second.examined == 0, "the pruned rows left the candidate set"
     assert second.pruned_functions == 0
+
+
+async def test_delayed_deletion_cannot_remove_a_redeployed_digest(
+    authenticated_client,
+    test_pod,
+    db_session,
+):
+    from uuid import UUID
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.core.retention import RetentionPolicy
+    from app.modules.function.api.dependencies import (
+        build_function_service,
+        get_function_storage_factory,
+    )
+    from app.modules.function.domain.entities import (
+        FunctionArtifact,
+        FunctionRevisionEntity,
+    )
+    from app.modules.function.services.function_revision_retention import (
+        FunctionRevisionRetention,
+    )
+
+    function_id = UUID(
+        await _create_function(
+            authenticated_client, test_pod["id"], f"retry_{uuid4().hex[:8]}"
+        )
+    )
+    old, current = await _mint_revisions(db_session, function_id, count=2, age_days=10)
+    factory = SessionUnitOfWorkFactory(get_session_maker())
+    async with factory() as uow:
+        service = build_function_service(uow)
+        function = await service.repository.activate_revision(function_id, current)
+        await uow.commit()
+    async with factory() as uow:
+        service = build_function_service(uow)
+        retention = FunctionRevisionRetention(
+            service.repository, service.storage_factory
+        )
+        plan = await retention.plan(
+            function, policy=RetentionPolicy(keep_last=1, max_keep=1, keep_days=0)
+        )
+        await uow.commit()
+    assert plan.revision_numbers == (old.revision_number,)
+
+    artifact = FunctionArtifact(revision_hash=old.revision_hash, generation=uuid4())
+    storage = get_function_storage_factory()(function_id)
+    await storage.write_file(artifact.artifact_path, b"REDEPLOYED")
+    await storage.write_file(artifact.code_path, b"NEW GENERATION SOURCE")
+    async with factory() as uow:
+        service = build_function_service(uow)
+        redeployed = await service.repository.record_revision(
+            FunctionRevisionEntity(
+                function_id=function_id,
+                revision_number=0,
+                revision_hash=old.revision_hash,
+                generation=artifact.generation,
+                code_path=artifact.code_path,
+            )
+        )
+        await service.repository.activate_revision(function_id, redeployed)
+        await uow.commit()
+    assert redeployed.revision_number > current.revision_number
+    # A worker can resume its saved plan after a new upload, or repeat it after a crash.
+    await retention.execute(plan)
+    await retention.execute(plan)
+    assert await storage.read_bytes(artifact.artifact_path) == b"REDEPLOYED"
+    assert await storage.read_file(artifact.code_path) in (
+        b"NEW GENERATION SOURCE",
+        "NEW GENERATION SOURCE",
+    )
+    async with factory() as uow:
+        service = build_function_service(uow)
+        assert (
+            await service.repository.get_revision_by_number(
+                function_id, old.revision_number
+            )
+        ).is_pruned
+        assert not (
+            await service.repository.get_revision_by_number(
+                function_id, redeployed.revision_number
+            )
+        ).is_pruned
+
+
+async def test_pending_deletion_is_retried_below_the_retention_floor(
+    authenticated_client,
+    test_pod,
+    db_session,
+    monkeypatch,
+):
+    from uuid import UUID
+    from sqlalchemy import update
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.function.api.dependencies import get_function_storage_factory
+    from app.modules.function.events.handlers import _sweep_function_revisions
+    from app.modules.function.infrastructure.models import FunctionRevisionModel
+
+    monkeypatch.setattr(revision_settings, "function_revision_keep_last", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_max_keep", 1)
+    monkeypatch.setattr(revision_settings, "function_revision_keep_days", 0)
+    function_id = UUID(
+        await _create_function(
+            authenticated_client, test_pod["id"], f"pending_{uuid4().hex[:8]}"
+        )
+    )
+    old, _current = await _mint_revisions(db_session, function_id, count=2, age_days=10)
+    await db_session.execute(
+        update(FunctionRevisionModel)
+        .where(FunctionRevisionModel.id == old.id)
+        .values(
+            pruned_at=datetime.now(timezone.utc) - timedelta(days=30),
+        )
+    )
+    await db_session.commit()
+    outcome = await _sweep_function_revisions(
+        SessionUnitOfWorkFactory(get_session_maker()), page_size=1
+    )
+    assert outcome.examined >= 1
+    storage = get_function_storage_factory()(function_id)
+    with pytest.raises(FileNotFoundError):
+        await storage.read_bytes(old.artifact_path)
+    await db_session.refresh(await db_session.get(FunctionRevisionModel, old.id))
+    assert (await db_session.get(FunctionRevisionModel, old.id)).purged_at is not None

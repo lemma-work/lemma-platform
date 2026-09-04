@@ -378,12 +378,6 @@ class AppStepRunner:
             if tier != "vite":
                 # static: the source *is* the served site.
                 return source_bytes, source_bytes
-            bundled = await self._reusable_dist(resource_dir)
-            if bundled is not None:
-                # The bundle shipped a build with nothing pod-specific baked in,
-                # so rebuilding it would spend minutes and a sandbox to produce
-                # the same bytes.
-                return source_bytes, bundled
             dist_bytes = await self._sandbox.build(
                 user_id=user_id,
                 pod_id=pod_id,
@@ -409,30 +403,6 @@ class AppStepRunner:
         raise AppBuildFailedError(
             f"App '{name}' bundle has no source/ directory, html.html, or dist.zip."
         )
-
-    @staticmethod
-    async def _reusable_dist(resource_dir: Path) -> bytes | None:
-        """The bundled build, when it may be deployed without a rebuild.
-
-        Only when the exporter positively marked it portable. A bundle exported
-        before ``dist.json`` existed, or one whose build baked in the source
-        pod's id, returns None and gets rebuilt -- the same thing that happened
-        before builds were exported at all, so the fallback is never worse than
-        the old behavior.
-        """
-        dist_zip = resource_dir / "dist.zip"
-        marker = resource_dir / "dist.json"
-        if not dist_zip.is_file() or not marker.is_file():
-            return None
-        try:
-            import json
-
-            portable = json.loads(await run_blocking(marker.read_text)).get("portable")
-        except ValueError, OSError:
-            return None
-        if portable is not True:
-            return None
-        return await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
 
     # --- phase 3 ---------------------------------------------------------
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
 from ..types import UNSET, Unset
 
@@ -18,7 +20,7 @@ class AppReleaseResponse:
 
     Attributes:
         app_id (UUID):
-        created_at (Any):
+        created_at (datetime.datetime | None):
         has_source (bool): Whether this release's own source archive is still stored.
         id (UUID):
         is_live (bool): True for the release this app currently serves.
@@ -27,12 +29,12 @@ class AppReleaseResponse:
         version (str): sha256 digest of the release's dist archive.
         created_by (None | Unset | UUID):
         label (None | str | Unset):
-        pruned_at (Any | Unset): Set when retention removed this release's build. The entry stays in the history, but it
-            can no longer be previewed or promoted.
+        pruned_at (datetime.datetime | None | Unset): Set when retention removed this release's build. The entry stays
+            in the history, but it can no longer be previewed or promoted.
     """
 
     app_id: UUID
-    created_at: Any
+    created_at: datetime.datetime | None
     has_source: bool
     id: UUID
     is_live: bool
@@ -41,13 +43,17 @@ class AppReleaseResponse:
     version: str
     created_by: None | Unset | UUID = UNSET
     label: None | str | Unset = UNSET
-    pruned_at: Any | Unset = UNSET
+    pruned_at: datetime.datetime | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         app_id = str(self.app_id)
 
-        created_at = self.created_at
+        created_at: None | str
+        if isinstance(self.created_at, datetime.datetime):
+            created_at = self.created_at.isoformat()
+        else:
+            created_at = self.created_at
 
         has_source = self.has_source
 
@@ -75,7 +81,13 @@ class AppReleaseResponse:
         else:
             label = self.label
 
-        pruned_at = self.pruned_at
+        pruned_at: None | str | Unset
+        if isinstance(self.pruned_at, Unset):
+            pruned_at = UNSET
+        elif isinstance(self.pruned_at, datetime.datetime):
+            pruned_at = self.pruned_at.isoformat()
+        else:
+            pruned_at = self.pruned_at
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -105,7 +117,20 @@ class AppReleaseResponse:
         d = dict(src_dict)
         app_id = UUID(d.pop("app_id"))
 
-        created_at = d.pop("created_at")
+        def _parse_created_at(data: object) -> datetime.datetime | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                created_at_type_0 = isoparse(data)
+
+                return created_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None, data)
+
+        created_at = _parse_created_at(d.pop("created_at"))
 
         has_source = d.pop("has_source")
 
@@ -145,7 +170,22 @@ class AppReleaseResponse:
 
         label = _parse_label(d.pop("label", UNSET))
 
-        pruned_at = d.pop("pruned_at", UNSET)
+        def _parse_pruned_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                pruned_at_type_0 = isoparse(data)
+
+                return pruned_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        pruned_at = _parse_pruned_at(d.pop("pruned_at", UNSET))
 
         app_release_response = cls(
             app_id=app_id,

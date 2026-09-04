@@ -1,15 +1,4 @@
-"""Revision history for a function: record it, list it, promote one.
-
-The artifacts and source of every revision were always kept -- content-addressed
-at ``artifacts/<hash>.zip`` and ``revisions/<hash>/function.py``, deleted by
-nothing -- so going back to an older build needs no new bytes, only an index and
-a way to move ``functions.revision_hash``.
-
-Separate from :class:`~app.modules.function.services.function_service.
-FunctionService` because that file is already at the architecture ratchet's
-per-file ceiling, and because the seam is real: that service owns running and
-editing a function, this owns which built revision is the live one.
-"""
+"""Record revision contracts and select which retained build is live."""
 
 from __future__ import annotations
 
@@ -113,7 +102,7 @@ class FunctionRevisionService:
             return None
         if function.code_path is None:
             return None
-        return await self.repository.record_revision(
+        revision = await self.repository.record_revision(
             FunctionRevisionEntity(
                 function_id=function.id,
                 # Replaced by the repository's atomic per-function counter; the
@@ -121,6 +110,9 @@ class FunctionRevisionService:
                 # without racing a concurrent save.
                 revision_number=0,
                 revision_hash=function.revision_hash,
+                generation=function.pending_artifact.generation
+                if function.pending_artifact
+                else None,
                 code_path=function.code_path,
                 input_schema=function.input_schema,
                 output_schema=function.output_schema,
@@ -128,6 +120,9 @@ class FunctionRevisionService:
                 created_by=created_by or function.user_id,
             )
         )
+
+        function.code_path = revision.code_path
+        return revision
 
     async def resolve_revision(
         self,
@@ -153,12 +148,15 @@ class FunctionRevisionService:
                     hash_prefix
                 )
             ]
-            if len(matches) > 1:
+            if len({candidate.revision_hash for candidate in matches}) > 1:
                 raise FunctionRevisionNotFoundError(
                     f"Revision '{ref}' is ambiguous -- it matches "
                     f"{len(matches)} revisions. Use the full hash or the "
                     "revision number."
                 )
+            matches.sort(
+                key=lambda item: (item.is_pruned, -(item.revision_number or 0))
+            )
             revision = matches[0] if matches else None
         if revision is None:
             raise FunctionRevisionNotFoundError(
@@ -182,7 +180,10 @@ class FunctionRevisionService:
         return [
             RevisionListing(
                 revision=revision,
-                is_live=revision.revision_hash == function.revision_hash,
+                is_live=(
+                    not revision.is_pruned
+                    and revision.revision_hash == function.revision_hash
+                ),
             )
             for revision in revisions
         ]
@@ -196,7 +197,9 @@ class FunctionRevisionService:
             pod_id, name, permission=Permissions.FUNCTION_READ, ctx=ctx
         )
         revision = await self.resolve_revision(function, ref, allow_pruned=True)
-        return revision, revision.revision_hash == function.revision_hash
+        return revision, (
+            not revision.is_pruned and revision.revision_hash == function.revision_hash
+        )
 
     async def read_revision_code(
         self, function_id: UUID, revision: FunctionRevisionEntity
@@ -214,6 +217,9 @@ class FunctionRevisionService:
             pod_id, name, permission=Permissions.FUNCTION_UPDATE, ctx=ctx
         )
         assert function.id is not None
+        function = await self.repository.get_for_update(function.id)
+        if function is None:
+            raise FunctionNotFoundError(f"Function {name} not found")
         revision = await self.resolve_revision(function, ref)
 
         schema_changed = (
@@ -234,3 +240,47 @@ class FunctionRevisionService:
         return PromotionResult(
             revision=revision, function=updated, schema_changed=schema_changed
         )
+
+    async def resolve_for_execution(
+        self, function: FunctionEntity, revision_ref: str, *, ctx: Context
+    ) -> FunctionEntity:
+        """Resolve a run pinned to a specific revision, and gate it.
+
+        Testing an unpromoted build is an authoring action: someone who may only
+        execute this function gets the live revision, which is the one whose
+        behavior the pod has actually signed off on. Pinning additionally
+        requires FUNCTION_UPDATE.
+
+        Nothing downstream needs to know: the dispatcher and the runtime gateway
+        already derive the artifact from the RUN's hash and verify its digest, so
+        a pinned run is an ordinary run with a different hash on it.
+        """
+        assert function.id is not None
+        await ctx.require(
+            Permissions.FUNCTION_UPDATE,
+            ResourceRef(
+                resource_type=ResourceType.FUNCTION,
+                resource_id=function.id,
+                pod_id=function.pod_id,
+            ),
+        )
+        revision = await self.resolve_revision(function, revision_ref)
+        return function.model_copy(
+            update={
+                "revision_hash": revision.revision_hash,
+                "code_path": revision.code_path,
+                "input_schema": revision.input_schema,
+                "output_schema": revision.output_schema,
+                "config_schema": revision.config_schema,
+            }
+        )
+
+    async def cleanup_function_storage(self, function_id: UUID) -> None:
+        """Purge storage after the function deletion has committed."""
+        if self.storage_factory is None:
+            raise RuntimeError("Function storage is required for deletion")
+        storage = self.storage_factory(function_id)
+        try:
+            await storage.delete_prefix("")
+        except FileNotFoundError:
+            return
