@@ -25,6 +25,7 @@ from pydantic_ai import BinaryContent
 from pydantic_ai.messages import UserContent
 from pydantic_ai import UsageLimits
 
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     current_usage_context,
@@ -174,6 +175,23 @@ async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
     return model, runtime_profile
 
 
+def allowance_refusal() -> VisionDescriptionError:
+    """What a person reads when the workspace cannot afford to look.
+
+    A Vision error rather than the usage error it comes from, because this is a
+    tool and not a run: `describe_single_image` and `describe_document_pages`
+    know only the two Vision types, so a raw `UsageLimitExceededError` escaping
+    here failed the whole run instead of the one tool call. The agent can carry
+    on perfectly well without the picture provided it is told why -- which is
+    `PS-OPS-012`: refused clearly, never silently.
+    """
+    return VisionDescriptionError(
+        "The workspace has used its available usage allowance, so this image "
+        "could not be read. Usage resets at the start of the next period, or "
+        "the plan limit can be raised."
+    )
+
+
 def _validate(images: Sequence[VisionImage]) -> None:
     if not images:
         raise VisionDescriptionError("No images were provided.")
@@ -218,12 +236,18 @@ async def describe_images(
     usage_context = _vision_usage_context(
         organization_id=organization_id, user_id=user_id
     )
-    reservation = await reserve_usage_for_runtime(
-        organization_id=organization_id,
-        user_id=user_id,
-        runtime_profile=runtime_profile,
-    )
+    try:
+        reservation = await reserve_usage_for_runtime(
+            organization_id=organization_id,
+            user_id=user_id,
+            runtime_profile=runtime_profile,
+        )
+    except UsageLimitExceededError as exc:
+        raise allowance_refusal() from exc
+
     result = None
+    status = "FAILED"
+    failure: tuple[str, BaseException] | None = None
     try:
         async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
             result = await agent.run(
@@ -232,43 +256,39 @@ async def describe_images(
                     request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
                 ),
             )
-        await record_pydantic_ai_result_usage(
-            ctx=usage_context,
-            runtime_profile=runtime_profile,
-            result=result,
-            status="COMPLETED",
-            reservation=reservation,
-            metadata={"helper": "vision"},
-        )
+        status = "COMPLETED"
     except TimeoutError as exc:
-        await record_pydantic_ai_result_usage(
-            ctx=usage_context,
-            runtime_profile=runtime_profile,
-            result=result,
-            status="FAILED",
-            reservation=reservation,
-            metadata={"helper": "vision"},
+        failure = (
+            f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s.",
+            exc,
         )
-        raise VisionDescriptionError(
-            f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
-        ) from exc
     except Exception as exc:
-        await record_pydantic_ai_result_usage(
-            ctx=usage_context,
-            runtime_profile=runtime_profile,
-            result=result,
-            status="FAILED",
-            reservation=reservation,
-            metadata={"helper": "vision"},
-        )
         logger.warning(
             "agent.vision_service.description_failed.degraded", exc_info=True
         )
-        raise VisionDescriptionError(
-            "The vision model could not describe the image."
-        ) from exc
+        failure = ("The vision model could not describe the image.", exc)
 
-    description = (result.output or "").strip()
+    # Once, after the outcome is known and before anything is re-raised. Writing
+    # it from inside the handlers meant a failed write replaced the provider's
+    # error with a database one -- and took the reservation down with it, since
+    # releasing is this call's job too.
+    await record_pydantic_ai_result_usage(
+        ctx=usage_context,
+        runtime_profile=runtime_profile,
+        result=result,
+        status=status,
+        reservation=reservation,
+        metadata={"helper": "vision"},
+    )
+    if failure is not None:
+        message, cause = failure
+        raise VisionDescriptionError(message) from cause
+
+    # `result` is set on every path that leaves `failure` unset, but that is an
+    # invariant of the two blocks above rather than something a type checker can
+    # see -- and a missing description and an empty one are the same answer to
+    # the caller either way.
+    description = (result.output or "").strip() if result is not None else ""
     if not description:
         raise VisionDescriptionError("The vision model returned no description.")
     return description

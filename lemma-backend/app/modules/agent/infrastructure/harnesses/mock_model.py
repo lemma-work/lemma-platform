@@ -474,7 +474,19 @@ class _UsageScriptedFunctionModel(FunctionModel):
     (titles, compaction) do not. On the streaming path the usage is applied after
     the stream is exhausted, which is where the accumulated estimate would
     otherwise stand -- and still before the caller folds it into the run.
+
+    `StreamedResponse.usage` is a read-only property over `_usage`, so the
+    streaming path has to write the private attribute; there is no public seam.
+    The write is guarded rather than trusted: were pydantic-ai to rename it, an
+    unguarded assignment would quietly create a new attribute and every cost
+    assertion downstream would go back to asserting the estimator's flat 50
+    tokens while still passing. Failing here instead points at the one line that
+    has to change.
     """
+
+    #: The attribute `StreamedResponse.usage` reads from. Named once so the
+    #: guard below and the failure message agree.
+    _STREAM_USAGE_ATTRIBUTE = "_usage"
 
     def __init__(
         self,
@@ -507,8 +519,16 @@ class _UsageScriptedFunctionModel(FunctionModel):
         ) as stream:
             yield stream
             scripted = self._usage_for(messages)
-            if scripted is not None:
-                stream._usage = scripted
+            if scripted is None:
+                return
+            if not hasattr(stream, self._STREAM_USAGE_ATTRIBUTE):
+                raise AttributeError(
+                    f"{type(stream).__name__} no longer stores its usage in "
+                    f"{self._STREAM_USAGE_ATTRIBUTE!r}; scripted token counts "
+                    "cannot be applied to a streamed response until this is "
+                    "pointed at whatever replaced it."
+                )
+            setattr(stream, self._STREAM_USAGE_ATTRIBUTE, scripted)
 
 
 def _scripted_usage(

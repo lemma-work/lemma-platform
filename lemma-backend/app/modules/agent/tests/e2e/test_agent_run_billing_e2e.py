@@ -76,11 +76,16 @@ async def _usage_for_run(
             params={"days": 1},
         )
         assert response.status_code == status.HTTP_200_OK, response.text
+        # The run's own row, not merely a row carrying its id. History
+        # compaction and the vision delegate meter under the same
+        # `agent_run_id` with their own `source_type`, so a script long enough
+        # to compact would otherwise bind this assertion to whichever row came
+        # back first.
         return next(
             (
                 item
                 for item in response.json()["items"]
-                if item["agent_run_id"] == run_id
+                if item["agent_run_id"] == run_id and item["source_type"] == "AGENT_RUN"
             ),
             None,
         )

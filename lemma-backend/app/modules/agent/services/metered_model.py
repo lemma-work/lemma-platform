@@ -13,9 +13,11 @@ model is metered for free. Only `request` is overridden, because that is the one
 `Agent.run` uses; a streaming summarizer would need `request_stream` too, and
 there is no such thing today.
 
-The recording never fails the run. A compaction that succeeded and then could not
-write its usage row must still return the compacted history -- refusing it would
-turn a metering problem into a broken conversation.
+A storage fault in the recording never fails the run. A compaction that succeeded
+and then could not write its usage row must still return the compacted history --
+refusing it would turn a metering problem into a broken conversation. The catch
+names the faults that can actually happen on that path rather than everything: a
+bug in the recording code should still be a crash somebody sees.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from dataclasses import replace
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.wrapper import WrapperModel
+from pydantic import ValidationError
 from pydantic_ai.settings import ModelSettings
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -92,9 +95,13 @@ class MeteredModel(WrapperModel):
                 ),
                 status="COMPLETED",
             )
-        except SQLAlchemyError:
+        except SQLAlchemyError, OSError, ValidationError:
             # See the module docstring: the tokens are already spent either way,
             # and failing here would lose the compacted history along with them.
+            # `OSError` because a database that has gone away surfaces as a
+            # socket error before SQLAlchemy has anything to wrap, and
+            # `ValidationError` because the numbers come from a provider and a
+            # shape we have never seen must not end the conversation.
             logger.warning(
                 "agent.metered_model.usage_record_failed.degraded",
                 source_type=self._source_type,

@@ -84,10 +84,21 @@ ones that happen outside a run of the user's own: history compaction (via
 `services/metered_model.py`, which wraps the summarizer's model) and the vision
 delegate that reads images for a text-only model.
 
-Deliberately **not** metered today: speech (Deepgram `listen`/`say` and voice
-transcription at ingress) and web search (Brave). Both run on platform API keys
-and are treated as included. The `units` / `unit_usd` / `UsageKind` machinery
-exists for them when that stops being true.
+Deliberately **not** metered today, all on platform API keys and all treated as
+included:
+
+- **Embeddings** — `core/embeddings/openai_compat_embedder.py`, reached on every
+  datastore file index and on every vector or hybrid search query. This is the
+  largest unmetered volume, and it is unmetered by choice rather than oversight.
+  The local `fastembed` embedder costs nothing and is what a deployment without
+  `LEMMA_OPENAI_API_KEY` gets.
+- **Speech** — Deepgram `listen`/`say`, and voice-note transcription at surface
+  ingress, which has no agent run in scope at all.
+- **Web search** — Brave.
+
+The `units` / `unit_usd` / `UsageKind` machinery exists for all three when that
+stops being true; `UsageKind.EMBEDDING` and `UsageKind.AUDIO` are declared and
+never written for exactly this reason.
 
 `UsageLimitPort` lets another composed module supply plan-specific values. The
 OSS/local default is unlimited so an unregistered custom model cannot prevent

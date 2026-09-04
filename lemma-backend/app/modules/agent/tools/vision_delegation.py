@@ -12,6 +12,7 @@ The tools own *what* they render; this owns *how a blind model is answered*.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from app.modules.agent.tools.tool_errors import safe_error_text
@@ -34,6 +35,13 @@ _NO_VISION_SUFFIX = (
     "model is required to look at one."
 )
 
+#: What both tools call to turn pictures into words. A parameter rather than a
+#: module name a test reaches in and replaces: the interesting cases here are
+#: the *failures* -- no vision model, a provider error, an exhausted allowance
+#: -- and each has to be arranged from outside. Injecting the describer says
+#: which of the three a test means.
+Describer = Callable[..., Awaitable[str]]
+
 
 async def describe_single_image(
     ctx: BaseAgentContext,
@@ -43,12 +51,19 @@ async def describe_single_image(
     file_path: str,
     source: str,
     instructions: str | None,
+    describe: Describer | None = None,
 ) -> "ViewImageResponse":
-    """`view_image`'s answer when the model cannot take image content."""
+    """`view_image`'s answer when the model cannot take image content.
+
+    ``describe`` defaults to ``None`` rather than to ``describe_images``,
+    because a default argument binds at import and would freeze the name past
+    anything that replaces it later.
+    """
     from app.modules.agent.tools.workspace_cli.models import ViewImageResponse
 
+    describe = describe or describe_images
     try:
-        description = await describe_images(
+        description = await describe(
             [VisionImage(data=data, media_type=media_type, label=f"image {file_path}")],
             instructions=instructions,
             organization_id=getattr(ctx, "organization_id", None),
