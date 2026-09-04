@@ -35,6 +35,10 @@ export default defineConfig({
             'components/triggers/trigger-config.{test,spec}.ts',
             // Which file types write themselves back, and the one line of
             // status that says so. Decisions, not DOM.
+            // What a token total is made of. Pure because the arithmetic is the
+            // part that can be wrong -- the cache buckets are subsets of input,
+            // and adding them as siblings draws a bar wider than its own total.
+            'components/usage/usage-composition.{test,spec}.ts',
             'components/documents/document-save-state.{test,spec}.ts',
             // Which file types the viewer can lay out on paper, and how a path
             // maps to a preview. The heavy renderers alongside them are all

@@ -61,6 +61,10 @@ const allowedInlineSvgFiles = new Set([
   'components/lemma/assistant/assistant-parts.tsx',
   'components/shared/resource-icon-uploader.tsx',
   'components/shared/resource-identity.tsx',
+  // A stacked bar of what a token total is made of. Inline because no charting
+  // library is installed and the bundle budget is the reason -- four `rect`s
+  // filled from `--chart-N` cost nothing and follow the viewer's theme.
+  'components/usage/usage-token-breakdown.tsx',
 ]);
 
 if (help) {
