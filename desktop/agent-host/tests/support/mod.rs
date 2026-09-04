@@ -716,10 +716,10 @@ impl ControlPlane {
             host_log: Arc::new(Mutex::new(None)),
         };
         let app = Router::new()
-            .route("/agent-host/pairings:complete", post(pairing))
+            .route("/agent-host/pairings/complete", post(pairing))
             .route("/agent-host/harnesses", put(publish))
             .route("/agent-host/poll", post(poll))
-            .route("/agent-host/events:append", post(append_events))
+            .route("/agent-host/events/append", post(append_events))
             .with_state(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

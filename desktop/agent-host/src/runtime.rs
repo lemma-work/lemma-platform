@@ -2759,7 +2759,7 @@ mod target_worker_tests {
         async fn with_manifest(manifest: AdapterManifest) -> Self {
             let stub = Arc::<StubState>::default();
             let app = Router::new()
-                .route("/agent-host/events:append", post(append_events))
+                .route("/agent-host/events/append", post(append_events))
                 .route("/agent-host/poll", post(poll))
                 .with_state(Arc::clone(&stub));
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

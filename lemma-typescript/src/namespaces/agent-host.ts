@@ -10,7 +10,7 @@ import { AgentHostService } from "../openapi_client/services/AgentHostService.js
  * Manage the caller's paired Agent Hosts.
  *
  * Only the user-authenticated management half of `/agent-host` lives here. The
- * host-authenticated half (poll, events:append, harness publish, pairing
+ * host-authenticated half (poll, events/append, harness publish, pairing
  * completion) is spoken by the Agent Host binary with its own host secret, not
  * by a browser session, so it stays off this namespace.
  */

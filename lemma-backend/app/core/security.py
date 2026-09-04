@@ -194,7 +194,7 @@ EXCLUDED_PATHS = (
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
     # A paired computer has no user session and never will: it authenticates
     # with its own host secret, which `_authenticated_host` checks on every one
-    # of these routes, and `pairings:complete` is authenticated by the one-time
+    # of these routes, and `pairings/complete` is authenticated by the one-time
     # pairing code it consumes. Requiring a session here 401s the only caller
     # these routes have. The user-facing host routes are under `/me/runtime/...`
     # and stay session-protected.

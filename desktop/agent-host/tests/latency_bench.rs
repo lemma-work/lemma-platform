@@ -306,7 +306,7 @@ async fn append_events(
         {
             state.mark("terminal reached Lemma");
         }
-        state.mark(format!("events:append batch of {}", batch.events.len()));
+        state.mark(format!("events/append batch of {}", batch.events.len()));
         events.extend(batch.events);
     }
     Ok(Json(response))
@@ -337,10 +337,10 @@ impl Bench {
             checkpoint_states: Arc::new(Mutex::new(std::collections::HashMap::new())),
         };
         let app = Router::new()
-            .route("/agent-host/pairings:complete", post(pairing))
+            .route("/agent-host/pairings/complete", post(pairing))
             .route("/agent-host/harnesses", put(publish))
             .route("/agent-host/poll", post(poll))
-            .route("/agent-host/events:append", post(append_events))
+            .route("/agent-host/events/append", post(append_events))
             .with_state(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -483,7 +483,7 @@ async fn measure(mode: Mode, harness: &str, prompt: &str) {
     }
     let appends = hops
         .iter()
-        .filter(|hop| hop.what.starts_with("events:append"))
+        .filter(|hop| hop.what.starts_with("events/append"))
         .map(|hop| hop.at)
         .collect::<Vec<_>>();
     let batches = appends.len();

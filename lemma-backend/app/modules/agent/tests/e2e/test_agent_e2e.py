@@ -2854,7 +2854,7 @@ class TestAgentRuntimeConfigApis:
 
         # Restore: back to ACTIVE, and back in the default listing.
         restored = await authenticated_client.post(
-            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore",
         )
         assert restored.status_code == status.HTTP_200_OK, restored.text
         restored_payload = restored.json()
@@ -2870,7 +2870,7 @@ class TestAgentRuntimeConfigApis:
 
         # Restoring an already-active profile is idempotent too.
         restored_again = await authenticated_client.post(
-            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore",
         )
         assert restored_again.status_code == status.HTTP_200_OK, restored_again.text
         assert restored_again.json()["status"] == "ACTIVE"
@@ -3134,7 +3134,7 @@ class TestAgentOpenApi:
         assert profile_path["delete"]["operationId"] == "agent.runtime.profiles.archive"
         assert (
             paths[
-                "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore"
+                "/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore"
             ]["post"]["operationId"]
             == "agent.runtime.profiles.restore"
         )

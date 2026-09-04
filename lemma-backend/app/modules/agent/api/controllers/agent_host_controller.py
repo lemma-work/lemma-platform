@@ -247,10 +247,20 @@ async def list_agent_host_harnesses(
     )
 
 
+# The colon spelling is what every already-paired host calls, and the
+# desktop app has no auto-updater: an installed host keeps whatever path it
+# shipped with until someone reinstalls it. Same function, so the two cannot
+# drift; hidden from the schema, so the surface is the slash spelling only.
+# Removable once a host that predates the rename can no longer reach us.
+@router.post(
+    "/agent-host/pairings/complete",
+    response_model=AgentHostPairingCompleted,
+    operation_id="agent.host.pairing.complete",
+)
 @router.post(
     "/agent-host/pairings:complete",
     response_model=AgentHostPairingCompleted,
-    operation_id="agent.host.pairing.complete",
+    include_in_schema=False,
 )
 async def complete_agent_host_pairing(
     request: AgentHostPairingComplete,
@@ -528,10 +538,17 @@ async def _await_commands(
                     await waiting
 
 
+# Colon spelling retained for already-paired hosts; see the note on
+# `/agent-host/pairings/complete`.
+@router.post(
+    "/agent-host/events/append",
+    response_model=AgentHostEventAck,
+    operation_id="agent.host.events.append",
+)
 @router.post(
     "/agent-host/events:append",
     response_model=AgentHostEventAck,
-    operation_id="agent.host.events.append",
+    include_in_schema=False,
 )
 async def append_agent_host_events(
     request: AgentHostEventBatch,
