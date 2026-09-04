@@ -48,10 +48,7 @@ class SurfaceIngressCredentialMixin:
             # Worker path: read credentials in a short UoW and return the plain
             # dict, so no connection is held during the platform I/O that follows.
             async with self._uow_factory() as uow:
-                resolver = SurfaceCredentialResolver(
-                    session=uow.session,
-                    connector_service=self._connector_service_factory(uow),
-                )
+                resolver = SurfaceCredentialResolver(uow=uow)
                 if needs_surface:
                     surface = await SurfaceRepository(uow).get(context.surface_id)
                     if surface is not None:

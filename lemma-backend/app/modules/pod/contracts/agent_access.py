@@ -23,9 +23,7 @@ from app.modules.pod.infrastructure.models.pod_models import Pod
 async def pod_organization_id(uow, pod_id: UUID) -> UUID | None:
     """The organization holding this pod, for callers that need only the scope."""
     return (
-        await uow.session.execute(
-            select(Pod.organization_id).where(Pod.id == pod_id)
-        )
+        await uow.session.execute(select(Pod.organization_id).where(Pod.id == pod_id))
     ).scalar_one_or_none()
 
 

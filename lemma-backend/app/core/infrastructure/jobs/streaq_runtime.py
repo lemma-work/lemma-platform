@@ -362,9 +362,6 @@ class AppWorkerContext:
         from app.modules.agent_surfaces.api.dependencies import (
             surface_repository_factory,
         )
-        from app.modules.connectors.api.dependencies import (
-            get_connector_service,
-        )
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
         )
@@ -380,7 +377,6 @@ class AppWorkerContext:
             surface_repository=surface_repository_factory(uow),
             conversation_link_repository=SurfaceConversationLinkRepository(uow),
             conversation_service=get_conversation_service(uow),
-            connector_service=get_connector_service(uow),
             pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         )
 
@@ -393,7 +389,6 @@ class AppWorkerContext:
         writes the inbound message in separate short UoWs from this factory.
         """
         from app.modules.agent.api.dependencies import get_conversation_service
-        from app.modules.connectors.api.dependencies import get_connector_service
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
         )
@@ -401,7 +396,6 @@ class AppWorkerContext:
         return AgentSurfaceIngressService(
             uow_factory=self.uow_factory,
             conversation_service_factory=get_conversation_service,
-            connector_service_factory=get_connector_service,
         )
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 
 
@@ -48,4 +49,32 @@ async def conversation_scope(uow, conversation_id: UUID) -> ConversationScope | 
     )
 
 
-__all__ = ["ConversationScope", "conversation_scope"]
+async def merge_conversation_metadata(
+    uow, conversation_id: UUID, updates: dict[str, object]
+) -> None:
+    """Fold these keys into a conversation's metadata, leaving the rest alone.
+
+    A write, and the only one another module makes to this row. `agent_surfaces`
+    was doing it by loading `ConversationModel` from `app/composition/surface_agent.py`
+    and assigning the column itself, which put the read-modify-write -- and the
+    fact that the column is named `conversation_metadata` and not `metadata` --
+    inside a module that owns neither.
+
+    A no-op for a conversation that has since been deleted: the caller is
+    stamping a surface's delivery details onto a run that has already finished,
+    and there is nothing to repair if the run's conversation is gone.
+    """
+    model = await uow.session.get(ConversationModel, conversation_id)
+    if model is None:
+        return
+    metadata = dict(model.conversation_metadata or {})
+    metadata.update(updates)
+    model.conversation_metadata = metadata
+    await uow.session.flush()
+
+
+__all__ = [
+    "ConversationScope",
+    "conversation_scope",
+    "merge_conversation_metadata",
+]

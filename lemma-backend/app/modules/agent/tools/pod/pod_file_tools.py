@@ -15,7 +15,10 @@ from __future__ import annotations
 from pydantic_ai import BinaryContent, ToolReturn
 from pydantic_ai.tools import RunContext
 
-from app.modules.datastore.contracts.agent_tools import build_file_app_url, build_object_url
+from app.modules.datastore.contracts.agent_tools import (
+    build_file_app_url,
+    build_object_url,
+)
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_memory_paths import agent_memory_paths_for_name
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value

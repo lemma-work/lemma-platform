@@ -23,10 +23,11 @@ shape above avoids.
 Neither issues a query per pod. Both resolve the whole set at once through the
 owning modules' contracts.
 
-Lives at the application root rather than inside ``identity`` because it reads
-across pod, apps and agent. Putting it in a module would make that module depend
-on three others and close a dependency cycle; composition is where a view that
-spans modules is allowed to be assembled.
+Lives in ``identity`` because the organization is identity's, and what a sidebar
+shows inside one -- pods, and the apps and agents in them -- arrives through
+those modules' published contracts. Three contract imports are not three
+dependencies to unpick: none of the three reaches back into identity to answer,
+so there is no cycle here to route around.
 """
 
 from __future__ import annotations
