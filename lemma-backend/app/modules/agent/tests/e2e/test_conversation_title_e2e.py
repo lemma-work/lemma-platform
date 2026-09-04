@@ -12,6 +12,7 @@ verified end-to-end without provider credentials.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -63,20 +64,17 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
             del usage_limits, model_settings
             return SimpleNamespace(output=output)
 
-    async def _noop_reserve(*, organization_id, user_id, runtime_profile):
-        from app.modules.usage.domain.entities import UsageReservation
+    @asynccontextmanager
+    async def _noop_billed(model, *, source_type, runtime_profile, context):
+        """The metering scope, doing none of it.
 
-        del runtime_profile
-        return UsageReservation(
-            organization_id=organization_id,
-            user_id=user_id,
-            amount_usd=0.01,
-        )
-
-    async def _noop_record(
-        *, ctx, runtime_profile, result, status, reservation, metadata
-    ):
-        return None
+        One name where there were two. `billed` reserves on the way in, records
+        each request and settles on the way out, so a test that wants titling
+        without touching the spend counters replaces the scope rather than the
+        pair of calls it used to be made of.
+        """
+        del source_type, runtime_profile, context
+        yield model
 
     # The LLM title path is opt-in (agent_settings.conversation_title_model); without
     # it the service deliberately falls back to the first-message title. Enable
@@ -89,8 +87,7 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
     monkeypatch.setattr(
         cts, "require_pydantic_ai_model_from_runtime_profile", lambda **_: object()
     )
-    monkeypatch.setattr(cts, "reserve_usage_for_runtime", _noop_reserve)
-    monkeypatch.setattr(cts, "record_pydantic_ai_result_usage", _noop_record)
+    monkeypatch.setattr(cts, "billed", _noop_billed)
 
 
 async def _create_pod(authenticated_client, fixed_test_org) -> str:
