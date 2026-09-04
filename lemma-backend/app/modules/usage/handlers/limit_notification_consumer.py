@@ -39,7 +39,6 @@ from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
 from app.core.log.log import get_logger
-from app.modules.usage.services.identity_lookups import identity_lookups
 from app.modules.usage.domain.events import (
     USAGE_EVENTS_STREAM,
     UsageLimitApproachingEvent,
@@ -122,10 +121,12 @@ async def on_usage_limit_approaching(
 
     async def send_warning() -> None:
         from app.core.email.email_sender import EmailSender
+        from app.modules.identity.contracts.profiles import user_profile
 
         parsed = UsageLimitApproachingEvent.model_validate(event)
         async with uow_factory() as uow:
-            email = await identity_lookups().resolve_user_email(uow, parsed.user_id)
+            recipient = await user_profile(uow.session, parsed.user_id)
+        email = recipient.email if recipient else None
         if email is None:
             logger.debug(
                 "usage.limit_notification_consumer.no_address_for_warning.diagnostic",
