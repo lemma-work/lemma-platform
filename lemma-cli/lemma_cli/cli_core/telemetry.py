@@ -12,7 +12,7 @@ list of known groups and dropped if it is not one of them, so an unrecognised
 first token cannot become a dimension.
 
 Off by every switch that should turn it off: ``LEMMA_TELEMETRY=0``,
-``lemma system telemetry off``, and — the default — no ingestion key compiled
+``lemma telemetry off``, and — the default — no ingestion key compiled
 in, which is the case for every self-hosted and locally built CLI.
 """
 
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -37,6 +38,7 @@ _TIMEOUT_SECONDS = 2.0
 _CONFIG_KEY = "telemetry"
 _INSTALL_ID_KEY = "install_id"
 _ENABLED_KEY = "enabled"
+_NOTICE_KEY = "notice_shown"
 
 
 def _config_path() -> Path:
@@ -56,14 +58,26 @@ def _read_config() -> dict[str, Any]:
 
 
 def _write_telemetry_block(block: dict[str, Any]) -> None:
-    import json
+    """Merge ``block`` into the ``telemetry`` key of ``~/.lemma/config.json``.
+
+    Through the SDK's ``config_lock`` + ``save_config``, like every other writer
+    of this file. The previous unlocked ``write_text`` of a whole re-read config
+    raced the token-refresh path in ``state.py``: a refresh landing between this
+    read and this write was silently lost, and a crash mid-write truncated the
+    file, after which every command failed with "Invalid JSON". Losing that file
+    means losing the login session — far more than telemetry is worth.
+    """
+    from lemma_sdk.config import config_lock, load_config, save_config
 
     path = _config_path()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        config = _read_config()
-        config[_CONFIG_KEY] = {**config.get(_CONFIG_KEY, {}), **block}
-        path.write_text(json.dumps(config, indent=2))
+        with config_lock(path):
+            # load_config, not the raw read: it raises on a corrupt file, so a
+            # file we cannot parse is left alone rather than replaced by a stub
+            # holding nothing but this block.
+            config = load_config(path)
+            config[_CONFIG_KEY] = {**(config.get(_CONFIG_KEY) or {}), **block}
+            save_config(path, config)
     except Exception:
         # Telemetry must never be the reason a CLI invocation fails, including
         # on a read-only home directory.
@@ -83,6 +97,33 @@ def install_id() -> str:
     minted = str(uuid.uuid4())
     _write_telemetry_block({_INSTALL_ID_KEY: minted})
     return minted
+
+
+#: Printed once, to stderr, on the first invocation that actually reports. The
+#: alternative — telemetry that simply starts arriving — is the version that
+#: becomes a public complaint, and "discoverable by running `lemma telemetry`"
+#: is not disclosure. Not printed at all when nothing is being sent, which is
+#: every self-hosted and locally built CLI.
+_FIRST_RUN_NOTICE = (
+    "Lemma sends anonymous usage telemetry: the command group you ran, whether "
+    "it succeeded, the CLI version, and your OS — never arguments, paths, names "
+    "or ids. Turn it off with `lemma telemetry off` (or LEMMA_TELEMETRY=0)."
+)
+
+
+def _announce_once() -> None:
+    """Disclose telemetry the first time this installation reports.
+
+    Printed before the flag is stored, not after: on a home directory we cannot
+    write, the notice then repeats rather than never appearing at all. Noisy is
+    a complaint; undisclosed is the one that matters.
+    """
+    if (_read_config().get(_CONFIG_KEY) or {}).get(_NOTICE_KEY):
+        return
+    # stderr, never stdout: `--output json` promises a parseable stream, and a
+    # one-time notice is exactly the kind of line that breaks every `| jq`.
+    print(_FIRST_RUN_NOTICE, file=sys.stderr)  # noqa: T201 — stderr disclosure
+    _write_telemetry_block({_NOTICE_KEY: True})
 
 
 def is_enabled() -> bool:
@@ -112,15 +153,13 @@ def status() -> dict[str, Any]:
 
 
 def _cli_version() -> str:
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    # versions.cli_version(), not importlib.metadata: the import package is
+    # `lemma_cli` but the published *distribution* is `lemma-terminal`, so
+    # version("lemma-cli") raised PackageNotFoundError on every install and the
+    # one dimension this telemetry exists to record was always "unknown".
+    from .versions import cli_version
 
-        try:
-            return version("lemma-cli")
-        except PackageNotFoundError:
-            return "unknown"
-    except Exception:
-        return "unknown"
+    return cli_version()
 
 
 def _post(event: dict[str, Any]) -> None:
@@ -147,6 +186,7 @@ def record_command(command: str | None, *, exit_status: str) -> None:
         return
     if command is None:
         return
+    _announce_once()
     payload = {
         "event": "cli.command_invoked",
         "distinct_id": install_id(),

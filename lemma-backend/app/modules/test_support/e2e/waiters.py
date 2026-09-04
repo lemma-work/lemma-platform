@@ -11,6 +11,12 @@ import pytest
 T = TypeVar("T")
 
 
+#: First poll gap. Everything after it doubles until the caller's
+#: ``interval_seconds`` ceiling, so a condition that is already true costs one
+#: probe and a condition that takes a while is not polled in a hot loop.
+_INITIAL_POLL_SECONDS = 0.02
+
+
 async def eventually(
     *,
     label: str,
@@ -19,21 +25,53 @@ async def eventually(
     timeout_seconds: float = 30.0,
     interval_seconds: float = 0.25,
     fail_fast: Callable[[T], str | None] | None = None,
+    retry_exceptions: tuple[type[BaseException], ...] = (),
 ) -> T:
-    """Poll ``probe`` until ``done`` is true or fail with useful context."""
+    """Poll ``probe`` until ``done`` is true or fail with useful context.
 
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    ``retry_exceptions`` treats a matching exception from ``probe`` as "not
+    ready yet" rather than a hard failure -- e.g. ``OSError`` while a port
+    isn't listening yet, or ``httpx.HTTPError`` during a health check before
+    the server has bound. Anything not in this tuple still propagates
+    immediately, same as before.
+    """
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
     last_value: T | None = None
-    while asyncio.get_running_loop().time() < deadline:
-        last_value = await probe()
-        if fail_fast is not None:
-            failure = fail_fast(last_value)
-            if failure:
-                pytest.fail(f"{label} failed: {failure}. Last value: {last_value!r}")
-        if done(last_value):
-            return last_value
-        await asyncio.sleep(interval_seconds)
+    last_error: BaseException | None = None
+    delay = _INITIAL_POLL_SECONDS
+    while True:
+        try:
+            last_value = await probe()
+        except retry_exceptions as exc:
+            last_error = exc
+        else:
+            last_error = None
+            if fail_fast is not None:
+                failure = fail_fast(last_value)
+                if failure:
+                    pytest.fail(
+                        f"{label} failed: {failure}. Last value: {last_value!r}"
+                    )
+            if done(last_value):
+                return last_value
+        # Checked after every attempt (not before) so a zero/tiny timeout
+        # still gets exactly one real probe instead of silently skipping it.
+        if loop.time() >= deadline:
+            break
+        # Ramp rather than a flat interval. Most waits here resolve on the first
+        # or second poll against an in-process ASGI probe that answers in single
+        # -digit milliseconds, so a flat 0.25s default overshot by 5-15x every
+        # time it missed -- and 51 of 77 call sites take the default, while
+        # every site that thought about it chose tighter. Backing off to the
+        # caller's interval keeps a genuinely slow condition from being polled
+        # in a hot loop.
+        await asyncio.sleep(min(delay, interval_seconds))
+        delay *= 2
 
+    if last_error is not None:
+        pytest.fail(f"Timed out waiting for {label}. Last error: {last_error!r}")
     pytest.fail(f"Timed out waiting for {label}. Last value: {last_value!r}")
 
 
@@ -47,7 +85,13 @@ async def wait_for_status(
     timeout_seconds: float = 30.0,
     interval_seconds: float = 0.25,
 ) -> dict:
-    failed = failed or {"FAILED", "ERROR"}
+    # `failed or {...}` would silently ignore an explicitly-passed empty set
+    # (falsy) and fall back to the default anyway -- a real trap for a
+    # caller that legitimately wants no fail-fast statuses at all (e.g.
+    # waiting for a status that overlaps the default "bad" set, like
+    # `expected={"FAILED"}`, where {"FAILED", "ERROR"} would fail-fast the
+    # instant it becomes true).
+    failed = {"FAILED", "ERROR"} if failed is None else failed
     return await eventually(
         label=label,
         probe=probe,
@@ -60,4 +104,3 @@ async def wait_for_status(
         timeout_seconds=timeout_seconds,
         interval_seconds=interval_seconds,
     )
-

@@ -31,12 +31,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-from app.composition.pod_delivery import DELIVERY_CLAIM_SQL, DeliveryVia
+from app.modules.analytics.services.pod_delivery import DeliveryVia
+from app.modules.pod.contracts.delivery import DELIVERY_CLAIM_SQL
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 # Re-bound per file, the way the sibling outbox test does it: these are module
 # attributes rather than a plugin, so each file that wants a database says so.
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 redis_container = e2e_fixtures.redis_container
 supertokens_container = e2e_fixtures.supertokens_container

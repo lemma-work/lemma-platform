@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
@@ -14,10 +16,14 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
-from app.composition.workflow_schedule_runtime import (
-    ScheduleRepository,
-    ScheduleRunOutcomeService,
-    ScheduleRunRepository,
+from app.modules.schedule.contracts.dispatch import (
+    claim_schedule_run,
+    mark_run_dispatched,
+    mark_run_failed,
+    record_fire,
+    get_schedule,
+    record_dispatch_dead_letter,
+    record_pre_dispatch_failure,
 )
 from app.modules.schedule.contracts import (
     ScheduleFireStatus,
@@ -73,6 +79,54 @@ def _accept_inactive_one_time_fire(
     return configured == occurred_at and schedule_event_id == expected_event_id
 
 
+def _agent_target_ref(schedule, *, pod_id: UUID) -> ResourceRef:
+    """What ``agent.execute`` is asked about for this target.
+
+    The pod's own assistant is asked about pod-scoped. Its row's id *is* the
+    pod's, so both arms name the same thing -- but the resource type is not
+    cosmetic: grants match on (type, id), and an AGENT-typed check would newly
+    hit the resource-owner shortcut for whoever created the pod.
+    """
+    if is_pod_default_agent(schedule.agent_id, pod_id=pod_id):
+        return ResourceRef.pod(pod_id)
+    return ResourceRef(
+        resource_type=ResourceType.AGENT,
+        resource_id=schedule.agent_id,
+        pod_id=pod_id,
+    )
+
+
+#: What a firing carries alongside its payload: the source's routing key, its
+#: `source_event_id`, and whatever else the source chose to say about the
+#: delivery. Free-form because each source decides what belongs there.
+FiringMetadata = dict[str, Any]
+
+
+def _conversation_metadata(
+    schedule, metadata: FiringMetadata | None
+) -> FiringMetadata | None:
+    """What the started conversation should know about where it is.
+
+    A webhook source may say which repository its delivery came from -- see
+    `NormalizedWebhook.context` -- and that turns a triggered run from "an agent
+    told about a pull request" into "an agent standing in the checkout with the
+    branch already out". `parse_project_repo` validates it downstream, so
+    nothing here has to trust the shape.
+
+    The schedule's account becomes the clone identity. Deliberately the *user's*
+    account and not the App installation: the sandbox's `git` and `gh` act as
+    the person, so the work an agent pushes is attributed to whoever owns the
+    repository rather than to a bot nobody recognises.
+    """
+    repo = (metadata or {}).get("repo")
+    if not isinstance(repo, dict) or not repo:
+        return None
+    bound = dict(repo)
+    if schedule.account_id is not None:
+        bound["account_id"] = str(schedule.account_id)
+    return {"repo": bound}
+
+
 class ScheduleStartService:
     """Handles schedule.fired events for workflows."""
 
@@ -84,6 +138,34 @@ class ScheduleStartService:
         return await create_authorization_data_service(self._uow).build_user_context(
             user_id=user_id,
             pod_id=pod_id,
+        )
+
+    async def _start_agent_for_schedule(
+        self,
+        schedule,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        trigger: TriggerContext,
+        target_run_id: str,
+        metadata: FiringMetadata | None = None,
+    ) -> UUID:
+        """Start the conversation this firing hands over to.
+
+        One arm, because the pod's own assistant is looked up by id like every
+        other agent now. The schedule's instruction rides along either way: an
+        agent's standing instruction says what it is for, and this says what
+        *this run* is for.
+        """
+        return await self._engine.agent_adapter.run_agent_by_id(
+            agent_id=schedule.agent_id,
+            input_data=trigger.to_context_value(),
+            pod_id=pod_id,
+            user_id=user_id,
+            conversation_id=UUID(target_run_id),
+            source="SCHEDULE",
+            instructions=schedule.instruction,
+            conversation_metadata=_conversation_metadata(schedule, metadata),
         )
 
     async def handle_schedule_fired(
@@ -107,11 +189,39 @@ class ScheduleStartService:
             return
 
         # 2. A schedule targeting a workflow or agent.
-        schedule_repo = ScheduleRepository(self._uow)
-        schedule = await schedule_repo.get(UUID(schedule_id))
-        if schedule is None or (
-            schedule.workflow_id is None and schedule.agent_id is None
-        ):
+        schedule = await get_schedule(self._uow, UUID(schedule_id))
+        if schedule is None:
+            logger.debug(
+                "workflow.schedule_start_service.no_target_schedule.observed",
+                schedule_id=schedule_id,
+            )
+            return
+        if not schedule.has_target:
+            # An internal schedule is a wait timer and never had a target; if
+            # `_dispatch_wake` did not claim it there is nothing to record.
+            # A schedule a person made always had one -- creation refuses
+            # without it -- so a missing target means the workflow or agent was
+            # deleted out from under it. PS-SCHED-030: record the firing as
+            # failed and say the target is missing, rather than dropping it
+            # into a debug log nobody reads. The ledger row is what the failure
+            # breaker counts, so a schedule left pointing at nothing is
+            # eventually paused and its owner emailed.
+            if not schedule.is_internal:
+                await record_pre_dispatch_failure(
+                    self._uow,
+                    schedule,
+                    source_event_id=schedule_event_id,
+                    error_type="ScheduleTargetMissing",
+                )
+                await self._record_fire(
+                    schedule,
+                    status=ScheduleFireStatus.ERROR,
+                    error=(
+                        "The workflow or agent this schedule starts no longer "
+                        "exists. Point the schedule at another target, or "
+                        "delete it."
+                    ),
+                )
             logger.debug(
                 "workflow.schedule_start_service.no_target_schedule.observed",
                 schedule_id=schedule_id,
@@ -125,8 +235,8 @@ class ScheduleStartService:
             return
         run_user_id = _schedule_run_user_id(schedule, user_id)
 
-        run_repo = ScheduleRunRepository(self._uow)
-        schedule_run = await run_repo.claim(
+        schedule_run = await claim_schedule_run(
+            self._uow,
             schedule_id=schedule.id,
             user_id=run_user_id,
             source_event_id=schedule_event_id,
@@ -141,7 +251,6 @@ class ScheduleStartService:
         execution_user_id, target_run_id = _schedule_run_identity(schedule_run)
         if schedule_run.status == ScheduleRunStatus.DEAD_LETTERED:
             await self._record_fire(
-                schedule_repo,
                 schedule,
                 run_id=target_run_id,
                 status=ScheduleFireStatus.ERROR,
@@ -166,16 +275,14 @@ class ScheduleStartService:
                     schedule_event_id=schedule_event_id,
                     target_run_id=target_run_id,
                 )
-                await run_repo.mark_dispatched(schedule_run.id)
+                await mark_run_dispatched(self._uow, schedule_run.id)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=run_id,
                 )
             except Exception as exc:
-                run_status = await run_repo.mark_failed(schedule_run.id, exc)
+                run_status = await mark_run_failed(self._uow, schedule_run.id, exc)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
@@ -196,32 +303,27 @@ class ScheduleStartService:
                 )
                 await ctx.require(
                     Permissions.AGENT_EXECUTE,
-                    ResourceRef(
-                        resource_type=ResourceType.AGENT,
-                        resource_id=schedule.agent_id,
-                        pod_id=pod_id,
-                    ),
+                    _agent_target_ref(schedule, pod_id=pod_id),
                 )
                 ctx_token = set_current_context(ctx)
                 try:
-                    conversation_id = await self._engine.agent_adapter.run_agent_by_id(
-                        agent_id=schedule.agent_id,
-                        input_data=trigger.to_context_value(),
+                    conversation_id = await self._start_agent_for_schedule(
+                        schedule,
                         pod_id=pod_id,
                         user_id=execution_user_id,
-                        conversation_id=UUID(target_run_id),
-                        source="SCHEDULE",
+                        trigger=trigger,
+                        target_run_id=target_run_id,
+                        metadata=metadata,
                     )
                 finally:
                     reset_current_context(ctx_token)
-                await run_repo.mark_dispatched(schedule_run.id)
+                await mark_run_dispatched(self._uow, schedule_run.id)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=str(conversation_id),
                 )
             except Exception as exc:
-                run_status = await run_repo.mark_failed(schedule_run.id, exc)
+                run_status = await mark_run_failed(self._uow, schedule_run.id, exc)
                 logger.debug(
                     "workflow.schedule_start_service.start_agent_schedule.propagated",
                     agent_id=str(schedule.agent_id),
@@ -229,7 +331,6 @@ class ScheduleStartService:
                     exc_info=True,
                 )
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
@@ -405,7 +506,6 @@ class ScheduleStartService:
 
     async def _record_fire(
         self,
-        schedule_repo,
         schedule,
         *,
         run_id: str | None = None,
@@ -414,14 +514,13 @@ class ScheduleStartService:
         dispatch_dead_lettered: bool = False,
     ) -> None:
         resolved = status or ScheduleFireStatus.TRIGGERED
-        await schedule_repo.record_fire(
+        await record_fire(
+            self._uow,
             schedule.id,
             status=resolved,
             run_id=run_id,
             error=error,
         )
         if dispatch_dead_lettered:
-            await ScheduleRunOutcomeService(self._uow).record_dispatch_dead_letter(
-                schedule
-            )
+            await record_dispatch_dead_letter(self._uow, schedule)
         await self._uow.commit()

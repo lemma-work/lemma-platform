@@ -1,13 +1,17 @@
 from datetime import datetime, timedelta, timezone
 import inspect
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
@@ -21,11 +25,15 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.services.workspace_location import ProjectRepo
-from app.modules.agent.services.agent_runner_service import (
-    FULL_HISTORY_AGENT_RUN_COUNT,
-    AgentRunnerService,
+from app.modules.agent.services.conversation_access import resolve_agent
+from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
+from app.modules.agent.tools.callable_tool_factory import (
+    AgentCallableToolFactory,
+    inline_schema,
+    normalize_json_schema,
+    _schema_preview,
 )
-from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.pod import pod_toolset
 from app.modules.agent.tools.skills import skills_toolset
@@ -108,18 +116,35 @@ def test_toolset_resolver_returns_exactly_the_selected_toolsets():
 
 @pytest.mark.asyncio
 async def test_default_pod_agent_gets_fixed_default_toolsets():
+    """The assistant is run with the constant, not with what its row stores.
+
+    The row stores `toolsets = []` on purpose -- a stored list would freeze
+    per-pod on the day the pod was made, and adding a toolset later would need a
+    data migration to reach pods that already exist. `resolve_agent` is the one
+    seam that substitutes the constant, so this asserts against what comes back
+    from it rather than against the row.
+    """
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+    pod_id = uuid4()
     conversation = Conversation(
-        pod_id=uuid4(),
+        pod_id=pod_id,
         user_id=uuid4(),
         agent_id=None,
     )
-
-    agent = await runner._resolve_agent(
-        uow=object(),
-        conversation=conversation,
+    stored = Agent(
+        id=pod_id,
+        pod_id=pod_id,
         user_id=conversation.user_id,
-        agent_name=None,
+        name=DEFAULT_POD_AGENT_NAME,
+        kind=AgentKind.POD_DEFAULT,
+        instruction="",
+        toolsets=[],
+    )
+
+    agent = await resolve_agent(
+        conversation,
+        user_id=conversation.user_id,
+        agent_repository=SimpleNamespace(get=AsyncMock(return_value=stored)),
     )
     toolsets = await runner.tool_assembler.assemble(
         agent=agent,
@@ -138,16 +163,20 @@ async def test_default_pod_agent_gets_fixed_default_toolsets():
 
 
 @pytest.mark.asyncio
-async def test_user_created_agent_gets_only_its_selected_toolsets():
-    # A user-created agent must get EXACTLY the toolsets it was created with —
-    # the pod defaults (workspace CLI, skills, …) are NOT forced onto it.
+async def test_a_user_created_agent_gets_no_declarable_toolset_it_did_not_choose():
+    """The declared half stays exactly what the author picked.
+
+    Universal abilities are added on top (see the next test), but nothing from
+    the *declarable* set is ever implied — an agent that was not given a sandbox
+    shell or the ability to spawn sub-agents does not quietly acquire one.
+    """
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
         name="reporter",
         instruction="Summarize records.",
-        toolsets=[AgentToolset.POD, AgentToolset.WEB_SEARCH],
+        toolsets=[AgentToolset.WEB_SEARCH],
     )
     conversation = Conversation(
         pod_id=agent.pod_id,
@@ -160,26 +189,61 @@ async def test_user_created_agent_gets_only_its_selected_toolsets():
         conversation=conversation,
     )
 
-    assert pod_toolset in toolsets
     assert web_search_toolset in toolsets
-    # Nothing from the pod defaults is implicitly added — including SUBAGENTS,
-    # which is opt-in for user-created agents.
     assert workspace_cli_toolset not in toolsets
-    assert user_interaction_toolset not in toolsets
     assert subagents_toolset not in toolsets
+    # POD is derived from a grant, and this agent holds none.
+    assert pod_toolset not in toolsets
 
 
 @pytest.mark.asyncio
-async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
+async def test_every_agent_can_reach_a_person_whatever_it_was_given():
+    """`request_approval` is the seam where a human gets to say no.
+
+    It rides in USER_INTERACTION, which is why that toolset is universal rather
+    than a switch: withholding it never made an agent safer, it only removed the
+    place a person could intervene.
+    """
+    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="narrow",
+        instruction="Answer questions.",
+        toolsets=[],
+    )
+    conversation = Conversation(
+        pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
+    )
+
+    toolsets = await runner.tool_assembler.assemble(
+        agent=agent, conversation=conversation
+    )
+
+    assert user_interaction_toolset in toolsets
+
+
+@pytest.mark.asyncio
+async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
     # RunToolAssembler feeds BOTH the in-process harness and the remote MCP path,
-    # so a user-created agent gets the todo tools only when its toolsets include
-    # TODO — never implicitly.
+    # and a task list is conversation-scoped scratch with no access implication —
+    # so it is universal rather than a switch. The prompt still says nothing when
+    # the conversation has never planned anything.
     from app.modules.agent.tools import callable_tool_factory as ctf
 
-    async def _no_dynamic(self, *, agent, allow_subagents):  # noqa: ANN001
+    async def _no_dynamic(self, *, agent, allow_subagents, grants=None):  # noqa: ANN001
         return []
 
     monkeypatch.setattr(ctf.AgentCallableToolFactory, "build_toolsets", _no_dynamic)
+
+    # Toolset selection now reads the agent's grants (POD and CONNECTORS are
+    # derived from them), so the assembler opens a unit of work even when the
+    # dynamic tools above are stubbed out. Return an empty summary rather than a
+    # database.
+    async def _no_grants(self, *, pod_id, agent_id):  # noqa: ANN001
+        return AgentGrantSummary()
+
+    monkeypatch.setattr(ctf.AgentCallableToolFactory, "load_grant_summary", _no_grants)
 
     runner = AgentRunnerService(uow_factory=lambda: None, harness_registry=object())
 
@@ -198,7 +262,7 @@ async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
         user_id=without_todo.user_id,
         agent_id=without_todo.id,
     )
-    assert not _has_todo(
+    assert _has_todo(
         await runner.tool_assembler.assemble(agent=without_todo, conversation=conv)
     )
 
@@ -443,6 +507,45 @@ def test_display_resource_validates_widget_form_and_table_payloads():
     )
 
 
+def test_display_resource_rejects_the_agents_own_sandbox_paths():
+    """A workspace path is caught here, where the agent can still fix it.
+
+    `/workspace/...` is the agent's cwd, so it is the path in hand when it
+    decides to show a file it just made. It used to pass validation and fail
+    three layers down, where the only thing left was a card whose "Open file"
+    button pointed into a pod directory that does not exist.
+    """
+    error = _payload_error(
+        type=DisplayResourceType.FILE,
+        path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
+    )
+    assert "sandbox path" in error
+    # The message has to carry the fix, or the model retries the same call.
+    assert "lemma files upload" in error
+
+    for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
+        assert _payload_error(type=DisplayResourceType.FILE, path=private_root)
+
+    # A pod path is still a pod path, including one that merely starts with the
+    # same letters.
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/me/reports/q3.pdf"
+            )
+        )
+        is None
+    )
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.FILE, path="/workspaces/notes.md"
+            )
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_display_resource_invalid_payload_returns_success_false():
     """An invalid payload comes back as a uniform success:false/error result."""
@@ -473,6 +576,27 @@ async def test_display_resource_rejects_nonportable_widget_html():
     assert response.success is False
     assert "Invalid WIDGET content" in (response.error or "")
     assert "relative" in (response.error or "")
+
+
+@pytest.mark.asyncio
+async def test_display_resource_rejects_css_outside_style_tag():
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
+        tool_call_id="tc",
+    )
+    response = await display_resource(
+        ctx,
+        DisplayResourceRequest(
+            type=DisplayResourceType.WIDGET,
+            content=(
+                ".card{background:var(--lemma-widget-surface);padding:20px}\n"
+                '<div class="card"><h1>Tool run</h1></div>'
+            ),
+        ),
+    )
+    assert response.success is False
+    assert "Invalid WIDGET content" in (response.error or "")
+    assert "outside any <style> tag" in (response.error or "")
 
 
 def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
@@ -605,16 +729,29 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
-    """On remote/MCP runs (no pause signal) the tools never raise or block; they
-    return guidance so the model falls back to a conversational ask."""
+async def test_interaction_tools_park_instead_of_refusing_on_a_remote_harness():
+    """A remote harness waits for the person; it does not fall back to prose.
+
+    These tools never raise here -- raising is caught only by the in-process run
+    loop, and a tool served over MCP cannot end its caller's turn from inside a
+    tool call. So they return a parked id instead, and the host's MCP bridge
+    holds the response open until the decision lands, exactly as it already does
+    for the harness's own native ACP permission requests.
+
+    They used to return guidance telling the model to ask in prose. That lost
+    the interaction card: the choices, the recommended option and the native
+    buttons on Slack/Teams/Telegram all collapsed into a paragraph.
+    """
     ask = await ask_user(
         _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
         _one_question(),
     )
-    assert ask.success is False
-    assert ask.interaction_fallback is True
-    assert "continue this conversation" in (ask.message or "")
+    assert ask.success is True
+    assert ask.interaction_fallback is False
+    assert ask.parked_tool_call_id, ask
+    # The id the bridge polls has to be the durable tool call id the card
+    # resolves through, or the answer would be waited for in the wrong place.
+    assert ask.parked_tool_call_id == "question-call"
 
     approval = await request_approval(
         _approval_ctx("approval-remote", supports_pause_signal=False),  # type: ignore[arg-type]
@@ -622,9 +759,9 @@ async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
         args={"cmd": "ls"},
         title="List files?",
     )
-    assert approval.success is False
-    assert approval.interaction_fallback is True
-    assert "can't run a tool with the user's approval" in (approval.message or "")
+    assert approval.success is True
+    assert approval.interaction_fallback is False
+    assert approval.parked_tool_call_id == "approval-remote"
 
 
 @pytest.mark.asyncio
@@ -820,6 +957,123 @@ def test_workspace_agent_prompt_states_working_directory():
     assert "uv venv" in prompt
 
 
+def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
+    """A plan written in turn one has to still be visible in turn five.
+
+    The list lives in conversation metadata; the only place a later run could
+    have seen it was the `write_todos` tool return, an old message that history
+    trimming eventually drops. An agent that cannot see its own checklist cannot
+    check anything off it -- which is how a plan gets written once and never
+    updated again.
+
+    Both harnesses get this: the section is added outside the
+    `include_toolset_prompts` guard, like the working-directory one.
+    """
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={
+            "todos": [
+                {"content": "Fetch the Q3 report", "done": True},
+                {"content": "Summarize findings", "done": False},
+            ]
+        },
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    for include_fragments in (True, False):
+        prompt = build_agent_instructions(
+            agent=agent,
+            conversation=conversation,
+            ctx=SimpleNamespace(surface_platform=None),
+            include_toolset_prompts=include_fragments,
+        )
+        assert "# Task list" in prompt
+        assert "- [x] Fetch the Q3 report" in prompt
+        assert "- [ ] Summarize findings" in prompt
+        assert "1 of 2 done" in prompt
+        # Named, so picking up mid-plan needs no inference.
+        assert "Summarize findings**" in prompt
+
+
+def test_a_conversation_that_never_planned_is_not_nagged_about_a_task_list():
+    """An agent with no list should decide whether the work needs one."""
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(surface_platform=None),
+    )
+
+    assert "This conversation already has a task list" not in prompt
+
+
+def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
+    """A list it cannot edit is noise: there is no `write_todos` on this run."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="builder",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.WORKSPACE_CLI],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(workspace_cwd="/workspace/c/x/y", surface_platform=None),
+    )
+
+    assert "# Task list" not in prompt
+
+
+def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
+    """All-done is not "nothing to do": the next request replaces the plan."""
+    conversation = Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        metadata={"todos": [{"content": "Ship it", "done": True}]},
+    )
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="researcher",
+        instruction="Do the task.",
+        toolsets=[AgentToolset.TODO],
+    )
+
+    prompt = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=SimpleNamespace(surface_platform=None),
+    )
+
+    assert "Every item on this conversation's list is finished" in prompt
+    assert "replaces the old one" in prompt
+
+
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     """On a repo, the scratchpad orientation is not just unhelpful but wrong:
     there is no sibling `/workspace/c/<date>/<slug>` holding earlier work, and
@@ -927,6 +1181,96 @@ def test_connector_access_modes_use_account_ownership_names():
     }
 
 
+@pytest.mark.parametrize("schema", [None, {}, "not-a-dict", [], 0])
+def test_normalize_json_schema_defaults_absent_or_malformed_input(schema):
+    """None, empty, and non-dict schemas all fall back to the same open object."""
+    assert normalize_json_schema(schema) == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": True,
+    }
+
+
+def test_normalize_json_schema_forces_object_type():
+    """A dynamic tool's declared schema is always exposed as an object, even
+    when the stored schema (e.g. authored against a single scalar) says
+    otherwise -- pydantic-ai tool parameters must be an object schema."""
+    normalized = normalize_json_schema({"type": "string", "minLength": 1})
+    assert normalized["type"] == "object"
+    assert normalized["minLength"] == 1
+    assert normalized["properties"] == {}
+    assert normalized["additionalProperties"] is True
+
+
+def test_normalize_json_schema_preserves_explicit_fields_and_does_not_mutate_input():
+    original = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "additionalProperties": False,
+        "required": ["name"],
+    }
+    snapshot = dict(original)
+
+    normalized = normalize_json_schema(original)
+
+    # Existing values win over the defaults `setdefault` would otherwise apply.
+    assert normalized["properties"] == {"name": {"type": "string"}}
+    assert normalized["additionalProperties"] is False
+    assert normalized["required"] == ["name"]
+    # The input schema is never mutated in place.
+    assert original == snapshot
+
+
+def test_inline_schema_resolves_a_local_ref_and_drops_the_defs_bucket():
+    schema = {
+        "type": "object",
+        "properties": {"address": {"$ref": "#/$defs/Address"}},
+        "$defs": {
+            "Address": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            }
+        },
+    }
+
+    inlined = inline_schema(schema)
+
+    assert "$ref" not in str(inlined)
+    assert inlined["properties"]["address"]["properties"]["city"] == {"type": "string"}
+
+
+def test_inline_schema_is_a_no_op_for_a_schema_with_no_refs():
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+    }
+
+    assert inline_schema(dict(schema)) == schema
+
+
+@pytest.mark.parametrize("schema", [None, {}, "not-a-dict", 42])
+def test_schema_preview_is_empty_for_absent_or_malformed_schema(schema):
+    """No output schema (or garbage in its place) means nothing goes in the
+    tool description -- never the 61 characters of empty-object boilerplate."""
+    assert _schema_preview(schema) == ""
+
+
+def test_schema_preview_renders_compact_normalized_json():
+    preview = _schema_preview(
+        {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    )
+
+    # Compact separators (no spaces) and normalized (additionalProperties filled
+    # in), so the description does not silently double the token cost of the
+    # schema it is summarizing.
+    assert preview == (
+        '{"type":"object","properties":{"ok":{"type":"boolean"}},'
+        '"additionalProperties":true}'
+    )
+    assert " " not in preview
+
+
 def test_callable_function_tool_uses_function_name_prefix():
     function = FunctionEntity(
         id=uuid4(),
@@ -1006,37 +1350,38 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
         instruction="",
     )
 
-    # The tool delegates to FunctionUseCases.execute_function_as_workload (which
-    # owns auth + run creation); patch the use-case builder to capture input_data.
-    class _FakeUseCases:
-        async def execute_function_as_workload(
-            self,
-            *,
-            pod_id,
-            name,
-            input_data,
-            user_id,
-            principal_type,
-            principal_id,
-            delegation_scope,
-            delegation_actor_name,
-            run_as_workload=None,
-        ):
-            captured["input_data"] = input_data
-            captured["user_id"] = user_id
-            captured["run_as_workload"] = run_as_workload
-            captured["principal_type"] = principal_type
-            captured["principal_id"] = principal_id
-            return SimpleNamespace(
-                id=uuid4(),
-                status=FunctionRunStatus.COMPLETED,
-                output_data={"ok": True},
-                error=None,
-            )
+    # The tool delegates to `function`'s published operation, which owns auth and
+    # run creation. Stubbed where `function` publishes it rather than where
+    # `agent` imports it: the latter is a double inside the subject.
+    async def _execute(
+        uow_factory,
+        *,
+        pod_id,
+        name,
+        input_data,
+        user_id,
+        agent_id,
+        agent_name,
+        delegation_scope,
+    ):
+        del uow_factory, pod_id, name, agent_name, delegation_scope
+        captured["input_data"] = input_data
+        captured["user_id"] = user_id
+        captured["agent_id"] = agent_id
+        return SimpleNamespace(
+            id=uuid4(),
+            status=FunctionRunStatus.COMPLETED,
+            output_data={"ok": True},
+            error=None,
+        )
+
+    from app.modules.function.contracts.agent_tools import (
+        execute_function_for_agent as _real_execute_function_for_agent,
+    )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory.create_function_use_cases",
-        lambda uow_factory: _FakeUseCases(),
+        "app.modules.function.contracts.agent_tools.execute_function_for_agent",
+        _execute,
     )
 
     factory = AgentCallableToolFactory(uow_factory=lambda: _FakeUow())
@@ -1059,13 +1404,20 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
     assert result == {"ok": True}
     assert captured["input_data"] == {"apps": ["gmail", "slack"], "query": "x"}
     assert captured["user_id"] == user_id
+    assert captured["agent_id"] == parent_agent.id
     # The agent's function.execute grant is enforced via the AGENT principal,
-    # but the function itself must run under its OWN identity (run_as_workload
-    # unset -> executor defaults to the function principal), same as the
+    # but the function itself must run under its OWN identity, same as the
     # direct-user and JOB paths. No parent-grant mirroring.
-    assert captured["run_as_workload"] is None
-    assert captured["principal_type"] == "AGENT"
-    assert captured["principal_id"] == parent_agent.id
+    #
+    # Asserted on the signature rather than on a captured `None`: the operation
+    # `agent` calls has no `run_as_workload` parameter at all, so mirroring is
+    # not something a caller can express by accident. That is a stronger
+    # guarantee than the value happening to be unset on this one path, and it
+    # is what publishing an operation instead of `FunctionUseCases` bought.
+    assert (
+        "run_as_workload"
+        not in inspect.signature(_real_execute_function_for_agent).parameters
+    )
 
 
 def test_callable_agent_tool_uses_agent_name_prefix():
@@ -1449,7 +1801,7 @@ def _run_with_age(*, run_index: int, hours_ago: float, message_count: int = 5):
 def test_surface_history_window_trims_by_message_count(monkeypatch):
     # Small budget so only the most recent run fits (5 msgs each, budget 6).
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (6, 0),
     )
     runs = [_agent_run_with_messages(i) for i in range(4)]
@@ -1460,12 +1812,19 @@ def test_surface_history_window_trims_by_message_count(monkeypatch):
 
     # Only the most recent run survives the count budget.
     assert set(grouped) == {runs[-1].id}
-    assert len(grouped[runs[-1].id]) == 5
+    # Its own five messages. The sixth is the notice saying the older runs were
+    # dropped -- the cap announces itself rather than trimming in silence.
+    real = [m for m in grouped[runs[-1].id] if m.kind is not MessageKind.NOTIFICATION]
+    assert len(real) == 5
+    assert any(
+        (m.metadata or {}).get("summary_kind") == "conversation_runs_dropped"
+        for m in grouped[runs[-1].id]
+    )
 
 
 def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (40, 24),
     )
     old = _run_with_age(run_index=0, hours_ago=48)
@@ -1483,7 +1842,7 @@ def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
 
 def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch):
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (6, 0),
     )
     runs = [_agent_run_with_messages(i) for i in range(4)]
@@ -1496,26 +1855,48 @@ def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch
     assert len(grouped) == 4
 
 
-def test_history_processors_summarize_then_enforce_a_hard_ceiling():
+def test_history_processors_compact_then_enforce_a_hard_ceiling():
     """Two processors, in this order, for two different failure modes.
 
-    The summarizer keeps the prompt small on the happy path. The ceiling guard
-    exists because the summarizer swallows its own failures and returns the
-    ORIGINAL history — safe for the data, fatal for the request that follows.
+    The compactor keeps the prompt small on the happy path. The ceiling guard is
+    the backstop for what it cannot cover -- a tail that is over the ceiling on
+    its own.
     """
+    from pydantic_ai._utils import takes_run_context
+
+    from app.modules.agent.domain.value_objects import (
+        DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES,
+        DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT,
+    )
+
     processors = build_history_processors(
         HarnessOptions(model_name="kimi-k2.6"),
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 2
-    assert processors[0].trigger == ("tokens", 70_000)
-    assert processors[0].keep == ("messages", 40)
-    # A real tokenizer, not the library's len(text)/4 estimate — and an async
-    # one, because tokenizing a large history is ~30ms of CPU per model request
-    # and the worker runs many agent runs on a single core.
-    assert processors[0].token_counter.__name__ == "_count_tokens_off_loop"
-    assert inspect.iscoroutinefunction(processors[0].token_counter)
+    # Detach stale images, compact, the ceiling backstop, then the provider
+    # shape guarantee.
+    assert [
+        getattr(processor, "__name__", type(processor).__name__)
+        for processor in processors
+    ] == [
+        "_detach_stale_images",
+        "HistoryCompactor",
+        "_ceiling_guard",
+        "_ensure_leading_user_message",
+    ]
+    compactor = processors[1]
+    # Thresholds come from what the run's model affords
+    # (services/context_budget), so assert against the resolved default rather
+    # than a literal that has to be chased every time a window changes.
+    assert compactor.trigger_tokens == DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
+    assert compactor.keep_messages == DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
+    assert compactor.model == "openai:gpt-4.1"
+    # Load-bearing: pydantic-ai decides whether to hand the processor the run
+    # context by inspecting the first parameter's annotation, and silently calls
+    # it with one argument when that annotation is anything else. Without the
+    # context the summarization call is unbilled -- which is what it was.
+    assert takes_run_context(compactor)
 
 
 def test_disabling_summarization_keeps_the_ceiling_guard():
@@ -1528,11 +1909,18 @@ def test_disabling_summarization_keeps_the_ceiling_guard():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert len(processors) == 1
-    assert processors[0].__name__ == "_ceiling_guard"
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ceiling_guard",
+        "_ensure_leading_user_message",
+    ]
 
 
-def test_everything_can_be_disabled_explicitly():
+def test_compaction_can_be_disabled_but_image_detachment_always_runs():
+    """The two compaction stages are policy and can be turned off. Detaching
+    images the model has already read is not: pydantic-ai re-uploads every image
+    on every model request for the life of the run, whatever the thresholds say.
+    """
     processors = build_history_processors(
         HarnessOptions(
             model_name="kimi-k2.6",
@@ -1542,7 +1930,10 @@ def test_everything_can_be_disabled_explicitly():
         summarization_model="openai:gpt-4.1",
     )
 
-    assert processors == []
+    assert [processor.__name__ for processor in processors] == [
+        "_detach_stale_images",
+        "_ensure_leading_user_message",
+    ]
 
 
 def test_conversation_instructions_are_appended_to_agent_prompt():
@@ -1572,7 +1963,7 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "private to this conversation" in prompt
+    assert "The workspace is the user's, not this conversation's" in prompt
     assert "/me/<topic>/" in prompt
     assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
@@ -1605,7 +1996,12 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     )
 
     assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "Structure for state, prose for knowledge" in prompt
+    assert "## Where the work lands" in prompt
+    # Reply discipline is not keyed to a toolset: every agent replies, and the
+    # reply is the one thing the person always sees. It rode in on the surface
+    # fragment for a long time, which meant a run with no surface platform --
+    # the web UI -- was told nothing about length or narration.
+    assert "## Your reply is a chat message" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that
@@ -1806,6 +2202,40 @@ def test_latest_user_prompt_renders_channel_context_as_background():
     assert "NOT" in user_prompt  # framed as not-instructions
     # The stored message text is untouched.
     assert message.text == "what happened?"
+
+
+def test_latest_user_prompt_renders_the_message_a_reply_quotes():
+    """A quoted reply must carry what it points at.
+
+    Telegram delivers the quoted message inline in the update, but only the
+    group path ever read it — so in a DM "this one is wrong" arrived as a
+    pronoun with no referent.
+    """
+    message = Message(
+        conversation_id=uuid4(),
+        sequence=0,
+        role=MessageRole.USER.value,
+        kind=MessageKind.TEXT,
+        text="this one is wrong",
+        metadata={
+            "surface_platform": "TELEGRAM",
+            "sender_display_name": "Deepak",
+            "quoted_message": {
+                "author": "lemmabot",
+                "text": "The runtime for agent-built software",
+                "is_bot": True,
+            },
+        },
+    )
+
+    _history, user_prompt = PydanticAIHarness()._history_and_prompt([message])
+
+    assert user_prompt is not None
+    assert "this one is wrong" in user_prompt
+    assert "your own earlier message" in user_prompt
+    assert "The runtime for agent-built software" in user_prompt
+    assert "BACKGROUND CONTEXT" in user_prompt
+    assert message.text == "this one is wrong"
 
 
 def test_latest_user_prompt_includes_metadata_state_without_changing_content():
@@ -2015,3 +2445,27 @@ def test_unparseable_tool_arguments_are_reported_rather_than_vanishing():
     assert len(return_parts) == 1
     assert return_parts[0].content["success"] is False
     assert "could not be parsed" in return_parts[0].content["error"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
+    """An option icon is presentation data on the choice, never a change to the
+    pause contract: the answer still comes back through the same resume path."""
+    request = _one_question(
+        options=[
+            {
+                "label": "OAuth",
+                "description": "Use OAuth",
+                "recommended": True,
+                "icon": "🔐",
+            },
+            {"label": "API key", "description": "Use an API key", "icon": "🔑"},
+        ]
+    )
+
+    with pytest.raises(AgentInputRequired) as excinfo:
+        await ask_user(_ask_ctx(), request)  # type: ignore[arg-type]
+
+    assert excinfo.value.kind == "ask_user"
+    assert request.questions[0].options[0].icon == "🔐"
+    assert request.questions[0].options[1].icon == "🔑"

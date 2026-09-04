@@ -203,7 +203,11 @@ async def test_slack_send_file_bytes_retries_without_customized_identity(monkeyp
 
     async def fake_upload_ticket(self, **kwargs):
         uploads.append(kwargs)
-        return {"ok": True, "upload_url": "https://upload.example.test", "file_id": "F1"}
+        return {
+            "ok": True,
+            "upload_url": "https://upload.example.test",
+            "file_id": "F1",
+        }
 
     async def fake_complete(self, **kwargs):
         completions.append(kwargs)
@@ -237,7 +241,9 @@ async def test_slack_send_file_bytes_retries_without_customized_identity(monkeyp
             assert files["file"][0] == "report.txt"
             return FakeUploadResponse()
 
-    monkeypatch.setattr(AsyncWebClient, "files_getUploadURLExternal", fake_upload_ticket)
+    monkeypatch.setattr(
+        AsyncWebClient, "files_getUploadURLExternal", fake_upload_ticket
+    )
     monkeypatch.setattr(AsyncWebClient, "files_completeUploadExternal", fake_complete)
     monkeypatch.setattr(
         "app.modules.agent_surfaces.platforms.slack.service.httpx.AsyncClient",
@@ -297,9 +303,7 @@ async def test_failed_stream_append_is_reported_and_can_be_retried(monkeypatch):
         attempts += 1
         calls["append"].append(kwargs)
         if attempts == 1:
-            raise SlackApiError(
-                "rate limited", {"ok": False, "error": "ratelimited"}
-            )
+            raise SlackApiError("rate limited", {"ok": False, "error": "ratelimited"})
         return {"ok": True}
 
     monkeypatch.setattr(AsyncWebClient, "chat_appendStream", flaky_append)

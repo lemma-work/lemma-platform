@@ -13,6 +13,7 @@ import pytest
 import structlog
 
 import app.core.log.log as logmod
+from app.core.log import contract as log_contract
 from app.core.log.log import (
     LoggingContractError,
     get_dependency_logger,
@@ -142,8 +143,16 @@ def test_unregistered_event_and_field_fail_in_explicit_local_strict_mode(
     assert captured_stdout() == []
 
 
-def test_production_emits_one_bounded_contract_violation(monkeypatch) -> None:
-    monkeypatch.setattr(logmod, "_contract_violation_emitted", False)
+def test_production_reports_each_offending_event_once(monkeypatch) -> None:
+    """Once per offender, not once per process.
+
+    This used to latch on a single boolean: after the first violation, every
+    later violating record -- any event, for the life of the process -- was
+    dropped whole, error records included. An event missing from the catalog
+    then did not lose its fields, it disappeared, and the one record that was
+    emitted did not say which event it was about.
+    """
+    monkeypatch.setattr(log_contract, "reported_violations", set())
     setup_logging("production", service_name="lemma-test", json_logs=True)
     buffer = io.StringIO()
     handler = _processor_formatter_handler()
@@ -153,19 +162,25 @@ def test_production_emits_one_bounded_contract_violation(monkeypatch) -> None:
         logger = get_logger("app.demo")
         logger.info("not.registered", payload="CANARY")
         logger.info("also.not.registered", payload="SECOND-CANARY")
+        # A repeat of the first says nothing new.
+        logger.info("not.registered", payload="THIRD-CANARY")
     finally:
         handler.stream = original_stream
     records = [json.loads(line) for line in buffer.getvalue().splitlines() if line]
-    assert len(records) == 1
-    assert records[0]["event"] == "logging.contract.violation"
-    assert records[0]["contract_violation"] == "unregistered_event"
-    assert "CANARY" not in json.dumps(records[0])
+    assert [record["offending_event"] for record in records] == [
+        "not.registered",
+        "also.not.registered",
+    ]
+    assert {record["contract_violation"] for record in records} == {
+        "unregistered_event"
+    }
+    assert "CANARY" not in json.dumps(records)
 
 
 def test_deployed_development_contract_violation_is_fail_safe(monkeypatch) -> None:
     monkeypatch.setenv("LEMMA_ENVIRONMENT", "development")
     monkeypatch.setenv("LEMMA_LOGGING_CONTRACT_STRICT", "true")
-    monkeypatch.setattr(logmod, "_contract_violation_emitted", False)
+    monkeypatch.setattr(log_contract, "reported_violations", set())
     setup_logging("development", service_name="lemma-test", json_logs=True)
     buffer = io.StringIO()
     handler = _processor_formatter_handler()
@@ -202,8 +217,7 @@ def test_setup_reconciles_one_console_and_preserves_non_console_handler(
         assert preserved in logging.getLogger().handlers
         assert logging.getLogger("uvicorn.access").handlers == []
         assert (
-            logging.getLogger("uvicorn.access").getEffectiveLevel()
-            == logging.WARNING
+            logging.getLogger("uvicorn.access").getEffectiveLevel() == logging.WARNING
         )
         assert logging.getLogger("uvicorn.error").getEffectiveLevel() == logging.INFO
     finally:
@@ -728,7 +742,9 @@ def test_a_credential_is_withheld_even_from_an_error() -> None:
     about the error survives, and the field is named so the omission is
     visible rather than mysterious.
     """
-    record = _bound("db.connect.failed", "error", password="hunter2", dsn="postgres://h/db")
+    record = _bound(
+        "db.connect.failed", "error", password="hunter2", dsn="postgres://h/db"
+    )
     assert "password" not in record
     assert record["dropped_fields"] == "password"
     assert record["dsn"] == "postgres://h/db"
@@ -806,3 +822,86 @@ def test_a_deliberate_file_sink_on_a_dependency_logger_is_preserved(
     finally:
         dependency_logger.removeHandler(file_handler)
         file_handler.close()
+
+
+def test_the_event_leads_the_line_and_context_trails_it() -> None:
+    """A container log view clips each line at the pane width.
+
+    `JSONRenderer` writes keys in insertion order, which put `logger` and the
+    static resource context first: every line opened with the same forty
+    characters and the event -- and an error's message -- sat off the right
+    edge. Ordering is the whole fix; nothing is dropped.
+    """
+    ordered = logmod._order_for_reading(
+        None,
+        "error",
+        {
+            "logger": "app.modules.agent.harness",
+            "service.name": "lemma-worker",
+            "trace_id": "7f8b5a15",
+            "stream": "agent_events",
+            "event": "agent.run.failed",
+            "level": "error",
+            "timestamp": "2026-08-30T10:52:17Z",
+            "error_traceback": "Traceback (most recent call last): ...",
+            "error_message": "boom",
+            "error_type": "HarnessDriverCancelled",
+        },
+    )
+
+    keys = list(ordered)
+    assert keys[:5] == [
+        "timestamp",
+        "level",
+        "event",
+        "error_type",
+        "error_message",
+    ]
+    # The bulky and the constant both sort to the back.
+    assert keys[-4:] == [
+        "error_traceback",
+        "logger",
+        "trace_id",
+        "service.name",
+    ]
+    # A domain field the caller supplied keeps its place in the middle.
+    assert "stream" in keys[5:-4]
+
+
+def test_ordering_preserves_every_key_and_value() -> None:
+    """Presentation only. A processor that silently dropped a field would be a
+    far worse defect than the one it was written to fix."""
+    record = {
+        "event": "x",
+        "level": "info",
+        "timestamp": "t",
+        "logger": "l",
+        "custom": {"nested": [1, 2]},
+        "_record": object(),
+        "_from_structlog": True,
+    }
+    before = dict(record)
+
+    ordered = logmod._order_for_reading(None, "info", record)
+
+    assert ordered == before
+    # structlog's own meta survives for `remove_processors_meta` to strip.
+    assert ordered["_record"] is before["_record"]
+
+
+def test_ordering_tolerates_a_record_missing_the_usual_keys() -> None:
+    assert logmod._order_for_reading(None, "info", {"only": 1}) == {"only": 1}
+    assert logmod._order_for_reading(None, "info", {}) == {}
+
+
+def test_rendered_json_puts_the_event_first(capsys) -> None:
+    """End to end through the real pipeline, not just the processor."""
+    setup_logging(env="test", service_name="lemma-test", json_logs=True)
+    handler = _processor_formatter_handler()
+    stream = io.StringIO()
+    handler.setStream(stream)
+
+    get_logger(__name__).info("worker.heartbeat")
+
+    line = stream.getvalue().strip().splitlines()[-1]
+    assert list(json.loads(line))[:3] == ["timestamp", "level", "event"]

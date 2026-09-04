@@ -55,7 +55,9 @@ async def test_imported_support_agent_files_ticket_with_real_model(
     pod_id = test_pod["id"]
 
     await provision_workspace(authenticated_client, pod_id)
-    await import_and_apply(authenticated_client, pod_id, pack_fixture_bundle("support_inbox"))
+    await import_and_apply(
+        authenticated_client, pod_id, pack_fixture_bundle("support_inbox")
+    )
 
     # Point the imported agent at the real runtime (the bundle is runtime-agnostic).
     patch = await authenticated_client.patch(

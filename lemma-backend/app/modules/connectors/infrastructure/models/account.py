@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, String, ForeignKey, Index, Text, text
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.connectors.domain.account import AccountEntity
-
 from app.modules.connectors.infrastructure.models.connector import Connector
 
 if TYPE_CHECKING:
@@ -31,10 +31,16 @@ class Account(UUIDAuditBase):
     connector_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("connectors.id", ondelete="CASCADE")
     )
-    status: Mapped[str] = mapped_column(
-        String(50), default="CONNECTED", nullable=False
-    )
+    status: Mapped[str] = mapped_column(String(50), default="CONNECTED", nullable=False)
     provider_account_id: Mapped[str | None] = mapped_column(
+        String(255), default=None, nullable=True, index=True
+    )
+    # The opaque upstream id this account's events arrive under: a Composio
+    # `connection_id`, a Slack `authed_user.id`. Distinct from
+    # `provider_account_id`, which is the human's handle on the provider and is
+    # what the uniqueness index is about. Plaintext and indexed because
+    # `credentials` is encrypted JSONB and inbound routing has to query this.
+    external_ref: Mapped[str | None] = mapped_column(
         String(255), default=None, nullable=True, index=True
     )
 
@@ -53,12 +59,8 @@ class Account(UUIDAuditBase):
     )
 
     # JSON configuration fields
-    credentials: Mapped[dict | None] = mapped_column(
-        JSONB, default=None, nullable=True
-    )
-    preferences: Mapped[dict | None] = mapped_column(
-        JSONB, default=None, nullable=True
-    )
+    credentials: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
+    preferences: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     # Scopes
     allowed_scopes: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text), default=None, nullable=True

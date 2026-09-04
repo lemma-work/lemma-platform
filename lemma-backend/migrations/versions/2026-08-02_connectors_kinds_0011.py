@@ -48,7 +48,9 @@ _PROVIDER_TO_KIND = "CASE WHEN {col} = 'COMPOSIO' THEN 'composio' ELSE 'package'
 _KIND_TO_PROVIDER = "CASE WHEN {col} = 'composio' THEN 'COMPOSIO' ELSE 'LEMMA' END"
 
 
-def _rewrite_capability_array(column: str, from_key: str, to_key: str, expr: str) -> str:
+def _rewrite_capability_array(
+    column: str, from_key: str, to_key: str, expr: str
+) -> str:
     """Rewrite each element of a JSONB capability array, renaming its tag key."""
     return f"""
         UPDATE connectors
@@ -67,12 +69,18 @@ def _rewrite_capability_array(column: str, from_key: str, to_key: str, expr: str
 
 def upgrade() -> None:
     # --- connectors: provider_capabilities -> kinds -------------------------
-    op.execute(_rewrite_capability_array("provider_capabilities", "provider", "kind", _PROVIDER_TO_KIND))
+    op.execute(
+        _rewrite_capability_array(
+            "provider_capabilities", "provider", "kind", _PROVIDER_TO_KIND
+        )
+    )
     op.alter_column("connectors", "provider_capabilities", new_column_name="kinds")
 
     # --- auth_configs: provider -> kind, plus multi-install support ---------
     op.add_column("auth_configs", sa.Column("kind", sa.String(50), nullable=True))
-    op.execute(f"UPDATE auth_configs SET kind = {_PROVIDER_TO_KIND.format(col='provider')}")
+    op.execute(
+        f"UPDATE auth_configs SET kind = {_PROVIDER_TO_KIND.format(col='provider')}"
+    )
     op.alter_column("auth_configs", "kind", nullable=False)
     op.alter_column("auth_configs", "provider_config", new_column_name="config")
     op.add_column(
@@ -116,7 +124,9 @@ def upgrade() -> None:
     )
 
     # --- connector_operations: catalog-only, keyed on kind ------------------
-    op.add_column("connector_operations", sa.Column("kind", sa.String(50), nullable=True))
+    op.add_column(
+        "connector_operations", sa.Column("kind", sa.String(50), nullable=True)
+    )
     op.add_column("connector_operations", sa.Column("execution", JSONB, nullable=True))
     op.execute(
         f"UPDATE connector_operations SET kind = {_PROVIDER_TO_KIND.format(col='provider')}"
@@ -262,7 +272,9 @@ def downgrade() -> None:
 
     # --- auth_configs -------------------------------------------------------
     op.add_column("auth_configs", sa.Column("provider", sa.String(50), nullable=True))
-    op.execute(f"UPDATE auth_configs SET provider = {_KIND_TO_PROVIDER.format(col='kind')}")
+    op.execute(
+        f"UPDATE auth_configs SET provider = {_KIND_TO_PROVIDER.format(col='kind')}"
+    )
     op.execute("DROP INDEX IF EXISTS uq_auth_configs_default_per_connector")
     op.execute("DROP INDEX IF EXISTS ix_auth_configs_org_connector_status")
     op.drop_column("auth_configs", "is_default")
@@ -305,5 +317,7 @@ def downgrade() -> None:
     # --- connectors ---------------------------------------------------------
     op.alter_column("connectors", "kinds", new_column_name="provider_capabilities")
     op.execute(
-        _rewrite_capability_array("provider_capabilities", "kind", "provider", _KIND_TO_PROVIDER)
+        _rewrite_capability_array(
+            "provider_capabilities", "kind", "provider", _KIND_TO_PROVIDER
+        )
     )

@@ -25,10 +25,8 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.domain.setup_guides import (
-    SurfaceSetupAction,
-    SurfacePlatformSetupGuide,
-)
+from app.modules.agent_surfaces.domain.setup_actions import SurfaceSetupAction
+from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 
 
 class SurfaceIdentityConfigInput(BaseModel):
@@ -39,18 +37,15 @@ class SurfaceIdentityConfigInput(BaseModel):
 
 
 class SurfaceChannelRouteInput(BaseModel):
-    """One channel's routing, in the same three states the domain models.
+    """One channel this surface's agent may be spoken to in.
 
-    ``use_pod_assistant`` is not a synonym for an absent ``agent_name`` — see
-    :class:`SurfaceChannelRoute`. Omitting it here is what silently turned an
-    explicit "the pod assistant answers here", picked from inside Slack, back
-    into "unconfigured" on the next save from the web UI.
+    An allow-list entry. A surface belongs to exactly one agent, so a channel
+    says *where*, never *who* — it used to name an agent, back when one bot
+    could serve several.
     """
 
     channel_id: str | None = None
     channel_name: str | None = None
-    agent_name: str | None = None
-    use_pod_assistant: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -58,10 +53,6 @@ class SurfaceChannelRouteInput(BaseModel):
     def validate_channel_ref(self) -> "SurfaceChannelRouteInput":
         if not self.channel_id and not self.channel_name:
             raise ValueError("channel_id or channel_name is required")
-        if self.use_pod_assistant and self.agent_name:
-            raise ValueError(
-                "use_pod_assistant and agent_name are different answers; set one"
-            )
         return self
 
 
@@ -80,12 +71,7 @@ class SurfaceTelegramConfigInput(BaseModel):
 
 
 class SurfaceSlackConfigInput(BaseModel):
-    """The Slack settings a *caller* owns.
-
-    Only ``app_name``. The per-person DM agent map is written from inside Slack
-    — each person picks their own in the App Home — so it is readable here and
-    never writable, which keeps one editor from reassigning everybody.
-    """
+    """The Slack settings a caller owns."""
 
     app_name: str | None = None
 
@@ -93,20 +79,20 @@ class SurfaceSlackConfigInput(BaseModel):
 
 
 class SurfaceSlackConfigResponse(BaseModel):
-    """Slack settings as read back. ``dm_agent_by_user`` maps a Slack user id to
-    the agent that person chose, or ``__pod_assistant__`` when they explicitly
-    chose the pod assistant. A user absent from the map has never chosen and
-    falls to the surface default."""
+    """Slack settings as read back."""
 
     app_name: str | None = None
-    dm_agent_by_user: dict[str, str] = Field(default_factory=dict)
 
 
 class SurfaceBehaviorConfigInput(BaseModel):
-    identity: SurfaceIdentityConfigInput = Field(default_factory=SurfaceIdentityConfigInput)
+    identity: SurfaceIdentityConfigInput = Field(
+        default_factory=SurfaceIdentityConfigInput
+    )
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
-    send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    send_policy: SurfaceSendPolicyConfig = Field(
+        default_factory=SurfaceSendPolicyConfig
+    )
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
@@ -118,8 +104,6 @@ class SurfaceBehaviorConfigInput(BaseModel):
 class SurfaceChannelRouteResponse(BaseModel):
     channel_id: str | None = None
     channel_name: str | None = None
-    agent_name: str | None = None
-    use_pod_assistant: bool = False
 
 
 class AvailableSurfaceChannelResponse(BaseModel):
@@ -147,7 +131,9 @@ class SurfaceConfigResponse(BaseModel):
     )
     channels: list[SurfaceChannelRouteResponse] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
-    send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    send_policy: SurfaceSendPolicyConfig = Field(
+        default_factory=SurfaceSendPolicyConfig
+    )
     telegram: SurfaceTelegramConfigInput = Field(
         default_factory=SurfaceTelegramConfigInput
     )
@@ -165,12 +151,7 @@ def surface_config_from_input(
     *,
     channel_routes: list[SurfaceChannelRoute],
 ) -> SurfaceConfig:
-    """Build the domain config from API input (channel routes pre-resolved
-    from agent names by the controller).
-
-    ``slack.dm_agent_by_user`` is deliberately absent: it is written from
-    inside Slack and never carried on a create, which has no one's choices yet.
-    """
+    """Build the domain config from API input."""
     return SurfaceConfig(
         dm_conversation_reset_after_hours=config_input.dm_conversation_reset_after_hours,
         identity=SurfaceIdentityPolicy(
@@ -187,8 +168,8 @@ def surface_config_from_input(
 class SurfaceCreateRequest(BaseModel):
     """Body for `POST /pods/{pod_id}/surfaces` — creates one surface.
 
-    A pod may have several surfaces of the same ``platform`` (different
-    bots/accounts, each routed to its own agent); ``name`` is the stable,
+    A pod may have several surfaces of the same ``platform`` — one bot per
+    agent is the model, not the exception; ``name`` is the stable,
     pod-unique identifier used to address it afterward. When omitted, it
     defaults to the lowercased platform (so the common single-surface-per-
     platform case needs no name at all) — pick an explicit name to create a
@@ -203,7 +184,9 @@ class SurfaceCreateRequest(BaseModel):
     default_agent_name: str | None = None
     account_id: UUID | None = None
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool = True
 
     model_config = ConfigDict(extra="forbid")
@@ -220,7 +203,9 @@ class SurfaceUpdateRequest(BaseModel):
     default_agent_name: str | None = None
     account_id: UUID | None = None
     credential_mode: SurfaceCredentialMode | None = None
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -232,7 +217,9 @@ class TelegramManagedBotSetupRequest(BaseModel):
         description="Pod-unique surface name. Defaults to telegram.",
     )
     default_agent_name: str | None = None
-    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    config: SurfaceBehaviorConfigInput = Field(
+        default_factory=SurfaceBehaviorConfigInput
+    )
     is_enabled: bool = True
 
     model_config = ConfigDict(extra="forbid")
@@ -337,38 +324,6 @@ class AgentSurfaceListResponse(BaseModel):
     items: list[AgentSurfaceResponse]
     limit: int
     next_page_token: str | None = None
-
-
-class UserSurfaceItem(BaseModel):
-    """One of the current user's surfaces (across any pod they belong to)."""
-
-    id: UUID
-    name: str
-    pod_id: UUID
-    platform: SurfacePlatform
-    agent_id: UUID | None = None
-    is_default: bool = False
-
-
-class UserSurfacePlatformGroup(BaseModel):
-    """All of a user's surfaces for one platform. ``conflict`` is true when more
-    than one surface could answer them (they should pick a ``default``)."""
-
-    platform: SurfacePlatform
-    conflict: bool = False
-    default_surface_id: UUID | None = None
-    surfaces: list[UserSurfaceItem]
-
-
-class UserSurfacesResponse(BaseModel):
-    groups: list[UserSurfacePlatformGroup]
-
-
-class SetDefaultSurfaceRequest(BaseModel):
-    """Pick which surface answers this user for ``platform`` when several could."""
-
-    platform: SurfacePlatform
-    surface_id: UUID
 
 
 class SurfaceSendRequest(BaseModel):

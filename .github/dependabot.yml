@@ -3,6 +3,12 @@ version: 2
 # Version updates are intentionally low-frequency and grouped into one PR per
 # ecosystem, including major updates. Security updates remain immediate, but are
 # grouped per ecosystem instead of opening one PR per vulnerable dependency.
+#
+# The limit is 2, not 1, and that is the whole point of it. Every ecosystem
+# declares two groups -- routine and security -- and the limit counts open PRs
+# for the ecosystem, not per group. At 1, an open routine PR held the only slot
+# and the security group had nowhere to go, which is how 28 alerts accumulated
+# under a config that reads as correct.
 updates:
   - package-ecosystem: uv
     directories:
@@ -16,7 +22,7 @@ updates:
       interval: monthly
       time: "04:00"
       timezone: Asia/Kolkata
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     groups:
       python-routine-updates:
         applies-to: version-updates
@@ -33,7 +39,7 @@ updates:
       interval: monthly
       time: "04:15"
       timezone: Asia/Kolkata
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     groups:
       javascript-routine-updates:
         applies-to: version-updates
@@ -48,7 +54,7 @@ updates:
       interval: monthly
       time: "04:30"
       timezone: Asia/Kolkata
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     groups:
       github-actions-updates:
         applies-to: version-updates
@@ -56,6 +62,17 @@ updates:
       github-actions-security-updates:
         applies-to: security-updates
         patterns: ["*"]
+    # `dtolnay/rust-toolchain`'s tag is not the action's version, it is the Rust
+    # version the action installs -- so Dependabot reads the newest Rust release
+    # tag on the action repository and proposes it as an upgrade. It proposed
+    # 1.100.0, which is not a Rust release at all, and every desktop job in the
+    # group PR died with "could not download nonexistent rust version". Worse,
+    # a tag that *does* exist would be just as wrong: rust-toolchain.toml pins
+    # the channel, the two must agree, and Dependabot only ever moves one of
+    # them. Bumping Rust here is the deliberate two-file change CONTRIBUTING
+    # describes, not something to receive monthly.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
 
   - package-ecosystem: docker
     directories:
@@ -65,11 +82,29 @@ updates:
       interval: monthly
       time: "04:45"
       timezone: Asia/Kolkata
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     groups:
       docker-updates:
         applies-to: version-updates
         patterns: ["*"]
       docker-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # `desktop` is a cargo workspace and was covered by no entry, so a Rust
+  # advisory had nothing to open a PR against -- the `glib` alert sat with no
+  # possible fix. The lockfile is at the workspace root.
+  - package-ecosystem: cargo
+    directory: /desktop
+    schedule:
+      interval: monthly
+      time: "05:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 2
+    groups:
+      rust-routine-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      rust-security-updates:
         applies-to: security-updates
         patterns: ["*"]

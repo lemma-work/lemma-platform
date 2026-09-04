@@ -4,7 +4,11 @@ from typing import Any
 from unittest.mock import MagicMock
 from uuid import UUID
 
+import httpx
+import pytest
+
 from lemma_sdk import POD_DEFAULT_AGENT_SELECTOR, Lemma
+from lemma_sdk.errors import LemmaServerError
 from lemma_sdk.openapi_client.models.agent_run_start_response import (
     AgentRunStartResponse,
 )
@@ -31,7 +35,7 @@ class StubTransport:
                 "kwargs": kwargs,
             }
         )
-        return None
+        return
 
     def close(self) -> None:
         pass
@@ -169,3 +173,52 @@ def test_retry_stream_starts_then_streams_the_returned_run():
         str(start.conversation_id),
         agent_run_id=str(start.agent_run_id),
     )
+
+
+CONVERSATION_ID = "33333333-3333-4333-8333-333333333333"
+
+
+def _streaming_pod(handler: Any) -> tuple[Any, list[httpx.Request]]:
+    """A pod whose transport answers over a mocked httpx transport, so the real
+    streaming path (timeouts, draining, closing) runs."""
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    lemma = Lemma(token="token", base_url="https://api.example.test")
+    lemma._transport.generated.set_httpx_client(
+        httpx.Client(
+            transport=httpx.MockTransport(record),
+            base_url="https://api.example.test",
+        )
+    )
+    return lemma.pod("22222222-2222-4222-8222-222222222222"), seen
+
+
+def test_send_waits_out_the_whole_run_with_no_read_deadline():
+    # The send endpoint streams runtime events until the run completes. Reading
+    # them through a 30s-deadline buffered call is what made every agent run
+    # longer than half a minute raise LemmaTimeoutError.
+    frames = b"event: token\ndata: {}\n\nevent: run.completed\ndata: {}\n\n"
+    pod, seen = _streaming_pod(
+        lambda _: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=frames
+        )
+    )
+
+    assert pod.conversations.send(CONVERSATION_ID, "Classify ticket rec-1") is None
+
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].extensions["timeout"]["read"] is None
+
+
+def test_send_does_not_start_a_second_run_when_the_gateway_fails():
+    pod, seen = _streaming_pod(lambda _: httpx.Response(504))
+
+    with pytest.raises(LemmaServerError):
+        pod.conversations.send(CONVERSATION_ID, "Classify ticket rec-1")
+
+    assert len(seen) == 1

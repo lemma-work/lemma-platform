@@ -168,6 +168,7 @@ pub struct LemmaMcpEndpoint {
     transport: McpTransport,
     accepted: Arc<Mutex<Vec<String>>>,
     scripted: Arc<Mutex<Vec<ScriptedFailure>>>,
+    polls: Arc<Mutex<u32>>,
 }
 
 /// A failure to serve instead of the next real answer.
@@ -197,8 +198,34 @@ pub enum McpTransport {
     ServerSentEvents,
 }
 
+/// The tool that parks, and the durable id it parks under.
+pub const PARK_TOOL: &str = "lemma_park";
+pub const PARK_CALL_ID: &str = "parked-call-1";
+const PARKED_POLLS_BEFORE_DECISION: u32 = 2;
+
+async fn interaction_poll(
+    axum::extract::State(state): axum::extract::State<McpState>,
+    axum::extract::Path((_conversation_id, tool_call_id)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut polls = state.polls.lock().unwrap();
+    *polls += 1;
+    let answered = *polls > PARKED_POLLS_BEFORE_DECISION;
+    drop(polls);
+    if !answered {
+        return axum::http::StatusCode::NO_CONTENT.into_response();
+    }
+    axum::Json(json!({
+        "success": true,
+        "answers": {"Pick one": "Blue"},
+        "decided_for": tool_call_id,
+    }))
+    .into_response()
+}
+
 #[derive(Clone)]
 struct McpState {
+    polls: Arc<Mutex<u32>>,
     requests: Arc<Mutex<Vec<McpRequestRecord>>>,
     deletes: Arc<Mutex<Vec<Option<String>>>>,
     transport: McpTransport,
@@ -210,6 +237,11 @@ struct McpState {
 }
 
 impl LemmaMcpEndpoint {
+    /// How many times the bridge asked whether the parked call was decided.
+    pub fn interaction_polls(&self) -> u32 {
+        *self.polls.lock().unwrap()
+    }
+
     /// # Panics
     /// If the listener cannot bind.
     pub async fn start(transport: McpTransport) -> Self {
@@ -217,7 +249,9 @@ impl LemmaMcpEndpoint {
         let deletes = Arc::new(Mutex::new(Vec::new()));
         let accepted = Arc::new(Mutex::new(vec![format!("Bearer {MCP_BEARER}")]));
         let scripted = Arc::new(Mutex::new(Vec::new()));
+        let polls = Arc::new(Mutex::new(0u32));
         let state = McpState {
+            polls: Arc::clone(&polls),
             requests: Arc::clone(&requests),
             deletes: Arc::clone(&deletes),
             transport,
@@ -228,6 +262,14 @@ impl LemmaMcpEndpoint {
             .route(
                 "/agent-runtime/conversations/{conversation_id}/mcp",
                 post(mcp_post).delete(mcp_delete),
+            )
+            // What Lemma answers a bridge that is holding a parked tool
+            // response open: 204 while the person is still deciding, then the
+            // decision. Two 204s first, so the test proves the bridge actually
+            // waits rather than happening to ask once after the answer landed.
+            .route(
+                "/agent-runtime/conversations/{conversation_id}/interactions/{tool_call_id}",
+                axum::routing::get(interaction_poll),
             )
             .with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -244,6 +286,7 @@ impl LemmaMcpEndpoint {
             transport,
             accepted,
             scripted,
+            polls,
         }
     }
 
@@ -389,6 +432,15 @@ async fn mcp_post(
                     "required": ["text"],
                 },
                 "_meta": {"lemma_tool_name": "echo"},
+            }, {
+                // The parking tool has to be *offered*, not merely answered: an
+                // agent cannot call a tool it was never shown, which is exactly
+                // how the first real-provider run of this failed.
+                "name": PARK_TOOL,
+                "description":
+                    "Ask the user a question and wait for their answer.",
+                "inputSchema": {"type": "object", "properties": {}},
+                "_meta": {"lemma_tool_name": "ask_user"},
             }]},
         }),
         "tools/call" => {
@@ -400,7 +452,20 @@ async fn mcp_post(
                 .pointer("/params/arguments/text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if name == ECHO_TOOL {
+            if name == PARK_TOOL {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": "{\"parked\":true}"}],
+                        "structuredContent": {
+                            "success": true,
+                            "parked_tool_call_id": PARK_CALL_ID,
+                        },
+                        "isError": false,
+                    },
+                })
+            } else if name == ECHO_TOOL {
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -542,6 +607,18 @@ struct ControlState {
     permission_answer: PermissionAnswer,
     published: Arc<Mutex<Option<(Uuid, String)>>>,
     start_sent: Arc<AtomicBool>,
+    /// The `START_RUN` we are offering, until the host acknowledges it.
+    ///
+    /// A real control plane redelivers a command until it comes back in a
+    /// poll's `acknowledged_command_ids`; this used to be a one-shot bool, marked the moment
+    /// the command was written into a response body. A response that never
+    /// arrived -- a dropped connection, a poll cancelled under load -- took the
+    /// run with it, permanently: nothing re-offered it, so the test waited its
+    /// whole 90s for events from a run that was never started. That is the
+    /// `published=Some(..), start_sent=true, events=[]` failure.
+    start_command: Arc<Mutex<Option<Uuid>>>,
+    /// Drop the first response that carries a command, as a lost one would be.
+    drop_first_command: Arc<AtomicBool>,
     /// Streamed text that, once seen, makes the next poll cancel the run.
     ///
     /// Keyed on the agent's own output so the cancel lands mid-turn, while the
@@ -563,6 +640,46 @@ struct ControlState {
     decisions: Arc<Mutex<Vec<DecisionSnapshot>>>,
     events: Arc<Mutex<Vec<Event>>>,
     snapshots: Arc<Mutex<Vec<Value>>>,
+    /// Commands the host refused, and why.
+    ///
+    /// The poll body carries these and this double used to take no body at
+    /// all, so the one field that explains a run which never starts was
+    /// discarded on arrival. A `START_RUN` rejected as `HARNESS_NOT_FOUND` is
+    /// permanent -- `retryable: false`, and this double sends `START_RUN`
+    /// exactly once -- and presented as a 90-second wait for a terminal event
+    /// that was never coming, with nothing anywhere saying why.
+    rejections: Arc<Mutex<Vec<Value>>>,
+    /// The id assigned to each harness key, once and for the life of this
+    /// control plane.
+    ///
+    /// `agent_host_harnesses` is unique on `(host_id, harness_key)` -- see
+    /// `uq_agent_host_harness_key` -- so the real backend upserts a row and a
+    /// harness keeps one id for as long as the host does. This double used to
+    /// mint a fresh `Uuid::new_v4()` per snapshot on *every* publish, which is
+    /// the whole of an intermittent 90-second hang:
+    ///
+    /// The host re-publishes whenever a harness changes state. `published` was
+    /// then updated to an id the host had not yet been told about -- the
+    /// publish response carrying it was still in flight -- and a poll landing
+    /// in that window sent `START_RUN` naming it. `handle_start` looks the id
+    /// up in the map built from the *last* response, does not find it, and
+    /// fails with "command references an unknown harness".
+    ///
+    /// Which is permanent. `command_rejection` classifies it as
+    /// `HARNESS_NOT_FOUND` with `retryable: false`, and `start_sent` means this
+    /// double sends `START_RUN` exactly once -- so nothing was ever going to
+    /// arrive after it, and the test waited out its full 90 seconds for a
+    /// terminal event with `events=[]`.
+    ///
+    /// Measured at a 5ms window, hit whenever an adapter install happened to
+    /// finish inside it.
+    harness_ids: Arc<Mutex<BTreeMap<String, Uuid>>>,
+    /// Where the host process writes its own log, once one is running.
+    ///
+    /// Registered by `HostProcess::start` so a timeout can quote it. The tests
+    /// keep the host in a `TempDir` that unwinding deletes, so by the time a
+    /// panic reaches a human the log is already gone.
+    host_log: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl ControlPlane {
@@ -584,6 +701,8 @@ impl ControlPlane {
             permission_answer,
             published: Arc::new(Mutex::new(None)),
             start_sent: Arc::new(AtomicBool::new(false)),
+            start_command: Arc::new(Mutex::new(None)),
+            drop_first_command: Arc::new(AtomicBool::new(false)),
             cancel_after: Arc::new(Mutex::new(None)),
             cancel_sent: Arc::new(AtomicBool::new(false)),
             refresh_after: Arc::new(Mutex::new(None)),
@@ -592,12 +711,15 @@ impl ControlPlane {
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
             snapshots: Arc::new(Mutex::new(Vec::new())),
+            rejections: Arc::new(Mutex::new(Vec::new())),
+            harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
+            host_log: Arc::new(Mutex::new(None)),
         };
         let app = Router::new()
-            .route("/agent-host/pairings:complete", post(pairing))
+            .route("/agent-host/pairings/complete", post(pairing))
             .route("/agent-host/harnesses", put(publish))
             .route("/agent-host/poll", post(poll))
-            .route("/agent-host/events:append", post(append_events))
+            .route("/agent-host/events/append", post(append_events))
             .with_state(state.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -617,6 +739,11 @@ impl ControlPlane {
     ///
     /// # Panics
     /// If the mutex is poisoned.
+    /// Arm the stub to lose the first response that carries a command.
+    pub fn lose_the_first_command(&self) {
+        self.state.drop_first_command.store(true, Ordering::SeqCst);
+    }
+
     pub fn cancel_when_text_contains(&self, marker: &str) {
         *self.state.cancel_after.lock().unwrap() = Some(marker.to_owned());
     }
@@ -673,6 +800,24 @@ impl ControlPlane {
         self.state.decisions.lock().unwrap().clone()
     }
 
+    /// Commands the host refused, and why.
+    ///
+    /// # Panics
+    /// If the rejection mutex is poisoned.
+    #[must_use]
+    pub fn rejections(&self) -> Vec<Value> {
+        self.state.rejections.lock().unwrap().clone()
+    }
+
+    /// Tell this control plane where the host writes its log, so a timeout can
+    /// quote it.
+    ///
+    /// # Panics
+    /// If the mutex is poisoned.
+    pub fn watch_host_log(&self, path: &Path) {
+        *self.state.host_log.lock().unwrap() = Some(path.to_path_buf());
+    }
+
     #[must_use]
     pub fn permission_requests(&self) -> Vec<Event> {
         self.events()
@@ -702,9 +847,57 @@ impl ControlPlane {
         let published = self.state.published.lock().unwrap().clone();
         panic!(
             "timed out waiting for {what}; published={published:?}, \
-             start_sent={}, events={kinds:?}",
+             start_sent={}, events={kinds:?}{}{}",
             self.state.start_sent.load(Ordering::SeqCst),
+            self.rejection_summary(),
+            self.host_log_tail(),
         );
+    }
+
+    /// What the host refused, if anything, phrased as the answer to "why is
+    /// this run not running".
+    fn rejection_summary(&self) -> String {
+        let rejections = self.rejections();
+        if rejections.is_empty() {
+            return String::new();
+        }
+        let described = rejections
+            .iter()
+            .map(|rejection| {
+                format!(
+                    "{} (retryable={}) {}",
+                    rejection["code"].as_str().unwrap_or("?"),
+                    rejection["retryable"].as_bool().unwrap_or(false),
+                    rejection["detail"].as_str().unwrap_or(""),
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "\n  the host REFUSED {} command(s): {described:?}\n  \
+             A refusal with retryable=false is permanent, and this control \
+             plane sends START_RUN exactly once, so nothing was ever going to \
+             arrive after it.",
+            rejections.len(),
+        )
+    }
+
+    /// The last of the host's own log.
+    ///
+    /// Only the tail: these logs run to thousands of lines at
+    /// `lemma_agent_host=debug`, and a panic message nobody can read is worth
+    /// about as much as the one that said nothing.
+    fn host_log_tail(&self) -> String {
+        const LINES: usize = 40;
+        let path = self.state.host_log.lock().unwrap().clone();
+        let Some(path) = path else {
+            return String::new();
+        };
+        let Ok(log) = std::fs::read_to_string(&path) else {
+            return format!("\n  (no host log at {})", path.display());
+        };
+        let lines = log.lines().collect::<Vec<_>>();
+        let tail = lines[lines.len().saturating_sub(LINES)..].join("\n    ");
+        format!("\n  last {LINES} lines of the host log:\n    {tail}")
     }
 }
 
@@ -742,7 +935,20 @@ async fn publish(
     let items = snapshots
         .iter()
         .map(|snapshot| {
-            let id = Uuid::new_v4();
+            // One id per harness key, for the life of this control plane. See
+            // `ControlState::harness_ids` for what minting a fresh one per
+            // publish cost.
+            let id = *state
+                .harness_ids
+                .lock()
+                .unwrap()
+                .entry(
+                    snapshot["harness_key"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+                .or_insert_with(Uuid::new_v4);
             if snapshot["harness_key"].as_str() == Some(state.harness_key.as_str())
                 && snapshot["health"].as_str() == Some("READY")
             {
@@ -768,12 +974,44 @@ async fn publish(
 async fn poll(
     State(state): State<ControlState>,
     headers: HeaderMap,
+    Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     require_auth(&headers)?;
+    // Kept, not ignored. See `ControlState::rejections`.
+    if let Some(rejections) = body.get("rejections").and_then(Value::as_array)
+        && !rejections.is_empty()
+    {
+        state
+            .rejections
+            .lock()
+            .unwrap()
+            .extend(rejections.iter().cloned());
+    }
+    // Command acknowledgements, which is how a real control plane learns a
+    // command landed. Without reading these the stub cannot tell "delivered"
+    // from "written into a response that never arrived".
+    let acked: Vec<Uuid> = body
+        .get("acknowledged_command_ids")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str())
+                .filter_map(|id| Uuid::parse_str(id).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !acked.is_empty()
+        && let Some(offered) = *state.start_command.lock().unwrap()
+        && acked.contains(&offered)
+    {
+        state.start_sent.store(true, Ordering::SeqCst);
+    }
+
     let mut commands = Vec::new();
     let published = state.published.lock().unwrap().clone();
+
     if let Some((harness_id, revision)) = published
-        && !state.start_sent.swap(true, Ordering::SeqCst)
+        && !state.start_sent.load(Ordering::SeqCst)
     {
         let payload = serde_json::to_value(RunSpec {
             agent_run_id: state.run_id,
@@ -788,10 +1026,19 @@ async fn poll(
             context: BTreeMap::new(),
             mcp: state.mcp.clone(),
             run_deadline: Utc::now() + chrono::Duration::minutes(3),
+            system_prompt_delivery: None,
         })
         .unwrap();
+        // One id across every redelivery: the host acknowledges by id, and a
+        // fresh id each time would make an ack for the copy that landed fail to
+        // match the copy we are still offering.
+        let command_id = *state
+            .start_command
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Uuid::new_v4);
         commands.push(json!({
-            "command_id": Uuid::new_v4(),
+            "command_id": command_id,
             "kind": "START_RUN",
             "created_at": Utc::now(),
             "expires_at": Utc::now() + chrono::Duration::minutes(2),
@@ -878,6 +1125,12 @@ async fn poll(
             }));
         }
     }
+    if !commands.is_empty() && state.drop_first_command.swap(false, Ordering::SeqCst) {
+        // The response the host never received. A real one is lost to a dropped
+        // connection or a poll cancelled under load; the effect is the same, and
+        // the command has to be offered again.
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     Ok(Json(json!({
         "protocol_version": 2,
         "host_status": "ONLINE",
@@ -951,6 +1204,16 @@ impl HostProcess {
             // Adapter resolution reads this before PATH, so the pinned
             // manifest's native adapters resolve to the scripted agent.
             .env("LEMMA_AGENT_HOST_PATH", &shims.directory)
+            // Hermetic means hermetic. Without this every host in this suite
+            // npm-installed the Codex and Claude Agent adapters from the public
+            // registry, and discovery then probed them -- launching the
+            // developer's own Codex and Claude Code, which the README puts
+            // behind `#[ignore]` as release qualification rather than CI.
+            //
+            // It also made the suite time-variable in a way that mattered: an
+            // install landing mid-test makes the host re-publish its harnesses,
+            // which is what used to strand a run.
+            .env("LEMMA_AGENT_HOST_SKIP_ADAPTER_DOWNLOAD", "1")
             .env("RUST_LOG", "lemma_agent_host=debug")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -958,6 +1221,11 @@ impl HostProcess {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
+        // So a `wait_for` timeout can quote the host's own account of what it
+        // did. The tests keep this whole directory in a `TempDir`, which
+        // unwinding deletes -- so without this the log is gone by the time
+        // anybody reads the panic.
+        control.watch_host_log(&stderr_path);
         Self { child, stderr_path }
     }
 

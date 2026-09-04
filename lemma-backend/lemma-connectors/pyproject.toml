@@ -1,6 +1,6 @@
 [project]
 name = "lemma-connectors"
-version = "0.7.0"
+version = "0.7.1"
 description = "OpenAPI-native native connector packages for Lemma"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -14,9 +14,23 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "datamodel-code-generator>=0.56.1",
+    # The floor is a security bound, not a preference: eleven advisories sat
+    # against 0.56.1 -- code injection via unescaped input and arbitrary local
+    # file read among them -- and 0.64.0 is the highest first-patched version
+    # across them. Below this the generator is exploitable by a hostile spec.
+    "datamodel-code-generator>=0.64.0",
     "openapi-python-client>=0.29.0",
 ]
+
+# Ruff, scoped. The generated OpenAPI clients under */generated/** carry many
+# pre-existing findings that are not worth chasing -- the Slack client alone
+# reports 75 undefined-name errors from its `Unset`/`UNSET` sentinel pattern --
+# but the hand-written code around them was going unlinted as a result. That is
+# how `LazyToolMap.get_tool` came to raise a name it never imported: every
+# lookup miss produced a NameError instead of ToolNotFoundError, and no gate
+# looked. Excluding the generated trees makes the rest enforceable.
+[tool.ruff]
+extend-exclude = ["src/lemma_connectors/*/generated/**"]
 
 [build-system]
 requires = ["hatchling"]

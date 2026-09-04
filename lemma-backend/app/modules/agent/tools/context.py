@@ -7,10 +7,8 @@ without importing anything from the old agent module.
 
 from __future__ import annotations
 
-import os
 from uuid import UUID
 
-import aiofiles
 from pydantic import BaseModel, Field
 
 from app.modules.agent.domain.context import AgentContext
@@ -19,8 +17,11 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.subscription_models_provider import (
     resolve_subscription_models,
 )
-from app.modules.agent.services.workspace_location import ProjectRepo
-from app.composition.agent_workspace import WorkspaceFileManager
+from app.modules.agent.services.workspace_location import (
+    ProjectRepo,
+    pod_cwd_from_workspace_cwd,
+)
+from app.modules.workspace.contracts.tooling import WorkspaceFileManager
 
 
 class BaseAgentContext(AgentContext):
@@ -83,9 +84,13 @@ class BaseAgentContext(AgentContext):
 
     def get_pod_cwd(self) -> str:
         # Callers on the main run path always set `pod_cwd` explicitly (see
-        # `resolve_pod_cwd`); this conversation_id-based fallback only covers
-        # secondary context-construction sites that haven't set it.
-        return self.pod_cwd or f"/me/conversations/{self.conversation_id}"
+        # `resolve_pod_cwd`); this fallback only covers secondary
+        # context-construction sites that haven't set it. It mirrors the
+        # workspace cwd rather than naming the conversation id, because the two
+        # directories are meant to be the same short path under two roots -- a
+        # fallback of its own shape scattered pod writes under
+        # `/me/conversations/<uuid>`, where nothing else ever looks.
+        return self.pod_cwd or pod_cwd_from_workspace_cwd(self.get_workspace_cwd())
 
     def get_workspace_scope_key(self) -> str:
         return f"workspace:{self.workspace_id}:conversation:{self.conversation_id}"
@@ -110,11 +115,3 @@ class BaseToolResponse(BaseModel):
         default=None,
         description="Human-readable status or follow-up information for the tool call.",
     )
-
-
-async def get_prompt(prompt_name: str) -> str:
-    """Load an Agent prompt by name."""
-    current_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    path = os.path.join(current_dir, f"prompts/{prompt_name}.md")
-    async with aiofiles.open(path, "r") as file:
-        return await file.read()

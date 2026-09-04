@@ -1,8 +1,13 @@
+import base64
+import binascii
+import json
+import time
 from uuid import UUID
 from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
+from supertokens_python.exceptions import SuperTokensError
 from supertokens_python.recipe.session.exceptions import (
     InvalidClaimsError,
     TryRefreshTokenError,
@@ -22,12 +27,104 @@ from app.core.auth_state_cache import (
     get_account_standing,
     set_account_standing,
 )
-from app.composition.app_session import maybe_record_app_session
+from app.core.analytics.app_session import maybe_record_app_session
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
 
 logger = get_logger(__name__)
+
+
+# How far past its expiry an access token has to be before the expiry itself is
+# the suspicious part.
+#
+# Minutes are ordinary: a token expires, the client refreshes, and a request in
+# flight over the boundary answers 401 once. Hours are not. A token that was
+# minted seconds ago and is already hours expired means the clock that signed it
+# and the clock reading it disagree — which no amount of refreshing fixes,
+# because every replacement token comes from the same wrong clock. That state
+# used to be completely silent: the loop it produces logs a wall of 401s and not
+# one line saying why.
+CLOCK_SKEW_SUSPECT_SECONDS = 300
+
+# How often that observation is worth repeating.
+#
+# The state it reports is a loop: every request in it carries the same expired
+# token, so an un-throttled warning is hundreds of identical lines a minute --
+# which is the log flood this whole branch exists to stop, arriving from the
+# other side. One line a minute is enough to see it and enough to date it.
+CLOCK_SKEW_REPORT_INTERVAL_SECONDS = 60
+
+
+class _ReportThrottle:
+    """Lets one observation through per interval, and swallows the rest.
+
+    An object rather than a module-level counter and a `global`: the decision is
+    then something a test can drive directly, and the state has an owner.
+    """
+
+    __slots__ = ("_interval_seconds", "_last_at")
+
+    def __init__(self, interval_seconds: float) -> None:
+        self._interval_seconds = interval_seconds
+        self._last_at = -interval_seconds
+
+    def should_report(self, now: float) -> bool:
+        """`now` is monotonic, so a corrected wall clock cannot push the next
+        report into the far future."""
+        if now - self._last_at < self._interval_seconds:
+            return False
+        self._last_at = now
+        return True
+
+    def reset(self) -> None:
+        self._last_at = -self._interval_seconds
+
+
+# Process-local by design: this describes the machine, not a request.
+_skew_reports = _ReportThrottle(CLOCK_SKEW_REPORT_INTERVAL_SECONDS)
+
+
+def _unverified_token_expiry(connection: HTTPConnection) -> float | None:
+    """The `exp` the presented access token claims, without verifying it.
+
+    Only ever read after verification has already failed, and only to describe
+    the failure. Nothing is authorized on the strength of it.
+    """
+    token = connection.cookies.get("sAccessToken")
+    if not token:
+        header = connection.headers.get("authorization", "")
+        if header.lower().startswith("bearer "):
+            token = header[7:].strip()
+    if not token:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except binascii.Error, ValueError, UnicodeDecodeError:
+        return None
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    return float(expiry) if isinstance(expiry, (int, float)) else None
+
+
+def _report_expired_access_token(connection: HTTPConnection) -> None:
+    """Say so when a token is expired by more than an expiry explains."""
+    expiry = _unverified_token_expiry(connection)
+    if expiry is None:
+        return
+    expired_by_seconds = int(time.time() - expiry)
+    if expired_by_seconds < CLOCK_SKEW_SUSPECT_SECONDS:
+        return
+    if not _skew_reports.should_report(time.monotonic()):
+        return
+    logger.warning(
+        "identity.session.access_token_expiry_implausible.degraded",
+        expired_by_seconds=expired_by_seconds,
+    )
 
 
 async def _get_local_auth_state(user_id: UUID) -> AccountStanding | None:
@@ -93,16 +190,11 @@ EXCLUDED_PATHS = (
     "/surfaces/teams/admin-consent/callback",  # surface consent callback
     "/surfaces/webhooks",  # surface webhook endpoints
     "/webhooks",
-    # Internal scheduler job API: reached service-to-service with no user
-    # session, so the router enforces its own bearer token instead
-    # (`require_scheduler_token`). Excluding it here is what lets that
-    # dependency be the single gate rather than one of two.
-    "/scheduler/jobs",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
     # A paired computer has no user session and never will: it authenticates
     # with its own host secret, which `_authenticated_host` checks on every one
-    # of these routes, and `pairings:complete` is authenticated by the one-time
+    # of these routes, and `pairings/complete` is authenticated by the one-time
     # pairing code it consumes. Requiring a session here 401s the only caller
     # these routes have. The user-facing host routes are under `/me/runtime/...`
     # and stay session-protected.
@@ -189,13 +281,13 @@ async def verify_auth(connection: HTTPConnection):
     ):
         return
 
-    if connection.scope["type"] != "http" and (
-        connection.url.path.startswith("/workspace/browser")
-        or _is_datastore_changes_ws_path(connection.url.path)
-    ):
-        return
-
     if connection.scope["type"] != "http":
+        # WebSockets: two of them carry their own authentication, and nothing
+        # else on a non-HTTP scope is authenticated here at all.
+        if connection.url.path.startswith(
+            "/workspace/browser"
+        ) or _is_datastore_changes_ws_path(connection.url.path):
+            return
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
@@ -292,26 +384,61 @@ async def verify_auth(connection: HTTPConnection):
         # This exception is raised when the access token has expired.
         # SuperTokens frontend SDKs handle the refresh flow, but for an API client,
         # we return 401 so they know to refresh.
+        _report_expired_access_token(connection)
         raise HTTPException(
             status_code=401,
             detail="Access token has expired. Please refresh your session.",
         )
+    except HTTPException:
+        # Already classified above (403 for an inactive account, an unverified
+        # email, revoked delegation) or by SuperTokens' own machinery.
+        raise
+    except SuperTokensError as e:
+        # The ordinary answer to a request without a valid session: no token, a
+        # malformed one, a revoked one. Same 401 as before and deliberately no
+        # record -- one per unauthenticated request is the volume that would
+        # bury the arm below, which is the one worth reading.
+        raise HTTPException(status_code=401, detail="Unauthorized") from e
     except Exception as e:
-        # Catch-all for other auth errors (e.g. malformed token) provided by SuperTokens or logic
-        # If get_session raises a 401-like exception (Unauthorised), FastAPI handles it.
-        # But if it's a generic error, we log and deny.
-        # Note: get_session(session_required=True) raises supertokens_python.exceptions.SuperTokensError mostly
-        # creating a proper 401 response.
+        # Everything else is this deployment failing, not the caller: the
+        # SuperTokens core unreachable, a JWKS fetch that did not come back, a
+        # key that does not match. It still answers 401, because a request
+        # whose identity could not be established must not proceed -- but the
+        # client's reaction to a 401 is to discard a working session and ask
+        # for a new one, so the server has to be the one that knows better.
+        #
+        # This was `logger.debug` with no exception, on the hottest path in the
+        # service. At LOG_LEVEL=INFO the record was dropped before formatting,
+        # so a core outage looked exactly like a wave of bad tokens and there
+        # was nothing server-side to say otherwise.
+        logger.warning(
+            "security.auth_dependency.unexpected_failure.degraded",
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        # `from e` so the traceback keeps the frame that actually failed.
+        raise HTTPException(status_code=401, detail="Unauthorized") from e
 
-        # We check if it's already an HTTPException (like 401 from SuperTokens machinery if any)
-        if isinstance(e, HTTPException):
-            raise e
 
-        logger.debug("security.security.auth_dependency.observed")
-        # If we reached here, and authentication failed but didn't raise, we force 401.
-        # However, get_session(session_required=True) *should* send a response or raise.
-        # SuperTokens often sends a response directly which stops execution?
-        # In FastAPI integration, it usually raises an exception that is handled by exception handlers.
+async def supertokens_core_reachable() -> bool:
+    """Can this process reach the SuperTokens core it verifies sessions against?
 
-        # Re-raising generic exception as 401 for safety if not handled
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    ``initialize_supertokens`` is configuration only -- it makes no network call
+    -- while ``verify_auth`` above calls the core on *every* authenticated
+    request. So a core that is down leaves readiness at 200 and every API call
+    failing, which is the state PS-OPS-030 says a process must not report itself
+    healthy in.
+
+    ``/hello`` is the core's own liveness route and needs no API key. Never
+    raises: readiness treats "did not answer" and "answered badly" alike, and it
+    is the caller that owns the deadline.
+    """
+    import httpx
+
+    base = settings.supertokens_core_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            response = await client.get(f"{base}/hello")
+        return response.status_code == 200
+    except httpx.HTTPError:
+        return False

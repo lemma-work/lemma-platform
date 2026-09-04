@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
   "description": "The bundled splash/installer page drives setup over IPC. Scoped to the main webview rather than the main window: Local settings is a child webview of that same window, and capability matching is window OR webview, so a window scope here would hand the splash commands to Local settings too.",
-  "webviews": ["main"],
+  "webviews": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "allow-start",
@@ -16,6 +18,9 @@
     "allow-set-connection-mode",
     "allow-get-state",
     "allow-login",
-    "allow-prepare-runtime"
+    "allow-prepare-runtime",
+    "allow-local-recovery-options",
+    "allow-reset-local-data",
+    "allow-reset-full-reinstall"
   ]
 }

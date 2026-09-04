@@ -82,7 +82,9 @@ FUNCTION_CAPABILITIES = frozenset({SandboxCapability.PORT_ACCESS})
 
 def capabilities_for(kind: SandboxKind) -> frozenset[SandboxCapability]:
     return (
-        WORKSPACE_CAPABILITIES if kind is SandboxKind.WORKSPACE else FUNCTION_CAPABILITIES
+        WORKSPACE_CAPABILITIES
+        if kind is SandboxKind.WORKSPACE
+        else FUNCTION_CAPABILITIES
     )
 
 

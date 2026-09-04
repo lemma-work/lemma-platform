@@ -37,6 +37,7 @@ from app.modules.workspace.session_support import (
     canonical_runtime_path as _canonical_runtime_path,
     canonical_workspace_cwd,
     with_backpressure as _with_backpressure,
+    sandbox_is_responsive,
 )
 
 
@@ -45,6 +46,12 @@ logger = get_logger(__name__)
 # How long a pure output poll waits for new bytes. Bounded by write_stdin's own
 # 35s deadline.
 _POLL_YIELD_MS = 30_000
+
+# The whole budget for deciding whether a silent sandbox is still alive. Short
+# on purpose: this runs after a window that already spent 30 seconds telling the
+# caller nothing, and `echo` on a healthy sandbox answers in well under a
+# second, so anything approaching this bound is itself the answer.
+_LIVENESS_PROBE_SECONDS = 8.0
 
 # Stateful interpreters already created, by (sandbox, python session, epoch).
 #
@@ -64,7 +71,6 @@ def forget_python_sessions(logical_id: UUID) -> None:
     """Drop remembered interpreters for a sandbox that is going away."""
     for key in [key for key in _python_sessions_observed if key[0] == logical_id]:
         _python_sessions_observed.pop(key, None)
-
 
 
 class SandboxWorkspaceSession:
@@ -119,6 +125,8 @@ class SandboxWorkspaceSession:
                 lambda: self.client.execute_python(
                     self.logical_id,
                     self.python_session_id,
+                    # Every call: E2B has no interpreter to hold this.
+                    cwd=self._cwd,
                     operation_id=operation_id,
                     code=code,
                     environment=self._environment,
@@ -285,8 +293,8 @@ class SandboxWorkspaceSession:
                     completed=False,
                 )
             return _sandbox_command_failure(
-                error=f"the sandbox runtime {exc.code}: {exc}",
-                retryable=exc.retry.value != "do_not_retry",
+                error=f"the sandbox runtime failed: {describe_exception(exc)}",
+                retryable=isinstance(exc, SandboxUnavailable),
                 process_id=process_id,
             )
         except (httpx.HTTPError, OSError, ValueError) as exc:
@@ -312,9 +320,7 @@ class SandboxWorkspaceSession:
                     if input_accepted
                     else "the sandbox runtime process input outcome is unknown: "
                 )
-                + (
-                    f"{describe_exception(exc)}"
-                ),
+                + (f"{describe_exception(exc)}"),
                 retryable=False,
                 process_id=process_id,
                 completed=False,
@@ -364,7 +370,9 @@ class SandboxWorkspaceSession:
         return [
             {
                 "process_id": str(process.operation_id),
-                "cmd": "",
+                # Empty when the in-sandbox runtime is the source: it tracks
+                # what is running, not how it was asked for.
+                "cmd": getattr(process, "command", None) or "",
                 # Absent when the sandbox runtime is the source: it tracks what
                 # is running, not what a control plane once recorded about how
                 # it was started.
@@ -510,10 +518,12 @@ class SandboxWorkspaceSession:
                         deadline_at=self._deadline(30),
                     )
                 except Exception:
-                    logger.debug(
-                        "workspace.sandbox_session.python_session_delete_failed",
+                    # Leaks a session, not a sandbox: the sweeper reclaims that.
+                    logger.warning(
+                        "workspace.sandbox_session.python_session_delete.degraded",
                         sandbox_id=self.sandbox_id,
                         session_id=self.session_id,
+                        exc_info=True,
                     )
         finally:
             if self._owns_client:
@@ -576,6 +586,13 @@ class SandboxWorkspaceSession:
             operation_id,
             deadline_at=deadline_at,
             yield_time_ms=yield_time_ms,
+            probe_liveness=lambda: sandbox_is_responsive(
+                self.client,
+                self.logical_id,
+                cwd=self._cwd,
+                deadline=self._deadline(_LIVENESS_PROBE_SECONDS),
+                budget_seconds=_LIVENESS_PROBE_SECONDS,
+            ),
         )
 
     @staticmethod

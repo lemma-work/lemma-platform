@@ -18,12 +18,13 @@ from sandbox_runtime.protocol import (
     FunctionRuntimeLease,
     WorkloadKind,
 )
-from sandbox_runtime.errors import SandboxUnavailable
+from sandbox_runtime.errors import SandboxError, SandboxUnavailable
 from app.modules.workspace.services.local_sandbox_client import (
     LocalSandboxClient,
 )
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
@@ -40,6 +41,7 @@ from app.modules.function.domain.entities import (
 
 
 tracer = trace.get_tracer(__name__)
+logger = get_logger(__name__)
 
 
 def endpoint_reuse_seconds() -> int:
@@ -185,6 +187,49 @@ class FunctionRuntimeRouteResolver:
             endpoint=endpoint,
         )
 
+    async def quarantine(
+        self,
+        pod_id: UUID,
+        endpoint: FunctionRuntimeEndpoint,
+    ) -> None:
+        """Drop the endpoint *and* the sandbox behind it, after it stops serving.
+
+        Dropping the cached endpoint alone does not help: the reload adopts the
+        same sandbox, because adoption asks the provider whether the sandbox is
+        running and a sandbox whose runtime process has died is still running.
+        That is exactly what happened -- one slow cold start left a sandbox
+        answering 502 on the runtime port, every later run was handed it, and
+        the outage lasted 100 minutes until someone deleted it by hand. A
+        freshly booted sandbox from the same template answered 404, so the
+        template was sound and the process had died.
+
+        Destroying is safe here in a way it would not be for a workspace: a
+        function sandbox holds no user files, so replacing it costs a cold start
+        and nothing else.
+        """
+        await self.invalidate_for(pod_id, endpoint)
+        client = self._sandbox_client_factory()
+        try:
+            await client.destroy_sandbox(WorkloadKind.FUNCTION, pod_id)
+        except SandboxError, httpx.HTTPError:
+            # Best effort, and deliberately narrow: a provider that cannot be
+            # reached leaves the endpoint evicted anyway, so the next run
+            # re-resolves. Anything not from the sandbox or its transport is a
+            # bug here and should surface rather than be swallowed on a path
+            # that already has a failure in hand.
+            logger.warning(
+                "function.runtime.quarantine_failed",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
+        else:
+            logger.info(
+                "function.runtime.sandbox_quarantined",
+                pod_id=str(pod_id),
+            )
+        finally:
+            await client.close()
+
     async def _load(
         self,
         pod_id: UUID,
@@ -290,7 +335,9 @@ class FunctionRuntimeRouteResolver:
                 or "\n" in item.value
                 or "\x00" in item.value
             ):
-                raise ValueError("the sandbox returned an invalid runtime request header")
+                raise ValueError(
+                    "the sandbox returned an invalid runtime request header"
+                )
             names.add(normalized)
             headers.append((item.name, item.value))
         return tuple(headers)
@@ -374,7 +421,20 @@ class FunctionRuntimeRouteResolver:
         if remaining <= 0:
             return
         server_floor = max(0.0, (retry_after_ms or 0) / 1000)
-        backoff = min(5.0, 0.5 * (2 ** min(attempt, 4)))
+        # 100ms doubling to a 750ms ceiling, not 500ms doubling to 5s.
+        #
+        # This is a poll for "is the sandbox serving yet", and the old ladder
+        # slept 0.5, 1, 2, 4, 5 -- so four waits was 7.5 to 9 seconds of pure
+        # sleeping, on top of however long the sandbox actually took. A boot
+        # that finishes at 2.1s was not noticed until 3.5s, and the overshoot
+        # grew with every attempt. The caller is a user waiting on a synchronous
+        # function call, so the cost of asking again is a cheap local check and
+        # the cost of asking late is the whole request.
+        #
+        # The ceiling still matters: `retry_after_ms` from the provider is
+        # honoured as a floor above it, so a sandbox that says "not for 5
+        # seconds" is still believed.
+        backoff = min(0.75, 0.1 * (2 ** min(attempt, 3)))
         delay = max(server_floor, backoff) * random.uniform(1.0, 1.2)
         await asyncio.sleep(min(delay, remaining))
 

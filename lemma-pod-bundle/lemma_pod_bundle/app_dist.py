@@ -89,6 +89,6 @@ def dist_is_portable(dist_archive: bytes | Path, *, pod_id: str) -> bool:
                 content = archive.read(info).lower()
                 if any(needle in content for needle in needles):
                     return False
-    except (zipfile.BadZipFile, OSError, KeyError):
+    except zipfile.BadZipFile, OSError, KeyError:
         return False
     return True

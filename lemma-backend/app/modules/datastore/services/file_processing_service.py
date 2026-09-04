@@ -55,6 +55,10 @@ from app.modules.datastore.infrastructure.storage_paths import (
 )
 from app.modules.datastore.services.files.page_markers import parse_page_offsets
 from app.modules.datastore.services.files.projection import FileProjection
+from app.modules.datastore.services.search.indexing_availability import (
+    sanitize_processing_error,
+    warn_if_a_facility_is_absent,
+)
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
@@ -136,16 +140,6 @@ class DatastoreFileProcessingService:
         mime_type = self._base_mime_type(file_entity)
         return mime_type in _CONVERTED_MARKDOWN_MIME_TYPES if mime_type else False
 
-    @staticmethod
-    def _sanitize_error(exc: Exception) -> str:
-        """Return a safe, user-facing error string for storage in the DB.
-
-        Provider bodies, object keys, SQL, URLs, and credentials may all appear
-        in an exception message. Persist only the failure class and a stable
-        summary; detailed diagnostics belong in redacted structured telemetry.
-        """
-        return f"{type(exc).__name__}: document processing failed"
-
     async def process_file_async(
         self,
         file_id: UUID,
@@ -162,7 +156,7 @@ class DatastoreFileProcessingService:
             file_entity = await files.get_model(file_id)
             if file_entity is None:
                 logger.debug(
-                    'datastore.file_processing_service.file_s_not_found_processing.diagnostic',
+                    "datastore.file_processing_service.file_s_not_found_processing.diagnostic",
                     file_id=file_id,
                 )
                 return
@@ -186,7 +180,7 @@ class DatastoreFileProcessingService:
                 await self.search_service.remove_file(file_id)
             except Exception:
                 logger.debug(
-                    'datastore.file_processing_service.removing_search_projection_s.diagnostic',
+                    "datastore.file_processing_service.removing_search_projection_s.diagnostic",
                     file_id=file_id,
                     exc_info=True,
                 )
@@ -201,7 +195,7 @@ class DatastoreFileProcessingService:
         size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
         if self._exceeds_size_limit(size_bytes, max_file_bytes):
             logger.debug(
-                'datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic',
+                "datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic",
                 file_id=file_id,
                 size_bytes=size_bytes,
                 max_file_bytes=max_file_bytes,
@@ -326,10 +320,10 @@ class DatastoreFileProcessingService:
             raise
         except Exception as exc:
             logger.debug(
-                'datastore.file_processing_service.search_processing_s.propagated',
+                "datastore.file_processing_service.search_processing_s.propagated",
                 file_id=file_id,
-            exc_info=True,
-        )
+                exc_info=True,
+            )
             async with self._file_repo() as files:
                 missing_original = isinstance(
                     exc, (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError)
@@ -343,8 +337,9 @@ class DatastoreFileProcessingService:
                     file_id,
                     content_sha256=content_sha256,
                     processing_attempt=processing_attempt,
-                    error=self._sanitize_error(exc),
+                    error=sanitize_processing_error(exc),
                 )
+            warn_if_a_facility_is_absent(exc, pod_id=self.pod_id)
             logger.debug(
                 "datastore.file_processing_service.datastore_persisted_s_file_s.observed",
                 file_id=file_id,
@@ -385,7 +380,7 @@ class DatastoreFileProcessingService:
 
         # Stream the source to a temp file instead of buffering the whole file in
         # memory. The processor extracts from the path (Kreuzberg streams it to
-        # its multipart body; markitdown/docling read it off the loop), so peak
+        # its multipart body; xberg/docling read it off the loop), so peak
         # memory stays ~one chunk rather than the file plus a BytesIO copy.
         storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
         tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))

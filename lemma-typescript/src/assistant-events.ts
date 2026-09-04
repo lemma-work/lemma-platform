@@ -26,6 +26,24 @@ export interface ParsedAssistantStreamEvent {
   token?: string;
   tokenKind?: string;
   error?: string;
+  /**
+   * The conversation was renamed. Generated from the first user message while
+   * the run is still going, so it arrives mid-stream and belongs to the
+   * conversation rather than to any one run.
+   */
+  title?: string;
+  /**
+   * Which conversation a conversation-scoped frame is about. Only set by frames
+   * that name it; run frames leave it undefined and are already filtered to the
+   * stream's own run by the server.
+   */
+  conversationId?: string;
+  /**
+   * The transport gave up, not the run. Carries no status on purpose: the run
+   * is still going, and a consumer that treats this as an ending stops reading
+   * a conversation the server is still writing to.
+   */
+  interrupted?: boolean;
 }
 
 function isRecord(value: unknown): value is ParsedRecord {
@@ -80,6 +98,24 @@ function extractStatus(payload: unknown): string | undefined {
   }
 
   return normalizeStatus(payload);
+}
+
+function extractTitle(payload: unknown): string | undefined {
+  const title = typeof payload === "string"
+    ? payload
+    : isRecord(payload) && typeof payload.title === "string"
+      ? payload.title
+      : undefined;
+
+  return title && title.trim().length > 0 ? title.trim() : undefined;
+}
+
+function extractConversationId(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  const conversationId = payload.conversation_id ?? payload.conversationId;
+  return typeof conversationId === "string" && conversationId.trim().length > 0
+    ? conversationId
+    : undefined;
 }
 
 function extractErrorMessage(payload: unknown): string | undefined {
@@ -155,7 +191,24 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
     return { status: "STOPPED" };
   }
 
-  if (eventType === "error" || eventType === "stream_error") {
+  if (eventType === "title") {
+    // No status and no message: a rename says nothing about the run, and a
+    // consumer that reads it as one would end a turn that is still going.
+    const title = extractTitle(payload);
+    return title ? { title, conversationId: extractConversationId(payload) } : {};
+  }
+
+  if (eventType === "stream_error") {
+    // The subscription behind the stream died while the run kept going. No
+    // status: the run's own is unchanged, and reporting FAILED here is what
+    // turned a reconnect instruction into a dead transcript.
+    return {
+      interrupted: true,
+      error: extractErrorMessage(payload) ?? "Realtime stream interrupted.",
+    };
+  }
+
+  if (eventType === "error") {
     return {
       status: "FAILED",
       error: extractErrorMessage(payload) ?? "Agent run failed.",

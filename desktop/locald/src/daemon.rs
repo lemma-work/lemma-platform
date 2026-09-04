@@ -13,7 +13,9 @@ use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
 use crate::host_process::HostProcessManager;
-use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
+use crate::managed_runtime::{
+    ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
+};
 use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
 use crate::paths::LocalPaths;
@@ -50,15 +52,25 @@ pub struct Daemon {
     sharing: Option<Arc<SharingController>>,
     host_operation_running: AtomicBool,
     agent_host: Arc<AgentHostSupervisor>,
+    /// State this daemon had to repair before it could start, in the operator's
+    /// words rather than serde's. Empty on every healthy launch.
+    healed: Vec<String>,
 }
 
 impl Daemon {
     pub fn new(paths: LocalPaths) -> io::Result<Arc<Self>> {
         paths.ensure()?;
-        let token = load_or_create_token(&paths.token)?;
+        // What this construction had to repair to get going. Reported by
+        // `serve`, never swallowed: replacing a credential or a config behind
+        // the operator's back is how a self-heal becomes the next mystery.
+        let mut healed: Vec<String> = Vec::new();
+        let token = load_or_create_token(&paths.token, &mut healed)?;
         let mut state = StateSnapshot::load(&paths.state);
-        let operator_config = OperatorConfigStore::load(paths.root.join("operator-config.json"))?;
-        let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths)?;
+        let operator_config = OperatorConfigStore::load_reporting(
+            paths.root.join("operator-config.json"),
+            &mut healed,
+        )?;
+        let managed_bootstrap = ManagedRuntimeBootstrap::discover(&paths, &mut healed)?;
         let host_pack_root = env::var_os("LEMMA_LOCALD_HOST_PACK_ROOT")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from);
@@ -67,9 +79,12 @@ impl Daemon {
             _ => host_pack_root
                 .as_ref()
                 .map(|pack_root| match managed_bootstrap.as_ref() {
-                    Some(runtime) => {
-                        native_host_pack::prepare(&paths, pack_root, runtime.manifest_material())
-                    }
+                    Some(runtime) => native_host_pack::prepare(
+                        &paths,
+                        pack_root,
+                        runtime.manifest_material(),
+                        &mut healed,
+                    ),
                     None => prepare_compatibility_host_manifest(&paths, pack_root),
                 })
                 .transpose()?,
@@ -88,8 +103,14 @@ impl Daemon {
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
                 // LAN/Public desired state is deliberately not persisted.
                 // Every daemon launch starts from the private canonical origin.
-                state.url = format!("http://app.lemma.localhost:{frontend_port}");
-                state.api_url = format!("http://app.lemma.localhost:{backend_port}");
+                state.url = format!(
+                    "http://{}:{frontend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
+                state.api_url = format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                );
                 state.persist(&paths.state)?;
             }
         }
@@ -140,12 +161,14 @@ impl Daemon {
             sharing,
             host_operation_running: AtomicBool::new(false),
             agent_host,
+            healed,
         }))
     }
 
     pub fn serve(self: Arc<Self>) -> io::Result<()> {
         let listener = create_listener(&self.paths)?;
         self.write_daemon_log("locald listening")?;
+        self.report_healed_state();
         self.prime_backend_environment();
         self.start_host_status_monitor();
         self.start_agent_host_monitor();
@@ -482,6 +505,10 @@ impl Daemon {
         match command.as_str() {
             "runtime.prepare" => {
                 self.start_runtime_prepare(request, client.clone());
+                return true;
+            }
+            "local.reset-data" => {
+                self.start_local_data_reset(request, client.clone());
                 return true;
             }
             "control.snapshot" => {
@@ -1147,7 +1174,12 @@ impl Daemon {
             .host_processes
             .as_ref()
             .and_then(|manager| manager.application_ports())
-            .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
+            .map(|(_, backend_port)| {
+                format!(
+                    "http://{}:{backend_port}",
+                    crate::local_domain::LocalDomain::from_env().frontend_host()
+                )
+            })
             .unwrap_or_else(|| state.api_url.clone());
         state.persist(&self.paths.state)
     }
@@ -1579,11 +1611,217 @@ impl Daemon {
         });
     }
 
+    /// Destroy everything on this computer that the user made, then start clean.
+    ///
+    /// A locald verb rather than something the shell does, because only locald
+    /// owns the VM lifecycle -- and because the progress the splash already
+    /// renders comes from here. It takes `host_operation_running`, the same
+    /// guard `start`, `stop`, `restart` and `runtime.prepare` take, so a reset
+    /// can never interleave with a start.
+    ///
+    /// There is no rollback arm. `repair_runtime` can roll back because a
+    /// runtime is replaceable; data is not, and by the time anything here can
+    /// fail it is already gone. A failed restart afterwards therefore reports
+    /// that plainly and leaves the full-reinstall option on screen, rather than
+    /// retrying and pretending.
+    fn start_local_data_reset(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        if request.get("confirm").and_then(Value::as_str) != Some("reset-local-data") {
+            self.send_direct(
+                &client,
+                error_event(
+                    "confirmation-required",
+                    "a local data reset must be confirmed explicitly",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        let Some(manager) = self.host_processes.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "host-pack-unavailable",
+                    "this installation does not manage local services",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "local.reset-data",
+                "id": id.as_ref(),
+            }),
+        );
+
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let outcome = daemon.perform_local_data_reset(&manager, id.as_ref());
+            match outcome {
+                Ok(summary) => {
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "local.data-reset",
+                        "id": id.as_ref(),
+                        "summary": summary,
+                    }));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "local.reset-data",
+                        "id": id.as_ref(),
+                        "ok": true,
+                    }));
+                }
+                Err(error) => {
+                    daemon.broadcast(error_event(
+                        "local-data-reset-incomplete",
+                        error.to_string(),
+                        id.as_ref(),
+                    ));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "local.reset-data",
+                        "id": id.as_ref(),
+                        "ok": false,
+                    }));
+                }
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
+    /// The reset itself. Order is the safety property.
+    fn perform_local_data_reset(
+        self: &Arc<Self>,
+        manager: &Arc<HostProcessManager>,
+        id: Option<&Value>,
+    ) -> io::Result<Value> {
+        // Stop the things holding the data before removing it. The backend
+        // holds Postgres connections and the workspace bind mounts; the Agent
+        // Host runs jobs against the workspace it is about to lose.
+        manager.stop_all()?;
+        // Best effort: an Agent Host that will not stop is not a reason to
+        // leave the user stuck with data they cannot use. It is suspended
+        // rather than disabled, so it comes back with the clean workspace.
+        let _ = self.agent_host.suspend();
+
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "phase",
+            "id": id,
+            "key": "reset-data",
+            "label": "Erasing local data",
+            "detail": "removing databases, files and workspaces on this computer",
+            "progress": 20,
+        }));
+
+        let summary = self.discard_local_data()?;
+
+        // The database these describe no longer exists. Leaving them would have
+        // the next start skip migrations against an empty schema, and the
+        // backend would come up against tables that were never created.
+        manager.forget_setup_stamps()?;
+
+        // Only once the data is actually gone. A marker cleared before a failed
+        // wipe would let the next start run against data it cannot read, which
+        // is the state this whole path exists to escape.
+        crate::paths::clear_data_reset(&self.paths.root)?;
+
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "phase",
+            "id": id,
+            "key": "reset-data",
+            "label": "Setting up again",
+            "detail": "starting Lemma with a clean workspace",
+            "progress": 45,
+        }));
+        self.start_host_packs(manager, id)?;
+        Ok(summary)
+    }
+
+    /// Ask the guest to tidy up; discard the whole disk if it cannot.
+    ///
+    /// Chosen by a precondition rather than by retrying a failure. The surgical
+    /// path keeps the pulled container images, which for the case this exists
+    /// for -- a Postgres major that moved -- is the difference between seconds
+    /// and re-downloading several hundred megabytes.
+    fn discard_local_data(&self) -> io::Result<Value> {
+        let Some(runtime) = self.managed_runtime.as_ref() else {
+            // No guest and no data disk -- but files and object storage are on
+            // the host either way, so they still have to go.
+            let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
+            return Ok(json!({"strategy": "none", "host_bytes": host_side}));
+        };
+        // The user's files live on the Mac, not in the guest, so neither
+        // strategy below touches them. `LOCAL_FILE_STORAGE_ROOT` and
+        // `LOCAL_OBJECT_STORAGE_ROOT` point at `<root>/data/...`, and clearing
+        // only the guest erased the rows while leaving every uploaded byte on
+        // disk -- under a button whose own text says it "erases your pods,
+        // files and accounts". Someone resetting before handing the machine on
+        // would have kept all of it.
+        let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
+        if runtime.probe().is_ok() {
+            let removed = runtime.reset_guest_data()?;
+            runtime.stop_infrastructure()?;
+            return Ok(json!({
+                "strategy": "guest",
+                "removed": removed,
+                "host_bytes": host_side,
+            }));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let reclaimed = runtime.discard_data_disk()?;
+            Ok(json!({
+                "strategy": "disk",
+                "reclaimed_bytes": reclaimed + host_side,
+            }))
+        }
+        // Elsewhere the guest is the only way in: a WSL distribution is
+        // unregistered rather than having a disk file to unlink, and that path
+        // is not wired up yet.
+        #[cfg(not(target_os = "macos"))]
+        Err(io::Error::other(
+            "the private runtime is not responding, so local data cannot be reset from here",
+        ))
+    }
+
     fn start_host_packs(
         self: &Arc<Self>,
         manager: &HostProcessManager,
         operation_id: Option<&Value>,
     ) -> io::Result<()> {
+        // Refuse before touching the guest. Something has already replaced a
+        // credential this installation's data was written under, so starting
+        // would fail deep inside migrations as an opaque auth error, or come up
+        // unable to decrypt its own rows. Say so here, in words the shell turns
+        // into a reset button.
+        if let Some(reason) = crate::paths::data_reset_reason(&self.paths.root) {
+            return Err(io::Error::other(format!(
+                "{reason}; {}",
+                crate::paths::DATA_RESET_MARKER
+            )));
+        }
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
@@ -1627,6 +1865,23 @@ impl Daemon {
                 "log_source": log_source,
             }));
         })?;
+        // The auth service was started before the backend and is only now
+        // waited for, so it came up alongside it rather than in front of it.
+        // Nothing may report ready until it answers: a workspace whose first
+        // act is signing in would otherwise meet an auth service that is not
+        // there yet, which is worse than the wait this removes.
+        //
+        // Its failure has to take the host processes with it. They are running
+        // by this point -- that is the whole point -- and a stack with no auth
+        // is not a stack anybody can use.
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            if let Err(error) = runtime.await_private_services() {
+                if let Some(manager) = self.host_processes.as_ref() {
+                    let _ = manager.stop_all();
+                }
+                return Err(error);
+            }
+        }
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",
@@ -1649,7 +1904,39 @@ impl Daemon {
             "operation_id": operation_id,
             "runtime_generation": runtime_generation,
         }));
+        self.warm_sandbox_images();
         Ok(())
+    }
+
+    /// Start fetching the sandbox images behind the workspace, and say so.
+    ///
+    /// After `ready`, never before it. The images are only needed once a pod
+    /// runs something; fetching them inline held the startup bar at 68% behind
+    /// several hundred megabytes on a first run. The app shows this as a
+    /// notice it can take away again, rather than as a phase of starting.
+    fn warm_sandbox_images(self: &Arc<Self>) {
+        let Some(runtime) = self.managed_runtime.as_ref() else {
+            // No guest to warm -- this is a supervisor-mode stack. Said out
+            // loud, and terminally, because the workspace polls until it hears
+            // an answer that cannot change; silence here left it asking every
+            // two seconds for the rest of the session.
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": SANDBOX_IMAGES_UNSUPPORTED,
+                "detail": "",
+            }));
+            return;
+        };
+        let daemon = Arc::clone(self);
+        runtime.warm_sandbox_images(move |status| {
+            daemon.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "sandbox-images",
+                "state": status.state,
+                "detail": status.detail,
+            }));
+        });
     }
 
     fn recover_managed_stack(self: &Arc<Self>) -> io::Result<()> {
@@ -1682,6 +1969,7 @@ impl Daemon {
             "mode": "managed-local",
             "release": manager.release(),
         }));
+        self.warm_sandbox_images();
         Ok(())
     }
 
@@ -1959,24 +2247,31 @@ impl Daemon {
             .retain(|_, subscriber| subscriber.send(line.clone()).is_ok());
     }
 
+    /// One implementation, two callers: a running daemon writes through here,
+    /// and `lemma-locald serve` writes a construction failure through the same
+    /// free function before this type exists at all.
     fn write_daemon_log(&self, line: &str) -> io::Result<()> {
-        use std::fs::OpenOptions;
-        const MAX_DAEMON_LOG_BYTES: u64 = 5 * 1024 * 1024;
-        if self
-            .paths
-            .log
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() >= MAX_DAEMON_LOG_BYTES)
-        {
-            let previous = self.paths.log.with_extension("previous.log");
-            let _ = std::fs::remove_file(&previous);
-            std::fs::rename(&self.paths.log, previous)?;
+        crate::protocol::append_bounded_daemon_log(&self.paths.log, line)
+    }
+
+    /// Say out loud what `Daemon::new` had to replace to get this far.
+    ///
+    /// Broadcast as well as logged: a subscriber that connects later still gets
+    /// it from the journal, and the app can surface "your configuration was
+    /// reset" instead of the operator discovering it by finding their provider
+    /// missing.
+    fn report_healed_state(&self) {
+        if self.healed.is_empty() {
+            return;
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.paths.log)?;
-        writeln!(file, "{line}")
+        for note in &self.healed {
+            let _ = self.write_daemon_log(&format!("healed: {note}"));
+        }
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "local.healed",
+            "notes": self.healed.clone(),
+        }));
     }
 }
 
@@ -2030,8 +2325,41 @@ fn sharing_environment(
         ),
         ("SESSION_COOKIE_SAME_SITE".into(), "lax".into()),
         ("SESSION_COOKIE_DOMAIN".into(), String::new()),
+        // No app host is served through a tunnel, so stop claiming one.
+        //
+        // The gateway routes by *path* -- `/_lemma/api` to the backend, the rest
+        // to the frontend -- so there is no host-based route for
+        // `<slug>.apps.<domain>` and there cannot be one without wildcard DNS on
+        // the tunnel. Left set, `public_app_url` kept handing visitors
+        // `<slug>.apps.lemma.localhost`, which their browser resolves against
+        // *their own* machine: not a dead link but one pointing somewhere else
+        // entirely. Blank makes `public_app_url` return None and
+        // `app_slug_from_host` decline to route, which is the truth.
+        ("APP_BASE_DOMAIN".into(), String::new()),
+        // ...and with no app origin, the app-origin API door is meaningless.
+        // It aliases the whole API under `/_lemma` on whatever origin serves
+        // user-authored HTML, and widens the refresh cookie to `Path=/` to make
+        // that work. Neither is wanted on a public origin.
+        ("APP_API_VIA_APP_ORIGIN".into(), "false".into()),
         ("AUTH_EMAIL_VERIFICATION_REQUIRED".into(), "false".into()),
         ("CORS_ORIGIN_REGEX".into(), exact_origin),
+        // Raised, not merely rewritten.
+        //
+        // The host pack turns every abuse control off, which is right for an
+        // installation only this Mac can reach. This overlay is applied when
+        // that stops being true -- and it used to change URLs and nothing else,
+        // so an installation reachable from the LAN or the open internet still
+        // had no rate limit on sign-in, no ceiling on account creation, and no
+        // ALTCHA. Anyone who found the address got unlimited, unthrottled
+        // password guessing against the owner's account.
+        //
+        // `DEBUG` matters for the same reason: the backend's own config
+        // validator explains that it makes every unhandled error answer with a
+        // source-annotated traceback, and it is set unconditionally for local
+        // mode.
+        ("AUTH_ABUSE_PROTECTION_ENABLED".into(), "true".into()),
+        ("AUTH_ALTCHA_ENABLED".into(), "true".into()),
+        ("DEBUG".into(), "false".into()),
     ]);
     let frontend = HashMap::from([
         ("NEXT_PUBLIC_API_URL".into(), api_url),
@@ -2112,6 +2440,11 @@ fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'stat
         "wsl-required"
     } else if message.contains("did not approve or complete WSL 2 setup") {
         "wsl-setup-denied"
+    } else if message.contains(crate::paths::DATA_RESET_MARKER) {
+        // One phrase, one code, however many detectors raise it. Anything the
+        // user cannot fix by retrying but can fix by discarding local data says
+        // the marker phrase and lands here.
+        "local-data-incompatible"
     } else {
         fallback
     }
@@ -2323,6 +2656,8 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 mod tests {
     use std::collections::HashMap;
 
+    use tempfile::tempdir;
+
     use super::{
         compose_backend_environment, error_diagnostic_source, exact_origin_regex,
         runtime_operation_error_code, sharing_environment,
@@ -2393,6 +2728,60 @@ mod tests {
         );
     }
 
+    /// Anything that says the marker phrase gets the code the reset button
+    /// keys on -- however many different detectors end up raising it.
+    #[test]
+    fn stranded_local_data_is_reported_with_the_code_the_reset_button_uses() {
+        assert_eq!(
+            runtime_operation_error_code(
+                "this installation's secret was replaced, and anything encrypted with the \
+                 previous one can no longer be read; local data must be reset",
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+        // The phrase is the whole contract, so a detector nobody has written
+        // yet gets the same treatment for free.
+        assert_eq!(
+            runtime_operation_error_code(
+                &format!(
+                    "the workspace database was created by PostgreSQL 16 and this release \
+                     runs PostgreSQL 18; {}",
+                    crate::paths::DATA_RESET_MARKER
+                ),
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+    }
+
+    /// The marker is checked before the guest is touched.
+    ///
+    /// Reaching `prepare_private_infra` would boot a VM to discover a failure
+    /// already known on disk, and the failure it would then report is an opaque
+    /// auth error rather than an offer to reset.
+    #[test]
+    fn a_recorded_data_reset_requirement_survives_until_it_is_cleared() {
+        let root = tempdir().unwrap();
+        assert!(crate::paths::data_reset_reason(root.path()).is_none());
+
+        crate::paths::require_data_reset(root.path(), "the passwords were replaced").unwrap();
+        let reason = crate::paths::data_reset_reason(root.path()).unwrap();
+        assert_eq!(reason, "the passwords were replaced");
+        assert_eq!(
+            runtime_operation_error_code(
+                &format!("{reason}; {}", crate::paths::DATA_RESET_MARKER),
+                "host-operation-failed"
+            ),
+            "local-data-incompatible"
+        );
+
+        crate::paths::clear_data_reset(root.path()).unwrap();
+        assert!(crate::paths::data_reset_reason(root.path()).is_none());
+        // Clearing twice is how a reset that retries behaves; it must not fail.
+        crate::paths::clear_data_reset(root.path()).unwrap();
+    }
+
     #[test]
     fn startup_errors_select_the_relevant_diagnostic_log() {
         assert_eq!(
@@ -2414,6 +2803,12 @@ mod tests {
         let (backend, frontend) =
             sharing_environment("https://lemma.example.com/", SharingMode::Public);
         assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
+        // A tunnel serves one origin and no app host, so the deployment must
+        // stop advertising one. Left set, every app's URL pointed at
+        // `<slug>.apps.lemma.localhost` -- which a visitor's browser resolves
+        // against their own machine.
+        assert_eq!(backend["APP_BASE_DOMAIN"], "");
+        assert_eq!(backend["APP_API_VIA_APP_ORIGIN"], "false");
         assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
         assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
         assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");
@@ -2447,5 +2842,32 @@ mod tests {
             exact_origin_regex("http://192.168.1.20:51234"),
             "^http://192\\.168\\.1\\.20:51234$"
         );
+    }
+
+    /// Exposing an installation raises its defences, in every mode.
+    ///
+    /// The host pack turns every abuse control off, which is correct while only
+    /// this Mac can reach the stack. This overlay is what runs when that stops
+    /// being true, and it used to rewrite URLs and nothing else -- so a
+    /// workspace on the LAN or the open internet had no sign-in rate limit, no
+    /// ceiling on account creation, no ALTCHA, and answered unhandled errors
+    /// with a source-annotated traceback.
+    #[test]
+    fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
+        for (origin, mode) in [
+            ("https://lemma.example.com", SharingMode::Public),
+            ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
+        ] {
+            let (backend, _) = sharing_environment(origin, mode);
+            assert_eq!(
+                backend["AUTH_ABUSE_PROTECTION_ENABLED"], "true",
+                "{origin} is reachable by someone other than this Mac"
+            );
+            assert_eq!(backend["AUTH_ALTCHA_ENABLED"], "true", "{origin}");
+            assert_eq!(
+                backend["DEBUG"], "false",
+                "{origin} must not answer strangers with tracebacks"
+            );
+        }
     }
 }

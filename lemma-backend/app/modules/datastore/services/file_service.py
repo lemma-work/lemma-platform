@@ -499,6 +499,18 @@ class DatastoreFileService(FileTransactionFacade):
             ctx=ctx,
         )
 
+    async def count_files_missing_from_the_index(self, pod_id: UUID) -> tuple[int, int]:
+        """`(queued, failed)` — the two ways a file is absent from a search.
+
+        Both look like a healthy pod holding nothing on the topic, which is how
+        an agent comes to state that confidently while the index is broken. A
+        pair rather than a total, because only the first is fixed by waiting.
+        """
+        return (
+            await self.file_repository.count_active_for_pod(pod_id),
+            await self.file_repository.count_failed_for_pod(pod_id),
+        )
+
     async def get_directory_tree(
         self,
         pod_id: UUID,

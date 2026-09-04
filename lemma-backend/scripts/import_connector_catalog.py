@@ -97,6 +97,7 @@ from app.modules.connectors.domain.connector import (
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
+    ConnectorKind,
     DiscoveryMode,
     HttpKindSpec,
     LemmaProviderCapability,
@@ -108,10 +109,17 @@ from app.modules.connectors.domain.connector import (
     provider_to_kind,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigStatus
+from app.modules.connectors.services.auth_config_schemas import (
+    default_auth_config_schema,
+)
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
+from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
+    NATIVE_LEMMA_OAUTH2_DEFAULTS,
+    _dotenv_values,
+)
 from app.modules.connectors.infrastructure.adapters.schema_compiler import (
     PydanticCodeSchemaCompiler,
 )
@@ -151,9 +159,7 @@ COMPOSIO_CONNECTOR_ID_TO_TOOLKIT = {
     for toolkit_slug, connector_id in COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.items()
 }
 COMPOSIO_NATIVE_CONNECTOR_IDS = set(COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.values())
-NATIVE_OPERATION_CONNECTOR_IDS = (
-    supported_lemma_connectors()
-)
+NATIVE_OPERATION_CONNECTOR_IDS = supported_lemma_connectors()
 NATIVE_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
     "apollo": AuthMethod.API_KEY,
     "airtable": AuthMethod.API_KEY,
@@ -184,6 +190,12 @@ CONNECTOR_ID_RENAMES: dict[str, str] = {
 }
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "gmail",
+    # Meeting notes and warehouse queries, by their Composio slugs rather than
+    # the names people use: Granola is `granola_mcp`, and BigQuery is
+    # `googlebigquery` with no underscore.
+    "granola_mcp",
+    "fireflies",
+    "googlebigquery",
     "googlecalendar",
     "googledrive",
     "googledocs",
@@ -259,6 +271,7 @@ IMPORT_BATCH_OPERATION_CHUNK_SIZE = 100
 # Lemma native apps config loaded from JSON (committed to repo, no secrets)
 LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
 
+
 def _load_lemma_apps_config() -> list[dict]:
     """Load Lemma native apps configuration from JSON file."""
     if not LEMMA_APPS_CONFIG_PATH.exists():
@@ -333,7 +346,9 @@ def _build_operation_search_document(
         seen.add(lowered)
     return "\n".join(normalized_chunks)
 
+
 get_native_info_client = create_lemma_info_client
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -428,7 +443,12 @@ def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
 
     if "NO_AUTH" in schemes:
         return AuthMethod.NOAUTH
-    if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK"}:
+    # DCR_OAUTH is an OAuth flow whose client is registered dynamically rather
+    # than configured ahead of time. Composio handles the registration, so from
+    # here it is an authorization-code redirect like any other -- and falling
+    # through to API_KEY, as it did, offers a form asking for a key that does
+    # not exist instead of a consent screen.
+    if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH"}:
         return AuthMethod.OAUTH2
     return AuthMethod.API_KEY
 
@@ -447,9 +467,7 @@ def _composio_field_json_type(field_type: object) -> str:
     return _COMPOSIO_FIELD_TYPE_TO_JSON.get(str(field_type).lower(), "string")
 
 
-def _composio_credential_schema(
-    toolkit_detail, auth_method: AuthMethod
-) -> dict | None:
+def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict | None:
     """Build a JSON Schema describing the credentials a user must submit to
     connect a non-OAuth Composio app, derived from the toolkit's
     ``connected_account_initiation`` fields so the UI can render the form."""
@@ -536,7 +554,14 @@ def _env_names(value: object) -> list[str]:
 
 
 def _env_available(value: object) -> bool:
-    return any(bool(os.getenv(name)) for name in _env_names(value))
+    # Same fallback the runtime adapter uses: on a developer's machine these
+    # live in `.env` rather than the exported environment, and seeding
+    # `system_default_available=False` there records a falsehood that read-time
+    # enrichment then silently contradicts.
+    return any(
+        bool(os.getenv(name) or _dotenv_values().get(name))
+        for name in _env_names(value)
+    )
 
 
 def _system_oauth_available(system_oauth: dict[str, object] | None) -> bool:
@@ -549,25 +574,86 @@ def _system_oauth_available(system_oauth: dict[str, object] | None) -> bool:
 
 def _existing_capabilities(
     existing: ConnectorEntity | None,
-) -> dict[AuthProvider, object]:
+) -> dict[ConnectorKind, object]:
     if not existing:
         return {}
-    return {AuthProvider(capability.provider.value): capability for capability in existing.provider_capabilities}
+    return {
+        capability.kind: capability for capability in existing.provider_capabilities
+    }
+
+
+def _capability_order(kind: ConnectorKind) -> tuple[int, str]:
+    """Native kinds first, composio last, alphabetical within each group.
+
+    Only the *stability* matters -- ``default_kind_for_provider`` resolves the
+    legacy ``LEMMA`` vocabulary to the first non-composio spec in this list, so
+    an order that varies between imports would make that answer vary too.
+    """
+    return (1 if kind is ConnectorKind.COMPOSIO else 0, kind.value)
+
+
+def _is_unusable_carried_package_kind(capability: object, connector_id: str) -> bool:
+    """A `package` OAuth spec left behind by an import that no longer makes one.
+
+    The merge below preserves every kind a connector has ever been written
+    with, which is right for a real one and wrong for this: a connector that
+    dropped out of the native-operations set keeps a `package` spec that names
+    no package, has no OAuth endpoints and no system client, and cannot be
+    installed by any route. It is not inert. `supports_org_custom_oauth` was
+    set on it unconditionally, so the UI offered "use my own OAuth app", took a
+    client id and secret, created the install, and only then failed at sign-in
+    with "OAuth2 defaults are not configured" -- with the install left behind.
+
+    Recognised by what it lacks rather than by a list of connector ids, because
+    the next connector to leave that set would otherwise arrive in the same
+    state and nobody would think to add it.
+    """
+    if getattr(capability, "kind", None) is not ConnectorKind.PACKAGE:
+        return False
+    if getattr(capability, "auth_scheme", None) != AuthMethod.OAUTH2:
+        return False
+    # The Google apps are the reason the registry is consulted here: they store
+    # no `oauth2_defaults` and no `system_oauth` either, and resolve both at
+    # runtime from `NATIVE_LEMMA_OAUTH2_DEFAULTS`. By the shape test alone they
+    # are indistinguishable from the dead specs, and pruning gmail would be a
+    # far worse bug than the one this fixes.
+    return not (
+        getattr(capability, "package_name", None)
+        or getattr(capability, "oauth2_defaults", None)
+        or getattr(capability, "system_oauth", None)
+        or connector_id in NATIVE_LEMMA_OAUTH2_DEFAULTS
+    )
 
 
 def _merge_provider_capabilities(
     existing: ConnectorEntity | None,
     *capabilities: object | None,
 ) -> list[object]:
+    """Merge kind specs by *kind*, not by the two-valued auth provider.
+
+    Keying by provider collapsed every native kind onto one slot, because
+    ``kind_to_provider`` maps http/sql/mcp/package alike to ``LEMMA``. A
+    connector that gained a second native spec silently lost the first --
+    exactly what a package-to-http migration does.
+
+    Carrying is not unconditional, though: a `package` spec this import would
+    no longer produce, and which nothing can install, is dropped rather than
+    preserved forever. See `_is_unusable_carried_package_kind`.
+    """
     merged = _existing_capabilities(existing)
     for capability in capabilities:
         if capability is None:
             continue
-        merged[AuthProvider(capability.provider.value)] = capability
+        merged[capability.kind] = capability
+    replaced = {
+        capability.kind for capability in capabilities if capability is not None
+    }
+    connector_id = existing.id if existing else ""
     return [
-        merged[provider]
-        for provider in (AuthProvider.LEMMA, AuthProvider.COMPOSIO)
-        if provider in merged
+        merged[kind]
+        for kind in sorted(merged, key=_capability_order)
+        if kind in replaced
+        or not _is_unusable_carried_package_kind(merged[kind], connector_id)
     ]
 
 
@@ -587,41 +673,23 @@ def _native_package_provider_capability(
                     "profile_operation_names": profile_operation_names,
                 }
                 if capability.auth_config_schema is None:
-                    updates["auth_config_schema"] = _default_auth_config_schema(
-                        auth_method
+                    updates["auth_config_schema"] = default_auth_config_schema(
+                        auth_method, connector_id
                     )
                 return capability.model_copy(update=updates)
         except ValueError:
             pass
 
     return _native_kind_spec(
-        auth_method=auth_method, profile_operation_names=profile_operation_names
+        connector_id=connector_id,
+        auth_method=auth_method,
+        profile_operation_names=profile_operation_names,
     )
-
-
-def _default_auth_config_schema(auth_method: AuthMethod) -> dict:
-    if auth_method != AuthMethod.OAUTH2:
-        return {"type": "object", "properties": {}, "additionalProperties": False}
-    return {
-        "type": "object",
-        "required": ["client_id", "client_secret"],
-        "properties": {
-            "client_id": {
-                "type": "string",
-                "title": "Client ID",
-            },
-            "client_secret": {
-                "type": "string",
-                "title": "Client secret",
-                "format": "password",
-            },
-        },
-        "additionalProperties": False,
-    }
 
 
 def _native_kind_spec(
     *,
+    connector_id: str | None = None,
     auth_method: AuthMethod,
     oauth2_defaults: dict | None = None,
     auth_config_schema: dict | None = None,
@@ -640,6 +708,17 @@ def _native_kind_spec(
     system_default_available = (
         auth_method != AuthMethod.OAUTH2 or _system_oauth_available(system_oauth)
     )
+    # "Bring your own OAuth app" is only an offer we can honour when the
+    # deployment knows where to send people. `resolve_auth_install` pairs the
+    # org's client id and secret with the connector's *endpoints*, which come
+    # from `oauth2_defaults` or the native registry -- and for a connector that
+    # has neither there is nothing to pair with, so the install is accepted and
+    # then fails at sign-in with "OAuth2 defaults are not configured", leaving a
+    # stranded install behind. Sixty of the eighty-four connectors in one
+    # deployment advertised exactly that.
+    org_custom_oauth_is_possible = auth_method == AuthMethod.OAUTH2 and bool(
+        oauth2_defaults or NATIVE_LEMMA_OAUTH2_DEFAULTS.get(connector_id or "")
+    )
     spec_cls = {
         "sql": SqlKindSpec,
         "mcp": McpKindSpec,
@@ -657,14 +736,19 @@ def _native_kind_spec(
         oauth2_defaults=OAuth2Defaults.model_validate(oauth2_defaults)
         if oauth2_defaults
         else None,
+        # `connector_id` matters: the shared default adds the signing secret an
+        # org's own Slack app needs for its webhooks to verify at all. Seeding
+        # without it wrote a schema that never asked for one, and because the
+        # catalog then *has* a schema, the read-time default never filled the
+        # gap either.
         auth_config_schema=auth_config_schema
         if auth_config_schema is not None
-        else _default_auth_config_schema(auth_method),
+        else default_auth_config_schema(auth_method, connector_id),
         credential_schema=credential_schema,
         system_oauth=SystemOAuthCredentialRef.model_validate(system_oauth)
         if system_oauth
         else None,
-        supports_org_custom_oauth=auth_method == AuthMethod.OAUTH2,
+        supports_org_custom_oauth=org_custom_oauth_is_possible,
         system_default_available=system_default_available,
         profile_operation_names=profile_operation_names,
     )
@@ -696,10 +780,37 @@ def _operation_id(
     return f"{connector_id}:{resolved}:{operation_name}"
 
 
-def _trigger_id(
-    connector_id: str, provider: AuthProvider, trigger_slug: str
-) -> str:
-    return f"{connector_id}:{provider.value.lower()}:{trigger_slug.lower()}"
+def _trigger_id(connector_id: str, kind: str, trigger_slug: str) -> str:
+    """Mint a trigger id from the *kind*, matching the uniqueness index.
+
+    This used to key on the two-valued auth provider while
+    ``ix_connector_triggers_app_kind_event`` keys on the five-valued kind, so
+    two triggers the index considers distinct could mint the same primary key.
+    Composio ids are unchanged -- its provider and kind are both ``composio``.
+    """
+    return f"{connector_id}:{kind.lower()}:{trigger_slug.lower()}"
+
+
+def _reject_duplicate_trigger_events(
+    connector_id: str, triggers: list[dict[str, object]]
+) -> None:
+    """Refuse a catalog entry whose triggers collide on ``event_type``.
+
+    Identity is ``(connector, kind, event_type)`` in the index and in the id, so
+    two triggers sharing an ``event_type`` are one row: the second silently
+    overwrote the first on every import, and the ``name`` that told them apart
+    is never read. Failing the import is the only way that stays visible.
+    """
+    seen: set[str] = set()
+    for trigger in triggers:
+        event_type = str(trigger.get("event_type") or "")
+        if event_type in seen:
+            raise ValueError(
+                f"Connector '{connector_id}' declares two triggers with "
+                f"event_type '{event_type}'. Give them distinct event types -- "
+                "a dotted sub-type such as 'message.thread' is the convention."
+            )
+        seen.add(event_type)
 
 
 def _normalize_connector_id(app_slug: str) -> str:
@@ -843,7 +954,10 @@ def _is_excluded_composio_connector(entity: ConnectorEntity) -> bool:
 
     return bool(normalized_ids & COMPOSIO_EXCLUDED_CONNECTOR_IDS) and (
         AuthProvider.COMPOSIO
-        in {AuthProvider(capability.provider.value) for capability in entity.provider_capabilities}
+        in {
+            AuthProvider(capability.provider.value)
+            for capability in entity.provider_capabilities
+        }
     )
 
 
@@ -924,7 +1038,9 @@ async def _upsert_operation(
     # like the execute-operation route's never finds it.
     resolved_kind = kind or provider_to_kind(provider).value
     operation_name = (
-        _normalize_operation_name(public_name) if normalize_name else public_name.strip()
+        _normalize_operation_name(public_name)
+        if normalize_name
+        else public_name.strip()
     )
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
@@ -1018,7 +1134,9 @@ async def _upsert_trigger(
         trigger.slug,
     )
     entity = ConnectorTriggerEntity(
-        id=existing.id if existing else _trigger_id(connector_id, provider, trigger.slug),
+        id=existing.id
+        if existing
+        else _trigger_id(connector_id, provider_to_kind(provider).value, trigger.slug),
         connector_id=connector_id,
         provider=provider,
         event_type=trigger.slug,
@@ -1160,9 +1278,7 @@ async def _sync_native_catalog(
     # First sync Lemma-managed apps from JSON config (Slack, Jira, Confluence)
     lemma_apps = _load_lemma_apps_config()
     normalized_app_filters = (
-        {_normalize_connector_id(slug) for slug in app_filters}
-        if app_filters
-        else None
+        {_normalize_connector_id(slug) for slug in app_filters} if app_filters else None
     )
     for app_config in lemma_apps:
         app_name = app_config["name"]
@@ -1191,6 +1307,7 @@ async def _sync_native_catalog(
             provider_capabilities=_merge_provider_capabilities(
                 existing,
                 _native_kind_spec(
+                    connector_id=connector_id,
                     auth_method=auth_method,
                     oauth2_defaults=app_config.get("oauth2_config"),
                     auth_config_schema=app_config.get("auth_config_schema"),
@@ -1229,29 +1346,32 @@ async def _sync_native_catalog(
                 count=op_count,
             )
 
-        # Sync triggers for this app
+        # Triggers, tagged with the same kind as the spec and the static
+        # operations above -- `list_triggers_for_auth_config` reads them back by
+        # the *install's* kind, so a trigger written under the wrong one exists
+        # in the table and is invisible through the API.
+        _reject_duplicate_trigger_events(connector_id, app_config.get("triggers", []))
+        trigger_kind = native_kind or ConnectorKind.PACKAGE.value
         for trigger_data in app_config.get("triggers", []):
             from app.modules.connectors.domain.connector_trigger import (
                 ConnectorTriggerEntity,
             )
 
-            existing_trigger = (
-                await trigger_repository.get_by_connector_kind_and_name(
-                    connector_id,
-                    provider_to_kind(AuthProvider.LEMMA).value,
-                    trigger_data["event_type"],
-                )
+            existing_trigger = await trigger_repository.get_by_connector_kind_and_name(
+                connector_id,
+                trigger_kind,
+                trigger_data["event_type"],
             )
             trigger_entity = ConnectorTriggerEntity(
                 id=(
                     existing_trigger.id
                     if existing_trigger
                     else _trigger_id(
-                        connector_id, AuthProvider.LEMMA, trigger_data["event_type"]
+                        connector_id, trigger_kind, trigger_data["event_type"]
                     )
                 ),
                 connector_id=connector_id,
-                provider=AuthProvider.LEMMA,
+                kind=trigger_kind,
                 event_type=trigger_data["event_type"],
                 description=trigger_data.get("description"),
                 config_schema=trigger_data.get("config_schema"),
@@ -1286,7 +1406,9 @@ async def _sync_native_catalog(
                 operation_descriptors = [
                     SimpleNamespace(
                         name=operation_name,
-                        **(await info_client.get_operation_details(operation_name)).__dict__,
+                        **(
+                            await info_client.get_operation_details(operation_name)
+                        ).__dict__,
                     )
                     for operation_name in operation_names
                 ]
@@ -1300,7 +1422,9 @@ async def _sync_native_catalog(
         entity = ConnectorEntity(
             id=connector_id,
             title=app_title or connector_id.replace("_", " ").title(),
-            description=(app_description or (existing.description if existing else None)),
+            description=(
+                app_description or (existing.description if existing else None)
+            ),
             icon=existing.icon if existing else None,
             provider_capabilities=_merge_provider_capabilities(
                 existing,
@@ -1455,7 +1579,9 @@ async def _sync_single_composio_toolkit(
             profile_operations, connector_id, AuthProvider.LEMMA
         )
         try:
-            lemma_capability = existing.capability_for(AuthProvider.LEMMA) if existing else None
+            lemma_capability = (
+                existing.capability_for(AuthProvider.LEMMA) if existing else None
+            )
         except ValueError:
             lemma_capability = None
         if lemma_capability is not None:
@@ -1464,6 +1590,7 @@ async def _sync_single_composio_toolkit(
             )
         else:
             lemma_capability = _native_kind_spec(
+                connector_id=connector_id,
                 auth_method=_infer_native_auth_method(connector_id, existing),
                 profile_operation_names=lemma_profile_operation_names,
             )
@@ -1523,9 +1650,7 @@ async def _sync_single_composio_toolkit(
             connector_id,
             provider=AuthProvider.COMPOSIO,
             public_name=str(tool.slug).strip(),
-            provider_operation_name=_resolve_composio_provider_operation_name(
-                tool
-            ),
+            provider_operation_name=_resolve_composio_provider_operation_name(tool),
             display_name=tool.name,
             description=description,
             input_schema=tool.input_parameters,
@@ -1563,7 +1688,10 @@ async def _sync_single_composio_toolkit(
 
 
 async def _run_in_session_batch(
-    sync_fn: Callable[[ConnectorRepository, ConnectorOperationRepository, ConnectorTriggerRepository], Awaitable[tuple[int, int, int]]],
+    sync_fn: Callable[
+        [ConnectorRepository, ConnectorOperationRepository, ConnectorTriggerRepository],
+        Awaitable[tuple[int, int, int]],
+    ],
     *,
     dry_run: bool,
 ) -> tuple[int, int, int]:
@@ -1744,9 +1872,7 @@ async def _run_composio_retirements(*, dry_run: bool) -> int:
         uow = SqlAlchemyUnitOfWork(session)
         connector_repository = ConnectorRepository(uow)
         try:
-            retired = await _retire_composio_capabilities(
-                connector_repository, session
-            )
+            retired = await _retire_composio_capabilities(connector_repository, session)
             if dry_run:
                 await uow.rollback()
             else:
@@ -1788,12 +1914,14 @@ async def _sync_native_catalog_batched(
             connector_id=app_slug,
         )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
-            lambda connector_repository, operation_repository, trigger_repository: _sync_native_catalog(
-                connector_repository,
-                operation_repository,
-                trigger_repository,
-                app_filters={app_slug},
-                schema_compiler=schema_compiler,
+            lambda connector_repository, operation_repository, trigger_repository: (
+                _sync_native_catalog(
+                    connector_repository,
+                    operation_repository,
+                    trigger_repository,
+                    app_filters={app_slug},
+                    schema_compiler=schema_compiler,
+                )
             ),
             dry_run=dry_run,
         )
@@ -1837,13 +1965,15 @@ async def _sync_composio_catalog_batched(
             connector_id=toolkit_item.slug,
         )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
-            lambda connector_repository, operation_repository, trigger_repository: _sync_single_composio_toolkit(
-                composio,
-                toolkit_item,
-                connector_repository=connector_repository,
-                operation_repository=operation_repository,
-                trigger_repository=trigger_repository,
-                page_size=page_size,
+            lambda connector_repository, operation_repository, trigger_repository: (
+                _sync_single_composio_toolkit(
+                    composio,
+                    toolkit_item,
+                    connector_repository=connector_repository,
+                    operation_repository=operation_repository,
+                    trigger_repository=trigger_repository,
+                    page_size=page_size,
+                )
             ),
             dry_run=dry_run,
         )
@@ -1856,7 +1986,10 @@ async def _sync_composio_catalog_batched(
 
 SKILLS_DIR = Path(__file__).parent.parent / "app" / "modules" / "connectors" / "skills"
 
-def _build_skill_prompt(app_id: str, title: str, description: str, operations: list) -> str:
+
+def _build_skill_prompt(
+    app_id: str, title: str, description: str, operations: list
+) -> str:
     """Build the complete LLM prompt for skill doc generation as one plain string."""
     ops_info: list[str] = []
     for op in operations[:20]:
@@ -1870,7 +2003,9 @@ def _build_skill_prompt(app_id: str, title: str, description: str, operations: l
             props = input_schema.get("properties", {})
             required = set(input_schema.get("required", []))
             for fname, finfo in list(props.items())[:8]:
-                ftype = finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                ftype = (
+                    finfo.get("type", "string") if isinstance(finfo, dict) else "string"
+                )
                 fdesc = finfo.get("description", "") if isinstance(finfo, dict) else ""
                 req_mark = "*" if fname in required else ""
                 fields.append(f"  - {fname}{req_mark} ({ftype}): {fdesc[:80]}")
@@ -1884,9 +2019,15 @@ def _build_skill_prompt(app_id: str, title: str, description: str, operations: l
         )
 
     ops_block = "\n\n".join(ops_info) if ops_info else "(no operations available)"
-    app_desc = (description[:400] if description else f"Connector with {title or app_id}.").strip()
+    app_desc = (
+        description[:400] if description else f"Connector with {title or app_id}."
+    ).strip()
 
-    example_cmd = "lemma connectors operations execute " + app_id + ' OPERATION_NAME --json \'{"payload": {"field1": "value1"}}\''
+    example_cmd = (
+        "lemma connectors operations execute "
+        + app_id
+        + ' OPERATION_NAME --json \'{"payload": {"field1": "value1"}}\''
+    )
 
     return (
         "Write a skill guide for an AI agent. The entire document must be 300-500 words — concise and scannable.\n\n"
@@ -2006,7 +2147,6 @@ async def _generate_app_skills(
         await _for_provider(None)
 
 
-
 _SKILL_MODEL = "accounts/fireworks/models/deepseek-v4-pro"
 _SKILL_BASE_URL = "https://api.fireworks.ai/inference/v1"
 
@@ -2019,10 +2159,14 @@ def _build_skill_agent():
 
     api_key = settings.lemma_openai_api_key or os.environ.get("FIREWORKS_API_KEY")
     if not api_key:
-        raise SystemExit("Set lemma_openai_api_key or FIREWORKS_API_KEY to generate skills.")
+        raise SystemExit(
+            "Set lemma_openai_api_key or FIREWORKS_API_KEY to generate skills."
+        )
 
     client = AsyncOpenAI(base_url=_SKILL_BASE_URL, api_key=api_key)
-    return PydanticAIAgent(OpenAIChatModel(_SKILL_MODEL, provider=OpenAIProvider(openai_client=client)))
+    return PydanticAIAgent(
+        OpenAIChatModel(_SKILL_MODEL, provider=OpenAIProvider(openai_client=client))
+    )
 
 
 async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
@@ -2050,7 +2194,12 @@ async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
         batch_size = 5
         for i in range(0, len(apps), batch_size):
             batch = apps[i : i + batch_size]
-            await asyncio.gather(*[_generate_app_skills(skill_agent, session, app, SKILLS_DIR) for app in batch])
+            await asyncio.gather(
+                *[
+                    _generate_app_skills(skill_agent, session, app, SKILLS_DIR)
+                    for app in batch
+                ]
+            )
             logger.debug(
                 "connector_catalog.skill_batch.completed",
                 count=min(i + batch_size, len(apps)),

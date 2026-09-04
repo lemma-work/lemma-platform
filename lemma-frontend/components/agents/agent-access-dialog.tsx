@@ -12,6 +12,7 @@ import {
     Image as ImageIcon,
     ListTodo,
     MessageCircle,
+    NotebookPen,
     Plug,
     Search,
     Send,
@@ -64,12 +65,25 @@ type AccessCategory = {
     /** Rail label — the one noun this concept goes by everywhere in the product. */
     label: string;
     icon: LemmaIcon;
-    /** What granting this category actually lets the agent do. */
+    /**
+     * What granting this category actually lets the agent do, in one sentence or
+     * two. The header stays the thinnest thing in the dialog on purpose: it is
+     * read once, and the rows under it are what someone came here to switch.
+     */
     blurb: string;
 };
 
 const CATEGORIES: AccessCategory[] = [
-    { id: 'tools', label: 'Tools', icon: Wrench, blurb: 'Built-in abilities every conversation can draw on.' },
+    {
+        id: 'tools',
+        label: 'Tools',
+        icon: Wrench,
+        // The second half used to be its own paragraph listing all five always-on
+        // abilities by name, which cost eight lines of header to answer a question
+        // nobody had yet. What a person actually needs to know here is that the
+        // absent switches are absent on purpose.
+        blurb: 'Built-in abilities every conversation can draw on. Asking a person, task lists, messaging and pause-and-resume are always on; pod data and connected apps come from grants, not from a switch here.',
+    },
     { id: 'connectors', label: 'Connectors', icon: Plug, blurb: 'Outside apps this agent can act in, and whose account it uses.' },
     { id: 'tables', label: 'Tables', icon: TableIcon, blurb: 'Pod data it can read, and what it may change.' },
     { id: 'folders', label: 'Folders', icon: FolderOpen, blurb: 'Documents it can search, read, and cite.' },
@@ -80,11 +94,20 @@ const CATEGORIES: AccessCategory[] = [
 /**
  * Toolsets, said in terms of what the agent gains. The enum name is an
  * implementation detail — `WORKSPACE_CLI` told nobody anything.
+ *
+ * Deliberately wider than `TOOL_ORDER`: only the declarable ones render as
+ * rows, but an agent created before pod access became derived still *holds*
+ * `POD`, and `toolSetLabel` is what names it wherever it is shown. Drop an entry
+ * and that becomes a title-cased enum name in front of a user.
  */
 const TOOL_COPY: Record<string, { label: string; description: string; icon: LemmaIcon }> = {
     WORKSPACE_CLI: {
-        label: 'Workspace',
-        description: 'Run shell commands and Python in its own sandbox.',
+        // "Computer", not "Workspace": the thing it gets is a machine it can run
+        // commands on. Said as "its own" because "This computer" elsewhere in
+        // the product means the *person's* paired machine, and these are not
+        // the same computer.
+        label: 'Computer',
+        description: 'Run shell commands and Python on a computer of its own.',
         icon: SquareTerminal,
     },
     POD: {
@@ -108,9 +131,14 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         icon: MessageCircle,
     },
     SUBAGENTS: {
-        label: 'Delegation',
+        label: 'Sub agents',
         description: 'Spawn other agents and collect what they find.',
         icon: Bot,
+    },
+    MEMORY: {
+        label: 'Memory',
+        description: 'Remember durable facts between conversations — shared pod knowledge and private notes on each person.',
+        icon: NotebookPen,
     },
     TODO: {
         label: 'Task list',
@@ -147,20 +175,28 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
     },
 };
 
-/** Ordered so the abilities most agents want are decided first. */
+/**
+ * The only toolsets a person decides. Everything else an agent can do is either
+ * universal or already answered by a grant, and the server resolves it:
+ *
+ *   always on  — ask a person, skills, sleep/resume, message people, task list
+ *   derived    — pod data (any folder or table grant), connected apps (any
+ *                connector grant)
+ *   runtime    — vision, from the model's own capability
+ *
+ * Kept in step with `DECLARABLE_TOOLSETS` in
+ * `lemma-backend/app/modules/agent/tools/toolset_selection.py`. Nothing checks
+ * that for you: showing a switch the server ignores, or hiding one it honours,
+ * both fail silently.
+ *
+ * Ordered so the abilities most agents want are decided first.
+ */
 const TOOL_ORDER: string[] = [
     'WORKSPACE_CLI',
-    'POD',
     'WEB_SEARCH',
-    'SKILLS',
-    'USER_INTERACTION',
     'SUBAGENTS',
-    'TODO',
+    'MEMORY',
     'SPEECH',
-    'SNOOZE',
-    'MESSAGING',
-    'VIEW_IMAGE',
-    'CONNECTORS',
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';
@@ -454,9 +490,11 @@ export function AgentAccessDialog({
         setQuery('');
     };
 
-    // The folder tree browses rather than lists, so it brings its own
-    // navigation; a search box above it would filter nothing.
-    const isSearchable = category !== 'folders';
+    // Search is for lists that can outgrow the pane. The folder tree browses
+    // rather than lists, so it brings its own navigation and a box above it would
+    // filter nothing; Tools is a fixed five rows, all of them on screen at once,
+    // where a search box is a control that can only ever hide something.
+    const isSearchable = category !== 'folders' && category !== 'tools';
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -519,10 +557,6 @@ export function AgentAccessDialog({
                                 <div className="agent-access-list">
                                     {TOOL_ORDER
                                         .filter((tool) => Object.values(ToolSet).includes(tool as ToolSet))
-                                        .concat(
-                                            Object.values(ToolSet).filter((tool) => !TOOL_ORDER.includes(tool)),
-                                        )
-                                        .filter((tool) => matches(query, toolCopy(tool).label, toolCopy(tool).description))
                                         .map((tool) => {
                                             const copy = toolCopy(tool);
                                             const Icon = copy.icon;

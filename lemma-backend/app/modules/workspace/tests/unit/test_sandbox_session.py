@@ -359,6 +359,36 @@ async def test_relative_initial_cwd_is_canonicalized_under_workspace() -> None:
 
 
 @pytest.mark.asyncio
+async def test_every_execution_carries_the_directory_the_shell_uses() -> None:
+    """The session holds one cwd, and both surfaces are told it every time.
+
+    Creating the session with a cwd is not enough. A provider without a
+    resident interpreter (E2B) starts a fresh process per execution, so it can
+    only learn the directory from the execution itself -- and it was never
+    given one, which is how `execute_python` ran in `/workspace` while
+    `exec_command` ran in the conversation's own directory.
+    """
+    client = _CanonicalClient()
+    session = SandboxWorkspaceSession(
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        session_id="conversation-1",
+        initial_cwd="/workspace/c/2026-08-21/0d8y15k6",
+    )
+
+    await session.exec_command(cmd="pwd")
+    await session.execute_code("import os; os.getcwd()")
+    # A second execution: the create round trip is skipped once the interpreter
+    # is known to exist, so anything carried only on create would be lost here.
+    await session.execute_code("import os; os.getcwd()")
+
+    shell_cwd = client.started[0]["cwd"]
+    assert shell_cwd == "/workspace/c/2026-08-21/0d8y15k6"
+    assert [call["cwd"] for call in client.python_executes] == [shell_cwd, shell_cwd]
+    assert client.python_creates[0]["cwd"] == shell_cwd
+
+
+@pytest.mark.asyncio
 async def test_workspace_paths_cannot_escape_runtime_roots() -> None:
     client = _CanonicalClient()
     session = _session(client)
@@ -408,11 +438,57 @@ async def test_a_short_yield_still_waits_long_enough_to_see_the_exit(
     client = _CanonicalClient()
     session = _session(client)
 
-    result = await session.exec_command(
-        cmd="printf done", yield_time_ms=yield_time_ms
-    )
+    result = await session.exec_command(cmd="printf done", yield_time_ms=yield_time_ms)
 
     assert result["completed"] is True, result
     assert result["exit_code"] == 0
     assert result["process_id"] is None
     assert client._reads > 1, "a short yield collapsed into one non-waiting poll"
+
+
+class _StdinRefusingClient(_CanonicalClient):
+    """Fails the stdin write the way a real sandbox does.
+
+    E2B answers a write to a process whose stdin is closed with
+    `Code.INTERNAL: error writing to stdin: stdin not enabled or closed`,
+    which the transport raises as `SandboxUnavailable`.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def send_process_input(self, *_args: Any, **_kwargs: Any) -> None:
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (SandboxUnavailable("stdin not enabled or closed"), True),
+        (SandboxRejected("stdin not enabled or closed"), False),
+    ],
+)
+async def test_a_failed_stdin_write_reports_the_sandbox_error_itself(
+    error: Exception, retryable: bool
+) -> None:
+    """The handler must not raise while describing the failure.
+
+    It read `exc.code` and `exc.retry` off the exception, and no sandbox error
+    has ever carried either. So every `SandboxError` on this path died with
+    `AttributeError: 'SandboxUnavailable' object has no attribute 'code'`, and
+    the agent was told that instead of what actually went wrong -- observed in
+    production as three consecutive `manage_process` calls failing identically
+    with the AttributeError, hiding "stdin not enabled or closed".
+    """
+    session = _session(_StdinRefusingClient(error))  # type: ignore[arg-type]
+
+    result = await session.write_stdin(process_id=str(uuid4()), chars="y\n")
+
+    assert result["success"] is False
+    assert "AttributeError" not in str(result["error"])
+    assert "stdin not enabled or closed" in str(result["error"])
+    # Retryability reaches the agent as the retry hint and the completed flag.
+    assert ("Retry the same operation" in str(result["error"])) is retryable
+    assert result["completed"] is not retryable

@@ -7,6 +7,7 @@ from app.modules.workspace.config import workspace_settings
 import os
 import json
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,16 +21,18 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.test_utils import (
+    SHARED_E2E_NETWORK_NAME,
     create_postgres_database,
-    get_postgres_container,
+    get_postgres_uri_from_another_container,
     get_postgres_url,
-    get_redis_container,
     get_redis_url,
     get_supertokens_container,
     get_supertokens_url,
-    get_test_network,
+    shared_postgres,
+    shared_redis,
 )
 
 if TYPE_CHECKING:
@@ -69,7 +72,14 @@ def _remove_workspace_volumes() -> None:
     disks with it on a shared developer machine.
     """
     listed = subprocess.run(
-        ["docker", "volume", "ls", "-q", "--filter", "label=managed-by=lemma-workspace"],
+        [
+            "docker",
+            "volume",
+            "ls",
+            "-q",
+            "--filter",
+            "label=managed-by=lemma-workspace",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -116,8 +126,12 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     filter_sets = [["--filter", "label=lemma.e2e=true"]]
     if sandboxes_only:
         filter_sets = [
-            ["--filter", "label=lemma.e2e=true",
-             "--filter", "label=app.kubernetes.io/name=lemma-sandbox"],
+            [
+                "--filter",
+                "label=lemma.e2e=true",
+                "--filter",
+                "label=app.kubernetes.io/name=lemma-sandbox",
+            ],
             ["--filter", "label=managed-by=lemma-workspace"],
         ]
     else:
@@ -135,32 +149,24 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
             line.strip() for line in ps.stdout.splitlines() if line.strip()
         ]
     if container_ids:
-        # `-v` takes each container's anonymous volumes with it. Without it, an
-        # image that declares VOLUME (pgvector declares the postgres data dir)
-        # orphans one per run -- unnamed, unlabelled, and holding a whole
-        # database. That is how hundreds of volumes and tens of GB accumulated.
+        # -v also removes each container's anonymous data volume (postgres,
+        # supertokens, and kreuzberg all declare VOLUME in their image) — every
+        # sweep that ran without it leaked one volume per container, forever.
         subprocess.run(
             ["docker", "rm", "-f", "-v", *sorted(set(container_ids))], check=False
         )
 
-    # Sandbox volumes are NAMED and labelled, so the `-v` above does not touch
-    # them: a workspace disk is meant to outlive the container that mounts it.
-    # That is right in production, where the sweeper now reclaims them, but an
-    # e2e run's sandboxes have no sweeper and no rows behind them, so their
-    # disks are orphaned the moment their container goes. Safe in both modes
-    # precisely because it is scoped to the workspace label: the shared session
-    # containers (postgres/redis/supertokens) own no volume carrying it, and the
-    # sandboxes whose disks these are have just been removed above.
     _remove_workspace_volumes()
 
     if sandboxes_only:
         return
     # At session boundaries also prune orphaned ``lemma-e2e-*`` networks left by
-    # interrupted runs (each LemmaDockerNetwork is a separate Docker network and
-    # consumes a subnet from the default address pool — accumulating them
-    # eventually exhausts the pool: "all predefined address pools have been fully
-    # subnetted", and every later run fails at ``docker network create``). In-use
-    # networks (the live session's) can't be removed and fail harmlessly.
+    # interrupted runs from before the shared-Postgres model (each was its own
+    # Docker network and consumed a subnet from the default address pool —
+    # accumulating them eventually exhausts the pool: "all predefined address
+    # pools have been fully subnetted", and every later run fails at ``docker
+    # network create``). Nothing creates these anymore, so this is a no-op once
+    # any stragglers are gone; kept as a cheap defensive sweep.
     nets = subprocess.run(
         ["docker", "network", "ls", "-q", "--filter", "name=lemma-e2e"],
         capture_output=True,
@@ -214,7 +220,6 @@ async def _close_e2e_process_clients() -> None:
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
     from app.core.infrastructure.channels.channel_service import channel_service
     from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.events.message_bus import close_message_bus
     from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
     from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
         close_surface_event_dedup_store,
@@ -241,7 +246,6 @@ async def _close_e2e_process_clients() -> None:
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
     await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
-    await _run_cleanup_step("close_message_bus", close_message_bus)
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
@@ -321,42 +325,188 @@ async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:
     assert verified.status == "OK"
 
 
-@pytest.fixture(scope="session")
-def test_network():
-    yield _shared_context_resource("network", get_test_network)
+def _sanitize_worker_id(worker_id: str) -> str:
+    import re
+
+    return re.sub(r"[^0-9a-zA-Z_]", "_", worker_id)
 
 
-@pytest.fixture(scope="session")
-def postgres_container(test_network):
+def _postgres_worker_db_name(worker_id: str) -> str:
+    return f"lemma_e2e_{_sanitize_worker_id(worker_id)}"
+
+
+def _redis_worker_db_index(worker_id: str) -> int:
+    """Map an xdist worker id to a small Redis logical-DB index.
+
+    Redis has a native per-connection "logical database" concept (``SELECT
+    <n>``, or ``redis://host:port/<n>``) -- unlike Postgres there's no
+    ``CREATE DATABASE``-equivalent step, so each worker just gets routed to
+    its own index on the one shared server. "master" (no xdist) -> 0,
+    "gw0" -> 1, "gw1" -> 2, etc.
+
+    Redis ships with only 16 databases (0-15) by default, so this fails
+    loudly rather than silently colliding two workers on the same index if
+    parallelism ever grows past that. The widest matrix in
+    ``.github/workflows/e2e.yml`` today is ``-n 3``, well under the ceiling;
+    if that ever changes, either raise ``databases`` in the shared
+    container's redis.conf or shrink worker counts.
+    """
+    if worker_id == "master":
+        return 0
+    import re
+
+    match = re.search(r"(\d+)$", worker_id)
+    if not match:
+        raise RuntimeError(
+            f"Cannot derive a Redis DB index from xdist worker id {worker_id!r} "
+            "(expected 'master' or a 'gwN' id)."
+        )
+    index = int(match.group(1)) + 1
+    if index > 15:
+        raise RuntimeError(
+            f"xdist worker {worker_id!r} maps to Redis DB index {index}, but "
+            "Redis only ships 16 logical databases (0-15) by default. Reduce "
+            "xdist parallelism or raise `databases` in the shared Redis "
+            "container's config."
+        )
+    return index
+
+
+def _postgres_worker_datastore_db_name(worker_id: str) -> str:
+    return f"datastore_{_sanitize_worker_id(worker_id)}"
+
+
+def _postgres_worker_supertokens_db_name(worker_id: str) -> str:
+    return f"supertokens_{_sanitize_worker_id(worker_id)}"
+
+
+def _start_postgres(worker_id: str, basetemp_parent) -> None:
+    """Connect to the ONE Postgres server shared across all xdist workers.
+
+    Each worker gets its own logical database inside it (created via
+    ``create_postgres_database``), rather than its own full container -- one
+    `docker run postgres` and one idle Postgres server process for the whole
+    run instead of N. See ``shared_postgres`` in test_utils for the
+    coordination mechanism (mirrors ``shared_kreuzberg``).
+    """
+
     def _factory():
-        return get_postgres_container(network=test_network)
+        return shared_postgres(basetemp_parent, worker_id)
 
     postgres = _shared_context_resource("postgres", _factory)
-    if not getattr(postgres, "_lemma_datastore_database_created", False):
-        create_postgres_database(postgres, "datastore")
-        setattr(postgres, "_lemma_datastore_database_created", True)
-    yield postgres
+    if not getattr(postgres, "_lemma_worker_databases_created", False):
+        create_postgres_database(postgres, _postgres_worker_db_name(worker_id))
+        create_postgres_database(
+            postgres, _postgres_worker_datastore_db_name(worker_id)
+        )
+        create_postgres_database(
+            postgres, _postgres_worker_supertokens_db_name(worker_id)
+        )
+        setattr(postgres, "_lemma_worker_databases_created", True)
+
+
+def _start_supertokens(worker_id: str, basetemp_parent) -> None:
+    """Start this worker's SuperTokens container against real Postgres.
+
+    Depends on postgres (needs it running, plus this worker's supertokens_*
+    database to exist before the core's first connection) -- unlike
+    postgres/redis, deliberately NOT threaded alongside the other two in
+    _warm_shared_containers; see the comment there.
+    """
+    _start_postgres(worker_id, basetemp_parent)
+    postgres = _SHARED_RESOURCES["postgres"]
+    postgres_uri = get_postgres_uri_from_another_container(
+        postgres, _postgres_worker_supertokens_db_name(worker_id)
+    )
+
+    def _factory():
+        return get_supertokens_container(postgres_uri, network=SHARED_E2E_NETWORK_NAME)
+
+    _shared_context_resource("supertokens", _factory)
+
+
+def _start_redis(worker_id: str, basetemp_parent) -> None:
+    """Connect to the ONE Redis server shared across all xdist workers.
+
+    Each worker gets its own logical DB index inside it (selected via the
+    connection URL, see ``_redis_worker_db_index``), rather than its own full
+    container -- one `docker run redis` for the whole run instead of N. See
+    ``shared_redis`` in test_utils for the coordination mechanism (mirrors
+    ``shared_postgres``/``shared_kreuzberg``). Unlike Postgres, no
+    per-worker provisioning step is needed here -- Redis DBs exist by index
+    already, nothing to create.
+    """
+
+    def _factory():
+        return shared_redis(basetemp_parent, worker_id)
+
+    _shared_context_resource("redis", _factory)
+
+
+def _warm_shared_containers(worker_id: str, tmp_path_factory) -> None:
+    """Boot postgres(+supertokens) and redis concurrently on first use.
+
+    postgres and redis are independent Docker containers with nothing to
+    wait on each other for, so they're threaded -- `subprocess.run` and the
+    HTTP/TCP health polls all release the GIL while waiting, so this is real
+    concurrency, not just interleaving. supertokens now runs against real
+    Postgres (see _start_supertokens), so it's resolved sequentially AFTER
+    postgres within the same job rather than threaded alongside it -- it
+    needs postgres already running, with this worker's supertokens_*
+    database already created, before its own first connection.
+    `_shared_context_resource` is the dedupe layer, so a second caller (or a
+    test that only needs one of the three) always gets the same cached
+    instance.
+    """
+    if all(name in _SHARED_RESOURCES for name in ("postgres", "redis", "supertokens")):
+        return
+
+    # Resolve once on this (the calling) thread before fanning out to the
+    # pool below. ``TempPathFactory.getbasetemp()`` lazily creates and caches
+    # the base temp dir on first call and is not safe to invoke from two
+    # threads at once -- postgres and redis both used to derive this
+    # independently inside their own worker thread, and running both jobs
+    # concurrently raced two `mkdir`s for the same path, one losing with
+    # ``FileExistsError``.
+    basetemp_parent = tmp_path_factory.getbasetemp().parent
+
+    jobs: list[Callable[[], Any]] = []
+    if "postgres" not in _SHARED_RESOURCES or "supertokens" not in _SHARED_RESOURCES:
+        jobs.append(lambda: _start_supertokens(worker_id, basetemp_parent))
+    if "redis" not in _SHARED_RESOURCES:
+        jobs.append(lambda: _start_redis(worker_id, basetemp_parent))
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        for future in [pool.submit(job) for job in jobs]:
+            future.result()
 
 
 @pytest.fixture(scope="session")
-def supertokens_container():
-    yield _shared_context_resource("supertokens", get_supertokens_container)
+def postgres_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
+    yield _SHARED_RESOURCES["postgres"]
 
 
 @pytest.fixture(scope="session")
-def redis_container():
-    yield _shared_context_resource("redis", get_redis_container)
+def supertokens_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
+    yield _SHARED_RESOURCES["supertokens"]
 
 
 @pytest.fixture(scope="session")
-def test_database_url(postgres_container) -> str:
-    return get_postgres_url(postgres_container)
+def redis_container(worker_id, tmp_path_factory):
+    _warm_shared_containers(worker_id, tmp_path_factory)
+    yield _SHARED_RESOURCES["redis"]
 
 
 @pytest.fixture(scope="session")
-def test_redis_url(redis_container) -> str:
-    return get_redis_url(redis_container)
+def test_database_url(postgres_container, worker_id) -> str:
+    return get_postgres_url(postgres_container, _postgres_worker_db_name(worker_id))
 
+
+@pytest.fixture(scope="session")
+def test_redis_url(redis_container, worker_id) -> str:
+    return get_redis_url(redis_container, _redis_worker_db_index(worker_id))
 
 
 def _seed_system_model_pricing() -> None:
@@ -404,18 +554,28 @@ def _seed_system_model_pricing() -> None:
         }
     )
 
+
 @pytest.fixture(scope="session")
-def e2e_settings(test_database_url, test_redis_url, supertokens_container):
+def e2e_settings(test_database_url, test_redis_url, supertokens_container, worker_id):
     from app.core.config import settings
 
     os.environ["SUPERTOKENS_ENV"] = "testing"
     settings.database_url = test_database_url
     base_url = test_database_url.rsplit("/", 1)[0]
-    settings.datastore_database_url = f"{base_url}/datastore"
+    settings.datastore_database_url = (
+        f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
+    )
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"
     settings.debug = True
+    # ``api_docs_served()`` is opt-in now (off unless something turns it on) --
+    # it used to default to "everywhere except production", which is what kept
+    # ``/openapi.json`` reachable here. e2e tests read the live schema to catch
+    # route/response drift (e.g. TestAgentOpenApi, the agent_surfaces schema
+    # assertions), so opt the e2e stack in explicitly, the same way `make init`
+    # sets ``API_DOCS_ENABLED=true`` for the dev stack.
+    settings.api_docs_enabled = True
     settings.google_client_id = "test-google-client-id"
     settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
@@ -500,6 +660,17 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     # the prod default (5) so extraction rides that out instead of failing.
     # Set on os.environ so the worker subprocess (which indexes) inherits it.
     os.environ.setdefault("KREUZBERG_TRANSIENT_RETRY_ATTEMPTS", "8")
+    # ...but raising the attempt count without shrinking the base delay turned a
+    # blip into a stall. The total wait is base * (2^(attempts-1) - 1), which the
+    # datastore config docstring says is "the dominant wait": at the production
+    # 1.0s base, eight attempts is 127 seconds, against a 240s test timeout. The
+    # per-test document_worker fixture already gets this right for its own fake
+    # processor (attempts=2, base=0.01); this is the session-wide equivalent.
+    os.environ.setdefault("KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS", "0.05")
+    # Once five consecutive connection failures open the circuit it stays open
+    # for a real 30 seconds before a half-open trial, and any test that follows
+    # a wobble in the same process pays it.
+    os.environ.setdefault("KREUZBERG_CIRCUIT_RESET_SECONDS", "0.5")
 
     # e2e indexes datastore files explicitly in-process (the index_file helper).
     # Disable the worker's auto-index-on-upload so it doesn't ALSO index every
@@ -508,6 +679,54 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
+    # The schedule poller is a real background loop in the worker subprocess,
+    # defaulting to a 5s production cadence. Every schedule/wait-until test
+    # that goes through the HTTP API + poller (rather than calling the claim
+    # function directly, as test_due_schedule_claimer_e2e.py does) pays that
+    # full cadence. Setting the attribute alone does nothing for the worker --
+    # it re-reads its own config from its own environment at startup, not
+    # this process's settings singleton -- so set os.environ too, same as
+    # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
+    # env={**os.environ, ...} already inherits it, no extra Popen key needed.
+    settings.schedule_poll_interval_seconds = 0.5
+    os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
+
+    # The same argument as the schedule poller, for the other production
+    # cadences the suite sits through. Each is a background loop the tests wait
+    # on rather than drive, so the production interval is pure latency here.
+    # Attribute + os.environ for the same reason as above: the worker subprocess
+    # re-reads its own config from its own environment.
+    #
+    #   agent_run_stop_poll_interval_seconds  1.0s -- every stop/cancel journey
+    #   function_run_poll_interval_seconds    0.5s -- every agent-dispatches-a-
+    #                                                 function wait
+    #   outbox_*                              5.0s -> 0.5s (their declared
+    #                                                 floor) -- normally masked by the
+    #       pg_notify wake, but it degrades *silently* to the full interval
+    #       whenever the listen path is not attached, which reads as "this test
+    #       is sometimes five seconds slower" rather than as a fault.
+    os.environ["AGENT_RUN_STOP_POLL_INTERVAL_SECONDS"] = "0.1"
+    os.environ["FUNCTION_RUN_POLL_INTERVAL_SECONDS"] = "0.1"
+    # 0.5 is the floor these two declare (ge=0.5); anything lower fails
+    # validation at import and takes the whole app down, not just the setting.
+    os.environ["OUTBOX_IDLE_POLL_MAX_SECONDS"] = "0.5"
+    os.environ["OUTBOX_LISTEN_FALLBACK_POLL_SECONDS"] = "0.5"
+
+    # Pool connections instead of opening a fresh one per unit of work.
+    #
+    # `db_pool_in_testing` defaults to False, and its docstring justifies that
+    # with "the pytest process runs many event loops and a pooled connection
+    # must not outlive the loop that opened it". That has not been true since
+    # pytest.ini pinned asyncio_default_fixture_loop_scope and
+    # asyncio_default_test_loop_scope to `session`: there is exactly one loop.
+    #
+    # The cost it left behind is measured in that same docstring -- "JOB queue
+    # latency was 0.3s under NullPool against 0.06s pooled" -- and this suite is
+    # IO-bound, so a full TCP connect per unit of work is close to pure latency.
+    # It also means two xdist workers churn connections against one shared
+    # Postgres for the whole run.
+    settings.db_pool_in_testing = True
+
     from app.core.infrastructure.db import session as db_session_module
 
     db_session_module.reset_engine_state()
@@ -515,9 +734,18 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     return settings
 
 
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_workspace_containers_session():
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def cleanup_workspace_containers_session():
     yield
+    # The message bus is a process-wide singleton with no per-test subscribe
+    # state (it's publish-only; the real FastStream consumers run in the
+    # separate streaq worker subprocess, unaffected by this connection's
+    # lifecycle) -- close it once per xdist worker here instead of
+    # reconnecting it on every single test's teardown via
+    # _close_e2e_process_clients.
+    from app.core.infrastructure.events.message_bus import close_message_bus
+
+    await _run_cleanup_step("close_message_bus", close_message_bus)
     # Close exactly the contexts created by this pytest process. Broad sweeps
     # by the shared label are unsafe even in a serial session because another
     # independently invoked pytest process may be running at the same time.
@@ -535,9 +763,24 @@ async def cleanup_workspace_containers_function():
 
 
 def _import_e2e_models() -> None:
-    """Populate shared SQLAlchemy metadata before schema creation."""
+    """Populate shared SQLAlchemy metadata before schema creation.
+
+    Every module that declares a ``__tablename__`` has to appear here, or its
+    tables exist in ``Base.metadata`` only once some *test* happens to import
+    them -- after the schema was created. ``runtime_models`` was missing, and it
+    declares six: agent_hosts, agent_host_pairings, agent_host_harnesses,
+    agent_host_commands, agent_host_run_leases and agent_runtime_profiles.
+
+    That made schema creation order-dependent.
+    ``test_dynamic_agent_function_tools_e2e`` fails on `relation
+    "agent_runtime_profiles" does not exist` when its file runs on its own, and
+    passes in CI only because an earlier test in the same shard imports the
+    module first. The other modules listed below re-export their submodels
+    through a package ``__init__``, so importing the package is enough.
+    """
     from app.core.infrastructure.events import models as event_models
     from app.modules.agent.infrastructure import models as agent_models
+    from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
@@ -557,6 +800,7 @@ def _import_e2e_models() -> None:
 
     _ = (
         workspace_models,
+        agent_runtime_models,
         event_models,
         user_models,
         organization_models,
@@ -646,11 +890,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     # session-scoped production worker; per-test db_manager still truncates it.
     _ensure_repo_root_on_path()
     _import_e2e_models()
-    schema_manager = DatabaseManager(e2e_settings.database_url)
-    async with schema_manager.engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    await schema_manager.create_tables()
-    await schema_manager.close()
+    await _ensure_schema_once(e2e_settings.database_url)
 
     redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
     await redis_client.flushdb()
@@ -695,9 +935,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
-                "WORKSPACE_CALLBACK_API_URL": (
-                    e2e_settings.workspace_callback_api_url
-                ),
+                "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),
                 "FUNCTION_RUNTIME_GATEWAY_URL": (
                     e2e_settings.function_runtime_gateway_url
                 ),
@@ -705,6 +943,12 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 # worker pointed at it so worker-driven function jobs reach it.
                 "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
                 "ENVIRONMENT": "testing",
+                # E2E workers have no production drain to protect, and the default
+                # 10s grace period equalled the teardown's patience -- so the worker
+                # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
+                # cannot be trapped, so coverage's `sigterm = true` handler never
+                # flushed and the subprocess's coverage was lost.
+                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
                 "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
@@ -760,7 +1004,9 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         finally:
             proc.terminate()
             try:
-                proc.wait(timeout=10)
+                # Comfortably longer than the 1s grace period set at spawn, so
+                # SIGKILL becomes unreachable in practice.
+                proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 proc.kill()
             redis_client = redis.from_url(
@@ -770,12 +1016,64 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             await redis_client.aclose()
 
 
+# Table names this process has already created, per database.
+#
+# The per-test `create_all(checkfirst=True)` this replaces read as cheap -- the
+# comment on db_manager used to call it exactly that -- but SQLAlchemy's
+# PostgreSQL dialect issues one `has_table` round trip per table on this path
+# and does not cache them, so it was 55 statements per test to discover that
+# almost nothing had changed. Measured on test_records_e2e.py: 54.7 reflection
+# statements per test, a quarter of all setup SQL.
+#
+# "Almost" is the important word, and it is why this tracks table *names* rather
+# than just "have we run yet". Models register with Base.metadata lazily as the
+# app imports them, so metadata genuinely grows between tests -- the first naive
+# version of this hoisted create_all to run once and 20 of 21 tests then failed
+# on `relation "agent_host_run_leases" does not exist`. Creating only the tables
+# that appeared since last time keeps that correctness and still costs zero
+# round trips on the common path, where nothing appeared.
+#
+# Keyed by URL because each xdist worker gets its own logical database, and each
+# xdist worker is its own process with its own copy of this dict.
+_CREATED_TABLES: dict[str, set[str]] = {}
+
+
+async def _ensure_schema_once(database_url: str) -> None:
+    """Create the extension once, and any tables not yet created."""
+    known = _CREATED_TABLES.setdefault(database_url, set())
+    pending = [
+        table for name, table in Base.metadata.tables.items() if name not in known
+    ]
+    if not pending:
+        return
+
+    manager = DatabaseManager(database_url)
+    try:
+        if not known:
+            async with manager.engine.begin() as conn:
+                # Serialize with PostgresSearchService.ensure_schema(), which
+                # also runs CREATE EXTENSION under this advisory key (concurrent
+                # CREATE EXTENSION on pg_extension otherwise deadlocks). Key must
+                # match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
+                await conn.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
+                )
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        async with manager.engine.begin() as conn:
+            await conn.run_sync(
+                Base.metadata.create_all, tables=pending, checkfirst=True
+            )
+    finally:
+        await manager.close()
+    known.update(table.name for table in pending)
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
-    # Per-test, but cheap: the schema is created once (create_all is idempotent
-    # via checkfirst) and persists for the whole run, so each test only pays a
-    # fast TRUNCATE for data isolation instead of a full drop/create. Keeping the
-    # schema stable also lets the shared streaq worker hold its connections.
+    # Per-test data isolation only. The schema itself is prepared once per
+    # database (_ensure_schema_once) and persists for the whole run, so each test
+    # pays a filtered DELETE sweep rather than a drop/create. Keeping the schema
+    # stable also lets the shared streaq worker hold its connections.
     _ensure_repo_root_on_path()
     manager = DatabaseManager(e2e_settings.database_url)
 
@@ -812,17 +1110,8 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     last_exc: BaseException | None = None
     for _attempt in range(6):
         try:
-            async with manager.engine.begin() as conn:
-                # Serialize with PostgresSearchService.ensure_schema(), which also
-                # runs CREATE EXTENSION under this advisory key (concurrent
-                # CREATE EXTENSION on pg_extension otherwise deadlocks). Key must
-                # match _ENSURE_SCHEMA_LOCK_KEY in postgres_search_service.
-                await conn.execute(
-                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6C656D6D61}
-                )
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            # Idempotent (checkfirst) — creates schema on the first test, no-ops after.
-            await manager.create_tables()
+            # Once per database, not once per test — see _ensure_schema_once.
+            await _ensure_schema_once(e2e_settings.database_url)
             # Start each test from a clean slate without dropping the schema.
             await manager.truncate_all()
             break

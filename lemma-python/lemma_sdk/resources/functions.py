@@ -58,7 +58,9 @@ class PodFunctions(BoundResource):
     def get(self, name: str) -> FunctionDetailResponse:
         return self._call(function_get, self._pod_uuid(), name)
 
-    def update(self, name: str, request: UpdateFunctionRequest) -> FunctionDetailResponse:
+    def update(
+        self, name: str, request: UpdateFunctionRequest
+    ) -> FunctionDetailResponse:
         return self._call(function_update, self._pod_uuid(), name, body=request)
 
     def delete(self, name: str) -> None:
@@ -116,9 +118,7 @@ class PodFunctions(BoundResource):
 
     def revision(self, name: str, revision_ref: str) -> FunctionRevisionResponse:
         """One revision, with its source and the schemas its code implements."""
-        return self._call(
-            function_revision_get, self._pod_uuid(), name, revision_ref
-        )
+        return self._call(function_revision_get, self._pod_uuid(), name, revision_ref)
 
     def promote_revision(
         self, name: str, revision_ref: str

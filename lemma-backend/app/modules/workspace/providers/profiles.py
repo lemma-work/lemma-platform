@@ -37,11 +37,33 @@ class SandboxProfile:
         return self.kind is SandboxKind.FUNCTION
 
 
+def _digest_for(image: str, configured: str) -> str:
+    """The image's own digest when it has one, else the configured constant.
+
+    The configured digest is a hand-bumped placeholder, and forgetting to move
+    it is silent in the worst way: a release ships a new workspace image, every
+    existing sandbox compares equal to what is configured, and each one keeps
+    running the image it was built from. The comment on the setting says it was
+    "last moved when the GitHub CLI was added" -- every image change since then
+    reached only sandboxes that happened to be created afterwards.
+
+    A pinned reference already carries the answer. Desktop and local installs
+    resolve `lemma-workspace@sha256:...` from the release manifest, so the image
+    identity *is* the digest and no one has to remember anything. A floating tag
+    like `lemma-workspace:dev` carries nothing, and there the constant still
+    applies -- a developer rebuilding the same tag does not want their fleet
+    replaced on every build.
+    """
+    _, separator, digest = image.rpartition("@sha256:")
+    return f"sha256:{digest}" if separator else configured
+
+
 def workspace_profile(*, image: str | None = None) -> SandboxProfile:
+    resolved_image = image or workspace_settings.workspace_image
     return SandboxProfile(
         name=workspace_settings.workspace_profile_name,
-        digest=workspace_settings.workspace_profile_digest,
-        image=image or workspace_settings.workspace_image,
+        digest=_digest_for(resolved_image, workspace_settings.workspace_profile_digest),
+        image=resolved_image,
         kind=SandboxKind.WORKSPACE,
         runtime_port=WORKSPACE_RUNTIME_PORT,
         published_ports=(WORKSPACE_RUNTIME_PORT, WORKSPACE_BROWSER_PORT),
@@ -50,10 +72,11 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
 
 
 def function_profile(*, image: str | None = None) -> SandboxProfile:
+    resolved_image = image or workspace_settings.function_image
     return SandboxProfile(
         name=workspace_settings.function_profile_name,
-        digest=workspace_settings.function_profile_digest,
-        image=image or workspace_settings.function_image,
+        digest=_digest_for(resolved_image, workspace_settings.function_profile_digest),
+        image=resolved_image,
         kind=SandboxKind.FUNCTION,
         runtime_port=FUNCTION_RUNTIME_PORT,
         published_ports=(FUNCTION_RUNTIME_PORT,),
@@ -64,6 +87,17 @@ def function_profile(*, image: str | None = None) -> SandboxProfile:
 
 
 def profile_for(kind: SandboxKind) -> SandboxProfile:
-    return (
-        function_profile() if kind is SandboxKind.FUNCTION else workspace_profile()
-    )
+    return function_profile() if kind is SandboxKind.FUNCTION else workspace_profile()
+
+
+def profile_is_stale(*, kind: SandboxKind, recorded_digest: str | None) -> bool:
+    """Was this sandbox built from a profile that is no longer configured?
+
+    A row with no digest has never been provisioned (or was backfilled by the
+    migration), which is not stale -- there is nothing to compare and the first
+    provision adopts whatever is configured.
+
+    Here rather than on the service: it is a question about profiles, and
+    `profile_for` is the other half of the answer.
+    """
+    return bool(recorded_digest) and recorded_digest != profile_for(kind).digest

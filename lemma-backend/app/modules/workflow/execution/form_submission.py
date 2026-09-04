@@ -52,17 +52,23 @@ def validate_form_inputs(
     if not isinstance(schema, dict) or not schema:
         return
     try:
-        validator = Draft202012Validator(schema)
+        # `check_schema`, not construction: the constructor accepts a malformed
+        # schema without complaint, and the failure then surfaces from
+        # `iter_errors` as `UnknownType` — which is not a `SchemaError`, so it
+        # escaped this handler and reached the person submitting the form as an
+        # unhandled error. That is the opposite of what the docstring promises.
+        Draft202012Validator.check_schema(schema)
     except SchemaError:
         logger.warning("workflow.form.invalid_schema", node_id=node_id)
         return
+    validator = Draft202012Validator(schema)
     error = best_match(validator.iter_errors(data))
     if error is not None:
         field = ".".join(str(part) for part in error.absolute_path) or "input"
         raise FormValidationError(
-            f"Form input for node '{node_id}' is invalid at '{field}': "
-            f"{error.message}"
+            f"Form input for node '{node_id}' is invalid at '{field}': {error.message}"
         )
+
 
 async def check_assignee(
     uow,
@@ -72,15 +78,10 @@ async def check_assignee(
 ) -> None:
     if wait.assigned_pod_member_id is None or requester_user_id is None:
         return
-    from app.composition.workflow_pod import (
-        PodMemberRepository,
-    )
+    from app.modules.pod.contracts.members import pod_member_id
 
-    pod_member = await PodMemberRepository(uow).get_by_pod_and_user_id(
-        pod_id,
-        requester_user_id,
-    )
-    if pod_member is None or pod_member.id != wait.assigned_pod_member_id:
+    member_id = await pod_member_id(uow, pod_id, requester_user_id)
+    if member_id is None or member_id != wait.assigned_pod_member_id:
         raise WorkflowAccessDeniedError(
             "Workflow wait is assigned to another pod member"
         )

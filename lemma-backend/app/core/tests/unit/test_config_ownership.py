@@ -7,6 +7,9 @@ def test_global_settings_exclude_module_owned_controls() -> None:
     module_owned = {
         "agent_run_stop_poll_interval_seconds",
         "agent_context_brief_cache_ttl_seconds",
+        "agent_memory_index_max_chars",
+        "agent_memory_section_max_chars",
+        "agent_memory_brief_cache_ttl_seconds",
         "function_run_poll_interval_seconds",
         "conversation_title_model",
         "local_agent_runtime_config_path",
@@ -17,13 +20,15 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "datastore_markdown_max_bytes",
         "datastore_markdown_image_max_bytes",
         "datastore_markdown_batch_max_bytes",
+        "datastore_cell_max_bytes",
+        "datastore_row_max_bytes",
+        "datastore_event_payload_max_bytes",
         "app_source_archive_max_bytes",
         "app_dist_archive_max_bytes",
         "app_bundle_upload_max_bytes",
         "app_archive_max_entries",
         "app_archive_max_uncompressed_bytes",
         "app_archive_max_compression_ratio",
-        "scheduler_api_url",
         "schedule_max_consecutive_failures",
     }
 

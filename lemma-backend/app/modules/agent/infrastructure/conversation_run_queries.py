@@ -16,21 +16,39 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
+    Message as MessageEntity,
     MessageRole,
 )
-from app.modules.agent.domain.value_objects import ACTIVE_AGENT_RUN_STATUSES
-from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    ACTIVE_AGENT_RUN_STATUSES,
+)
+from app.modules.agent.infrastructure.models import (
+    AgentRunModel,
+    MessageModel,
+)
+from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
+    list_conversations_stranded_by_a_finished_run,
+)
 from app.modules.agent.infrastructure.repository_status import (
     run_status_values_for_db as _run_status_values_for_db,
 )
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import (
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
+
+#: How far back to look for a transcript of the file `listen` was asked for.
+#: Bounded because a long-running chat holds thousands of messages and the
+#: answer, when there is one, is nearly always the message being answered.
+_VOICE_TRANSCRIPT_LOOKBACK = 50
 
 
 class ConversationRunQueriesMixin:
@@ -119,6 +137,82 @@ class ConversationRunQueriesMixin:
         )
         return [StaleAgentRunRef(*row) for row in result.all()]
 
+    async def list_active_runs_pending_liveness(
+        self,
+        *,
+        cutoff_seconds: int,
+        decided_after_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]:
+        """Active runs whose age alone settles nothing.
+
+        Older than ``cutoff_seconds``, so anything still executing has had
+        several chances to renew its job heartbeat, and younger than
+        ``decided_after_seconds``, where `list_stale_active_runs` takes over
+        and fails them on age alone. A band rather than an open-ended window so
+        every run is decided in exactly one place, and so the caller never asks
+        the job layer about a run it has already reclaimed.
+        """
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            .where(
+                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
+                AgentRunModel.started_at < now - timedelta(seconds=cutoff_seconds),
+                AgentRunModel.started_at
+                >= now - timedelta(seconds=decided_after_seconds),
+            )
+            .order_by(AgentRunModel.started_at.asc())
+            .limit(limit)
+        )
+        return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_runs_stuck_stopping(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]:
+        """Stops that nobody picked up.
+
+        STOP_REQUESTED is an active status, so such a run keeps the one active
+        run slot: a new message attaches to the dying run and starts nothing,
+        and Retry refuses. A live worker now acts on a stop within a second, so
+        one still sitting here means the worker never will -- and until this,
+        the only thing that freed the conversation was the orphan sweep, an hour
+        after the run *started*.
+
+        Keyed on `updated_at`, which is when the stop was written, rather than
+        `started_at`: how long the run had been going says nothing about how
+        long the stop has been ignored.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        result = await self.session.execute(
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            .where(
+                AgentRunModel.status == AgentRunStatus.STOP_REQUESTED.value,
+                AgentRunModel.updated_at < cutoff,
+            )
+            .order_by(AgentRunModel.updated_at.asc())
+            .limit(limit)
+        )
+        return [StaleAgentRunRef(*row) for row in result.all()]
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]:
+        """Conversations still active whose most recent run already finished.
+
+        Implemented next to the write that settles them; see
+        `repositories.conversation_status_repair`.
+        """
+        return await list_conversations_stranded_by_a_finished_run(
+            self.session, cutoff_seconds=cutoff_seconds, limit=limit
+        )
+
     async def list_agent_runs_with_messages(
         self,
         conversation_id: UUID,
@@ -184,24 +278,20 @@ class ConversationRunQueriesMixin:
         if not runs:
             return []
 
-        digests = dict(
-            (
-                (row[0], (row[1], row[2]))
-                for row in (
-                    await self.session.execute(
-                        select(
-                            MessageModel.agent_run_id,
-                            func.count(),
-                            func.max(MessageModel.created_at),
-                        )
-                        .where(
-                            MessageModel.agent_run_id.in_([run.id for run in runs])
-                        )
-                        .group_by(MessageModel.agent_run_id)
+        digests = {
+            row[0]: (row[1], row[2])
+            for row in (
+                await self.session.execute(
+                    select(
+                        MessageModel.agent_run_id,
+                        func.count(),
+                        func.max(MessageModel.created_at),
                     )
-                ).all()
-            )
-        )
+                    .where(MessageModel.agent_run_id.in_([run.id for run in runs]))
+                    .group_by(MessageModel.agent_run_id)
+                )
+            ).all()
+        }
 
         entities: list[AgentRunEntity] = []
         for run in runs:
@@ -221,8 +311,10 @@ class ConversationRunQueriesMixin:
     ) -> list[AgentRunEntity]:
         """Fill in messages: whole for ``full_run_ids``, first and last for the rest.
 
-        Two ``DISTINCT ON`` reads serve the elided runs, both answered by the
-        (agent_run_id, sequence) index rather than by reading the runs.
+        Three reads serve the elided runs -- two ``DISTINCT ON`` for each run's
+        first and last message, and one for every user message in them, since
+        those are never elided. All are answered by the (agent_run_id, sequence)
+        index rather than by reading the runs.
         """
         if not runs:
             return runs
@@ -244,6 +336,27 @@ class ConversationRunQueriesMixin:
                 .all()
             )
         if elided_ids:
+            # The user's own messages are never elided, however old the run. An
+            # agent that cannot see what it was asked drifts onto a different
+            # task and then reports that task as the one requested -- which is
+            # exactly how a request for one video became an hour spent building
+            # another. Answered by (agent_run_id, sequence) like its neighbours.
+            messages.extend(
+                (
+                    await self.session.execute(
+                        select(MessageModel)
+                        .where(
+                            MessageModel.agent_run_id.in_(elided_ids),
+                            MessageModel.role == MessageRole.USER.value,
+                        )
+                        .order_by(
+                            MessageModel.agent_run_id, MessageModel.sequence.asc()
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for order in (MessageModel.sequence.asc(), MessageModel.sequence.desc()):
                 messages.extend(
                     (
@@ -307,6 +420,73 @@ class ConversationRunQueriesMixin:
         ).one()
         return bool(row.total) and not row.non_user
 
+    def _unclaimed_queued_messages(self, agent_run_id: UUID):
+        """Messages that arrived after this run started and nobody has read yet.
+
+        ``start`` stamps ``during_active_run`` on a message it appends to a run
+        already in flight, because that run loaded its history before the
+        message existed. ``steered_into_run`` is stamped back by whoever
+        delivered it into a model request, so the same predicate answers both
+        questions that matter: what to steer in next, and what is still owed an
+        answer once the run ends.
+
+        Compared as text rather than cast to boolean, because the column is free
+        JSONB -- a cast would raise on a row where something else wrote a
+        non-boolean under that key, and a miscount is the better failure.
+        """
+        return (
+            MessageModel.agent_run_id == agent_run_id,
+            MessageModel.role == MessageRole.USER.value,
+            MessageModel.message_metadata["during_active_run"].astext == "true",
+            MessageModel.message_metadata["steered_into_run"].astext.is_(None),
+        )
+
+    async def count_queued_user_messages(self, agent_run_id: UUID) -> int:
+        """How many of this run's queued messages are still unanswered.
+
+        Counted over ``ix_agent_message_run_sequence`` rather than loading the
+        run's messages, and asked once when a run ends -- so the answer is
+        normally zero and costs one indexed aggregate.
+        """
+        return int(
+            await self.session.scalar(
+                select(func.count()).where(
+                    *self._unclaimed_queued_messages(agent_run_id)
+                )
+            )
+            or 0
+        )
+
+    async def claim_queued_user_messages(
+        self, agent_run_id: UUID
+    ) -> list[MessageEntity]:
+        """Take the messages that arrived mid-run, and mark them taken.
+
+        Claimed and read in one statement so a message can be delivered into the
+        model exactly once. Whoever claims them owes the person an answer: if
+        the run then dies without replying, the row stays claimed and the
+        completion sweep will not pick it up either -- but the run is FAILED, so
+        the person is told, which is the recovery that was already there.
+
+        Returns them in the order they were appended, which the caller relies on
+        to keep several bubbles of one message in sequence.
+        """
+        stamped = MessageModel.message_metadata.op("||")(
+            func.jsonb_build_object("steered_into_run", str(agent_run_id))
+        )
+        rows = (
+            await self.session.execute(
+                update(MessageModel)
+                .where(*self._unclaimed_queued_messages(agent_run_id))
+                .values(message_metadata=stamped)
+                .returning(MessageModel)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        return sorted(
+            (row.to_entity() for row in rows), key=lambda message: message.sequence
+        )
+
     async def get_latest_agent_run_for_conversation(
         self,
         conversation_id: UUID,
@@ -320,3 +500,45 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def find_existing_voice_transcript(
+        self, conversation_id: UUID, paths: tuple[str, ...]
+    ) -> str | None:
+        """A transcript this conversation already holds for one of ``paths``.
+
+        Inbound voice notes are transcribed once, at ingress, before the agent
+        is asked anything -- their words arrive as the message text. The agent
+        is told so, and told not to transcribe the file again, and sometimes it
+        does anyway: on dev, five `listen` calls landed on files whose
+        transcript was already sitting in the same conversation. Each one paid a
+        speech provider to produce text the run had been handed for free.
+
+        An instruction is the wrong shape for that. A model is free to ignore
+        one, and the cost of it doing so is real money and a slower answer, so
+        this makes the second transcription unnecessary rather than discouraged
+        -- `listen` answers from here and never reaches the provider.
+
+        ``paths`` is a tuple because the agent may name the file either way: the
+        prompt block carries the stored path (``/{user}/whatsapp/audio.ogg``)
+        while a person, and a model reading a listing, would write ``/me/...``.
+        Both spellings are the same file and both must find the transcript.
+        """
+        if not paths:
+            return None
+        rows = await self.session.execute(
+            select(MessageModel.message_metadata)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.message_metadata.has_key("voice_transcripts"),
+            )
+            .order_by(MessageModel.sequence.desc())
+            .limit(_VOICE_TRANSCRIPT_LOOKBACK)
+        )
+        wanted = set(paths)
+        for (metadata,) in rows.all():
+            for item in (metadata or {}).get("voice_transcripts") or []:
+                if not isinstance(item, dict) or item.get("failed"):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text and str(item.get("path") or "") in wanted:
+                    return text
+        return None

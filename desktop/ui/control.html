@@ -46,6 +46,20 @@
         <div class="state-pill" id="state-pill">Connecting…</div>
       </header>
 
+      <!-- Shown when no snapshot has arrived. Without it this page draws
+           nothing at all and the state pill reads "Connecting…" forever, which
+           is exactly what a user sees when they open Local settings because
+           something is already broken. -->
+      <div class="warning-box" id="snapshot-unavailable" hidden>
+        <strong>Can't reach Lemma's background service.</strong>
+        <p>Settings can't be shown until it answers. Retrying every few seconds.</p>
+        <p class="limitation-note" id="snapshot-unavailable-detail"></p>
+        <div class="button-row">
+          <button class="btn" data-action="retry-snapshot">Try again</button>
+          <button class="btn" data-action="logs">Open logs folder</button>
+        </div>
+      </div>
+
       <section class="page active" data-page="overview">
         <div class="attention-banner" id="attention-banner" hidden>
           <span class="attention-icon">!</span>
@@ -176,23 +190,27 @@
         <article class="panel">
           <div class="panel-heading"><div><h2>Connected services</h2><p>Open only the provider you want to configure.</p></div></div>
           <details class="config-drawer">
-            <summary><span><strong>Composio</strong><small>Connector catalog and webhooks</small></span><span class="status">Optional</span></summary>
+            <summary><span><strong>Composio</strong><small>Connector catalog and webhooks</small></span><span class="config-state" data-config-state></span></summary>
             <div class="drawer-body">
               <label class="check"><input type="checkbox" id="composio-enabled" /> Enable Composio connectors</label>
               <div class="form-grid"><div class="field"><label for="composio-key">API key</label><div class="secret-wrap"><input id="composio-key" type="password" data-secret="integrations.composio_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="composio-webhook">Webhook secret</label><div class="secret-wrap"><input id="composio-webhook" type="password" data-secret="integrations.composio_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div>
             </div>
           </details>
           <details class="config-drawer">
-            <summary><span><strong>Google</strong><small>Gmail, Calendar, and Drive OAuth app</small></span><span class="status">Optional</span></summary>
+            <summary><span><strong>Google</strong><small>Gmail, Calendar, and Drive OAuth app</small></span><span class="config-state" data-config-state></span></summary>
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="google-id">Client ID</label><input id="google-id" /></div><div class="field"><label for="google-secret">Client secret</label><div class="secret-wrap"><input id="google-secret" type="password" data-secret="integrations.google_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Callback: <code id="connector-callback">Available after startup</code></p></div>
           </details>
           <details class="config-drawer">
-            <summary><span><strong>GitHub</strong><small>Repositories, issues, and pull requests</small></span><span class="status">Optional</span></summary>
+            <summary><span><strong>GitHub</strong><small>Repositories, issues, and pull requests</small></span><span class="config-state" data-config-state></span></summary>
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="github-id">Client ID</label><input id="github-id" /></div><div class="field"><label for="github-secret">Client secret</label><div class="secret-wrap"><input id="github-secret" type="password" data-secret="integrations.github_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">From a GitHub OAuth app. Needed before a GitHub account can be connected.</p></div>
           </details>
           <details class="config-drawer">
-            <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="status">Optional</span></summary>
+            <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="config-state" data-config-state></span></summary>
             <div class="drawer-body"><div class="form-grid"><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear">Remove</button></div></div></div></div>
+          </details>
+          <details class="config-drawer">
+            <summary><span><strong>Deepgram</strong><small>Speech: <code>say</code> and <code>listen</code></small></span><span class="config-state" data-config-state></span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="deepgram-key">API key</label><div class="secret-wrap"><input id="deepgram-key" type="password" data-secret="integrations.deepgram_api_key" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Without it, <code>say</code> and <code>listen</code> fail and inbound voice notes cannot be read.</p></div>
           </details>
         </article>
         <div class="savebar"><span>Unsaved integration changes</span><button class="btn primary" data-save>Save integrations</button></div>
@@ -201,11 +219,11 @@
       <section class="page config-page" data-page="channels">
         <article class="panel">
           <div class="panel-heading"><div><h2>Agent channels</h2><p>Enable only the receivers you use. Socket and polling channels do not need a public link.</p></div></div>
-          <details class="config-drawer"><summary><span><strong>Slack</strong><small>Connector app and workspace bot</small></span><span class="status">Optional</span></summary><div class="drawer-body"><p class="hint">Two different credentials. The <strong>connector app</strong> lets each person connect their own Slack account; the <strong>workspace bot</strong> is the one account that posts as Lemma.</p><div class="form-grid"><div class="field"><label for="slack-connector-id">Connector client ID</label><input id="slack-connector-id" /></div><div class="field"><label for="slack-connector-secret">Connector client secret</label><div class="secret-wrap"><input id="slack-connector-secret" type="password" data-secret="integrations.slack_client_secret" /><button class="secret-clear">Remove</button></div></div></div><label class="check"><input type="checkbox" id="slack-enabled" /> Enable Socket Mode</label><div class="form-grid"><div class="field"><label for="slack-app-token">App token</label><div class="secret-wrap"><input id="slack-app-token" type="password" data-secret="surfaces.slack_app_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-bot-token">Bot token</label><div class="secret-wrap"><input id="slack-bot-token" type="password" data-secret="surfaces.slack_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-signing-secret">Signing secret</label><div class="secret-wrap"><input id="slack-signing-secret" type="password" data-secret="surfaces.slack_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Telegram</strong><small>Long polling · no public ingress</small></span><span class="status">Optional</span></summary><div class="drawer-body"><label class="check"><input type="checkbox" id="telegram-enabled" /> Enable polling receiver</label><div class="form-grid"><div class="field"><label for="telegram-bot-token">Bot token</label><div class="secret-wrap"><input id="telegram-bot-token" type="password" data-secret="surfaces.telegram_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="telegram-webhook-secret">Webhook secret</label><div class="secret-wrap"><input id="telegram-webhook-secret" type="password" data-secret="surfaces.telegram_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Microsoft Teams</strong><small>Bot Framework callbacks</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="teams-id">Bot app ID</label><input id="teams-id" /></div><div class="field"><label for="teams-tenant">Tenant ID</label><input id="teams-tenant" /></div><div class="field"><label for="teams-password">App password</label><div class="secret-wrap"><input id="teams-password" type="password" data-secret="surfaces.teams_app_password" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>WhatsApp Business</strong><small>Meta webhook</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="wa-phone">Phone number ID</label><input id="wa-phone" /></div><div class="field"><label for="wa-waba">Business account ID</label><input id="wa-waba" /></div><div class="field"><label for="wa-access-token">Access token</label><div class="secret-wrap"><input id="wa-access-token" type="password" data-secret="surfaces.whatsapp_access_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-verify-token">Verify token</label><div class="secret-wrap"><input id="wa-verify-token" type="password" data-secret="surfaces.whatsapp_verify_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-app-secret">App secret</label><div class="secret-wrap"><input id="wa-app-secret" type="password" data-secret="surfaces.whatsapp_app_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
-          <details class="config-drawer"><summary><span><strong>Email · Resend</strong><small>Inbound email webhook</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="resend-domain">Inbound domain</label><input id="resend-domain" /></div><div class="field"><label for="resend-api-key">API key</label><div class="secret-wrap"><input id="resend-api-key" type="password" data-secret="surfaces.resend_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="resend-signing-secret">Signing secret</label><div class="secret-wrap"><input id="resend-signing-secret" type="password" data-secret="surfaces.resend_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Slack</strong><small>Connector app and workspace bot</small></span><span class="config-state" data-config-state></span></summary><div class="drawer-body"><p class="hint">Two different credentials. The <strong>connector app</strong> lets each person connect their own Slack account; the <strong>workspace bot</strong> is the one account that posts as Lemma.</p><div class="form-grid"><div class="field"><label for="slack-connector-id">Connector client ID</label><input id="slack-connector-id" /></div><div class="field"><label for="slack-connector-secret">Connector client secret</label><div class="secret-wrap"><input id="slack-connector-secret" type="password" data-secret="integrations.slack_client_secret" /><button class="secret-clear">Remove</button></div></div></div><label class="check"><input type="checkbox" id="slack-enabled" /> Enable Socket Mode</label><div class="form-grid"><div class="field"><label for="slack-app-token">App token</label><div class="secret-wrap"><input id="slack-app-token" type="password" data-secret="surfaces.slack_app_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-bot-token">Bot token</label><div class="secret-wrap"><input id="slack-bot-token" type="password" data-secret="surfaces.slack_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-signing-secret">Signing secret</label><div class="secret-wrap"><input id="slack-signing-secret" type="password" data-secret="surfaces.slack_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Telegram</strong><small>Long polling · no public ingress</small></span><span class="config-state" data-config-state></span></summary><div class="drawer-body"><label class="check"><input type="checkbox" id="telegram-enabled" /> Enable polling receiver</label><div class="form-grid"><div class="field"><label for="telegram-bot-token">Bot token</label><div class="secret-wrap"><input id="telegram-bot-token" type="password" data-secret="surfaces.telegram_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="telegram-webhook-secret">Webhook secret</label><div class="secret-wrap"><input id="telegram-webhook-secret" type="password" data-secret="surfaces.telegram_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Microsoft Teams</strong><small>Bot Framework callbacks</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="teams-id">Bot app ID</label><input id="teams-id" /></div><div class="field"><label for="teams-tenant">Tenant ID</label><input id="teams-tenant" /></div><div class="field"><label for="teams-password">App password</label><div class="secret-wrap"><input id="teams-password" type="password" data-secret="surfaces.teams_app_password" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>WhatsApp Business</strong><small>Meta webhook</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="wa-phone">Phone number ID</label><input id="wa-phone" /></div><div class="field"><label for="wa-waba">Business account ID</label><input id="wa-waba" /></div><div class="field"><label for="wa-access-token">Access token</label><div class="secret-wrap"><input id="wa-access-token" type="password" data-secret="surfaces.whatsapp_access_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-verify-token">Verify token</label><div class="secret-wrap"><input id="wa-verify-token" type="password" data-secret="surfaces.whatsapp_verify_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-app-secret">App secret</label><div class="secret-wrap"><input id="wa-app-secret" type="password" data-secret="surfaces.whatsapp_app_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Email · Resend</strong><small>Inbound email webhook</small></span><span class="summary-tags"><span class="requirement">Public link</span><span class="config-state" data-config-state></span></span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="resend-domain">Inbound domain</label><input id="resend-domain" /></div><div class="field"><label for="resend-api-key">API key</label><div class="secret-wrap"><input id="resend-api-key" type="password" data-secret="surfaces.resend_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="resend-signing-secret">Signing secret</label><div class="secret-wrap"><input id="resend-signing-secret" type="password" data-secret="surfaces.resend_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
         </article>
         <div class="savebar"><span>Unsaved channel changes</span><button class="btn primary" data-save>Save channels</button></div>
       </section>
@@ -225,21 +243,56 @@
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
         </article>
+        <!-- A separate panel, not more buttons in the one above: that panel
+             promises it does not delete workspace data, and these do. -->
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Destructive recovery</h2><p>These permanently delete data on this Mac. Use them when Lemma cannot start and repair has not helped.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button><button class="btn danger solid" data-action="full-reinstall">Start over</button></div>
+          <p class="limitation-note" id="recovery-note">Reset local data erases your pods, files and accounts and keeps your AI provider settings and the downloaded runtime. Start over erases everything, including stored keys, and downloads the runtime again.</p>
+        </article>
       </section>
 
       <section class="page" data-page="updates">
         <div class="metric-grid">
           <article class="metric-card"><span class="metric-label">Desktop</span><strong id="runtime-desktop-release">—</strong><p>Signed native application.</p></article>
           <article class="metric-card"><span class="metric-label">Active runtime</span><strong id="runtime-active-release">—</strong><p id="runtime-source">Checking verified packs.</p></article>
-          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Retained only for controlled recovery.</p></article>
+          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Kept for reference. Reinstalling an earlier Lemma from the release page is the supported way back.</p></article>
         </div>
-        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="warning-box" id="rollback-notice">Rollback stays unavailable until a release declares its data rollback boundary.</div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
+        <article class="panel">
+          <div class="panel-heading">
+            <div><h2>Lemma</h2><p id="app-update-summary">Checking for updates…</p></div>
+            <button class="btn compact" data-action="check-app-update">Check for updates</button>
+          </div>
+          <!-- Shown only when there is one. A permanently visible notice about
+               something that has not happened is noise people learn to skip. -->
+          <div class="warning-box" id="app-update-available" hidden>
+            <strong id="app-update-headline">A new version of Lemma is available.</strong>
+            <p id="app-update-cost"></p>
+            <p class="danger-warning" id="app-update-reset-warning" hidden>
+              This version upgrades the local database. Your existing pods and files
+              cannot be carried across and must be reset first.
+            </p>
+            <div class="button-row">
+              <button class="btn primary" data-action="install-app-update">Download and install</button>
+            </div>
+          </div>
+          <p class="limitation-note" id="app-update-unsupported" hidden></p>
+        </article>
+        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
       </section>
 
       <section class="page" data-page="diagnostics">
         <div class="two-column">
           <article class="panel"><div class="panel-heading"><div><h2>Local paths</h2><p>Private app state and bounded logs.</p></div></div><pre id="diag-paths">Loading…</pre><div class="button-row"><button class="btn" data-action="logs">Open logs folder</button><button class="btn" data-action="devtools">Developer tools</button></div></article>
           <article class="panel"><div class="panel-heading"><div><h2>Network contract</h2><p>Canonical workspace and API origins.</p></div></div><div id="network-contract">Available after startup.</div></article>
+          <article class="panel span-two">
+            <div class="panel-heading">
+              <div><h2>Logs</h2><p>The last of each log, refreshed while this page is open. Lines that report a problem are highlighted.</p></div>
+              <button class="btn compact" id="log-follow" type="button" aria-pressed="true">Following</button>
+            </div>
+            <div class="log-tabs" id="diag-log-tabs"></div>
+            <pre class="log-view" id="diag-log" tabindex="0">Loading…</pre>
+          </article>
           <article class="panel span-two"><div class="panel-heading"><div><h2>Non-destructive repair</h2><p>Replaces signed application/runtime files only. Databases, files, and workspaces are preserved.</p></div></div><div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
         </div>
       </section>

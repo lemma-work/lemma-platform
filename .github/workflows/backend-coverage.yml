@@ -1,0 +1,463 @@
+name: Backend coverage
+
+# Coverage aggregation for the backend, split out of "Backend E2E".
+#
+# It used to be the last job of that workflow, and it cost more than it looked
+# like it did. It runs only after every shard finishes, so its 256 seconds sat
+# on the end of the critical path of every PR; it is not a required check, so
+# those 256 seconds gated nothing; and it was the single largest source of red
+# on PRs — 23 of 32 observed e2e failures were this job, not a shard.
+#
+# It also re-ran the entire unit suite from scratch, ~152 of its ~233 seconds.
+# That was supposed to be a fallback: the fast path downloaded the already
+# validated `backend-unit-coverage` artifact, but only `if: workflow_run`,
+# while the shard job's own `if:` excluded workflow_run — so the producer was
+# always skipped on that event, the aggregate job never ran there, and the
+# "fallback" was in fact the only path that ever executed.
+#
+# As its own workflow_run consumer both problems go away: it is off the PR
+# critical path, and it can reach artifacts from *both* upstream runs (this
+# workflow's own trigger for the e2e shards, and the "CI" run for the same
+# commit for unit coverage) by run id, which is the thing a pull_request event
+# cannot do.
+#
+# The floors it enforces are real, and `Backend coverage passed` is a required
+# check, so they are enforced in front of the merge button again — just not on
+# the critical path, since this runs after Backend E2E rather than beside it.
+#
+# It could not be required while it enforced module floors several modules were
+# below; that would have blocked every PR for an unrelated reason. Every floor
+# now comes from a measurement rather than a hope, so the gate is green by
+# construction and a red one is a real regression.
+
+on:
+  workflow_run:
+    workflows: ["Backend E2E"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-coverage-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  # Does this commit have backend coverage to aggregate at all?
+  #
+  # `lemma-backend unit` is path-filtered, so a docs-only or frontend-only
+  # commit skips it and CI uploads no `backend-unit-coverage`. The aggregate
+  # job used to poll for that artifact for ten minutes and then fail, because
+  # the poll could not tell "not uploaded yet" from "never will be". Every
+  # docs-only commit on main went red that way, and burned ten minutes of a
+  # runner doing it. Deciding here keeps the aggregate job honest: it runs when
+  # there is something to measure and is *skipped*, not failed, when there is
+  # not.
+  detect:
+    name: backend coverage applicability
+    # A skipped or failed e2e run has no complete set of coverage artifacts.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # Above the 20-minute deadline inside the script, so a genuine timeout is
+    # reported by the script -- which says which commit and why -- rather than
+    # by the runner killing the job.
+    timeout-minutes: 25
+    permissions:
+      actions: read
+    outputs:
+      ci_run_id: ${{ steps.ci-run.outputs.id }}
+      should_run: ${{ steps.ci-run.outputs.should_run }}
+    steps:
+      - name: Locate the CI run that validated this commit
+        id: ci-run
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const headSha = context.payload.workflow_run.head_sha;
+            const deadline = Date.now() + 20 * 60 * 1000;
+            const UNIT_JOB = 'lemma-backend unit';
+            // Ask the producing *job*, not the run it belongs to.
+            //
+            // This waited for the whole CI run to reach `completed` before it
+            // would believe a skipped unit job, and a CI run is as slow as its
+            // slowest job -- the desktop lanes, which have nothing to do with
+            // coverage. So on a commit that skipped the unit job, this polled
+            // for ten minutes, timed out two minutes before CI finished, and
+            // went red. That is most of what this workflow has ever done: six
+            // failures in twelve runs on one day, ten runner-minutes each,
+            // reporting nothing about the code.
+            //
+            // The unit job's own conclusion is the whole answer, and it is
+            // available the moment that job ends. It is the last step of that
+            // job that uploads the artifact, so a `success` here means the
+            // artifact is there or is seconds away.
+            while (Date.now() < deadline) {
+              const runs = await github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,
+                {owner, repo, head_sha: headSha, per_page: 100},
+              );
+              const candidates = runs
+                .filter((run) => run.name === 'CI')
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              for (const run of candidates) {
+                const {data} = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner, repo, run_id: run.id, per_page: 100,
+                });
+                if (data.artifacts.some((a) => a.name === 'backend-unit-coverage')) {
+                  core.info(`Using unit coverage from CI run ${run.id}.`);
+                  core.setOutput('id', String(run.id));
+                  core.setOutput('should_run', 'true');
+                  return;
+                }
+              }
+              for (const run of candidates) {
+                const jobs = await github.paginate(
+                  github.rest.actions.listJobsForWorkflowRun,
+                  {owner, repo, run_id: run.id, per_page: 100},
+                );
+                const unit = jobs.find((job) => job.name === UNIT_JOB);
+                // Still running, or not started. Nothing to conclude yet.
+                if (!unit || unit.status !== 'completed') continue;
+                if (unit.conclusion === 'success') break;
+                // Skipped: the producer decided this commit does not touch the
+                // backend. Failed or cancelled: there is no coverage to
+                // aggregate, and CI is already reporting that failure -- a
+                // second red here would only say it twice.
+                core.notice(
+                  `CI run ${run.id} finished "${UNIT_JOB}" as ${unit.conclusion} for ` +
+                  `${headSha}, so there is no backend coverage to aggregate.`,
+                );
+                core.setOutput('should_run', 'false');
+                return;
+              }
+              core.info('backend-unit-coverage not uploaded yet; waiting 30s.');
+              await new Promise((resolve) => setTimeout(resolve, 30_000));
+            }
+            core.setFailed(
+              `No CI run for ${headSha} produced backend-unit-coverage within 20 minutes.`,
+            );
+
+  aggregate-coverage:
+    name: backend aggregate coverage gate
+    needs: detect
+    if: needs.detect.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      # This job has to reproduce the tree the producers measured, and
+      # `workflow_run.head_sha` is not it. Both producers run on
+      # `pull_request`, where GitHub checks out the *merge* of the PR into its
+      # base and reports that merge commit as `GITHUB_SHA`; the `workflow_run`
+      # payload carries the PR *head*. So every file the base gained since the
+      # branch point is in the coverage data and absent from a head_sha
+      # checkout, and `coverage json` stops dead at the first one:
+      #
+      #   No source for code: 'app/modules/agent/.../message_reply_service.py'
+      #
+      # That is what made this gate red on roughly a quarter of its runs. It
+      # was never flakiness -- it is deterministic, and it happens to surface
+      # only when the base adds a *file*. The worse half is silent: a file
+      # present on both sides but edited in the base was measured at the merge
+      # commit's line numbers and reported against the head commit's, so the
+      # numbers this gate published were quietly wrong rather than red.
+      #
+      # The artifact now records the commit it was measured on, so download it
+      # before the checkout -- the ref this job needs is inside it.
+      - name: Download validated unit coverage
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.detect.outputs.ci_run_id }}
+          name: backend-unit-coverage
+          path: ${{ runner.temp }}/unit
+      - name: Resolve the commit the coverage was measured on
+        id: measured
+        working-directory: ${{ github.workspace }}
+        run: |
+          sha_file="${{ runner.temp }}/unit/coverage-backend/measured-sha.txt"
+          # Absent means the artifact predates this mechanism: a branch cut
+          # before it landed still runs the old producers, while `workflow_run`
+          # always runs this file from the default branch. Fall back to the old
+          # ref rather than failing the gate, and report with `-i` so the
+          # mismatch this whole step exists to prevent degrades to skipped
+          # files instead of a hard red. It self-heals as branches rebase.
+          if [ ! -s "$sha_file" ]; then
+            echo "::warning::backend-unit-coverage has no measured-sha.txt; falling back to workflow_run.head_sha and ignoring missing sources."
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            echo "COVERAGE_REPORT_FLAGS=-i" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sha="$(tr -d '[:space:]' < "$sha_file")"
+          echo "Coverage was measured on $sha."
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "COVERAGE_REPORT_FLAGS=" >> "$GITHUB_ENV"
+      - name: Check out the commit the coverage was measured on
+        id: checkout-measured
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.measured.outputs.sha }}
+      # A PR merge commit sits on no branch, and GitHub does not keep one
+      # fetchable forever. If it has gone, the tree this coverage describes is
+      # simply not available any more -- so fall back to the PR head and say
+      # so, rather than failing a gate over an unreachable object.
+      - name: Fall back to the PR head if the measured commit is gone
+        if: steps.checkout-measured.outcome == 'failure'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "::warning::Could not check out ${{ steps.measured.outputs.sha }}; using workflow_run.head_sha and ignoring missing sources."
+          echo "COVERAGE_REPORT_FLAGS=-i" >> "$GITHUB_ENV"
+      - name: Check out the PR head instead
+        if: steps.checkout-measured.outcome == 'failure'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
+      - name: Sync dependencies
+        run: uv sync --extra local
+      - name: Download E2E coverage shards
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: backend-e2e-*-coverage
+          path: lemma-backend/coverage-artifacts/e2e
+      - name: Stage unit coverage and check every shard measured the same tree
+        run: |
+          mkdir -p coverage-artifacts
+          rm -rf coverage-artifacts/unit
+          cp -R "${{ runner.temp }}/unit" coverage-artifacts/unit
+          expected='${{ steps.measured.outputs.sha }}'
+          status=0
+          while IFS= read -r sha_file; do
+            actual="$(tr -d '[:space:]' < "$sha_file")"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$sha_file was measured on $actual but the unit coverage was measured on $expected; combining them reports one tree's line numbers against another's."
+              status=1
+            fi
+          done < <(find coverage-artifacts/e2e -type f -name 'measured-sha.txt')
+          exit "$status"
+      - name: Combine E2E-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/e2e-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/e2e-combined/.coverage.e2e.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e -type f -name '.coverage.backend')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw E2E coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage combine coverage-artifacts/e2e-combined
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage json $COVERAGE_REPORT_FLAGS -o coverage-backend/e2e-union.json
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage xml $COVERAGE_REPORT_FLAGS -o coverage-backend/e2e-union.xml
+          uv run python scripts/backend_coverage_report.py \
+            --phase e2e-union \
+            --coverage-json coverage-backend/e2e-union.json \
+            --junit-glob 'coverage-artifacts/e2e/*/coverage-backend/junit-*.xml' \
+            --markdown-out coverage-backend/e2e-union.md \
+            --summary-json-out coverage-backend/e2e-union-summary.json
+      - name: Prepare unit-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/unit-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/unit-combined/.coverage.unit.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw unit coverage artifact was downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage combine coverage-artifacts/unit-combined
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage json $COVERAGE_REPORT_FLAGS -o coverage-backend/unit.json
+      - name: Combine unit and E2E coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            # Coverage.py discovers parallel inputs by appending a suffix to
+            # the configured data-file basename. COVERAGE_FILE below is
+            # `.coverage.backend`, so retain that basename here.
+            cp "$coverage_file" "coverage-artifacts/combined/.coverage.backend.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage combine coverage-artifacts/combined
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage json $COVERAGE_REPORT_FLAGS -o coverage-backend/coverage.json
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage xml $COVERAGE_REPORT_FLAGS -o coverage-backend/coverage.xml
+      - name: Build authoritative coverage report
+        run: >-
+          uv run python scripts/backend_coverage_report.py
+          --unit-coverage-json coverage-backend/unit.json
+          --e2e-coverage-json coverage-backend/e2e-union.json
+          --combined-coverage-json coverage-backend/coverage.json
+          --unit-junit-glob 'coverage-artifacts/unit/**/junit-*.xml'
+          --e2e-junit-glob 'coverage-artifacts/e2e/**/junit-*.xml'
+          --markdown-out coverage-backend/overall.md
+          --summary-json-out coverage-backend/overall-summary.json
+      - name: Add authoritative coverage to job summary
+        run: cat coverage-backend/overall.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish one authoritative PR coverage comment
+        if: hashFiles('lemma-backend/coverage-backend/overall.md') != ''
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-backend-coverage:overall -->';
+            const body = fs.readFileSync(
+              'lemma-backend/coverage-backend/overall.md',
+              'utf8',
+            );
+            const pr = (context.payload.workflow_run?.pull_requests || [])[0];
+            if (!pr) {
+              core.info('No PR is associated with this workflow run.');
+              return;
+            }
+            const {owner, repo} = context.repo;
+            const {data: pull} = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping coverage comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const obsoleteComments = comments.filter((comment) =>
+              comment.user?.type === 'Bot' &&
+              /<!-- lemma-backend-coverage:(?!overall)[^>]+ -->/.test(comment.body || '')
+            );
+            for (const comment of obsoleteComments) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+      # Floors live in `lemma-backend/coverage-baseline.json`, one per module
+      # per lane, recorded from what a run actually measures. Four modules used
+      # to be named here and every other module had none, so anything unnamed
+      # could lose all of its coverage while the whole-repo figure -- one number
+      # over ~190k statements -- barely moved.
+      #
+      # Each floor sits half a point below the measurement it came from, which
+      # is the conclusion this file had already reached and applied to only one
+      # of its four modules. Across 38 runs where this gate executed, `agent`
+      # reported 79.56 to 79.98 and failed 32 of them: the floor was 80, set
+      # fractionally above the value it measures, and four separate head SHAs
+      # produced both a pass and a failure. The variance is real -- coverage
+      # measured across worker subprocesses under xdist, and
+      # `.github/e2e-shards.json` records a ~0.4-point per-run spread for
+      # `agent` from the same cause. A gate that is red most of the time gates
+      # nothing, because nobody reads it.
+      #
+      # `--write` raises a floor and never lowers one, so a good run locks its
+      # gain in and a bad run cannot be regenerated away.
+      - name: Enforce per-module E2E floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/e2e-union.json
+          --lane e2e_union
+          --min-total 0
+      - name: Enforce total and per-module floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/coverage.json
+          --lane combined
+          --min-total 70
+      - name: Enforce changed-code coverage
+        run: >-
+          uv run diff-cover coverage-backend/coverage.xml
+          --compare-branch origin/main
+          --fail-under=85
+      - name: Upload aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-aggregate-coverage
+          path: |
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            lemma-backend/coverage-backend/unit.json
+            lemma-backend/coverage-backend/e2e-union.json
+            lemma-backend/coverage-backend/e2e-union.xml
+            lemma-backend/coverage-backend/e2e-union.md
+            lemma-backend/coverage-backend/e2e-union-summary.json
+            lemma-backend/coverage-backend/overall.md
+            lemma-backend/coverage-backend/overall-summary.json
+          if-no-files-found: error
+
+  coverage-passed:
+    name: Backend coverage passed
+    # The single required context for this workflow, in the shape ci.yml and
+    # e2e.yml already use: `needs` the real jobs so a new one cannot be added
+    # outside the gate, and report on their results rather than repeating them.
+    timeout-minutes: 10
+    # `!cancelled()`, not `always()`: `cancel-in-progress` above supersedes a
+    # run on every new push to the branch, and a required check that reports
+    # failure for a run somebody replaced makes the run list unreadable — the
+    # reasoning e2e.yml's aggregator spells out at length.
+    if: ${{ !cancelled() }}
+    needs: [detect, aggregate-coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if the coverage gate failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::The backend coverage gate failed. A module fell below"
+          echo "::error::its floor in lemma-backend/coverage-baseline.json, or"
+          echo "::error::changed-code coverage fell below 85%. Write the test —"
+          echo "::error::regenerating the baseline only ever raises a floor."
+          exit 1
+      # `detect` is skipped when the upstream e2e run did not succeed, and then
+      # so is the gate. That is the correct answer here rather than a hold: the
+      # e2e failure is already blocking through its own required check, and a
+      # coverage check that waits for a run which will never happen leaves the
+      # pull request permanently pending.
+      - run: echo "Backend coverage passed (or was skipped as inapplicable)."

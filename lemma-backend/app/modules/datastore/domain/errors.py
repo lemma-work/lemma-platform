@@ -88,8 +88,39 @@ class DatastoreQueryError(DatastoreDomainError):
 
 
 class DatastoreInfrastructureError(DatastoreDomainError):
-    def __init__(self, message: str):
-        super().__init__(message, code="DATASTORE_INFRA_ERROR", status_code=500)
+    # `details` is not decoration: `parse_db_error` returns this class or
+    # `DatastoreQueryError` interchangeably, and every caller then does
+    # `error_cls(message, details)`. Without the parameter that call raised
+    # `TypeError: __init__() takes 2 positional arguments but 3 were given`
+    # -- destroying both the real error and the `from exc` chain, on the
+    # database-failure path where the cause matters most.
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message, code="DATASTORE_INFRA_ERROR", status_code=500, details=details
+        )
+
+
+class DatastoreQueryUnavailableError(DatastoreDomainError):
+    """Direct querying is not available on this deployment.
+
+    `PS-DATA-021`: a person who wrote perfectly good SQL must not be told their
+    query was the problem. Ad-hoc SQL runs as a dedicated Postgres role
+    (`datastore_query_role`), and a managed Postgres that never provisioned it
+    leaves every query with nowhere to run — a fact about the deployment that
+    no amount of rewriting the query will change.
+
+    503 rather than 400 for exactly that reason, and rather than 500 because
+    the platform is not broken: this one facility is absent, everything else in
+    the datastore works, and an operator can fix it by granting the role.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message,
+            code="DATASTORE_QUERY_UNAVAILABLE",
+            status_code=503,
+            details=details,
+        )
 
 
 class DocumentExtractionUnavailableError(RuntimeError):

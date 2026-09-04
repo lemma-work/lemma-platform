@@ -4,17 +4,32 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import JSONB
 
+from app.core.authorization.delegation import (
+    POD_DEFAULT_AGENT_SELECTOR,
+    is_pod_default_agent,
+)
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleFireStatus,
     ScheduleType,
 )
+
 
 class Schedule(UUIDAuditBase):
     """Unified schedule model for time, webhook, and datastore event sources."""
@@ -36,20 +51,30 @@ class Schedule(UUIDAuditBase):
         SQLEnum(ScheduleType, native_enum=False, length=50),
         index=True,
     )
+    # SET NULL, not CASCADE: deleting the workflow or agent a schedule starts
+    # must not delete the schedule, nor its firing history through the cascade
+    # on `schedule_runs.schedule_id`. Deleting and recreating a workflow is the
+    # normal way to restructure one, and it used to take every schedule
+    # attached to it silently. A schedule with no target survives as something
+    # a person can see and repoint, and the fire path records the firing as
+    # failed saying the target is missing. See migration 0028.
     workflow_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("workflow_flows.id", ondelete="CASCADE"),
+        ForeignKey("workflow_flows.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
     agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"),
+        ForeignKey("agents.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-
     # For WEBHOOK schedules: reference to app connector
+    # SET NULL, not CASCADE: deleting a connector account must not delete the
+    # schedules bound to it, nor their run history through the cascade below.
+    # `agent_surfaces.account_id` and `connector_trigger_id` on this same table
+    # already do this. See migration 0027.
     account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True, index=True
+        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )
     connector_trigger_id: Mapped[str | None] = mapped_column(
         ForeignKey("connector_triggers.id", ondelete="SET NULL"),
@@ -58,6 +83,9 @@ class Schedule(UUIDAuditBase):
     )
     # Type-specific config (JSON) - GIN indexed for querying
     config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # What the target should do when this fires. `filter_instruction` below
+    # decides whether to fire at all; this directs the work afterwards.
+    instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
@@ -92,14 +120,17 @@ class Schedule(UUIDAuditBase):
     # Relationships
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
     pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
-    workflow: Mapped[Any] = relationship(
-        "WorkflowModel", foreign_keys=[workflow_id]
-    )
-    agent: Mapped[Any] = relationship(
-        "AgentModel", foreign_keys=[agent_id]
-    )
+    workflow: Mapped[Any] = relationship("WorkflowModel", foreign_keys=[workflow_id])
+    agent: Mapped[Any] = relationship("AgentModel", foreign_keys=[agent_id])
 
     __table_args__ = (
+        # A schedule starts exactly one thing. The service says so too, but
+        # "agent_id set *and* workflow_id set" is the kind of state that only
+        # shows up months later as a schedule that fires twice.
+        CheckConstraint(
+            "(agent_id IS NOT NULL)::int + (workflow_id IS NOT NULL)::int <= 1",
+            name="ck_schedules_single_target",
+        ),
         Index("ix_schedules_user_pod", "user_id", "pod_id"),
         Index("ix_schedules_account", "account_id"),
         Index("ix_schedules_connector_trigger", "connector_trigger_id"),
@@ -121,10 +152,18 @@ class Schedule(UUIDAuditBase):
     def to_entity(self) -> ScheduleEntity:
         workflow = self.__dict__.get("workflow")
         agent = self.__dict__.get("agent")
+        # The assistant is echoed back as the wire selector rather than as its
+        # row's name. `POD_DEFAULT` is what the API takes, what the CLI passes
+        # and what every exported bundle already contains, and `pod_default` is
+        # an internal name nobody has ever had to type.
+        if agent is not None and is_pod_default_agent(agent.id, pod_id=self.pod_id):
+            agent_name = POD_DEFAULT_AGENT_SELECTOR
+        else:
+            agent_name = agent.name if agent else None
         return ScheduleEntity.model_validate(self).model_copy(
             update={
                 "workflow_name": workflow.name if workflow else None,
-                "agent_name": agent.name if agent else None,
+                "agent_name": agent_name,
             }
         )
 

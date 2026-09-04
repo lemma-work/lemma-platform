@@ -20,10 +20,13 @@ import socket
 from uuid import UUID, uuid4
 
 import pytest
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 import pytest_asyncio
 
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -47,20 +50,32 @@ async def agent_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
-    for _ in range(100):
+
+    async def probe() -> None:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        _, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+    # retry_exceptions=(OSError,): the port not listening yet is the expected
+    # "not ready" case. A crashed server task instead raises RuntimeError from
+    # inside probe(), which is not in retry_exceptions and so propagates
+    # immediately, same as the original loop's eager task.done() check.
+    # interval kept at the original 0.05s (already tighter than the usual
+    # 0.15s default) since this is a hot local port check.
+    await eventually(
+        label=f"MCP server on port {port} to start listening",
+        probe=probe,
+        done=lambda _: True,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
 
     yield f"http://127.0.0.1:{port}/mcp"
 
@@ -135,14 +150,24 @@ async def installed_connector(
 
 @pytest.fixture
 def agent_deps(installed_connector, connector_test_pod):
+    """The pod's own assistant, as `run_context_builder` builds it.
+
+    Addressed by its ``agents`` row id, which is its pod's, and carrying the
+    flag every builder of this context sets. The named-agent cases below build
+    their own context with a real agent id instead.
+    """
     from app.modules.agent.tools.context import BaseAgentContext
 
     _install, org_id, user_id = installed_connector
+    pod_id = UUID(str(connector_test_pod["id"]))
     return BaseAgentContext(
         user_id=user_id,
         org_id=org_id,
-        pod_id=UUID(str(connector_test_pod["id"])),
+        pod_id=pod_id,
         conversation_id=uuid4(),
+        workload_id=pod_id,
+        agent_name=DEFAULT_POD_AGENT_NAME,
+        is_pod_default_agent=True,
     )
 
 
@@ -288,8 +313,180 @@ class TestTheAgentCanUseATenantConnector:
             org_id=uuid4(),
             pod_id=agent_deps.pod_id,
             conversation_id=uuid4(),
+            workload_id=agent_deps.pod_id,
+            agent_name=DEFAULT_POD_AGENT_NAME,
+            is_pod_default_agent=True,
         )
         result = await list_connectors(_run_context(stranger))
         assert "error" in result
         names = {item["auth_config"] for item in result.get("items", [])}
         assert install.name not in names
+
+
+class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
+    """The grant gate, over a real MCP server.
+
+    Both halves of this existed and never met. The tests above prove an agent
+    can drive a live MCP install, but they run as the *default* pod agent, which
+    mirrors the person who asked and needs no grant -- so they say nothing about
+    whether a grant is required. The pod module proves a named agent needs one,
+    but against a synthetic connector with a stub operation, so it says nothing
+    about MCP.
+
+    Worth stating plainly, because it is the question this answers: a granted
+    MCP connector is *not* registered as an MCP server on the agent. Nothing in
+    the backend wires one -- the runtime is built with toolsets and no
+    `MCPServer` anywhere. The agent reaches the server's tools through the
+    connector toolset, so every call is resolved and authorized on this side and
+    the credential never leaves it.
+    """
+
+    @staticmethod
+    def _named_agent_context(installed_connector, pod_id, *, agent_id, agent_name):
+        from app.modules.agent.tools.context import BaseAgentContext
+
+        _install, org_id, user_id = installed_connector
+        return BaseAgentContext(
+            user_id=user_id,
+            org_id=org_id,
+            pod_id=pod_id,
+            conversation_id=uuid4(),
+            workload_id=agent_id,
+            agent_name=agent_name,
+        )
+
+    async def test_a_named_agent_without_a_grant_cannot_run_anything(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        """Refused as data, not as an exception: the toolset reports it so the
+        model can say so, rather than ending the run."""
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            run_connector_operation,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            RunConnectorOperationRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(str(connector_test_pod["id"])),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+
+        result = await run_connector_operation(
+            _run_context(deps),
+            RunConnectorOperationRequest(
+                auth_config=install.name,
+                operation="convert_currency",
+                arguments={"amount": 21, "to_currency": "EUR"},
+            ),
+        )
+        assert "error" in result, result
+        assert "42" not in str(result), result
+
+    async def test_reading_the_operation_list_is_not_itself_gated(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        """Stated because it surprised the author of this test.
+
+        The grant is checked where a credential is resolved, so it gates
+        *running* an operation, not seeing that one exists. An ungranted agent
+        in the organization can still read the install's operation list -- the
+        same surface the install itself already advertises org-wide. Nothing
+        here reaches the server or the credential.
+        """
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            search_connector_operations,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            SearchConnectorOperationsRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(str(connector_test_pod["id"])),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+
+        result = await search_connector_operations(
+            _run_context(deps),
+            SearchConnectorOperationsRequest(auth_config=install.name),
+        )
+        assert "error" not in result, result
+        assert [item["name"] for item in result["items"]] == ["convert_currency"]
+
+    async def test_a_granted_named_agent_reaches_the_real_server(
+        self, installed_connector, connector_test_pod, authenticated_client
+    ):
+        from app.modules.agent.tools.connectors.pydantic_adapter import (
+            run_connector_operation,
+        )
+        from app.modules.agent.tools.connectors.models import (
+            RunConnectorOperationRequest,
+        )
+
+        install, _org_id, _user_id = installed_connector
+        pod_id = str(connector_test_pod["id"])
+        agent = await _create_agent(authenticated_client, connector_test_pod)
+        await _grant_connector_to_agent(
+            authenticated_client,
+            pod_id=pod_id,
+            agent_name=agent["name"],
+            connector_id=install.connector_id,
+        )
+
+        deps = self._named_agent_context(
+            installed_connector,
+            UUID(pod_id),
+            agent_id=UUID(agent["id"]),
+            agent_name=agent["name"],
+        )
+        result = await run_connector_operation(
+            _run_context(deps),
+            RunConnectorOperationRequest(
+                auth_config=install.name,
+                operation="convert_currency",
+                arguments={"amount": 21, "to_currency": "EUR"},
+            ),
+        )
+        # The answer comes from the MCP server itself, so this is the whole
+        # path: grant, resolution, credential, transport, tool call.
+        assert "error" not in result, result
+        assert "42" in str(result), result
+
+
+async def _create_agent(authenticated_client, connector_test_pod) -> dict:
+    response = await authenticated_client.post(
+        f"/pods/{connector_test_pod['id']}/agents",
+        json={
+            "name": f"connector-agent-{uuid4().hex[:8]}",
+            "instruction": "Drive the tenant connector.",
+            "toolsets": ["CONNECTORS"],
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+    return response.json()
+
+
+async def _grant_connector_to_agent(
+    authenticated_client, *, pod_id: str, agent_name: str, connector_id: str
+) -> None:
+    response = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{agent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "connector",
+                    "resource_name": connector_id,
+                    "permission_ids": ["connector.use"],
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text

@@ -36,6 +36,26 @@ class _StubUsageRepository:
         self.reserved_cost_calls.append(kwargs)
         return 0.0
 
+    async def get_system_cost_by_window(self, *, window_starts, **kwargs):
+        # Defined in terms of the single-window call so the assertions on
+        # ``system_cost_calls`` below keep describing what was actually asked
+        # for, one entry per window, rather than one entry per statement.
+        return {
+            name: await self.get_system_cost(start=start, **kwargs)
+            for name, start in window_starts.items()
+        }
+
+    async def get_reserved_costs(self, *, scopes) -> dict[str, float]:
+        return {
+            window_kind: await self.get_reserved_cost(
+                organization_id=organization_id,
+                user_id=user_id,
+                window_kind=window_kind,
+                window_start=window_start,
+            )
+            for organization_id, user_id, window_kind, window_start in scopes
+        }
+
 
 class _FakeUsageLimitPort:
     """Stand-in for billing's adapter: returns fixed (org, user) limits."""

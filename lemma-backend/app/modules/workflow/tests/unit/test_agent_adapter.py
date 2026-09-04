@@ -1,4 +1,9 @@
-"""Agent adapter output normalization for the workflow resume path."""
+"""Agent adapter output normalization for the workflow resume path.
+
+The adapter belongs to `agent`, which owns every collaborator it drives; this
+file stays here because what it pins down is `workflow`'s side of the bargain --
+the shapes `run_resume_service` reads back out of `AgentPort`.
+"""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,8 +12,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.workflow_agent import AgentControlAdapter
-from app.composition import workflow_agent
+from app.modules.agent.infrastructure.adapters import workflow_control
+from app.modules.agent.infrastructure.adapters.workflow_control import (
+    AgentControlAdapter,
+)
 from app.modules.agent.domain.value_objects import ConversationStatus
 
 
@@ -31,14 +38,19 @@ async def test_reserved_id_returns_existing_conversation_without_side_effects(
 ):
     adapter = AgentControlAdapter(Mock(session=Mock()))
     pod_id = uuid4()
-    agent = SimpleNamespace(id=uuid4(), pod_id=pod_id, name="triage")
+    # `agent_runtime` is read to hand to the shared start path, before the
+    # reserved-id branch can return. A real `Agent` always carries it; the fake
+    # has to as well, or this asserts against a shape that never occurs.
+    agent = SimpleNamespace(
+        id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
+    )
     adapter.agent_repo = Mock(
         get=AsyncMock(return_value=agent),
         get_by_pod_and_name=AsyncMock(return_value=agent),
     )
     existing = SimpleNamespace(id=uuid4())
     create_reserved = AsyncMock(return_value=(existing, False))
-    monkeypatch.setattr(workflow_agent, "create_conversation_for_id", create_reserved)
+    monkeypatch.setattr(workflow_control, "create_conversation_for_id", create_reserved)
     adapter.conversation_repo = Mock(
         create_agent_run=AsyncMock(),
         append_message=AsyncMock(),
@@ -152,3 +164,96 @@ async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
     status = await adapter.get_conversation_status(uuid4())
 
     assert status["error"] == "Agent conversation FAILED"
+
+
+@pytest.mark.anyio
+async def test_the_assistant_is_started_like_any_other_agent(monkeypatch):
+    """The whole mechanism, in one assertion: it is an ordinary lookup.
+
+    Starting the pod's own assistant headlessly used to need its own method,
+    because there was no row to look up and `run_agent_by_id` could only raise
+    for it. Now its row's id is the pod's, so the ordinary path serves it -- and
+    the conversation still reads as the assistant's, which is what selects its
+    base prompt.
+    """
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    pod_id = uuid4()
+    assistant = SimpleNamespace(
+        id=pod_id, pod_id=pod_id, name="pod_default", agent_runtime=None
+    )
+    adapter.agent_repo = Mock(
+        get=AsyncMock(return_value=assistant),
+        get_by_pod_and_name=AsyncMock(return_value=assistant),
+    )
+    created = SimpleNamespace(id=uuid4())
+    adapter.conversation_repo = Mock(
+        create_conversation=AsyncMock(return_value=created),
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        append_message=AsyncMock(),
+        collect_events=Mock(),
+    )
+    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
+    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+
+    result = await adapter.run_agent_by_id(
+        agent_id=pod_id,
+        input_data={"payload": {}},
+        pod_id=pod_id,
+        user_id=uuid4(),
+        source="SCHEDULE",
+        instructions="Post the overnight summary.",
+    )
+
+    assert result == created.id
+    conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
+    assert conversation.agent_id == pod_id
+    # Still the assistant, and still selects the assistant's base prompt.
+    assert conversation.is_pod_assistant
+    # The trigger's words reach the run as conversation instructions, which the
+    # prompt appends after the agent's own -- which the assistant does not have.
+    assert conversation.instructions == "Post the overnight summary."
+    assert (
+        adapter.conversation_repo.create_agent_run.await_args.kwargs["agent_id"]
+        == pod_id
+    )
+
+
+@pytest.mark.anyio
+async def test_named_agent_run_carries_the_schedule_instruction_too(monkeypatch):
+    """The instruction is not a Lem special case.
+
+    A named agent is its own standing instruction, so a schedule's sentence adds
+    to it rather than replacing it -- `build_agent_instructions` layers agent
+    instruction then conversation instructions, in that order.
+    """
+    adapter = AgentControlAdapter(Mock(session=Mock()))
+    pod_id = uuid4()
+    agent = SimpleNamespace(
+        id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
+    )
+    adapter.agent_repo = Mock(
+        get=AsyncMock(return_value=agent),
+        get_by_pod_and_name=AsyncMock(return_value=agent),
+    )
+    created = SimpleNamespace(id=uuid4())
+    adapter.conversation_repo = Mock(
+        create_conversation=AsyncMock(return_value=created),
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        append_message=AsyncMock(),
+        collect_events=Mock(),
+    )
+    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
+    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+
+    await adapter.run_agent_by_id(
+        agent_id=agent.id,
+        input_data={"payload": {}},
+        pod_id=pod_id,
+        user_id=uuid4(),
+        source="SCHEDULE",
+        instructions="Only the tickets raised overnight.",
+    )
+
+    conversation = adapter.conversation_repo.create_conversation.await_args.args[0]
+    assert conversation.agent_id == agent.id
+    assert conversation.instructions == "Only the tickets raised overnight."

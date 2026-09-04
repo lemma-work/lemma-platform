@@ -1,8 +1,20 @@
 services:
   db:
-    # pg15 to stay data-compatible with existing volumes; 0.8.3 carries the
-    # CVE-2026-3172 (parallel HNSW build) fix and is needed for halfvec indexes.
-    image: docker.io/pgvector/pgvector:0.8.3-pg15
+    # pg18 to match what actually runs: prod is CloudSQL POSTGRES_18_4 and the
+    # dev cluster is CloudNativePG 18.4, so a local stack on 15 was testing
+    # against a major version nothing else uses. 0.8.3 carries the CVE-2026-3172
+    # (parallel HNSW build) fix and is needed for halfvec indexes.
+    #
+    # Postgres will not start on a data directory from an older major, so an
+    # existing local volume has to go: `docker compose down -v`. Local stack
+    # data is scratch -- pods and conversations live in the deployed
+    # environments -- so this is a reset, not a migration.
+    #
+    # The volume sits at /var/lib/postgresql, not .../data: the 18+ images keep
+    # major-version-specific directories under it (pg_ctlcluster layout,
+    # docker-library/postgres#1259) and refuse to start with a mount parked on
+    # the old path. A stale volume from before has to go all the same.
+    image: docker.io/pgvector/pgvector:0.8.3-pg18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -18,7 +30,7 @@ services:
       # standard ports for a plain `docker compose up`.
       - "${DEV_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./installer/postgres-init:/docker-entrypoint-initdb.d:ro
 
   redis:
@@ -39,6 +51,15 @@ services:
       - "${DEV_SUPERTOKENS_PORT:-3567}:3567"
     environment:
       POSTGRESQL_CONNECTION_URI: postgresql://postgres:postgres@db:5432/supertokens
+      # Five minutes, not the one-hour default. Session refresh is on the hot
+      # path of every long-lived tab and is the half of auth that only breaks
+      # after you have stopped looking: a desktop install once spent days
+      # refreshing successfully into tokens that authorized nothing, because
+      # nobody had ever kept a local session open long enough to reach a
+      # refresh. At five minutes a normal afternoon of development exercises it
+      # dozens of times. Raise it with DEV_ACCESS_TOKEN_VALIDITY if a long-
+      # running manual test needs the token to outlive it.
+      ACCESS_TOKEN_VALIDITY: ${DEV_ACCESS_TOKEN_VALIDITY:-300}
     restart: unless-stopped
     healthcheck:
       test: >

@@ -1,0 +1,502 @@
+"""Reading what a displayed resource actually contains, for the surface.
+
+The card the render plan builds knows only what the agent typed into the tool
+call: a path, a table name, a filter. That is enough for a link and not enough
+for a message. A person looking at their phone wants the file's size before
+deciding to open it and the table's first rows instead of a promise of rows, so
+this module fetches those — under the conversation owner's own authorization,
+never the pod's — and hands back something the plan can carry.
+
+It also owns getting a pod file onto the surface, because the two are the same
+read: the entity that says whether the file fits is the entity whose name and
+size describe it when it does not.
+
+**Nothing here may fail the send.** Every read is enrichment; the card, and the
+message behind it, must still go out when a table cannot be read or a document
+will not rasterize. That promise is kept in one place — :func:`_best_effort` —
+rather than by a ``try`` around each caller, so the module has one broad catch
+and one answer to what happens after it.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, TypeVar
+from uuid import UUID
+
+from app.core.authorization.context import Context
+from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.factory import create_authorization_data_service
+from app.core.file_types import is_untyped_mime, sniff_media_mime
+from app.core.log.log import get_logger
+from app.modules.datastore.contracts.surfaces import (
+    TableRows,
+    download_pod_file,
+    read_pod_file,
+    read_table_preview,
+    render_pod_file_page,
+    run_readonly_query,
+)
+from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
+from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
+from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
+from app.modules.agent_surfaces.services.display_resource_preview import (
+    PREVIEW_ROW_LIMIT,
+    describe_file,
+    format_record_count,
+    format_record_table,
+)
+from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
+
+logger = get_logger(__name__)
+
+T = TypeVar("T")
+
+# The page a document is recognised by. Rendering more would be a slideshow in
+# a chat; rendering none leaves a PDF as a grey glyph with a file name on it.
+_PREVIEW_PAGE = 1
+
+_PDF_MIME = "application/pdf"
+
+
+@dataclass(frozen=True, slots=True)
+class PodFileDelivery:
+    """What became of a pod file asked for on a chat surface."""
+
+    delivered: bool
+    name: str | None = None
+    size_bytes: int | None = None
+    mime_type: str | None = None
+    # Did the file clear the platform's cap? Distinguishes the one failure the
+    # card can explain — a file too big for this chat — from the ones it cannot,
+    # where saying nothing beats guessing at a reason.
+    fits: bool = True
+
+    @property
+    def description(self) -> str | None:
+        """``PDF · 2.3 MB``, for a card standing in for the file itself."""
+        return describe_file(
+            name=self.name, size_bytes=self.size_bytes, mime_type=self.mime_type
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TablePreview:
+    """The first rows of a table, laid out, plus how many there are in all."""
+
+    block: str
+    summary: str | None
+
+
+def apply_file_facts(
+    plan: SurfaceDisplayRenderPlan, delivery: PodFileDelivery
+) -> SurfaceDisplayRenderPlan:
+    """Put the file itself into the card that had to stand in for it.
+
+    Only reached when the bytes did not go: the card is all the recipient gets,
+    and "a file is ready to inspect" above a link they may not be able to open
+    is not enough to decide anything with. Kind and size are — and the file's
+    own name from the datastore beats the one parsed out of the path.
+    """
+    if delivery.name is None:
+        return plan
+    description = delivery.description
+    if not delivery.fits:
+        description = (
+            f"{description} — too large to send in this chat"
+            if description
+            else "Too large to send in this chat"
+        )
+    return plan.model_copy(
+        update={"title": delivery.name, "summary": description or plan.summary}
+    )
+
+
+def apply_table_rows(
+    plan: SurfaceDisplayRenderPlan, preview: TablePreview | None
+) -> SurfaceDisplayRenderPlan:
+    """Put a table's own first rows into its card."""
+    if preview is None:
+        return plan
+    update: dict[str, Any] = {"summary": preview.summary or plan.summary}
+    if preview.block:
+        update["preview_block"] = preview.block
+    return plan.model_copy(update=update)
+
+
+@dataclass(frozen=True)
+class PodFileParts:
+    """What a pod file becomes in an envelope, plus what a card needs to know.
+
+    Resolution, not delivery. The caller has to learn whether the bytes clear
+    the platform's cap *before* it can decide what the envelope holds -- an
+    oversize file is a card, not an attachment -- and knowing that after the
+    fact is what forced the old two-step: attempt the send, then patch the card
+    with what the failure taught you.
+    """
+
+    files: list[EnvelopeFile]
+    facts: PodFileDelivery
+
+
+async def resolve_pod_file_parts(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    path: str,
+    caption: str | None,
+    page_preview: bool = False,
+) -> PodFileParts:
+    """The envelope parts this pod file resolves to.
+
+    ``files`` is empty when the bytes did not clear the cap; ``facts`` still
+    carries the entity's name and size so the caller's card can say what it
+    could not send rather than leaving the person to find out by following a
+    link they may not be able to open.
+
+    With ``page_preview``, a PDF's first page leads the same envelope rather
+    than being sent ahead of it as its own message. That is the whole reason
+    the renderer is reached from here: a document arriving as a file name and a
+    grey icon tells nobody whether it is the right one.
+    """
+    resolved = await _load_pod_file(
+        uow=uow,
+        target=target,
+        conversation_id=conversation_id,
+        path=path,
+        require_inline_fit=True,
+    )
+    if resolved is None:
+        return PodFileParts(files=[], facts=PodFileDelivery(delivered=False))
+    entity, content, ctx = resolved
+    if content is None:
+        return PodFileParts(
+            files=[],
+            facts=PodFileDelivery(
+                delivered=False,
+                name=entity.name,
+                size_bytes=entity.size_bytes,
+                mime_type=entity.mime_type,
+                fits=False,
+            ),
+        )
+
+    files: list[EnvelopeFile] = []
+    if page_preview and _is_pdf(entity):
+        preview = await _best_effort(
+            lambda: _page_preview_part(
+                uow=uow,
+                target=target,
+                ctx=ctx,
+                path=path,
+                file_name=entity.name,
+                caption=caption,
+            ),
+            step="page_preview",
+            path=path,
+        )
+        if preview is not None:
+            files.append(preview)
+            # The page image carries the caption; repeating it on the document
+            # below would print the same line twice in a row.
+            caption = None
+    # What the file is decides how it arrives: every platform picks a photo
+    # bubble, a voice note or a grey file row from this one string
+    # (`media_kind_for_mime`). The datastore types a file by its name alone, so
+    # anything stored without an extension claims to be a blob and reaches the
+    # person as a download rather than as the picture they were sent -- and the
+    # bytes that would have said otherwise are already in hand here.
+    mime_type = entity.mime_type
+    if is_untyped_mime(mime_type):
+        mime_type = sniff_media_mime(content) or "application/octet-stream"
+    files.append(
+        EnvelopeFile(
+            file_name=entity.name,
+            content=content,
+            mime_type=mime_type,
+            caption=caption,
+        )
+    )
+    return PodFileParts(
+        files=files,
+        facts=PodFileDelivery(
+            delivered=True,
+            name=entity.name,
+            size_bytes=entity.size_bytes,
+            mime_type=mime_type,
+        ),
+    )
+
+
+async def load_pod_file_bytes(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    path: str,
+) -> tuple[Any, bytes] | None:
+    """A pod file's entity and bytes, with no size cap — for the voice path."""
+    resolved = await _load_pod_file(
+        uow=uow,
+        target=target,
+        conversation_id=conversation_id,
+        path=path,
+        require_inline_fit=False,
+    )
+    if resolved is None or resolved[1] is None:
+        return None
+    return resolved[0], resolved[1]
+
+
+async def resolve_table_preview(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    request: DisplayResourceRequest,
+) -> TablePreview | None:
+    """The first rows of a displayed table, or ``None`` when they cannot be read."""
+    return await _best_effort(
+        lambda: _read_table_preview(
+            uow=uow,
+            target=target,
+            conversation_id=conversation_id,
+            request=request,
+        ),
+        step="table_preview",
+        conversation_id=conversation_id,
+    )
+
+
+async def _read_table_preview(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    request: DisplayResourceRequest,
+) -> TablePreview | None:
+    pod_id = target.surface.pod_id
+    ctx = await _pod_context(
+        uow=uow,
+        conversation_id=conversation_id,
+        pod_id=pod_id,
+    )
+    if ctx is None or ctx.user_id is None:
+        # Rows of an RLS table are scoped to a person. Without one there is no
+        # correct set to show -- not a smaller one -- so the card keeps the
+        # link and says nothing it cannot stand behind.
+        return None
+    user_id = ctx.user_id
+    token = set_current_context(ctx)
+    try:
+        table = await _read_table_rows(
+            uow=uow, pod_id=pod_id, ctx=ctx, user_id=user_id, request=request
+        )
+    finally:
+        reset_current_context(token)
+    rows, total = table.rows, table.total
+    block = format_record_table(rows, columns=table.columns)
+    if block is None:
+        return TablePreview(block="", summary=format_record_count(0, total))
+    return TablePreview(block=block, summary=format_record_count(len(rows), total))
+
+
+async def _read_table_rows(
+    *,
+    uow: Any,
+    pod_id: UUID,
+    ctx: Context,
+    user_id: UUID,
+    request: DisplayResourceRequest,
+) -> TableRows:
+    """Rows for a TABLE resource, by ad-hoc query or by table name + filters."""
+    if request.query:
+        return await run_readonly_query(
+            uow,
+            pod_id=pod_id,
+            query=request.query,
+            user_id=user_id,
+            ctx=ctx,
+            limit=PREVIEW_ROW_LIMIT,
+        )
+    if not request.name:
+        return TableRows(rows=[], total=None, columns=None)
+    return await read_table_preview(
+        uow,
+        pod_id=pod_id,
+        table_name=request.name,
+        user_id=user_id,
+        ctx=ctx,
+        limit=PREVIEW_ROW_LIMIT,
+        filters=[
+            (item.field, _filter_op(item.op), item.value)
+            for item in (request.filters or [])
+        ]
+        or None,
+    )
+
+
+def _filter_op(op: Any) -> str:
+    return str(op.value if hasattr(op, "value") else op)
+
+
+async def _load_pod_file(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    path: str,
+    require_inline_fit: bool,
+) -> tuple[Any, bytes | None, Context] | None:
+    """Resolve a pod file, and download it unless it is too big to attach.
+
+    Returns ``(entity, content, ctx)`` where ``content`` is ``None`` for a file
+    that cleared authorization but not the platform's cap — the caller still
+    wants the entity, to describe what it could not send.
+    """
+    return await _best_effort(
+        lambda: _read_pod_file(
+            uow=uow,
+            target=target,
+            conversation_id=conversation_id,
+            path=path,
+            require_inline_fit=require_inline_fit,
+        ),
+        step="pod_file_read",
+        conversation_id=conversation_id,
+    )
+
+
+async def _read_pod_file(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    conversation_id: UUID,
+    path: str,
+    require_inline_fit: bool,
+) -> tuple[Any, bytes | None, Context] | None:
+    pod_id = target.surface.pod_id
+    ctx = await _pod_context(
+        uow=uow,
+        conversation_id=conversation_id,
+        pod_id=pod_id,
+    )
+    if ctx is None:
+        return None
+    token = set_current_context(ctx)
+    try:
+        entity = await read_pod_file(uow, pod_id=pod_id, path=path, ctx=ctx)
+        # The MIME type decides which ceiling applies on a platform that caps
+        # media types separately (WhatsApp: 5 MB an image, 100 MB a document),
+        # so pass it rather than let the largest one stand in.
+        if require_inline_fit and not fits_inline(
+            target.surface.surface_type.value,
+            entity.size_bytes,
+            mime_type=entity.mime_type,
+        ):
+            return entity, None, ctx
+        _entity, content = await download_pod_file(
+            uow, pod_id=pod_id, path=path, ctx=ctx
+        )
+    finally:
+        reset_current_context(token)
+    return entity, content, ctx
+
+
+async def _pod_context(
+    *,
+    uow: Any,
+    conversation_id: UUID,
+    pod_id: UUID,
+) -> Context | None:
+    """Authorization context of the conversation's owner, in this pod.
+
+    Everything read for a surface card is read as that person, so a resource
+    they cannot see is a resource the card does not describe.
+    """
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    if conversation is None:
+        return None
+    return await create_authorization_data_service(uow).build_user_context(
+        user_id=conversation.user_id,
+        pod_id=pod_id,
+    )
+
+
+async def _page_preview_part(
+    *,
+    uow: Any,
+    target: SurfaceEgressTarget,
+    ctx: Context,
+    path: str,
+    file_name: str,
+    caption: str | None,
+) -> EnvelopeFile | None:
+    """A document's first page as an image part, or None if there is none."""
+    token = set_current_context(ctx)
+    try:
+        image = await render_pod_file_page(
+            uow,
+            pod_id=target.surface.pod_id,
+            path=path,
+            ctx=ctx,
+            page=_PREVIEW_PAGE,
+        )
+    finally:
+        reset_current_context(token)
+    if image is None:
+        return None
+    if not fits_inline(
+        target.surface.surface_type.value, len(image), mime_type="image/jpeg"
+    ):
+        return None
+    return EnvelopeFile(
+        file_name=f"{file_name}-page-{_PREVIEW_PAGE}.jpg",
+        content=image,
+        mime_type="image/jpeg",
+        caption=caption,
+    )
+
+
+async def _best_effort(
+    action: Callable[[], Awaitable[T]],
+    *,
+    step: str,
+    conversation_id: UUID | None = None,
+    path: str | None = None,
+) -> T | None:
+    """Run an enrichment read, returning ``None`` if anything at all goes wrong.
+
+    Broad on purpose, and broad in one place: the caller is mid-delivery, and
+    the alternative to "no extra detail" is a message the person never receives.
+
+    One event covers all three reads, with ``step`` naming which one gave up.
+    The log catalog wants a literal event and named fields at the call site, and
+    it is right to: three near-identical event names would have said no more
+    than one name and a field, while costing three contracts to keep in step.
+    """
+    try:
+        return await action()
+    except Exception:
+        logger.debug(
+            "agent_surfaces.display_resource_content.enrichment_skipped.diagnostic",
+            step=step,
+            conversation_id=conversation_id,
+            path=path,
+            exc_info=True,
+        )
+        return None
+
+
+def _is_pdf(entity: Any) -> bool:
+    """Mirrors the document processor's own page-rendering predicate."""
+    mime = str(getattr(entity, "mime_type", "") or "").split(";")[0].strip().lower()
+    return mime == _PDF_MIME or str(getattr(entity, "name", "")).lower().endswith(
+        ".pdf"
+    )

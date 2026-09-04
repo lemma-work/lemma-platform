@@ -101,7 +101,9 @@ selected format. Read only the relevant format sections.
 
 Build an outline, slide map, workbook model, or page structure before styling.
 Use real content and representative data; do not leave placeholder copy unless
-the user requested a template.
+the user requested a template. Keep that model the thing you edit: change
+generated output by regenerating it, not by patching the rendered file with
+`sed -i` or another regex-substitution tool.
 
 For revisions, make the smallest defensible change in the native source. Preserve
 styles, section and sheet structure, references, metadata, embedded assets, and
@@ -153,9 +155,14 @@ lemma files url /reports/quarterly-review.pdf
 ```
 
 Use `/me/<folder>/...` instead for a private deliverable. `stat` reports indexing
-state: wait for `COMPLETED` before claiming an indexable prose document is
-searchable; `NOT_REQUIRED` is expected for stored binary/data formats such as
-XLSX. Treat `FAILED` as a delivery defect, not success.
+state: `PENDING` and `PROCESSING` are still in flight, so wait for `COMPLETED`
+before claiming an indexable prose document is searchable; `NOT_REQUIRED` is
+expected for stored binary/data formats such as XLSX. Treat `FAILED` as a delivery
+defect, not success — a recovery pass re-drives it after backoff, so re-`stat`
+before reporting either way. `FAILED_PERMANENT` is terminal: the file exhausted
+its retry budget and nothing will drive it again, so re-uploading is the only
+recovery. Never describe a document as searchable on the strength of a successful
+upload alone.
 
 For high-stakes delivery, download the exact uploaded bytes to a fresh temporary
 path, compare size or hash with the verified local final, and reopen that copy.

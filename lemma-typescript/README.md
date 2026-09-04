@@ -43,7 +43,7 @@ const tables = await client.tables.list();
 const records = await client.records.list("tickets");
 ```
 
-Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `functions`, `files`, the apps facade (`desks`), `integrations`, `resources`, and `datastore`. New runtime code should use agents plus conversations.
+Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `functions`, `files`, `apps`, `connectors`, `resourceAccess`, and `datastore`. New runtime code should use agents plus conversations.
 
 ### Live datastore changes (WebSocket)
 
@@ -617,18 +617,19 @@ npm run build
 npm run registry:build
 ```
 
-To build the single local sandbox app:
-
-```bash
-cd examples/inbox-crm
-npm run build
-```
-
-`examples/inbox-crm` is the only kept example app in this repo. It is a local sandbox for visualizing the current direction, not a promise that every copied component inside it is a published registry block.
+There is no example app checked in. `examples/` is reserved for one; until
+something lands there, the blocks in `registry/` are the working reference for
+how these components are meant to be composed.
 
 This repo includes:
 
 - `registry.json` for registry source definitions
 - `public/r` for the generated flat registry output
-- `.github/workflows/deploy-registry-pages.yml` for GitHub Pages deployment
-- `.github/workflows/publish-npm.yml` for npm publishing
+- `.github/workflows/release-lemma-typescript.yml` for npm publishing
+
+There is no workflow that publishes the registry. `deploy-registry-pages.yml`
+used to be listed here; it was deleted because it had never run once, GitHub
+Pages is not enabled on this repository, and the token it needed was never
+configured. `npm run registry:build` still produces `public/r`; if the registry
+should be served somewhere, that is a decision to make rather than a workflow to
+un-delete.

@@ -1,11 +1,33 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SHADCN_SCHEMA_URL = "https://ui.shadcn.com/schema.json";
-const LEMMA_REGISTRY_URL =
-  "https://lemma-work.github.io/lemma-platform/r/{name}.json";
+
+// The registry is served straight from this repo by jsDelivr. It used to be
+// written as a github.io URL, which 404s: Pages is not enabled on the
+// repository and the workflow that would have deployed it was deleted.
+const REGISTRY_ORIGIN = "https://cdn.jsdelivr.net/gh/lemma-work/lemma-platform";
+const REGISTRY_PATH = "lemma-typescript/public/r";
+
+/** This package's version, which is also the release tag the blocks came from. */
+function packageVersion() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const manifest = JSON.parse(
+    readFileSync(resolve(here, "..", "package.json"), "utf8"),
+  );
+  return manifest.version;
+}
+
+/** Pinned to the release tag rather than `@main`: a block installed today
+ *  should keep resolving to the same source after the branch moves on. */
+function registryUrl() {
+  return `${REGISTRY_ORIGIN}@v${packageVersion()}/${REGISTRY_PATH}/{name}.json`;
+}
+
+const LEMMA_REGISTRY_URL = registryUrl();
 
 function printUsage() {
   console.log(`Usage:

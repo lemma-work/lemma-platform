@@ -133,7 +133,10 @@ def test_schedule_create_agent_cron_dispatches_schedule_api(monkeypatch):
     fake_client = FakeClient()
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
 
@@ -162,6 +165,7 @@ def test_schedule_create_agent_cron_dispatches_schedule_api(monkeypatch):
             "agent_name": "triage",
             "workflow_name": None,
             "config": {"cron": "*/5 * * * *"},
+            "instruction": None,
             "account_id": None,
             "connector_trigger_id": None,
             "filter_instruction": None,
@@ -173,14 +177,20 @@ def test_schedule_create_agent_cron_dispatches_schedule_api(monkeypatch):
 def test_global_json_flag_applies_to_schedule_commands(monkeypatch):
     class FakeSchedules:
         def list(self, **kwargs):
-            return {"items": [{"id": "schedule-1", "name": "triage_cron"}], "limit": 100}
+            return {
+                "items": [{"id": "schedule-1", "name": "triage_cron"}],
+                "limit": 100,
+            }
 
     class FakeClient:
         def pod(self, pod_id):
             return SimpleNamespace(schedules=FakeSchedules())
 
     def fake_run_with_client(ctx, fn):
-        return fn(FakeClient(), SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            FakeClient(),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
 
@@ -227,7 +237,9 @@ def test_orgs_list_dispatches_organizations_api(monkeypatch):
     fake_client = SimpleNamespace(organizations=FakeOrganizations())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"defaults": {"org_id": "org-1"}}))
+        return fn(
+            fake_client, SimpleNamespace(config={"defaults": {"org_id": "org-1"}})
+        )
 
     monkeypatch.setattr(organizations, "run_with_client", fake_run_with_client)
 
@@ -298,7 +310,10 @@ def test_tables_list_dispatches_tables_api(monkeypatch):
     fake_client = SimpleNamespace(tables=FakeTables())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(data, "run_with_client", fake_run_with_client)
 
@@ -331,7 +346,10 @@ def test_tables_get_dispatches_tables_api(monkeypatch):
     fake_client = SimpleNamespace(tables=FakeTables())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(data, "run_with_client", fake_run_with_client)
 
@@ -357,7 +375,10 @@ def test_records_list_dispatches_records_api(monkeypatch):
     fake_client = SimpleNamespace(records=FakeRecords())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(data, "run_with_client", fake_run_with_client)
 
@@ -458,7 +479,11 @@ def test_pods_describe_renders_apps_and_surfaces(monkeypatch):
         )
         schedules = FakeResource({"items": []})
         apps = FakeResource(
-            {"items": [{"name": "inbox", "status": "READY", "url": "https://inbox.example"}]}
+            {
+                "items": [
+                    {"name": "inbox", "status": "READY", "url": "https://inbox.example"}
+                ]
+            }
         )
         surfaces = FakeResource(
             {
@@ -569,7 +594,10 @@ def test_resolve_pod_id_paginates_beyond_the_first_page():
     hardcoded single `limit=200` page silently dropped it)."""
     calls: list[dict] = []
     target = "33333333-3333-3333-3333-333333333333"
-    items = [{"id": f"{i:08d}-0000-0000-0000-000000000000", "name": f"pod{i}"} for i in range(450)]
+    items = [
+        {"id": f"{i:08d}-0000-0000-0000-000000000000", "name": f"pod{i}"}
+        for i in range(450)
+    ]
     items.append({"id": target, "name": "needle"})  # 451st item, on page 3
     client = _resolver_client(items, calls, page_size=200)
 
@@ -647,7 +675,10 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
     fake_client = FakeClient()
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
 
@@ -677,6 +708,7 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
         "agent_name": None,
         "workflow_name": "gmail-email-ingest",
         "config": {"source": "composio", "labelIds": "INBOX"},
+        "instruction": None,
         "account_id": "account-1",
         "connector_trigger_id": "gmail:gmail_new_gmail_message",
         "filter_instruction": None,
@@ -708,7 +740,10 @@ def test_workflow_update_graph_dispatches_workflow_api(monkeypatch):
     fake_client = FakeClient()
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(workflows, "run_with_client", fake_run_with_client)
 
@@ -762,7 +797,10 @@ def test_workflow_submit_form_dispatches_workflow_api(monkeypatch):
     fake_client = SimpleNamespace(pod=lambda pod_id: FakePod())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(workflows, "run_with_client", fake_run_with_client)
     monkeypatch.setattr(workflows, "pod_client", lambda client, s, pod=None: FakePod())
@@ -832,7 +870,10 @@ def test_function_permissions_replace_dispatches_permissions_api(monkeypatch):
     fake_client = SimpleNamespace(functions=FakeFunctions())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(functions, "run_with_client", fake_run_with_client)
 
@@ -889,7 +930,10 @@ def test_functions_run_dispatches_function_run_api(monkeypatch):
     fake_client = SimpleNamespace(functions=FakeFunctions())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(functions, "run_with_client", fake_run_with_client)
 
@@ -927,7 +971,10 @@ def test_functions_runs_list_dispatches_function_runs_api(monkeypatch):
     fake_client = SimpleNamespace(functions=FakeFunctions())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(functions, "run_with_client", fake_run_with_client)
 
@@ -953,7 +1000,10 @@ def test_functions_runs_get_dispatches_function_run_api(monkeypatch):
     fake_client = SimpleNamespace(functions=FakeFunctions())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(functions, "run_with_client", fake_run_with_client)
 
@@ -978,7 +1028,10 @@ def test_agent_permissions_get_dispatches_permissions_api(monkeypatch):
     fake_client = SimpleNamespace(agents=FakeAgents())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(agents, "run_with_client", fake_run_with_client)
 
@@ -1014,7 +1067,10 @@ def test_schedule_create_agent_webhook_forwards_connector_trigger_option(monkeyp
     fake_client = FakeClient()
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(schedules, "run_with_client", fake_run_with_client)
 
@@ -1044,6 +1100,7 @@ def test_schedule_create_agent_webhook_forwards_connector_trigger_option(monkeyp
         "agent_name": "triage",
         "workflow_name": None,
         "config": {"source": "slack"},
+        "instruction": None,
         "account_id": "account-1",
         "connector_trigger_id": "slack:message_created",
         "filter_instruction": None,
@@ -1065,7 +1122,10 @@ def test_file_upload_me_path_uses_path_only(monkeypatch, tmp_path):
     fake_client = SimpleNamespace(files=FakeFiles())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(files, "run_with_client", fake_run_with_client)
 
@@ -1100,7 +1160,10 @@ def test_file_download_passes_clean_path(monkeypatch, tmp_path):
     fake_client = SimpleNamespace(files=FakeFiles())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(files, "run_with_client", fake_run_with_client)
 
@@ -1138,7 +1201,10 @@ def test_file_download_markdown_passes_clean_path(monkeypatch, tmp_path):
     fake_client = SimpleNamespace(files=FakeFiles())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(files, "run_with_client", fake_run_with_client)
 
@@ -1187,7 +1253,10 @@ def test_chat_creates_agent_conversation_and_streams_message(monkeypatch):
     fake_client = SimpleNamespace(conversations=FakeConversations())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(conversations, "run_with_client", fake_run_with_client)
 
@@ -1229,7 +1298,10 @@ def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
     fake_client = SimpleNamespace(conversations=FakeConversations())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(conversations, "run_with_client", fake_run_with_client)
 
@@ -1240,6 +1312,80 @@ def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
     assert captured["send"] == ("pod-1", "conversation-1", "hello", True)
     assert "default pod agent" in result.stdout
     assert "default reply" in result.stdout
+
+
+def test_chat_treats_a_quoted_question_as_the_message_not_an_agent(monkeypatch):
+    """`lemma chat "what can you do in this pod?"` is the README's own example.
+
+    A lone positional used to be the agent name unconditionally, so the whole
+    question became an agent nobody has and the CLI opened an interactive
+    session against it instead of asking the default pod agent.
+    """
+    captured: dict[str, object] = {}
+
+    class FakeConversations:
+        def create(self, pod_id, payload):
+            captured["create"] = (pod_id, payload)
+            return {"id": "conversation-1"}
+
+        def send_message(self, pod_id, conversation_id, *, content, stream):
+            captured["send"] = (pod_id, conversation_id, content, stream)
+
+            class Response:
+                def iter_lines(self, decode_unicode=True):
+                    yield 'data: {"type":"token","data":"a lot"}'
+                    yield ""
+
+                def close(self):
+                    return None
+
+            return Response()
+
+    fake_client = SimpleNamespace(conversations=FakeConversations())
+    monkeypatch.setattr(
+        conversations,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        ),
+    )
+
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "chat", "what can you do in this pod?"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["create"] == ("pod-1", {"agent_name": None, "title": None})
+    assert captured["send"] == (
+        "pod-1",
+        "conversation-1",
+        "what can you do in this pod?",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "args,agent,message,expected",
+    [
+        # A one-word positional is still an agent name, opening interactive chat.
+        (["triage"], None, None, ("triage", None)),
+        # Quoted prose is the message; the default pod agent answers it.
+        (["what can you do?"], None, None, (None, "what can you do?")),
+        # AGENT then MESSAGE keeps working.
+        (["triage", "hello there"], None, None, ("triage", "hello there")),
+        # Unquoted words after an agent still join into one message.
+        (["triage", "hello", "there"], None, None, ("triage", "hello there")),
+        # An explicit --agent makes every positional part of the message.
+        (["how are you"], "triage", None, ("triage", "how are you")),
+        # An explicit --message wins over a message-shaped positional.
+        (["what can you do?"], None, "hi", (None, "hi")),
+    ],
+)
+def test_parse_chat_args(args, agent, message, expected):
+    from lemma_cli.cli_core.app import _parse_chat_args
+
+    assert _parse_chat_args(args, agent, message) == expected
 
 
 def test_conversation_stream_attaches_to_sse(monkeypatch):
@@ -1262,7 +1408,10 @@ def test_conversation_stream_attaches_to_sse(monkeypatch):
     fake_client = SimpleNamespace(conversations=FakeConversations())
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            fake_client,
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(conversations, "run_with_client", fake_run_with_client)
 
@@ -1555,9 +1704,7 @@ def test_connectors_connect_request_create(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeConnectors:
-        def create_connect_request(
-            self, connector, *, organization_id, auth_config_id
-        ):
+        def create_connect_request(self, connector, *, organization_id, auth_config_id):
             captured["connector"] = connector
             captured["organization_id"] = organization_id
             captured["auth_config_id"] = auth_config_id
@@ -1946,9 +2093,7 @@ def test_connectors_account_create_modern_facade_preserves_selector(
             captured["request"] = request.to_dict()
             return {"id": "account-1"}
 
-    fake_client = SimpleNamespace(
-        connectors=SimpleNamespace(accounts=FakeAccounts())
-    )
+    fake_client = SimpleNamespace(connectors=SimpleNamespace(accounts=FakeAccounts()))
 
     def fake_run_with_client(ctx, fn):
         return fn(fake_client, SimpleNamespace(config={"_runtime": {"org": "org-1"}}))
@@ -2011,7 +2156,9 @@ def test_connectors_account_create_requires_exactly_one_selector(selector_args):
     )
 
     assert result.exit_code != 0
-    assert "Use exactly one: --auth-config or --auth-config-id" in unstyle(result.output)
+    assert "Use exactly one: --auth-config or --auth-config-id" in unstyle(
+        result.output
+    )
 
 
 def test_connectors_triggers_list_passes_auth_config(monkeypatch):
@@ -2159,7 +2306,10 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
             return SimpleNamespace(surfaces=FakeSurfaces())
 
     def fake_run_with_client(ctx, fn):
-        return fn(FakeClient(), SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            FakeClient(),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(surfaces, "run_with_client", fake_run_with_client)
 
@@ -2204,7 +2354,7 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
     }
 
 
-def test_surfaces_channels_builds_route_payload(monkeypatch):
+def test_surfaces_channels_builds_the_allow_list(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeSurfaces:
@@ -2220,7 +2370,10 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
             return SimpleNamespace(surfaces=FakeSurfaces())
 
     def fake_run_with_client(ctx, fn):
-        return fn(FakeClient(), SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            FakeClient(),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(surfaces, "run_with_client", fake_run_with_client)
 
@@ -2236,8 +2389,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
             "C123",
             "--channel-name",
             "general",
-            "--agent",
-            "triage",
         ],
     )
 
@@ -2251,7 +2402,6 @@ def test_surfaces_channels_builds_route_payload(monkeypatch):
                     {
                         "channel_id": "C123",
                         "channel_name": "general",
-                        "agent_name": "triage",
                     }
                 ]
             }
@@ -2265,7 +2415,10 @@ def test_surfaces_setup_uses_surface_ref(monkeypatch):
     class FakeSurfaces:
         def setup(self, surface):
             captured["surface"] = surface
-            return {"platform": "SLACK", "webhook_url": "https://api.test/surfaces/webhooks/slack"}
+            return {
+                "platform": "SLACK",
+                "webhook_url": "https://api.test/surfaces/webhooks/slack",
+            }
 
     class FakeClient:
         def pod(self, pod_id):
@@ -2273,7 +2426,10 @@ def test_surfaces_setup_uses_surface_ref(monkeypatch):
             return SimpleNamespace(surfaces=FakeSurfaces())
 
     def fake_run_with_client(ctx, fn):
-        return fn(FakeClient(), SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"))
+        return fn(
+            FakeClient(),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty"),
+        )
 
     monkeypatch.setattr(surfaces, "run_with_client", fake_run_with_client)
 
@@ -2353,11 +2509,16 @@ def test_feedback_dispatches_the_tool_api(monkeypatch):
         app,
         [
             "feedback",
-            "--category", "cli",
-            "--subject", "import aborts mid-write",
-            "--issue-encountered", "dry-run passed, import died on step 12",
-            "--expected-behavior", "dry-run catches it",
-            "--actual-behavior", "422 with no file named",
+            "--category",
+            "cli",
+            "--subject",
+            "import aborts mid-write",
+            "--issue-encountered",
+            "dry-run passed, import died on step 12",
+            "--expected-behavior",
+            "dry-run catches it",
+            "--actual-behavior",
+            "422 with no file named",
         ],
     )
 
@@ -2398,11 +2559,16 @@ def test_feedback_rejects_an_unknown_category_and_names_the_valid_ones():
         app,
         [
             "feedback",
-            "--category", "nope",
-            "--subject", "import aborts mid-write",
-            "--issue-encountered", "dry-run passed, import died on step 12",
-            "--expected-behavior", "dry-run catches it",
-            "--actual-behavior", "422 with no file named",
+            "--category",
+            "nope",
+            "--subject",
+            "import aborts mid-write",
+            "--issue-encountered",
+            "dry-run passed, import died on step 12",
+            "--expected-behavior",
+            "dry-run catches it",
+            "--actual-behavior",
+            "422 with no file named",
         ],
     )
 
@@ -2444,7 +2610,8 @@ def test_apps_init_rejects_non_empty_directory(tmp_path):
     assert result.exit_code == 1
     # Normalize whitespace: Rich wraps at the (narrow) non-TTY console width, so a
     # long tmp path can split "not empty" across a line break in CI.
-    assert "not empty" in " ".join(result.stdout.split())
+    # stderr, not stdout: fail() is a diagnostic, so --json output stays parseable.
+    assert "not empty" in " ".join(result.stderr.split())
 
 
 def test_apps_init_rejects_registry_scaffolding(tmp_path):
@@ -2465,7 +2632,7 @@ def test_apps_init_rejects_registry_scaffolding(tmp_path):
 
     assert result.exit_code == 1
     assert (
-        "registry scaffolding is no longer part of `lemma apps init`" in result.stdout
+        "registry scaffolding is no longer part of `lemma apps init`" in result.stderr
     )
 
 
@@ -2847,7 +3014,9 @@ DESTRUCTIVE_COMMANDS = [
 
 
 @pytest.mark.parametrize(
-    "module,args", DESTRUCTIVE_COMMANDS, ids=lambda value: " ".join(value) if isinstance(value, list) else ""
+    "module,args",
+    DESTRUCTIVE_COMMANDS,
+    ids=lambda value: " ".join(value) if isinstance(value, list) else "",
 )
 def test_destructive_commands_require_yes(monkeypatch, tmp_path, module, args):
     calls: list[int] = []
@@ -2855,8 +3024,11 @@ def test_destructive_commands_require_yes(monkeypatch, tmp_path, module, args):
     config_args = ["--config-file", str(tmp_path / "config.json")]
 
     refused = runner.invoke(app, config_args + args)
-    assert refused.exit_code == 1, refused.stdout
-    assert "--yes" in refused.stdout
+    assert refused.exit_code == 1, refused.output
+    # The refusal is a diagnostic and belongs on stderr, so a --json caller
+    # can still parse stdout on failure.
+    assert "--yes" in refused.stderr
+    assert refused.stdout == ""
     assert not calls
 
     accepted = runner.invoke(app, config_args + args + ["--yes"])
@@ -2870,9 +3042,7 @@ def test_confirm_destructive_prompt_aborts_on_no(monkeypatch):
     from lemma_cli.cli_core import confirm as confirm_mod
     from lemma_cli.cli_core.confirm import confirm_destructive
 
-    monkeypatch.setattr(
-        confirm_mod.sys, "stdin", SimpleNamespace(isatty=lambda: True)
-    )
+    monkeypatch.setattr(confirm_mod.sys, "stdin", SimpleNamespace(isatty=lambda: True))
     monkeypatch.setattr(confirm_mod.typer, "confirm", lambda message: False)
     with pytest.raises(typer_mod.Exit):
         confirm_destructive("Delete thing?", False)
@@ -2939,6 +3109,7 @@ def test_runtime_profiles_list_and_agent_host_create(monkeypatch):
 # --------------------------------------------------------------------------- #
 def _patch_run(monkeypatch, module, fake_client):
     """Route a command's run_with_client to a flat fake client (no network)."""
+
     def fake_run_with_client(ctx, fn):
         return fn(
             fake_client,
@@ -2962,7 +3133,9 @@ def test_records_import_uses_bulk_create_csv(monkeypatch, tmp_path):
     csv_file = tmp_path / "rows.csv"
     csv_file.write_text("title,status\nA,open\nB,done\n", encoding="utf-8")
 
-    result = runner.invoke(app, ["--pod", "pod-1", "records", "import", "items", str(csv_file)])
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "records", "import", "items", str(csv_file)]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert captured["pod_id"] == "pod-1"
@@ -2987,7 +3160,8 @@ def test_records_import_jsonl_and_limit(monkeypatch, tmp_path):
     jsonl.write_text('{"n": 1}\n{"n": 2}\n{"n": 3}\n', encoding="utf-8")
 
     result = runner.invoke(
-        app, ["--pod", "pod-1", "records", "import", "items", str(jsonl), "--limit", "2"]
+        app,
+        ["--pod", "pod-1", "records", "import", "items", str(jsonl), "--limit", "2"],
     )
     assert result.exit_code == 0, result.stdout
     assert captured["records"] == [{"n": 1}, {"n": 2}]
@@ -3005,7 +3179,9 @@ def test_records_import_empty_file_does_not_call_api(monkeypatch, tmp_path):
     empty = tmp_path / "rows.csv"
     empty.write_text("title,status\n", encoding="utf-8")  # header only
 
-    result = runner.invoke(app, ["--pod", "pod-1", "records", "import", "items", str(empty)])
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "records", "import", "items", str(empty)]
+    )
     assert result.exit_code == 0, result.stdout
     assert "No rows to import." in result.stdout
     assert called["n"] == 0
@@ -3031,8 +3207,18 @@ def test_coerce_csv_value(raw, expected):
     assert coerce_csv_value(raw) == expected
 
 
-def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None,
-                   schedules=None, files_tree=None, file_meta=None, functions=None):
+def _doctor_client(
+    *,
+    tables,
+    agents,
+    agent_perms,
+    surfaces=None,
+    workflows=None,
+    schedules=None,
+    files_tree=None,
+    file_meta=None,
+    functions=None,
+):
     # doctor resolves the pod via pod_client(), which returns client.pod(pod_id)
     # for a catalog-capable client — so resources use hierarchical method names
     # (matching the real SDK and the `describe` test).
@@ -3253,15 +3439,27 @@ def test_grant_agent_and_function_cli_edit_bundle(tmp_path):
     init_resource("agent", "triage", root=tmp_path)
     init_resource("function", "scorer", root=tmp_path)
 
-    a = runner.invoke(app, ["agent", "grant", "triage", "tickets:read", "--root", str(tmp_path)])
+    a = runner.invoke(
+        app, ["agent", "grant", "triage", "tickets:read", "--root", str(tmp_path)]
+    )
     assert a.exit_code == 0, a.stdout
-    agent_json = loads_jsonc((tmp_path / "agents" / "triage" / "triage.json").read_text())
-    assert any(g["resource_name"] == "tickets" for g in agent_json["permissions"]["grants"])
+    agent_json = loads_jsonc(
+        (tmp_path / "agents" / "triage" / "triage.json").read_text()
+    )
+    assert any(
+        g["resource_name"] == "tickets" for g in agent_json["permissions"]["grants"]
+    )
 
-    f = runner.invoke(app, ["function", "grant", "scorer", "tickets:write", "--root", str(tmp_path)])
+    f = runner.invoke(
+        app, ["function", "grant", "scorer", "tickets:write", "--root", str(tmp_path)]
+    )
     assert f.exit_code == 0, f.stdout
-    fn_json = loads_jsonc((tmp_path / "functions" / "scorer" / "scorer.json").read_text())
-    assert any(g["resource_name"] == "tickets" for g in fn_json["permissions"]["grants"])
+    fn_json = loads_jsonc(
+        (tmp_path / "functions" / "scorer" / "scorer.json").read_text()
+    )
+    assert any(
+        g["resource_name"] == "tickets" for g in fn_json["permissions"]["grants"]
+    )
 
 
 def test_grant_print_does_not_write(tmp_path):
@@ -3270,7 +3468,16 @@ def test_grant_print_does_not_write(tmp_path):
     init_resource("agent", "triage", root=tmp_path)
     before = (tmp_path / "agents" / "triage" / "triage.json").read_text()
     result = runner.invoke(
-        app, ["agent", "grant", "triage", "tickets:read", "--print", "--root", str(tmp_path)]
+        app,
+        [
+            "agent",
+            "grant",
+            "triage",
+            "tickets:read",
+            "--print",
+            "--root",
+            str(tmp_path),
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert '"grants"' in result.stdout
@@ -3289,9 +3496,11 @@ def test_agents_create_missing_field_message(monkeypatch):
         yield SimpleNamespace(agents=SimpleNamespace(create=lambda pod_id, req: req))
 
     monkeypatch.setattr(state_mod, "client_session", fake_session)
-    result = runner.invoke(app, ["--pod", "pod-1", "agents", "create", "--data", '{"name": "x"}'])
+    result = runner.invoke(
+        app, ["--pod", "pod-1", "agents", "create", "--data", '{"name": "x"}']
+    )
     assert result.exit_code != 0
-    assert "Missing required field: instruction." in result.stdout
+    assert "Missing required field: instruction." in result.stderr
 
 
 def test_pod_create_with_starter_scaffolds_before_api(monkeypatch, tmp_path):
@@ -3353,7 +3562,18 @@ def test_schedule_create_accepts_on_all(monkeypatch):
     _patch_run(monkeypatch, schedules, SimpleNamespace(schedules=FakeSchedules()))
     result = runner.invoke(
         app,
-        ["--pod", "pod-1", "schedules", "create", "--workflow", "wf", "--datastore", "t", "--on", "all"],
+        [
+            "--pod",
+            "pod-1",
+            "schedules",
+            "create",
+            "--workflow",
+            "wf",
+            "--datastore",
+            "t",
+            "--on",
+            "all",
+        ],
     )
     assert result.exit_code == 0, result.stdout
     from lemma_cli.cli_core.io import to_plain
@@ -3374,8 +3594,20 @@ def test_tables_add_column_via_flags(monkeypatch):
     _patch_run(monkeypatch, data, SimpleNamespace(tables=FakeTables()))
     result = runner.invoke(
         app,
-        ["--pod", "pod-1", "tables", "add-column", "tickets", "status",
-         "--type", "enum", "--option", "open", "--option", "done"],
+        [
+            "--pod",
+            "pod-1",
+            "tables",
+            "add-column",
+            "tickets",
+            "status",
+            "--type",
+            "enum",
+            "--option",
+            "open",
+            "--option",
+            "done",
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert captured["table"] == "tickets"
@@ -3404,7 +3636,9 @@ def test_tables_drop_column_confirmation(monkeypatch):
 
     _patch_run(monkeypatch, data, SimpleNamespace(tables=FakeTables()))
     # non-interactive without --yes refuses, never calls the API
-    rejected = runner.invoke(app, ["--pod", "pod-1", "tables", "drop-column", "tickets", "old"])
+    rejected = runner.invoke(
+        app, ["--pod", "pod-1", "tables", "drop-column", "tickets", "old"]
+    )
     assert rejected.exit_code != 0
     assert called["n"] == 0
 
@@ -3482,7 +3716,9 @@ NESTED_TREE = {
                 }
             ],
         },
-        _folder("skills", {"name": "deep.md", "path": "/skills/deep.md", "kind": "FILE"}),
+        _folder(
+            "skills", {"name": "deep.md", "path": "/skills/deep.md", "kind": "FILE"}
+        ),
     ]
 }
 NESTED_TREE["children"][1]["path"] = "/skills"
@@ -3681,3 +3917,39 @@ def test_an_error_we_cannot_explain_is_left_to_traceback(capsys):
 
     assert report_cli_error(ValueError("a genuine bug")) is False
     assert capsys.readouterr().err == ""
+
+
+def test_init_says_when_the_picker_is_not_the_whole_list(monkeypatch, tmp_path):
+    """A picker showing the first page and nothing else is a confident wrong
+    answer: the org the user wants may simply not be on it."""
+    config_file = tmp_path / "config.json"
+
+    class FakeOrganizations:
+        def list(self, *, limit, page_token=None):
+            return {
+                "items": [{"id": f"org-{n}", "name": f"Org {n}"} for n in range(limit)],
+                "limit": limit,
+                "next_page_token": "next",
+            }
+
+    class FakePods:
+        def list_by_organization(self, org_id, *, limit, page_token=None):
+            return {"items": [{"id": "pod-1", "name": "Ops"}]}
+
+    fake_client = SimpleNamespace(organizations=FakeOrganizations(), pods=FakePods())
+
+    from lemma_cli.cli_core.commands import system
+
+    def fake_run_with_client(ctx, fn):
+        from lemma_cli.cli_core.state import state_from_ctx
+
+        return fn(fake_client, state_from_ctx(ctx))
+
+    monkeypatch.setattr(system, "run_with_client", fake_run_with_client)
+    # Non-interactive: take the first, but still say the list was cut short.
+    monkeypatch.setattr(system, "select_from_items", lambda items, **_kw: items[0])
+
+    result = runner.invoke(app, ["--config-file", str(config_file), "init"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "more organizations" in " ".join(result.stderr.split())

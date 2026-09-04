@@ -38,7 +38,7 @@ pub struct ManagedRuntimeBootstrap {
 }
 
 impl ManagedRuntimeBootstrap {
-    pub fn discover(paths: &LocalPaths) -> io::Result<Option<Self>> {
+    pub fn discover(paths: &LocalPaths, healed: &mut Vec<String>) -> io::Result<Option<Self>> {
         let Some(artifact_root) = env::var_os("LEMMA_LOCALD_MANAGED_RUNTIME_ARTIFACT_ROOT")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -85,7 +85,7 @@ impl ManagedRuntimeBootstrap {
                 vz_executable,
                 #[cfg(windows)]
                 wsl_executable,
-                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"))?,
+                secrets: load_or_create_secrets(&paths.root.join("infra.secrets.json"), healed)?,
             }))
         }
     }
@@ -126,8 +126,103 @@ impl ManagedRuntimeBootstrap {
             spec,
             forwarders: Mutex::new(Vec::new()),
             status: Mutex::new(None),
+            clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
         }))
     }
+}
+
+/// How often the guest's wall clock is put back on this machine's.
+///
+/// The guest sets its time once, at boot, and nothing moves it afterwards. A
+/// Virtualization.framework VM does not run while the Mac sleeps, so the guest
+/// clock falls behind by however long the lid was closed and stays there. That
+/// broke sign-in outright: the auth service runs inside the guest, so every
+/// access token it minted carried an `exp` computed from the wrong clock, the
+/// backend on the Mac read it as already expired, and the browser refreshed --
+/// getting another already-expired token from the same wrong clock, forever.
+///
+/// Thirty seconds is a bound on drift, not a poll for it: the request is one
+/// small round trip over the control socket, and the sleep case is caught
+/// within a tick anyway.
+const CLOCK_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+/// The slice the keeper sleeps in, so stopping does not wait out an interval.
+const CLOCK_KEEPER_TICK: Duration = Duration::from_secs(1);
+/// Wall time that ran further than the monotonic clock across one tick means
+/// the Mac was asleep in between -- `Instant` does not advance while it is.
+/// The guest was not running for that stretch, so it is now exactly that far
+/// behind and should not wait for the interval to find out.
+const HOST_SLEEP_MARGIN: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClockSyncReason {
+    HostSlept,
+    Interval,
+}
+
+/// Should this tick put the guest clock back on the host's, and why?
+///
+/// Split out from the loop because the loop is a thread and this is the part
+/// worth asserting on.
+fn clock_sync_due(
+    since_last_sync: Duration,
+    monotonic: Duration,
+    wall: Duration,
+) -> Option<ClockSyncReason> {
+    if wall > monotonic + HOST_SLEEP_MARGIN {
+        return Some(ClockSyncReason::HostSlept);
+    }
+    if since_last_sync >= CLOCK_SYNC_INTERVAL {
+        return Some(ClockSyncReason::Interval);
+    }
+    None
+}
+
+/// Where the sandbox image warm-up has got to.
+///
+/// Reported rather than waited on. The image a pod runs its work in is several
+/// hundred megabytes and is not needed until something actually runs, so
+/// fetching it used to sit in the middle of the startup bar and hold "Lemma is
+/// ready" behind a download nobody had asked for yet. It now runs behind the
+/// workspace, and this is what the app shows about it.
+/// Nothing has been said yet, and the workspace should keep asking.
+pub const SANDBOX_IMAGES_PENDING: &str = "pending";
+pub const SANDBOX_IMAGES_DOWNLOADING: &str = "downloading";
+pub const SANDBOX_IMAGES_READY: &str = "ready";
+pub const SANDBOX_IMAGES_FAILED: &str = "failed";
+/// This deployment does not manage sandbox images at all -- there is no guest
+/// to warm. Terminal, so the workspace stops asking rather than polling a
+/// question nothing will ever answer.
+pub const SANDBOX_IMAGES_UNSUPPORTED: &str = "unsupported";
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxImageStatus {
+    /// One of the `SANDBOX_IMAGES_*` constants above.
+    pub state: String,
+    pub detail: String,
+}
+
+impl SandboxImageStatus {
+    fn new(state: &str, detail: &str) -> Self {
+        Self {
+            state: state.to_owned(),
+            detail: detail.to_owned(),
+        }
+    }
+}
+
+impl Default for SandboxImageStatus {
+    fn default() -> Self {
+        Self::new(SANDBOX_IMAGES_PENDING, "")
+    }
+}
+
+struct ClockKeeper {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 
 pub struct ManagedRuntimeController {
@@ -135,6 +230,16 @@ pub struct ManagedRuntimeController {
     spec: ManagedRuntimeSpec,
     forwarders: Mutex<Vec<TcpForwarder>>,
     status: Mutex<Option<ManagedRuntimeStatus>>,
+    clock_keeper: Mutex<Option<ClockKeeper>>,
+    /// The last clock-sync failure written to the log, so a standing one is
+    /// said once rather than twice a minute for as long as the stack runs.
+    last_clock_error: Mutex<Option<String>>,
+    sandbox_images: Mutex<SandboxImageStatus>,
+    /// The auth service, still coming up while the backend boots.
+    ///
+    /// See `start_with_progress`. Joined by `await_private_services` before
+    /// anything reports ready, so this is a reordering and not a weakening.
+    pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
 }
 
 impl ManagedRuntimeController {
@@ -142,12 +247,12 @@ impl ManagedRuntimeController {
         self.runtime.prepare_host()
     }
 
-    pub fn start(&self) -> io::Result<()> {
+    pub fn start(self: &Arc<Self>) -> io::Result<()> {
         self.start_with_progress(|_, _, _, _| {})
     }
 
     pub fn start_with_progress(
-        &self,
+        self: &Arc<Self>,
         mut progress: impl FnMut(&str, &str, u64, &str),
     ) -> io::Result<()> {
         validate_spec(&self.spec)?;
@@ -160,10 +265,18 @@ impl ManagedRuntimeController {
         let status = self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
         })?;
+        // Before PostgreSQL, Redis or the auth service exist in there. `start`
+        // only boots a guest that is not already running, and a reused guest
+        // keeps whatever clock it drifted to while the Mac was asleep -- so the
+        // one place the clock is guaranteed correct cannot be boot alone.
+        self.sync_guest_clock(None);
         let parameters = json!({
             "images": self.spec.images,
             "credentials": self.spec.credentials,
         });
+        // Postgres and Redis first, and waited for: migrations run against the
+        // database before the backend starts, and the backend reaches for both
+        // as it boots.
         for (operation, component, label, percentage, detail) in [
             (
                 "core.images",
@@ -186,13 +299,6 @@ impl ManagedRuntimeController {
                 58,
                 "preparing local streams, cache, and pub/sub",
             ),
-            (
-                "core.supertokens",
-                "supertokens",
-                "Starting local authentication",
-                64,
-                "preparing the private auth service",
-            ),
         ] {
             progress(component, label, percentage, detail);
             if let Err(error) = self.runtime.request(operation, parameters.clone()) {
@@ -201,55 +307,136 @@ impl ManagedRuntimeController {
                 return Err(error);
             }
         }
+
+        // The auth service starts here and is *waited for* later, because the
+        // backend does not need it to boot.
+        //
+        // `core.supertokens` does not return when the container starts; it
+        // returns when the service answers, and getting a JVM to answer took
+        // 5.13s of a 19.9s cold start on the machine this was measured on. That
+        // wait sat on the critical path in front of a backend that spends its
+        // own ~4s importing and binding, and `initialize_supertokens` only
+        // writes local configuration -- the first call to the auth service
+        // happens on the first authenticated request, long after.
+        //
+        // On a thread rather than by reordering the request, because the guest
+        // control channel is single: the host bridge holds one vsock connection
+        // behind a process-wide mutex and guestd handles connections inline on
+        // its accept loop, so this request occupies that channel either way.
+        // What it must not also occupy is *this* thread, which is what the
+        // daemon needs back in order to start the backend at all.
         progress(
-            "infrastructure-health",
-            "Checking private services",
-            66,
-            "waiting for the Mac-to-VM database, cache, and auth routes",
+            "supertokens",
+            "Starting local authentication",
+            64,
+            "preparing the private auth service",
         );
-        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
-            let _ = self.runtime.capture_diagnostics();
-            let _ = self.runtime.stop();
-            return Err(error);
-        }
+        let auth = {
+            let controller = Arc::clone(self);
+            let parameters = parameters.clone();
+            thread::Builder::new()
+                .name("lemma-locald-supertokens".into())
+                .spawn(move || {
+                    controller
+                        .runtime
+                        .request("core.supertokens", parameters)
+                        .map(|_| ())
+                })?
+        };
+        *self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned") = Some(auth);
         if let Err(error) = self.ensure_forwarders(&status) {
             let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
             return Err(error);
         }
-        // Last, and deliberately not fatal.
-        //
-        // A sandbox image is only needed once a pod runs something, and it used
-        // to be fetched at exactly that moment -- `pull --quiet`, no progress,
-        // several hundred megabytes -- so the first real piece of work anybody
-        // asked for stopped dead and said nothing. Spending it here spends it
-        // once, on a bar that is already on screen, and leaves the first run
-        // fast.
-        //
-        // But everything above this line is what makes Lemma work at all, and
-        // this is a warm-up. Someone installing on a plane should still get a
-        // working local Lemma; `sandbox.ensure` will pull what it needs later,
-        // exactly as it does today.
-        progress(
-            "sandbox-images",
-            "Preparing the workspace sandbox",
-            68,
-            "downloading the images pods run their work in",
-        );
-        if let Err(error) = self.runtime.request("core.sandbox_images", parameters) {
-            eprintln!("locald: sandbox images could not be warmed up: {error}");
-            progress(
-                "sandbox-images",
-                "Workspace sandbox will download later",
-                68,
-                "Lemma is ready; the first task in a pod will fetch it",
-            );
-        }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
+        self.start_clock_keeper();
         Ok(())
     }
 
+    /// Wait for everything `start_with_progress` left in flight.
+    ///
+    /// The auth service is started there and joined here, so it comes up beside
+    /// the backend instead of in front of it. Nothing may report ready before
+    /// this returns: a workspace whose first action is signing in would meet an
+    /// auth service that is not answering yet, which is a worse failure than
+    /// the wait this removes.
+    ///
+    /// Called after the host processes are up rather than before, which is the
+    /// whole point -- and it is also why a failure here has to stop them. The
+    /// caller owns that, because it owns the processes.
+    pub fn await_private_services(&self) -> io::Result<()> {
+        let pending = self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned")
+            .take();
+        if let Some(handle) = pending {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(error);
+                }
+                // A panicked worker is not a runtime the caller should keep
+                // using, and joining loses the payload, so say which thread.
+                Err(_) => {
+                    let _ = self.runtime.capture_diagnostics();
+                    let _ = self.runtime.stop();
+                    return Err(io::Error::other(
+                        "the private auth service failed to start (worker panicked)",
+                    ));
+                }
+            }
+        }
+        let status = self
+            .status
+            .lock()
+            .expect("managed runtime status poisoned")
+            .clone();
+        let Some(status) = status else {
+            return Ok(());
+        };
+        // The same check as before, in the same place in the sequence relative
+        // to anything that uses these services -- only now the services had the
+        // backend's boot to finish coming up in, so it usually finds them ready.
+        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Ask the guest to destroy every database, volume and workspace it holds.
+    ///
+    /// The surgical half of a local-data reset: the guest tidies itself, so the
+    /// pulled container images survive and coming back up is seconds rather
+    /// than a re-download. Only reached when `probe` has already answered, so a
+    /// guest that cannot be asked falls to `discard_data_disk` instead of
+    /// retrying this.
+    pub fn reset_guest_data(&self) -> io::Result<serde_json::Value> {
+        self.runtime
+            .request("core.reset_data", json!({"confirm": "reset-local-data"}))
+    }
+
+    /// Throw the whole data disk away, returning the bytes reclaimed.
+    ///
+    /// The blunt half, for a guest that will not answer -- a torn filesystem, a
+    /// VM that will not boot. Takes the container images with it.
+    #[cfg(target_os = "macos")]
+    pub fn discard_data_disk(&self) -> io::Result<u64> {
+        self.stop_clock_keeper();
+        self.clear_forwarders();
+        self.runtime.discard_data_disk()
+    }
+
     pub fn stop_infrastructure(&self) -> io::Result<()> {
+        self.stop_clock_keeper();
         if self.status().is_none() {
             self.clear_forwarders();
             return self.runtime.stop();
@@ -261,6 +448,13 @@ impl ManagedRuntimeController {
     }
 
     pub fn shutdown(&self) -> io::Result<()> {
+        // Before the VM goes, like `stop_infrastructure`. The keeper holds an
+        // `Arc` to this controller, so leaving it running outlives the guest it
+        // is correcting and ticks once a second at a control socket with
+        // nothing behind it. Today the process exits immediately afterwards and
+        // nobody notices; the first caller to use this for a soft stop would
+        // inherit a thread that never ends.
+        self.stop_clock_keeper();
         self.clear_forwarders();
         self.runtime.stop()
     }
@@ -327,6 +521,201 @@ impl ManagedRuntimeController {
             ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
             ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
         ]))
+    }
+
+    /// What the app should currently say about the sandbox image.
+    pub fn sandbox_image_status(&self) -> SandboxImageStatus {
+        self.sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned")
+            .clone()
+    }
+
+    /// Fetch the images pods run their work in, behind the workspace.
+    ///
+    /// Deliberately not part of starting. Nothing needs these images until a
+    /// pod runs something, and they are several hundred megabytes -- so doing
+    /// it inline held "Lemma is ready" behind a download the user had not asked
+    /// for yet, on a first run, on whatever connection they happened to have.
+    ///
+    /// Equally deliberately not fatal. Someone installing on a plane gets a
+    /// working local Lemma; `sandbox.ensure` still pulls what it needs on first
+    /// use, exactly as it did before any of this existed. `report` is how the
+    /// app is told, and is called for every state this passes through so a
+    /// caller can show it and then take it away again.
+    pub fn warm_sandbox_images(
+        self: &Arc<Self>,
+        report: impl Fn(&SandboxImageStatus) + Send + 'static,
+    ) {
+        let Some(started) = self.claim_sandbox_image_warmup() else {
+            return;
+        };
+        report(&started);
+
+        let controller = Arc::clone(self);
+        thread::spawn(move || {
+            let parameters = json!({
+                "images": controller.spec.images,
+                "credentials": controller.spec.credentials,
+            });
+            let status = match controller
+                .runtime
+                .request("core.sandbox_images", parameters)
+            {
+                Ok(_) => {
+                    SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
+                }
+                Err(error) => {
+                    eprintln!("locald: sandbox images could not be warmed up: {error}");
+                    SandboxImageStatus::new(
+                        SANDBOX_IMAGES_FAILED,
+                        "Lemma is ready; the first task in a pod will fetch it",
+                    )
+                }
+            };
+            controller.publish_sandbox_images(status, &report);
+        });
+    }
+
+    /// Take the warm-up, or decline because one is already running.
+    ///
+    /// A compare-and-set under the status lock. Both the ready path and the
+    /// recovery path call `warm_sandbox_images`, and two runs would interleave
+    /// their downloading/ready events into one stream the app reads as a single
+    /// download finishing twice.
+    fn claim_sandbox_image_warmup(&self) -> Option<SandboxImageStatus> {
+        let mut current = self
+            .sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned");
+        if current.state == SANDBOX_IMAGES_DOWNLOADING {
+            return None;
+        }
+        let started = SandboxImageStatus::new(
+            SANDBOX_IMAGES_DOWNLOADING,
+            "Downloading the image pods run their work in",
+        );
+        *current = started.clone();
+        Some(started)
+    }
+
+    fn publish_sandbox_images(
+        &self,
+        status: SandboxImageStatus,
+        report: &impl Fn(&SandboxImageStatus),
+    ) {
+        *self
+            .sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned") = status.clone();
+        report(&status);
+    }
+
+    /// Hold the guest clock on this machine's for as long as the stack runs.
+    ///
+    /// Idempotent: a second call while one is running is a no-op, so a recovery
+    /// path that starts an already-started stack does not leave two threads
+    /// stepping the same clock.
+    fn start_clock_keeper(self: &Arc<Self>) {
+        let mut slot = self
+            .clock_keeper
+            .lock()
+            .expect("clock keeper lock poisoned");
+        if slot.is_some() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let controller = Arc::clone(self);
+        let flag = Arc::clone(&stop);
+        let handle = thread::spawn(move || controller.keep_clock(&flag));
+        *slot = Some(ClockKeeper { stop, handle });
+    }
+
+    fn stop_clock_keeper(&self) {
+        let keeper = self
+            .clock_keeper
+            .lock()
+            .expect("clock keeper lock poisoned")
+            .take();
+        if let Some(keeper) = keeper {
+            keeper.stop.store(true, Ordering::Release);
+            let _ = keeper.handle.join();
+        }
+    }
+
+    fn keep_clock(&self, stop: &AtomicBool) {
+        let mut last_sync = Instant::now();
+        let mut last_tick = Instant::now();
+        let mut last_wall = SystemTime::now();
+        while !stop.load(Ordering::Acquire) {
+            thread::sleep(CLOCK_KEEPER_TICK);
+            if stop.load(Ordering::Acquire) {
+                return;
+            }
+            let tick = Instant::now();
+            let wall = SystemTime::now();
+            let reason = clock_sync_due(
+                tick.duration_since(last_sync),
+                tick.duration_since(last_tick),
+                wall.duration_since(last_wall).unwrap_or_default(),
+            );
+            last_tick = tick;
+            last_wall = wall;
+            let Some(reason) = reason else {
+                continue;
+            };
+            last_sync = tick;
+            self.sync_guest_clock(Some(reason));
+        }
+    }
+
+    /// One correction, reported only when there was something to correct.
+    ///
+    /// Never fatal. A guest that will not take a clock is a guest with a
+    /// problem this cannot fix, and tearing the stack down over it would turn a
+    /// recoverable drift into an outage.
+    fn sync_guest_clock(&self, reason: Option<ClockSyncReason>) {
+        match self.runtime.sync_clock() {
+            Ok(report) => {
+                if !report
+                    .get("stepped")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                let skew = report
+                    .get("skew_seconds")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_default();
+                let cause = match reason {
+                    Some(ClockSyncReason::HostSlept) => " after this Mac slept",
+                    Some(ClockSyncReason::Interval) | None => "",
+                };
+                eprintln!("locald: the guest clock was {skew}s behind this Mac{cause}; corrected");
+                self.last_clock_error
+                    .lock()
+                    .expect("clock error lock poisoned")
+                    .take();
+            }
+            Err(error) => {
+                // Once per distinct failure. A guest too old to know
+                // `system.clock` refuses every attempt, and at this cadence
+                // saying so each time is a line twice a minute for as long as
+                // the stack runs -- which is the shape of log flood this
+                // codebase has already paid for once.
+                let message = error.to_string();
+                let mut last = self
+                    .last_clock_error
+                    .lock()
+                    .expect("clock error lock poisoned");
+                if last.as_deref() == Some(message.as_str()) {
+                    return;
+                }
+                eprintln!("locald: could not put the guest clock back on this Mac's: {message}");
+                *last = Some(message);
+            }
+        }
     }
 
     fn ensure_forwarders(&self, status: &ManagedRuntimeStatus) -> io::Result<()> {
@@ -631,19 +1020,77 @@ fn private_ipv4(value: &str, label: &str) -> io::Result<Ipv4Addr> {
     }
 }
 
-fn load_or_create_secrets(path: &Path) -> io::Result<InfraSecrets> {
+/// Read the infrastructure passwords, replacing them only if unreadable.
+///
+/// An unreadable file used to end the daemon permanently. Healing it needs one
+/// extra step that ordinary self-healing does not: `postgres_password` was
+/// baked into the `lemma-postgres-data` volume at `initdb`, so a new password
+/// does not open the existing database. `ensure_core_container` only replaces a
+/// container when its image or config generation changes, and `ensure_database`
+/// connects over the local socket with no password at all -- so the mismatch
+/// survives the entire guest start and first surfaces deep in the backend's
+/// migrations as an opaque auth error.
+///
+/// So the replacement is recorded as "this installation's data can no longer be
+/// read", which `start_host_packs` refuses on, with a reset the user can press.
+fn load_or_create_secrets(path: &Path, healed: &mut Vec<String>) -> io::Result<InfraSecrets> {
     if path.is_file() {
-        ensure_private_file(path)?;
-        let secrets: InfraSecrets = serde_json::from_slice(&fs::read(path)?)?;
-        validate_secret("postgres_password", &secrets.postgres_password)?;
-        validate_secret("redis_password", &secrets.redis_password)?;
-        return Ok(secrets);
+        match read_existing_secrets(path) {
+            Ok(secrets) => return Ok(secrets),
+            Err(reason) => {
+                let aside = crate::paths::quarantine_aside(path)?;
+                if let Some(root) = path.parent() {
+                    crate::paths::require_data_reset(
+                        root,
+                        "the private infrastructure passwords were replaced, and the existing \
+                         workspace database was created with the previous ones",
+                    )?;
+                }
+                healed.push(format!(
+                    "the infrastructure passwords were unreadable ({reason}); kept as {} and \
+                     replaced. The existing local data cannot be opened with the new ones",
+                    aside.display()
+                ));
+            }
+        }
+    }
+    // Missing, rather than unreadable. Same consequence: the password baked
+    // into the Postgres volume at `initdb` does not change because this file
+    // was recreated, so the new one opens nothing. Only a genuine first run may
+    // mint quietly, and a first run has no data.
+    else if path
+        .parent()
+        .is_some_and(crate::paths::installation_has_data)
+    {
+        let root = path.parent().expect("checked just above");
+        crate::paths::require_data_reset(
+            root,
+            "the private infrastructure passwords are missing, and the existing workspace \
+             database was created with the previous ones",
+        )?;
+        healed.push(
+            "the infrastructure passwords were missing while local data was still present; \
+             new ones were created and the existing database cannot be opened with them"
+                .to_owned(),
+        );
     }
     let secrets = InfraSecrets {
         postgres_password: random_hex()?,
         redis_password: random_hex()?,
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
+    Ok(secrets)
+}
+
+fn read_existing_secrets(path: &Path) -> Result<InfraSecrets, String> {
+    ensure_private_file(path).map_err(|error| error.to_string())?;
+    let raw = fs::read(path).map_err(|error| error.to_string())?;
+    let secrets: InfraSecrets =
+        serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+    validate_secret("postgres_password", &secrets.postgres_password)
+        .map_err(|error| error.to_string())?;
+    validate_secret("redis_password", &secrets.redis_password)
+        .map_err(|error| error.to_string())?;
     Ok(secrets)
 }
 
@@ -741,8 +1188,8 @@ mod tests {
     fn secrets_are_stable_private_and_not_accepted_when_tampered() {
         let root = tempdir().unwrap();
         let path = root.path().join("infra.secrets.json");
-        let first = load_or_create_secrets(&path).unwrap();
-        let second = load_or_create_secrets(&path).unwrap();
+        let first = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        let second = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
 
         assert_eq!(first.postgres_password, second.postgres_password);
         assert_eq!(first.redis_password, second.redis_password);
@@ -752,6 +1199,42 @@ mod tests {
             use std::os::unix::fs::MetadataExt;
             assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         }
+    }
+
+    /// Replacing the infrastructure passwords is recorded as stranded data.
+    ///
+    /// This is the one self-heal that deliberately makes the failure *harder*.
+    /// A new `postgres_password` does not open a volume that was `initdb`'d
+    /// with the old one, and nothing downstream notices: `ensure_core_container`
+    /// only replaces on an image or config-generation change, and
+    /// `ensure_database` connects over the local socket with no password. So
+    /// healing quietly would surface hours later as an opaque auth error deep
+    /// in the backend's migrations. The marker is what turns that into a button.
+    #[test]
+    fn replacing_the_infrastructure_passwords_records_that_data_must_be_reset() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("infra.secrets.json");
+        let original = load_or_create_secrets(&path, &mut Vec::new()).unwrap();
+        fs::write(&path, b"{\"postgres_password\": \"too-short\"").unwrap();
+
+        let mut healed = Vec::new();
+        let replaced = load_or_create_secrets(&path, &mut healed).unwrap();
+
+        assert_ne!(replaced.postgres_password, original.postgres_password);
+        assert_eq!(healed.len(), 1);
+        assert!(healed[0].contains("cannot be opened"), "{}", healed[0]);
+        let reason = crate::paths::data_reset_reason(root.path())
+            .expect("a replaced password strands the existing database");
+        assert!(reason.contains("previous ones"), "{reason}");
+        // The unreadable original is kept, not destroyed.
+        assert_eq!(
+            fs::read_dir(root.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -892,6 +1375,134 @@ mod tests {
         wait_for_tcp_services(Ipv4Addr::LOCALHOST, &services, Duration::from_millis(250)).unwrap();
     }
 
+    /// The case that shipped broken: the Mac slept for eleven hours, so wall
+    /// time ran eleven hours while the monotonic clock ran a tick. The guest
+    /// was not running for any of it and is now exactly that far behind.
+    #[test]
+    fn a_wall_clock_jump_past_the_monotonic_clock_is_read_as_host_sleep() {
+        assert_eq!(
+            clock_sync_due(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(41_250),
+            ),
+            Some(ClockSyncReason::HostSlept),
+        );
+    }
+
+    #[test]
+    fn an_ordinary_tick_inside_the_interval_does_not_sync() {
+        assert_eq!(
+            clock_sync_due(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            None,
+        );
+    }
+
+    /// Drift that is not a sleep still accumulates, so the interval is a
+    /// ceiling on how far the guest may be off before it is put back.
+    #[test]
+    fn the_interval_bounds_drift_that_was_not_a_sleep() {
+        assert_eq!(
+            clock_sync_due(
+                CLOCK_SYNC_INTERVAL,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+            Some(ClockSyncReason::Interval),
+        );
+    }
+
+    /// A controller with no VM behind it. Enough for anything that only reads
+    /// or writes the controller's own state.
+    fn test_controller() -> (tempfile::TempDir, ManagedRuntimeController) {
+        let root = tempdir().unwrap();
+        let controller = ManagedRuntimeController {
+            runtime: ManagedRuntime::new(ManagedRuntimeConfig {
+                wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+                local_root: root.path().join("local"),
+                artifact_root: root.path().join("artifacts"),
+                bridge_executable: root.path().join("lemma-runtime"),
+                #[cfg(target_os = "macos")]
+                vz_executable: root.path().join("lemma-vz"),
+                #[cfg(windows)]
+                wsl_executable: PathBuf::from("wsl.exe"),
+            })
+            .unwrap(),
+            spec: ManagedRuntimeSpec {
+                images: crate::host_process::ManagedRuntimeImages {
+                    postgres: "postgres@sha256:test".into(),
+                    redis: "redis@sha256:test".into(),
+                    supertokens: "supertokens@sha256:test".into(),
+                    workspace: Some("workspace@sha256:test".into()),
+                    function: Some("function@sha256:test".into()),
+                },
+                credentials: crate::host_process::ManagedRuntimeCredentials {
+                    postgres_password: "a".repeat(64),
+                    redis_password: "b".repeat(64),
+                },
+                ports: crate::host_process::ManagedRuntimePorts {
+                    postgres: 55432,
+                    redis: 56379,
+                    supertokens: 53567,
+                    backend: 8711,
+                    frontend: 3711,
+                },
+            },
+            forwarders: Mutex::new(Vec::new()),
+            clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
+            status: Mutex::new(Some(ManagedRuntimeStatus {
+                endpoint_host: "192.168.64.10".into(),
+                host_gateway: "192.168.64.1".into(),
+                engine: "containerd".into(),
+                active_sandboxes: 0,
+                balloon_state: None,
+                balloon_target_bytes: None,
+            })),
+        };
+
+        (root, controller)
+    }
+
+    /// Both the ready path and the recovery path warm the images. Two runs
+    /// would interleave their downloading/ready events into one stream the app
+    /// reads as a single download finishing twice.
+    #[test]
+    fn only_one_sandbox_image_warmup_is_claimed_at_a_time() {
+        let (_root, controller) = test_controller();
+
+        let first = controller.claim_sandbox_image_warmup();
+        let second = controller.claim_sandbox_image_warmup();
+
+        assert!(first.is_some());
+        assert!(second.is_none(), "a second warm-up ran alongside the first");
+        assert_eq!(
+            controller.sandbox_image_status().state,
+            SANDBOX_IMAGES_DOWNLOADING
+        );
+    }
+
+    /// Once one has ended, the next start is free to warm again -- a recovered
+    /// stack may be looking at a different guest.
+    #[test]
+    fn a_finished_warmup_does_not_block_the_next_one() {
+        let (_root, controller) = test_controller();
+
+        controller.claim_sandbox_image_warmup();
+        controller.publish_sandbox_images(
+            SandboxImageStatus::new(SANDBOX_IMAGES_READY, "ready"),
+            &|_: &SandboxImageStatus| {},
+        );
+
+        assert!(controller.claim_sandbox_image_warmup().is_some());
+    }
+
     #[test]
     fn host_processes_use_private_guest_services_without_published_infra_ports() {
         let root = tempdir().unwrap();
@@ -928,6 +1539,10 @@ mod tests {
                 },
             },
             forwarders: Mutex::new(Vec::new()),
+            clock_keeper: Mutex::new(None),
+            last_clock_error: Mutex::new(None),
+            sandbox_images: Mutex::new(SandboxImageStatus::default()),
+            pending_auth: Mutex::new(None),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

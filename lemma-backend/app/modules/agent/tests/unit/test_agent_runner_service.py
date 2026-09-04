@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
+from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    ConversationStatus,
+    MessageKind,
+    MessageRole,
+)
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
-from app.modules.agent.services import agent_runner_service as runner_module
+from app.modules.agent.services import run_finalizer as finalizer_module
+from app.modules.agent.services.run_finalizer import (
+    finalize_safely,
+    rejected_run_error_message,
+)
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
-    _finalize_safely,
-    _rejected_run_error_message,
+    _run_input_text,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
 
@@ -23,15 +34,17 @@ _GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try agai
 
 def test_rejected_run_error_message_uses_the_harness_supplied_detail():
     assert (
-        _rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
+        rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
         == "Harness snapshot is stale; refresh it"
     )
 
 
 def test_rejected_run_error_message_falls_back_for_malformed_data():
-    assert _rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
-    assert _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
-    assert _rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
+    assert rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
+    assert (
+        rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+    )
+    assert rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
 
 
 class _FailingContextManager:
@@ -60,9 +73,11 @@ async def test_finish_agent_run_rethrows_db_errors_for_boundary_retry() -> None:
     )
 
     with pytest.raises(RuntimeError, match="db connection lost"):
-        await service._finish_agent_run(
-            conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+        await service.finalizer.finish(
+            run=RunIdentity(
+                conversation_id=UUID("00000000-0000-0000-0000-000000000001"),
+                agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+            ),
             status=AgentRunStatus.FAILED,
             error="Something went wrong",
         )
@@ -86,23 +101,29 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
     monkeypatch.setattr(
-        runner_module, "ConversationRepository", lambda _uow: repository
+        finalizer_module, "ConversationRepository", lambda _uow: repository
     )
     publish = AsyncMock()
-    monkeypatch.setattr(runner_module, "publish_conversation_event", publish)
+    monkeypatch.setattr(finalizer_module, "publish_conversation_event", publish)
 
     service = AgentRunnerService(
         uow_factory=_Factory(),
         harness_registry=HarnessRegistry({}),
     )
     publish_usage = AsyncMock()
-    monkeypatch.setattr(service, "_publish_usage_event", publish_usage)
-    conversation_id = UUID("00000000-0000-0000-0000-000000000101")
-    run_id = UUID("00000000-0000-0000-0000-000000000102")
+    monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
+    identity = RunIdentity(
+        conversation_id=UUID("00000000-0000-0000-0000-000000000101"),
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000102"),
+        organization_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
 
-    await service._finish_agent_run(
-        conversation_id=conversation_id,
-        agent_run_id=run_id,
+    await service.finalizer.finish(
+        run=identity,
         status=AgentRunStatus.FAILED,
         conversation_status=ConversationStatus.FAILED,
         error="stale pre-transition error",
@@ -117,6 +138,15 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
         "output_data": {"partial": True},
         "conversation_status": "STOPPED",
     }
+    # A run is scoped to a conversation, so nothing downstream can say which pod
+    # it belonged to from the event alone unless the finalizer puts it there --
+    # and it already holds all of it, on the identity it is finishing. Leaving it
+    # off meant every consumer that wanted a pod loaded the conversation back.
+    assert event.pod_id == identity.pod_id
+    assert event.organization_id == identity.organization_id
+    assert event.agent_id == identity.agent_id
+    assert event.user_id == identity.user_id
+    assert event.started_at == identity.started_at
     assert publish.await_count == 1
     assert publish.await_args.args[1]["type"] == "completed"
     publish_usage.assert_awaited_once()
@@ -124,39 +154,46 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_exceptions() -> None:
-    """_finalize_safely must swallow all errors (DB, cancellation, etc)."""
+    """finalize_safely must swallow all errors (DB, cancellation, etc)."""
 
     async def boom() -> None:
         raise RuntimeError("DB gone away")
 
     # Should not raise.
-    await _finalize_safely(
+    await finalize_safely(
         boom(), agent_run_id=UUID("00000000-0000-0000-0000-000000000003")
     )
 
 
 @pytest.mark.asyncio
 async def test_finalize_safely_swallows_cancelled_error() -> None:
-    """_finalize_safely must swallow asyncio.CancelledError without propagating."""
+    """finalize_safely must swallow asyncio.CancelledError without propagating."""
 
     async def get_cancelled() -> None:
         raise asyncio.CancelledError()
 
     # Should not raise — this is the whole point: cancellation during
     # finalization must not crash the worker.
-    await _finalize_safely(
+    await finalize_safely(
         get_cancelled(), agent_run_id=UUID("00000000-0000-0000-0000-000000000004")
     )
 
 
 @pytest.mark.asyncio
-async def test_execute_does_not_re_raise_cancelled_error(monkeypatch) -> None:
-    """execute() must swallow CancelledError, not re-raise it.
+async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
+    """execute() must let CancelledError out, not swallow it.
 
-    Re-raising CancelledError into streaq's `with scope:` block triggers
-    "Attempted to exit a cancel scope that isn't the current task's current
-    cancel scope" — a RuntimeError that crashes the entire worker. The fix
-    is to finalize the run and return normally.
+    This is the whole resume mechanism. streaq XACKs a task that returned and
+    "relinquishes" a cancelled one -- leaving it in the pending list for the
+    next worker to reclaim. Swallowing it made every run interrupted by a
+    deploy look like a success, so nothing redelivered it and each person had
+    to ask again.
+
+    This test previously asserted the opposite, on the grounds that re-raising
+    crashes the worker with "Attempted to exit a cancel scope that isn't the
+    current task's current cancel scope". Reproduced against a real worker
+    under SIGTERM, with and without a shielded cleanup, that did not happen:
+    the task was relinquished and a fresh worker reclaimed it.
     """
     service = AgentRunnerService(
         uow_factory=_FailingUowFactory(),
@@ -190,11 +227,56 @@ async def test_execute_does_not_re_raise_cancelled_error(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "_resolve_agent_runtime", fake_resolve)
 
-    # The critical assertion: execute must NOT re-raise CancelledError.
-    # If it does, streaq's scope handling crashes the worker.
-    await service.execute(
-        agent_run_id=UUID("00000000-0000-0000-0000-000000000020"),
-        user_id=UUID("00000000-0000-0000-0000-000000000021"),
-        pod_id=UUID("00000000-0000-0000-0000-000000000022"),
-        agent_name="test-agent",
+    # The critical assertion: it must reach streaq, or the job is acked and
+    # the run is lost.
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            agent_run_id=UUID("00000000-0000-0000-0000-000000000020"),
+            user_id=UUID("00000000-0000-0000-0000-000000000021"),
+            pod_id=UUID("00000000-0000-0000-0000-000000000022"),
+            agent_name="test-agent",
+        )
+
+
+def _message(role: str, kind: MessageKind, text: str | None) -> Message:
+    return Message(
+        id=uuid4(),
+        created_at=datetime.now(UTC),
+        conversation_id=uuid4(),
+        sequence=0,
+        agent_run_id=None,
+        role=role,
+        kind=kind,
+        text=text,
+    )
+
+
+def test_run_input_text_is_the_turn_that_started_the_run():
+    """The span's input is this turn, not the transcript it was handed."""
+    messages = [
+        _message(MessageRole.USER.value, MessageKind.TEXT, "the previous turn"),
+        _message(MessageRole.ASSISTANT.value, MessageKind.TEXT, "an earlier answer"),
+        _message(MessageRole.USER.value, MessageKind.TEXT, "what changed?"),
+        _message(MessageRole.TOOL.value, MessageKind.TOOL_RETURN, "tool output"),
+    ]
+    assert _run_input_text(messages) == "what changed?"
+
+
+def test_run_input_text_skips_non_textual_and_blank_user_messages():
+    assert _run_input_text([]) is None
+    assert (
+        _run_input_text(
+            [_message(MessageRole.ASSISTANT.value, MessageKind.TEXT, "only the agent")]
+        )
+        is None
+    )
+    assert (
+        _run_input_text(
+            [
+                _message(MessageRole.USER.value, MessageKind.TEXT, "the real prompt"),
+                _message(MessageRole.USER.value, MessageKind.TEXT, "   "),
+                _message(MessageRole.USER.value, MessageKind.THINKING, "not a prompt"),
+            ]
+        )
+        == "the real prompt"
     )

@@ -13,11 +13,22 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
-from app.composition.agent_datastore import create_agent_skill_file_service
-from app.composition.authorization import create_authorization_service
+from app.modules.datastore.contracts.agent_tools import build_agent_skill_file_service
+from app.core.authorization.factory import create_authorization_data_service
 from functools import lru_cache
 
 _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+
+# Where skills live in the *pod file tree*: pod-authored skills are stored
+# there, and the system skills shipped in `lemma-skills/` are spliced in
+# read-only by `SystemSkillFileProvider`. It is not a directory in the
+# workspace container — the workspace image (sandbox-images/Dockerfile.workspace)
+# creates no `/skills`, and the shipped copies land at `/sdk/lemma-skills` and
+# inside the installed `lemma_cli` package instead. These paths were once
+# emitted as `workspace_path`/`workspace_dir`, and agents did the reasonable
+# thing: `cat /skills/<name>/references/<file>.md`, then `ls`, then `find /`.
+# They are named `pod_path`/`pod_dir` now, and the way to read one is
+# `load_skill(resource_path=...)` or `lemma files cat`.
 _SKILLS_ROOT = "/skills"
 
 
@@ -26,8 +37,8 @@ class SkillEntry:
     name: str
     description: str
     path: str
-    workspace_path: str
-    workspace_dir: str
+    pod_path: str
+    pod_dir: str
 
 
 @dataclass(frozen=True)
@@ -153,8 +164,8 @@ def _build_system_skill_catalog() -> dict[str, SkillEntry]:
             name=name,
             description=description,
             path=str(skill_md.relative_to(repo_root)),
-            workspace_path=_skill_file_path(name),
-            workspace_dir=_skill_dir_path(name),
+            pod_path=_skill_file_path(name),
+            pod_dir=_skill_dir_path(name),
         )
 
     return entries
@@ -192,9 +203,9 @@ async def _default_file_service(
     user_id: UUID,
 ) -> AsyncIterator[_FileServiceScope]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        service = create_agent_skill_file_service(
+        service = build_agent_skill_file_service(
             uow,
-            authorization_service=create_authorization_service(uow),
+            authorization_service=create_authorization_data_service(uow),
         )
         ctx = await AuthorizationDataService(uow.session).build_user_context(
             user_id=user_id,
@@ -309,7 +320,7 @@ async def _build_pod_skill_catalog(
                     path=skill_md_path,
                     ctx=scope.ctx,
                 )
-            except (DatastoreFileNotFoundError, FileNotFoundError, UnicodeDecodeError):
+            except DatastoreFileNotFoundError, FileNotFoundError, UnicodeDecodeError:
                 continue
 
             try:
@@ -322,8 +333,8 @@ async def _build_pod_skill_catalog(
                 name=name,
                 description=description,
                 path=skill_md_path,
-                workspace_path=skill_md_path,
-                workspace_dir=_skill_dir_path(name),
+                pod_path=skill_md_path,
+                pod_dir=_skill_dir_path(name),
             )
     return entries
 
@@ -380,8 +391,8 @@ async def list_workspace_skills(
                 "name": entry.name,
                 "description": entry.description,
                 "path": entry.path,
-                "workspace_path": entry.workspace_path,
-                "workspace_dir": entry.workspace_dir,
+                "pod_path": entry.pod_path,
+                "pod_dir": entry.pod_dir,
             }
         )
     return items
@@ -463,7 +474,7 @@ async def list_workspace_skill_resources(
                 resources.append(
                     {
                         "path": relative.as_posix(),
-                        "workspace_path": item.path,
+                        "pod_path": item.path,
                         "kind": _resource_kind(relative),
                         "executable": "true" if relative.suffix == ".sh" else "false",
                     }
@@ -489,7 +500,7 @@ def _list_system_skill_resources(name: str) -> list[dict[str, str]]:
         resources.append(
             {
                 "path": str(relative),
-                "workspace_path": _skill_file_path(name, relative),
+                "pod_path": _skill_file_path(name, relative),
                 "kind": _resource_kind(relative),
                 "executable": "true" if path.suffix == ".sh" else "false",
             }

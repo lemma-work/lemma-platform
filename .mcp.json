@@ -6,6 +6,10 @@
       "headers": {
         "Authorization": "Bearer ${CLICKSTACK_ACCESS_KEY}"
       }
+    },
+    "phoenix-local": {
+      "type": "http",
+      "url": "http://localhost:16006/mcp"
     }
   }
 }

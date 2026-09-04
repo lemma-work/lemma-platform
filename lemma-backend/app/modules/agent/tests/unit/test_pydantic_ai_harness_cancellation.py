@@ -15,6 +15,7 @@ failed run and must say so.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -24,8 +25,10 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentEventType, HarnessOptions
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
+)
+from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     PydanticAIHarness,
 )
 
@@ -98,8 +101,6 @@ async def _execute_events(harness: PydanticAIHarness, **overrides):
     return [
         event
         async for event in harness._execute(
-            malformed_tool_call_ids=set(),
-            emitted_tool_response_ids=set(),
             should_stop=None,
             **arguments,  # type: ignore[arg-type]
         )
@@ -140,8 +141,11 @@ async def test_the_failure_reaches_the_run_as_an_error_and_never_as_completed(
 
     assert AgentEventType.COMPLETED not in types
     assert types[-1] == AgentEventType.ERROR
-    # The user is told to retry, not to go and check a configuration that is fine.
-    assert "Retry" in events[-1].data
+    # The user is told to try again, not to go and check a configuration that
+    # is fine. Not by name, though: this run had already produced output, and
+    # the Retry control refuses exactly those.
+    assert "send another message" in events[-1].data
+    assert "configuration" not in events[-1].data
 
 
 @pytest.mark.asyncio
@@ -191,3 +195,50 @@ async def test_our_own_cancellation_is_not_reported_as_a_driver_failure(
     # `HarnessDriverCancelled`, which would say the worker is healthy and the
     # agent broke when the truth is the reverse.
     assert isinstance(outcome[0], asyncio.CancelledError), outcome[0]
+
+
+@pytest.mark.asyncio
+async def test_the_cancellation_record_says_whether_the_consumer_was_cancelled_too(
+    monkeypatch,
+) -> None:
+    """The one thing the traceback cannot tell you.
+
+    A `CancelledError` traceback shows where the task was suspended when the
+    cancellation arrived, not what delivered it -- so an outer cancellation
+    (shutdown, a job timeout) and one aimed at the driver alone by a cancel
+    scope inside the graph produce identical records. An incident spent chasing
+    exactly this ended in inference. These counters separate the two.
+    """
+    from app.modules.agent.infrastructure.harnesses import pydantic_ai_retry
+
+    records: list[tuple[str, dict]] = []
+
+    class _Logger:
+        def error(self, event: str, **fields) -> None:
+            records.append((event, fields))
+
+    monkeypatch.setattr(pydantic_ai_retry, "logger", _Logger())
+
+    async def _never() -> None:
+        await asyncio.sleep(3600)
+
+    driver = asyncio.create_task(_never())
+    driver.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await driver
+
+    with pytest.raises(HarnessDriverCancelled):
+        pydantic_ai_retry.reraise_driver_failure(
+            asyncio.CancelledError(),
+            cancelled_by_us=False,
+            agent_run_id=uuid4(),
+            driver_task=driver,
+        )
+
+    assert len(records) == 1
+    event, fields = records[0]
+    assert event == "agent.pydantic_ai.driver_cancelled_mid_run.failed"
+    # The driver was cancelled; this consumer was not. That is the signature of
+    # a cancellation aimed at the driver alone.
+    assert fields["driver_cancelling"] == 1
+    assert fields["consumer_cancelling"] == 0

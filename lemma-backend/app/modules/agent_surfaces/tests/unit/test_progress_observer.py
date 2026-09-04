@@ -11,7 +11,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEventType,
     MessageDraft,
 )
-from app.modules.agent_surfaces.services import progress_observer
+from app.modules.agent_surfaces.services import progress_display, progress_observer
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -52,7 +52,7 @@ class _SurfaceService:
 
     async def clear_progress_for_conversation(self, **kwargs):
         self.cleared.append(kwargs)
-        return None
+        return
 
     async def append_stream_text_for_conversation(self, **kwargs):
         self.streamed.append(kwargs)
@@ -180,7 +180,9 @@ def _assistant(draft: MessageDraft) -> AgentEvent:
 async def test_progress_observer_buffers_text_and_sends_final_answer_on_finish():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_event(
         _assistant(MessageDraft.of_text("Final answer.")),
@@ -251,103 +253,6 @@ async def test_progress_observer_sends_only_final_answer_not_thinking_or_tools()
     assert service.finished == []
 
 
-async def test_progress_observer_ignores_chat_display_resource_now_sent_by_tool():
-    # Chat-surface display_resource delivery happens inside the display_resource
-    # tool now. The observer must NOT also deliver it (that would double-send).
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(),
-        metadata={"surface_platform": "SLACK"},
-    )
-    tool_call = AgentEvent(
-        type=AgentEventType.MESSAGE,
-        data=MessageDraft.of_tool_call(
-            tool_name="display_resource",
-            tool_call_id="tool-display-1",
-            tool_args={"type": "TABLE", "name": "deals"},
-        ),
-    )
-    tool_return = AgentEvent(
-        type=AgentEventType.MESSAGE,
-        data=MessageDraft.of_tool_return(
-            tool_name="display_resource",
-            tool_call_id="tool-display-1",
-            tool_result={"success": True},
-        ),
-    )
-
-    await observer.on_event(tool_call, conversation, SimpleNamespace())
-    await observer.on_event(tool_return, conversation, SimpleNamespace())
-
-    # No display delivery from the observer for a chat surface.
-    assert all("display_resource" not in m for m in service.messages)
-
-
-async def test_progress_observer_email_suppresses_final_text_when_reply_tool_called():
-    # Email surfaces reply via gmail_reply_email / outlook_reply_email. When the
-    # agent used the reply tool, the observer must NOT also send the buffered
-    # text as a separate message.
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "GMAIL"})
-
-    await observer.on_event(
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_call(
-                tool_name="gmail_reply_email",
-                tool_call_id="reply-1",
-                tool_args={"content": "Here is the report.", "attachment_paths": ["/me/report.pdf"]},
-            ),
-        ),
-        conversation,
-        SimpleNamespace(),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("I emailed the report.")),
-        conversation,
-        SimpleNamespace(),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace())
-
-    # Reply tool handled delivery — observer sends nothing.
-    assert service.messages == []
-
-
-async def test_progress_observer_resend_suppresses_final_text_when_reply_tool_called():
-    # Regression: RESEND was previously missing from _EMAIL_PLATFORMS /
-    # _EMAIL_REPLY_TOOL_NAMES, so this fallback never suppressed and every real
-    # Resend reply also triggered a second, duplicate send attempt.
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "RESEND"})
-
-    await observer.on_event(
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_call(
-                tool_name="resend_reply_email",
-                tool_call_id="reply-1",
-                tool_args={"content": "Here is the report."},
-            ),
-        ),
-        conversation,
-        SimpleNamespace(),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("I emailed the report.")),
-        conversation,
-        SimpleNamespace(),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace())
-
-    # Reply tool handled delivery — observer sends nothing.
-    assert service.messages == []
-
-
 async def test_progress_observer_email_sends_buffered_text_when_no_reply_tool():
     # Fallback: if the agent never called the reply tool, the observer emails the
     # buffered final text so the user still gets a response.
@@ -411,10 +316,13 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     await asyncio.sleep(0.03)
     await observer.on_run_finished(conversation, SimpleNamespace())
 
-    assert service.calls
+    # The opening acknowledgement, then keep-alive ticks flagged as refreshes so
+    # an adapter can tell them apart from it.
+    assert service.calls[0] == {"conversation_id": conversation.id, "metadata": None}
+    assert len(service.calls) > 1
     assert service.calls[-1] == {
         "conversation_id": conversation.id,
-        "metadata": None,
+        "metadata": {"is_refresh": True},
     }
 
 
@@ -472,7 +380,9 @@ async def test_progress_observer_strips_inline_thinking_tags_from_text():
     must strip them so they never get buffered or delivered to a surface."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     # Build the message with literal thinking tags (constructed programmatically
     # so the tags survive in source without being stripped as markup).
@@ -616,7 +526,9 @@ async def test_progress_observer_renders_waiting_tool_call_once():
     the same native surface prompt several times."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
     waiting = AgentEvent(
         type=AgentEventType.WAITING,
         data={"kind": "ask_user", "tool_call_id": "ask-1"},
@@ -630,6 +542,8 @@ async def test_progress_observer_renders_waiting_tool_call_once():
             "questions": {
                 "conversation_id": conversation.id,
                 "tool_call_id": "ask-1",
+                # The lead-in travels with the question, not ahead of it.
+                "narration": None,
             }
         }
     ]
@@ -672,6 +586,7 @@ class TestAgentHostPermissionPrompt:
                 "approval": {
                     "conversation_id": conversation.id,
                     "tool_call_id": "agent-host-permission:call-9",
+                    "narration": None,
                 }
             }
         ]
@@ -730,7 +645,9 @@ async def _run_with_progress_then_answer(service, platform: str):
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
     if platform == "SLACK":
         await observer.on_event(
-            AgentEvent(type=AgentEventType.TOKEN, data={"kind": "text", "data": "x" * 300}),
+            AgentEvent(
+                type=AgentEventType.TOKEN, data={"kind": "text", "data": "x" * 300}
+            ),
             conversation,
             SimpleNamespace(),
         )
@@ -863,7 +780,9 @@ async def test_telegram_ignores_token_events():
     """Only platforms that can show a live stream consume tokens."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_event(_token("text", "z" * 500), conversation, SimpleNamespace())
 
@@ -881,7 +800,12 @@ async def test_reasoning_split_across_deltas_never_reaches_slack():
     observer = _observer(service)
     conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
 
-    for delta in ["Here is the plan. <thi", "nk>secret plotting</thi", "nk>", "x" * 300]:
+    for delta in [
+        "Here is the plan. <thi",
+        "nk>secret plotting</thi",
+        "nk>",
+        "x" * 300,
+    ]:
         await observer.on_event(_token("text", delta), conversation, SimpleNamespace())
 
     streamed = "".join(c["text"] for c in service.streamed)
@@ -941,9 +865,7 @@ async def test_failed_token_append_stays_buffered_until_confirmed():
         nonlocal attempts
         attempts += 1
         service.streamed.append(kwargs)
-        return StreamAppendResult(
-            handle={"message_id": 1}, appended=attempts > 1
-        )
+        return StreamAppendResult(handle={"message_id": 1}, appended=attempts > 1)
 
     service.append_stream_text_for_conversation = append
     observer._token_buffer = "must survive"
@@ -968,9 +890,7 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
 
     async def reject_append(**kwargs):
         service.streamed.append(kwargs)
-        return StreamAppendResult(
-            handle={"message_id": 1}, appended=False
-        )
+        return StreamAppendResult(handle={"message_id": 1}, appended=False)
 
     service.append_stream_text_for_conversation = reject_append
     observer._progress_handle = {"message_id": 1}
@@ -985,8 +905,235 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
 async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "TELEGRAM"})
+    conversation = SimpleNamespace(
+        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+    )
 
     await observer.on_run_started(conversation, SimpleNamespace())
 
     assert service.streamed == []
+
+
+def _plan_return(*lines: str) -> AgentEvent:
+    """A ``write_todos`` tool return carrying the whole checklist."""
+    return AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_return(
+            tool_name="write_todos",
+            tool_call_id="todo-1",
+            tool_result={"success": True, "todos": list(lines)},
+        ),
+    )
+
+
+def _conversation(platform: str) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+
+
+async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
+    """The most informative tool call used to render as the least informative line.
+
+    Every tool call collapses to one status string, so a five-step plan reached
+    the person as ``Using write_todos``.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TEAMS")
+
+    await observer.on_event(
+        _plan_return("- [x] Pull the Q3 numbers", "- [ ] Draft the summary"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    body = service.progress[-1]["progress_text"]
+    assert "write_todos" not in body
+    assert "Working on it — 1 of 2 steps done." in body
+    assert "✅ Pull the Q3 numbers" in body
+    assert "⏳ Draft the summary" in body
+
+
+async def test_telegram_gets_the_plan_as_one_line_because_its_chip_holds_one():
+    """A checklist in a ``tg-thinking`` chip is a run-on sentence.
+
+    The chip collapses newlines, so five lines arrived as one paragraph with the
+    marks stranded between the words — and the tool name trailing it said the
+    same thing as the step, worse.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+
+    await observer.on_event(
+        _plan_return("- [x] Write the scene", "- [ ] Render the video"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    body = service.progress[-1]["progress_text"]
+    assert body == "Working on it — 1 of 2 steps done · Render the video"
+    assert "\n" not in body
+
+
+async def test_a_plan_that_has_not_moved_does_not_spend_an_update():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+    plan = _plan_return("- [ ] Only step")
+
+    await observer.on_event(plan, conversation, SimpleNamespace())
+    await observer.on_event(plan, conversation, SimpleNamespace())
+
+    assert len(service.progress) == 1
+
+
+async def test_whatsapp_posts_the_plan_it_previously_showed_nothing_for():
+    """WhatsApp has no edit API, so a long run used to be pure silence."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_event(
+        _plan_return("- [ ] Reconcile the ledger", "- [ ] Write it up"),
+        conversation,
+        SimpleNamespace(),
+    )
+
+    assert len(service.progress) == 1
+    assert "0 of 2 steps done" in service.progress[0]["progress_text"]
+
+
+async def test_whatsapp_rations_updates_after_the_first_plan():
+    """Every WhatsApp update is a message in someone's chat, so they are capped.
+
+    The first plan goes straight through — it is what the person most wants at
+    the start of a long run — and the next one waits out the interval.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_event(
+        _plan_return("- [ ] One", "- [ ] Two"), conversation, SimpleNamespace()
+    )
+    await observer.on_event(
+        _plan_return("- [x] One", "- [ ] Two"), conversation, SimpleNamespace()
+    )
+
+    assert len(service.progress) == 1
+
+    observer._last_post_at -= progress_display._POST_PROGRESS_MIN_INTERVAL_SECONDS + 1
+    await observer.on_event(
+        _plan_return("- [x] One", "- [x] Two"), conversation, SimpleNamespace()
+    )
+
+    assert len(service.progress) == 2
+    assert "All 2 steps done" in service.progress[1]["progress_text"]
+
+
+async def test_whatsapp_says_something_on_a_long_run_with_no_plan():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+    activity = AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_call(
+            tool_name="run_query",
+            tool_call_id="tool-9",
+            tool_args={"request": {"comment": "Scanning the ledger"}},
+        ),
+    )
+
+    await observer.on_event(activity, conversation, SimpleNamespace())
+    assert service.progress == []
+
+    observer._run_started_at -= progress_display._POST_HEARTBEAT_DELAY_SECONDS + 1
+    await observer.on_event(activity, conversation, SimpleNamespace())
+
+    assert len(service.progress) == 1
+    assert "Still working on this" in service.progress[0]["progress_text"]
+
+    # One acknowledgement, not a drip feed.
+    observer._run_started_at -= 600
+    await observer.on_event(activity, conversation, SimpleNamespace())
+    assert len(service.progress) == 1
+
+
+async def test_whatsapp_keeps_its_typing_bubble_alive():
+    """The bubble the inbound path lights up expires after ~25s.
+
+    Nothing refreshed it, so on a long run it went dark early — dead in exactly
+    the runs where it was the only sign of life.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("WHATSAPP")
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+    task = observer._typing_task
+    if task is not None:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert service.calls == [{"conversation_id": conversation.id, "metadata": None}]
+
+
+async def test_email_still_shows_nothing_before_the_reply():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("RESEND")
+
+    await observer.on_event(
+        _plan_return("- [ ] Draft it"), conversation, SimpleNamespace()
+    )
+
+    assert service.progress == []
+    assert service.messages == []
+
+
+async def test_slack_is_acknowledged_by_its_open_stream_and_nothing_else():
+    """The open stream is Slack's indicator — the observer adds nothing to it."""
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("SLACK")
+
+    await observer.on_run_started(conversation, SimpleNamespace())
+
+    assert service.streamed == [
+        {"conversation_id": conversation.id, "progress_handle": None, "text": ""}
+    ]
+    assert service.calls == []
+
+
+async def test_email_gets_no_indicator_from_the_observer():
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer.on_run_started(_conversation("GMAIL"), SimpleNamespace())
+
+    assert service.calls == []
+    assert service.streamed == []
+
+
+async def test_a_one_line_surface_folds_a_multi_line_tool_comment():
+    """A tool's comment is free text, and Telegram's chip eats the newlines.
+
+    Two lines run together into one word without them, so the fold happens here
+    rather than in the surface that cannot show it.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("TELEGRAM")
+    event = AgentEvent(
+        type=AgentEventType.MESSAGE,
+        data=MessageDraft.of_tool_call(
+            tool_name="execute_python",
+            tool_call_id="tool-2",
+            tool_args={"request": {"comment": "Rendering the scene\nat 1080p"}},
+        ),
+    )
+
+    await observer.on_event(event, conversation, SimpleNamespace())
+
+    assert service.progress[-1]["progress_text"] == "Rendering the scene at 1080p"

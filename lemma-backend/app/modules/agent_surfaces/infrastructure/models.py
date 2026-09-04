@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.crypto import get_secret_cipher
+from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -35,6 +36,8 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
+
+logger = get_logger(__name__)
 
 
 class AgentSurface(UUIDAuditBase):
@@ -63,12 +66,20 @@ class AgentSurface(UUIDAuditBase):
     )
     # Stable, pod-unique identifier addressed by the API (like agent names).
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), index=True, nullable=True
+    # Whose surface this is, and the only question this column answers. It used
+    # to answer two -- "who answers here by default" inbound and "whose bot is
+    # this" outbound -- with null meaning the assistant to one and "nobody's, so
+    # anyone may borrow it" to the other. CASCADE rather than SET NULL because
+    # a nulled row was indistinguishable from the assistant's own surface, which
+    # is how a pod ended up answering from a deleted agent's address.
+    agent_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), index=True, nullable=False
     )
 
     surface_type: Mapped[str] = mapped_column(String(50), index=True)
-    mode: Mapped[str] = mapped_column(String(50), default="DM", server_default="DM", index=True)
+    mode: Mapped[str] = mapped_column(
+        String(50), default="DM", server_default="DM", index=True
+    )
     event_mode: Mapped[str] = mapped_column(
         String(50), default="WEBHOOK", server_default="WEBHOOK", index=True
     )
@@ -81,18 +92,23 @@ class AgentSurface(UUIDAuditBase):
         nullable=True,
         index=True,
     )
-    external_workspace_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    external_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    surface_identity_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    external_workspace_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    external_tenant_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    external_channel_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    surface_identity_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     surface_identity_username: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
-    status: Mapped[str] = mapped_column(String(50), default="ACTIVE", server_default="ACTIVE")
-    schedule_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("schedules.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
+    status: Mapped[str] = mapped_column(
+        String(50), default="ACTIVE", server_default="ACTIVE"
     )
     surface_identity_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
@@ -100,6 +116,47 @@ class AgentSurface(UUIDAuditBase):
     # Encrypted at rest via app.core.crypto (compact ``lsenc1:`` envelope). Text
     # (not String(255)) because the envelope is longer than the raw secret.
     webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_entity_or_none(self) -> "AgentSurfaceEntity | None":
+        """This row as an entity, or ``None`` when it names something retired.
+
+        ``surface_type`` and ``event_mode`` are plain string columns whose
+        enums have both lost members -- ``GMAIL``/``OUTLOOK`` when email became
+        Resend and only Resend, ``COMPOSIO_TRIGGER`` when polled triggers went.
+        No migration deletes those rows, deliberately: they are configuration
+        somebody chose, and removing them belongs to whoever is deploying.
+
+        But `to_entity` raising a bare ``ValueError`` made that choice
+        everyone's problem. `list_by_pod` maps a whole page, so one retired row
+        took the pod's entire surface list with it -- as a 500, since a
+        ``ValueError`` is not a ``DomainError`` and reaches the catch-all
+        handler. `get_account_conflict_in_org` is org-wide and platform-blind,
+        so it did the same to the *creation* of an unrelated surface, and
+        `list_by_pod` again to every agent-to-human notification for the pod.
+
+        So: unreadable rows drop out of lists and read as absent, which is what
+        every caller already handles. `to_entity` still raises, because code
+        holding a validated entity is entitled to assume the mapping worked.
+        """
+        raw_type = (self.surface_type or "SLACK").rsplit(".", 1)[-1].upper()
+        if SurfacePlatform.from_source(raw_type) is None:
+            self._log_retired_value("surface_type", raw_type)
+            return None
+        raw_event_mode = self.event_mode or SurfaceEventMode.WEBHOOK.value
+        try:
+            SurfaceEventMode(raw_event_mode)
+        except ValueError:
+            self._log_retired_value("event_mode", str(raw_event_mode))
+            return None
+        return self.to_entity()
+
+    def _log_retired_value(self, column: str, value: str) -> None:
+        logger.warning(
+            "agent_surfaces.surface_row.retired_value_skipped.degraded",
+            surface_id=str(self.id),
+            column=column,
+            value=value,
+        )
 
     def to_entity(self) -> AgentSurfaceEntity:
         surface_type_raw = self.surface_type or "SLACK"
@@ -115,7 +172,9 @@ class AgentSurface(UUIDAuditBase):
             agent_id=self.agent_id,
             surface_type=SurfacePlatform(surface_type_raw.upper()),
             mode=SurfaceMode(self.mode or SurfaceMode.DM.value),
-            event_mode=SurfaceEventMode(self.event_mode or SurfaceEventMode.WEBHOOK.value),
+            event_mode=SurfaceEventMode(
+                self.event_mode or SurfaceEventMode.WEBHOOK.value
+            ),
             credential_mode=SurfaceCredentialMode(
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),
@@ -127,7 +186,6 @@ class AgentSurface(UUIDAuditBase):
             surface_identity_id=self.surface_identity_id,
             surface_identity_username=self.surface_identity_username,
             status=self.status or AgentSurfaceStatus.ACTIVE.value,
-            schedule_id=self.schedule_id,
             surface_identity_email=self.surface_identity_email,
             # Decrypt at rest; legacy plaintext rows pass through unchanged.
             webhook_secret=get_secret_cipher().decrypt_str(self.webhook_secret),
@@ -190,9 +248,7 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
         nullable=False,
     )
     platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
-    external_channel_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     routed_agent_id: Mapped[UUID | None] = mapped_column(
@@ -201,7 +257,9 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
     conversation_kind: Mapped[str] = mapped_column(
         String(50), default="DM", server_default="DM", nullable=False
     )
-    route_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    route_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Nullable, and it stays nullable: the backfill sets it from ``updated_at``
@@ -252,7 +310,11 @@ class NotificationModel(UUIDAuditBase):
         ),
         # The reply path: does the conversation this inbound landed in have
         # anything open addressed to its owner?
-        Index("ix_notifications_delivery_conversation", "delivery_conversation_id", "status"),
+        Index(
+            "ix_notifications_delivery_conversation",
+            "delivery_conversation_id",
+            "status",
+        ),
         Index("ix_notifications_origin", "origin_kind", "origin_id"),
         # The expiry sweep only ever scans OPEN rows with a deadline.
         Index(
@@ -263,7 +325,9 @@ class NotificationModel(UUIDAuditBase):
         # Pod-scoped rather than global: the key encodes a run/node id, and two
         # pods can legitimately never collide, but a global unique index would
         # make one pod's retry key a landmine for another's.
-        UniqueConstraint("pod_id", "idempotency_key", name="uq_notifications_idempotency"),
+        UniqueConstraint(
+            "pod_id", "idempotency_key", name="uq_notifications_idempotency"
+        ),
     )
 
     pod_id: Mapped[UUID] = mapped_column(

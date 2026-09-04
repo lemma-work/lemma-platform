@@ -94,9 +94,7 @@ async def test_a_revision_with_a_run_in_flight_is_kept():
     function = _function()
     old, live = _revision(function.id, 1, seed="a"), _revision(function.id, 2, seed="b")
     function.revision_hash = live.revision_hash
-    retention, _repo, storage = _retention(
-        [old, live], in_flight={old.revision_hash}
-    )
+    retention, _repo, storage = _retention([old, live], in_flight={old.revision_hash})
 
     plan = await retention.plan(function, policy=_TIGHT, now=NOW)
 

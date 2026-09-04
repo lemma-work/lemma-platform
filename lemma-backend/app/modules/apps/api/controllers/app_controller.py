@@ -1,5 +1,6 @@
 """App API controller."""
 
+import re
 from io import BytesIO
 from typing import Optional
 from uuid import UUID
@@ -61,6 +62,20 @@ ZIP_FILE_RESPONSE = {
         },
     }
 }
+
+
+def _archive_disposition(app_name: str, archive_kind: str) -> str:
+    """A `Content-Disposition` for an app archive, built from a sanitized name.
+
+    `app_name` is a path parameter, and the header used to interpolate it raw:
+    the app is only looked up later, inside the use case, so the header trusted
+    something the request had not yet been shown to name. Names are normalized
+    at create time and pod membership gates the route, so nothing hostile should
+    reach here -- but a header built out of an unvalidated path segment is the
+    pattern, not the reachability, that is worth not having.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", app_name)[:100] or "app"
+    return f'attachment; filename="{safe}-{archive_kind}.zip"'
 
 
 async def _app_detail_response(ctx: PodContextDep, app: AppEntity) -> AppDetailResponse:
@@ -157,7 +172,7 @@ async def create_app_from_widget(
     status_code=status.HTTP_200_OK,
     operation_id="app.list",
     summary="List Apps",
-    dependencies=[require_pod_membership("list apps")],
+    dependencies=[require_pod_membership("list apps", enumerates=True)],
 )
 async def list_apps(
     pod_id: UUID,
@@ -188,6 +203,7 @@ async def list_apps(
     response_model=AppDetailResponse,
     status_code=status.HTTP_200_OK,
     operation_id="app.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App",
 )
 async def get_app(
@@ -390,6 +406,7 @@ async def promote_app_release(
     "/{app_name}/assets",
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.root.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App Root Asset",
 )
 async def get_app_root_asset(
@@ -414,6 +431,7 @@ async def get_app_root_asset(
     "/{app_name}/assets/{asset_path:path}",
     status_code=status.HTTP_200_OK,
     operation_id="app.asset.get",
+    dependencies=[require_pod_membership("read an app")],
     summary="Get App Asset",
 )
 async def get_app_asset(
@@ -442,6 +460,7 @@ async def get_app_asset(
     summary="Download App Source Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("download an app's source")],
 )
 async def download_app_source_archive(
     pod_id: UUID,
@@ -456,7 +475,7 @@ async def download_app_source_archive(
     return StreamingResponse(
         BytesIO(archive),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={app_name}-source.zip"},
+        headers={"Content-Disposition": _archive_disposition(app_name, "source")},
     )
 
 
@@ -467,6 +486,7 @@ async def download_app_source_archive(
     summary="Download App Dist Archive",
     response_class=StreamingResponse,
     responses=ZIP_FILE_RESPONSE,
+    dependencies=[require_pod_membership("download an app's build")],
 )
 async def download_app_dist_archive(
     pod_id: UUID,
@@ -481,5 +501,5 @@ async def download_app_dist_archive(
     return StreamingResponse(
         BytesIO(archive),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={app_name}-dist.zip"},
+        headers={"Content-Disposition": _archive_disposition(app_name, "dist")},
     )

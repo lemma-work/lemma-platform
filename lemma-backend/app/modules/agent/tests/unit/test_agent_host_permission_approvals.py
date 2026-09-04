@@ -32,10 +32,20 @@ from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
     dispatch_agent_host_permission,
 )
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.conversation_approvals import (
+    ApprovalCoordinator,
+)
 
 _PAYLOAD = {
-    "toolCall": {"toolCallId": "call-9", "title": "Run rm -rf build", "kind": "execute"},
+    "toolCall": {
+        "toolCallId": "call-9",
+        "title": "Run rm -rf build",
+        "kind": "execute",
+    },
     "message": "The local agent asked for permission to use a native tool.",
     "options": [
         {"optionId": "reject", "kind": "reject_once", "name": "No"},
@@ -105,7 +115,12 @@ class TestDecisionMapping:
         """Adapters differ on `allow_once` vs `allowOnce`; guessing wrong would
         silently fall through to "first allowed option"."""
         request = _request(
-            {"options": [{"optionId": "x", "kind": "rejectOnce"}, {"optionId": "y", "kind": "allowOnce"}]}
+            {
+                "options": [
+                    {"optionId": "x", "kind": "rejectOnce"},
+                    {"optionId": "y", "kind": "allowOnce"},
+                ]
+            }
         )
 
         assert request.option_for(AgentRunApprovalDecision.APPROVE_ONCE) == "y"
@@ -324,7 +339,7 @@ def _patch_agent_host(
     poked: list,
 ) -> None:
     """Stub the Agent Host infrastructure the dispatch imports lazily."""
-    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host_channels")
+    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host.channels")
 
     async def poke_host(host_id) -> None:
         poked.append(host_id)
@@ -340,13 +355,15 @@ def _patch_agent_host(
             return command
 
     dispatch = types.ModuleType(
-        "app.modules.agent.infrastructure.agent_host_dispatch_repository"
+        "app.modules.agent.infrastructure.agent_host.dispatch_repository"
     )
     dispatch.AgentHostDispatchRepository = _Repository
     monkeypatch.setitem(sys.modules, channels.__name__, channels)
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     monkeypatch.setattr(
-        approval_reconciliation, "SessionUnitOfWorkFactory", lambda _maker: _FakeUowFactory()
+        approval_reconciliation,
+        "SessionUnitOfWorkFactory",
+        lambda _maker: _FakeUowFactory(),
     )
 
 
@@ -358,6 +375,12 @@ class _ConversationRepository:
         self.decision: tuple | None = None
         self.appended: list[Message] = []
         self.created_runs = 0
+        self.execution_claims = 0
+
+    async def claim_approval_execution(self, **_kwargs):
+        """One claim per approval, like the real conditional UPDATE."""
+        self.execution_claims += 1
+        return self.execution_claims == 1
 
     async def get_approval_decision(self, **_kwargs):
         return self.decision
@@ -387,6 +410,11 @@ class _ConversationRepository:
         )
         self.appended.append(message)
         return message
+
+    async def get_agent_run(self, _run_id):
+        # None unless a test says otherwise: a run that paused in-process has
+        # already finished, so "no run here" is the ordinary case.
+        return getattr(self, "paused_run", None)
 
     async def lock_conversation(self, _conversation_id) -> None:
         return None
@@ -423,15 +451,22 @@ class TestResolutionRouting:
             tool_args=args,
         )
         repository = _ConversationRepository(call)
-        service = ConversationService.__new__(ConversationService)
-        service.conversation_repository = repository
         # The host dispatch is queued on the unit of work now rather than
         # awaited inline, so the fake has to accept it. It fires the callback
         # eagerly: these tests are about WHETHER the decision reaches the host,
         # and a fake that swallowed the callback would let them pass while
         # nothing happened. That it waits for the commit is asserted separately,
         # in `test_the_dispatch_waits_for_the_commit`.
-        service.uow = _AfterCommitUow()
+        uow = _AfterCommitUow()
+        # The real coordinator, not a stand-in and not a half-built service:
+        # what these tests check is its routing, so anything less would certify
+        # the test's own wiring instead.
+        service = ApprovalCoordinator(
+            uow,
+            repository,
+            ResumeToolReturnBuilder(uow, None),
+            PauseResume(uow, repository, None),
+        )
 
         async def _dispatch(*, request, agent_run_id, decision):
             dispatched.append((request.request_id, agent_run_id, decision))
@@ -443,8 +478,7 @@ class TestResolutionRouting:
             _dispatch,
         )
         monkeypatch.setattr(
-            "app.modules.agent.services.conversation_service"
-            ".publish_conversation_event",
+            "app.modules.agent.services.pause_resume.publish_conversation_event",
             _noop,
         )
         return service, repository, run_id
@@ -470,9 +504,7 @@ class TestResolutionRouting:
         )
 
         assert resolution.status == "resolved"
-        assert dispatched == [
-            ("call-9", run_id, AgentRunApprovalDecision.APPROVE_ONCE)
-        ]
+        assert dispatched == [("call-9", run_id, AgentRunApprovalDecision.APPROVE_ONCE)]
         assert repository.created_runs == 0
 
     @pytest.mark.asyncio
@@ -562,10 +594,60 @@ async def test_a_session_approval_is_recorded_before_the_tool_runs() -> None:
     # path that commits first.
     uow.after_commit(_record)
 
-    await uow.commit()          # execute_approved_tool_as_user commits here …
-    order.append("tool-ran")    # … and only then executes.
+    await uow.commit()  # execute_approved_tool_as_user commits here …
+    order.append("tool-ran")  # … and only then executes.
 
     assert order == ["approval-recorded", "tool-ran"], (
         "the session approval landed after the tool ran; an APPROVE_FOR_SESSION "
         "call will be denied by the grant the user just gave"
     )
+
+
+class TestAParkedInteractionDoesNotResume:
+    """A decision for a turn that is still in flight must not start a second one.
+
+    A remote harness's `ask_user` / `request_approval` parks: the run keeps
+    running while the host's MCP bridge holds the tool response open, and the
+    synthesized return appended by the resolution is exactly what that bridge is
+    polling for. The turn carries on the moment it reads it, so dispatching a
+    resume run here would put two runs on the same turn.
+
+    Keyed on the run still running rather than on a marker in the call's
+    arguments, unlike the ACP permission above: those arguments come from the
+    model, not from Lemma, so there is nothing of ours to read back. "Still
+    running" is also the honest condition — it is what makes a resume wrong.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_live_run_is_left_to_finish_its_own_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.agent.domain.value_objects import AgentRunStatus
+
+        service, repository, run_id = TestResolutionRouting()._service(monkeypatch, [])
+        # An ordinary request_approval — no ACP marker, so only the run's own
+        # state can tell this apart from an in-process pause.
+        repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
+        repository.paused_run = SimpleNamespace(
+            id=run_id, status=AgentRunStatus.RUNNING
+        )
+        conversation = SimpleNamespace(
+            id=repository.call.conversation_id, agent_id=None, pod_id=uuid4()
+        )
+
+        await service.resolve_user_approval_internal(
+            conversation=conversation,
+            approval_id=repository.call.tool_call_id,
+            user_id=uuid4(),
+            pod_id=conversation.pod_id,
+            # Denied rather than approved: an approval would run the wrapped
+            # tool as the user, which is a different mechanism entirely. The
+            # resume guard is the same either way, and a denial reaches it
+            # without dragging runtime resolution into a unit test.
+            decision=AgentRunApprovalDecision.DENY,
+        )
+
+        assert repository.created_runs == 0, "a duplicate run was dispatched"
+        # The answer still has to be written, because it is the thing the parked
+        # bridge is waiting to read.
+        assert any(m.kind == MessageKind.TOOL_RETURN for m in repository.appended)

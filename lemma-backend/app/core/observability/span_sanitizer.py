@@ -400,7 +400,7 @@ class SanitizingSpanExporter(SpanExporter):
         try:
             self._delegate.shutdown()
         except Exception:
-            return None
+            return
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         force_flush = getattr(self._delegate, "force_flush", None)

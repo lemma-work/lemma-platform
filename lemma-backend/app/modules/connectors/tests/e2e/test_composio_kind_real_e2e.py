@@ -81,11 +81,15 @@ def dispatcher() -> KindDispatcher:
     )
 
 
-def _request(dispatcher: KindDispatcher, operation: str, payload: dict, account_id: str):
+def _request(
+    dispatcher: KindDispatcher, operation: str, payload: dict, account_id: str
+):
     return dispatcher.build_request(
         connector_id=_TOOLKIT,
         kind=ConnectorKind.COMPOSIO,
-        operation=ResolvedOperation(name=operation.lower(), provider_operation_name=operation),
+        operation=ResolvedOperation(
+            name=operation.lower(), provider_operation_name=operation
+        ),
         payload=payload,
         credentials={"connection_id": account_id},
         config={},
@@ -102,7 +106,9 @@ class TestTheConnectionIsReal:
     async def test_composio_still_advertises_the_toolkits_tools(self, composio_client):
         # If Composio renames or drops the tools we ship in the catalog, this is
         # where we find out -- not in a customer's pod.
-        tools = composio_client.tools.get(user_id=_E2E_USER_ID, toolkits=[_TOOLKIT.upper()])
+        tools = composio_client.tools.get(
+            user_id=_E2E_USER_ID, toolkits=[_TOOLKIT.upper()]
+        )
         assert tools, f"Composio returned no tools for {_TOOLKIT}"
 
 
@@ -125,10 +131,16 @@ class TestExecution:
         with pytest.raises(OperationExecutionNotFoundError):
             await dispatcher.execute(request)
 
-    async def test_a_bogus_connection_is_reported_as_unauthorized(self, dispatcher):
+    async def test_a_bogus_connection_is_reported_as_unauthorized(
+        self, dispatcher, composio_client
+    ):
         # Drives the path that flips an account to REAUTH_REQUIRED. Getting this
         # classification wrong means a revoked account fails as a 500 forever
         # instead of prompting the user to reconnect.
+        #
+        # Takes `composio_client` purely for its skip: a bogus connection id
+        # needs no real account, so this was the one test here that reached a
+        # live call without the key and failed rather than skipping.
         request = _request(
             dispatcher, "GOOGLEDRIVE_LIST_FILES", {}, "ca_definitely_not_a_real_id"
         )
@@ -162,7 +174,10 @@ class TestTheEventLoopStaysFree:
         beat = asyncio.create_task(heartbeat())
         try:
             request = _request(
-                dispatcher, "GOOGLEDRIVE_LIST_FILES", {"page_size": 1}, connected_account_id
+                dispatcher,
+                "GOOGLEDRIVE_LIST_FILES",
+                {"page_size": 1},
+                connected_account_id,
             )
             await dispatcher.execute(request)
         finally:
@@ -233,7 +248,9 @@ class TestFileDownload:
         """
         from pathlib import Path
 
-        cache_dir = Path(os.environ.get("COMPOSIO_CACHE_DIR", "/tmp/composio")) / "files"
+        cache_dir = (
+            Path(os.environ.get("COMPOSIO_CACHE_DIR", "/tmp/composio")) / "files"
+        )
         before = set(cache_dir.rglob("*")) if cache_dir.exists() else set()
 
         request = _request(

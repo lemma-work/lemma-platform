@@ -50,7 +50,10 @@ def _op(name: str) -> dict:
         "provider_operation_name": name,
         "display_name": name,
         "description": f"internal tool: {name}",
-        "input_schema": {"type": "object", "properties": {"secret_arg": {"type": "string"}}},
+        "input_schema": {
+            "type": "object",
+            "properties": {"secret_arg": {"type": "string"}},
+        },
         "execution": {"kind": "mcp", "tool_name": name},
     }
 
@@ -103,9 +106,9 @@ class TestCatalogReadsSeeNoTenantData:
         await db_session.commit()
 
         # This is the query behind GET /connectors/{id}, which has no org scope.
-        catalog = await ConnectorOperationRepository(_uow(db_session)).list_by_connector(
-            connector_test_connector.id
-        )
+        catalog = await ConnectorOperationRepository(
+            _uow(db_session)
+        ).list_by_connector(connector_test_connector.id)
         assert [op.name for op in catalog] == []
 
     async def test_a_named_lookup_cannot_reach_a_discovered_operation(
@@ -122,12 +125,18 @@ class TestCatalogReadsSeeNoTenantData:
         await db_session.commit()
 
         repo = ConnectorOperationRepository(_uow(db_session))
-        assert await repo.get_by_connector_and_name(
-            connector_test_connector.id, "read_payroll"
-        ) is None
-        assert await repo.get_by_connector_kind_and_name(
-            connector_test_connector.id, "mcp", "read_payroll"
-        ) is None
+        assert (
+            await repo.get_by_connector_and_name(
+                connector_test_connector.id, "read_payroll"
+            )
+            is None
+        )
+        assert (
+            await repo.get_by_connector_kind_and_name(
+                connector_test_connector.id, "mcp", "read_payroll"
+            )
+            is None
+        )
 
     async def test_search_cannot_surface_another_tenants_tool_descriptions(
         self, db_session, connector_test_connector, fixed_test_org
@@ -160,7 +169,9 @@ class TestTwoOrganizationsOnOneConnector:
         )
 
         other_org = Organization(
-            id=uuid4(), name="Other Co", slug=f"other-{uuid4().hex[:8]}",
+            id=uuid4(),
+            name="Other Co",
+            slug=f"other-{uuid4().hex[:8]}",
             join_policy="INVITE_ONLY",
         )
         db_session.add(other_org)
@@ -198,6 +209,6 @@ class TestTwoOrganizationsOnOneConnector:
         rows = await db_session.execute(
             select(AuthConfigOperation.organization_id, AuthConfigOperation.name)
         )
-        by_name = dict((name, org) for org, name in rows.all())
+        by_name = {name: org for org, name in rows.all()}
         assert by_name["acme_only_tool"] == mine.organization_id
         assert by_name["other_only_tool"] == theirs.organization_id

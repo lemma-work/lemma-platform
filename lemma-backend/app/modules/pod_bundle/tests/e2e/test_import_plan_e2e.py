@@ -8,7 +8,6 @@ planner only lists+diffs the pod's resources, it never runs a sandbox.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +15,7 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import pack_bundle
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -81,19 +81,28 @@ async def _upload_import(authenticated_client, pod_id: str, zip_bytes: bytes) ->
 
 
 async def _wait_for_plan(authenticated_client, pod_id, import_id, timeout=60) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await authenticated_client.get(
             f"/pods/{pod_id}/bundle/imports/{import_id}"
         )
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in ("AWAITING_CONFIRMATION", "FAILED"):
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Plan did not finish in {timeout}s")
+        return res.json()
+
+    # failed=set(): both callers assert AWAITING_CONFIRMATION themselves --
+    # return on either terminal state, same as the original.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle import {import_id} plan",
+        probe=probe,
+        expected={"AWAITING_CONFIRMATION", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
-async def _create_table(authenticated_client, pod_id, table_name, extra_columns) -> None:
+async def _create_table(
+    authenticated_client, pod_id, table_name, extra_columns
+) -> None:
     res = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -164,9 +173,7 @@ async def test_plan_flags_destructive_column_drop(
 
 async def test_get_import_expired_returns_410(authenticated_client, test_pod, worker):
     pod_id = test_pod["id"]
-    res = await authenticated_client.get(
-        f"/pods/{pod_id}/bundle/imports/{uuid4()}"
-    )
+    res = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{uuid4()}")
     assert res.status_code == status.HTTP_410_GONE, res.text
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 
@@ -195,3 +202,83 @@ async def test_import_url_rejects_non_lemma_url(authenticated_client, test_pod, 
 # by tests/unit/test_import_events.py — streaming a never-terminating server
 # generator over the in-process ASGI transport hangs the shared session loop, so
 # it is not exercised as an e2e here.
+
+
+async def test_finished_job_rows_are_deleted_past_retention(
+    authenticated_client, test_pod, db_session, worker
+):
+    """Job rows are the one thing this module writes that nothing reclaimed.
+
+    Every export, import and publish leaves a `pod_bundle_jobs` row and one
+    `pod_bundle_job_steps` row per plan step, and the deletes on the store only
+    ever dropped the Redis key -- so a 200-step import kept 201 rows forever,
+    under a retention index that had never had a query. A running job (null
+    `completed_at`) must survive, and the steps go with the job.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.modules.pod_bundle.infrastructure.job_retention import (
+        JOB_ROW_PURGE_LIMIT,
+        JOB_ROW_RETENTION_SECONDS,
+        purge_completed_jobs,
+    )
+    from app.modules.pod_bundle.infrastructure.models import (
+        PodBundleJob,
+        PodBundleJobStep,
+    )
+
+    now = datetime.now(timezone.utc)
+    old_id, recent_id, running_id = uuid4(), uuid4(), uuid4()
+    for job_id, completed_at in (
+        (old_id, now - timedelta(seconds=JOB_ROW_RETENTION_SECONDS + 3600)),
+        (recent_id, now - timedelta(hours=1)),
+        (running_id, None),
+    ):
+        db_session.add(
+            PodBundleJob(
+                id=job_id,
+                job_kind="IMPORT",
+                pod_id=test_pod["id"],
+                user_id=uuid4(),
+                status="COMPLETED" if completed_at else "APPLYING",
+                snapshot={},
+                completed_at=completed_at,
+            )
+        )
+    db_session.add(
+        PodBundleJobStep(
+            id=uuid4(),
+            job_id=old_id,
+            step_index=0,
+            phase="APPLY",
+            kind="TABLE",
+            name="leads",
+            status="DONE",
+        )
+    )
+    await db_session.commit()
+
+    purged = await purge_completed_jobs(
+        cutoff=now - timedelta(seconds=JOB_ROW_RETENTION_SECONDS),
+        limit=JOB_ROW_PURGE_LIMIT,
+    )
+
+    assert purged == 1
+    surviving = set(
+        (
+            await db_session.scalars(
+                select(PodBundleJob.id).where(
+                    PodBundleJob.id.in_([old_id, recent_id, running_id])
+                )
+            )
+        ).all()
+    )
+    assert surviving == {recent_id, running_id}
+    steps = (
+        await db_session.scalars(
+            select(PodBundleJobStep.id).where(PodBundleJobStep.job_id == old_id)
+        )
+    ).all()
+    assert steps == []

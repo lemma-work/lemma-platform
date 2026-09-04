@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, Union, List
-from uuid import UUID
-from pydantic import ConfigDict, Field, BaseModel
-from datetime import datetime
 import enum
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.domain.entity import Entity
-
 from app.modules.connectors.domain.connector import ConnectorEntity
 
 
@@ -98,6 +98,13 @@ class AccountEntity(Entity):
     status: AccountStatus = Field(default=AccountStatus.CONNECTED)
     provider_account_id: Optional[str] = Field(
         None, description="Provider-side user/account identifier"
+    )
+    external_ref: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque upstream id this account's events arrive under, used to "
+            "route an inbound delivery back to it."
+        ),
     )
 
     email: Optional[str] = Field(None, description="Email associated with the account")

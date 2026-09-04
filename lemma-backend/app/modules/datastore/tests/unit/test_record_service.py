@@ -18,7 +18,9 @@ from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
-from app.modules.datastore.services.record_service import RecordService as _RecordService
+from app.modules.datastore.services.record_service import (
+    RecordService as _RecordService,
+)
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
 
@@ -303,9 +305,7 @@ async def test_update_event_carries_what_changed_and_what_it_was():
     async def update_record(*args, event_factory, **kwargs):
         # Stands in for the repository, which is the only layer that knows
         # which columns the statement wrote and what they held before.
-        staged_events.append(
-            event_factory(updated, ["status"], {"status": "pending"})
-        )
+        staged_events.append(event_factory(updated, ["status"], {"status": "pending"}))
         return updated
 
     record_repository.update_record.side_effect = update_record
@@ -596,7 +596,11 @@ async def test_rls_record_mutations_use_record_write_action():
     record_repository.create_record.return_value = type(
         "StoredRecord",
         (),
-        {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Cafe", "user_id": str(user_id)}},
+        {
+            "user_id": uuid4(),
+            "id": str(uuid4()),
+            "data": {"merchant": "Cafe", "user_id": str(user_id)},
+        },
     )()
     authorization_service = AsyncMock()
     authorization_service.resolve_resource_id_by_name.return_value = uuid4()
@@ -824,7 +828,9 @@ async def test_rls_list_records_enforces_current_user_scope_for_non_admin():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    )
 
 
 async def test_rls_list_records_scopes_pod_admin_by_default():
@@ -847,7 +853,9 @@ async def test_rls_list_records_scopes_pod_admin_by_default():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is True
+    )
 
 
 async def test_rls_list_records_admin_mode_bypasses_scope_for_admin():
@@ -868,7 +876,9 @@ async def test_rls_list_records_admin_mode_bypasses_scope_for_admin():
     finally:
         reset_current_context(token)
 
-    assert record_repository.list_records.await_args.kwargs["enforce_user_scope"] is False
+    assert (
+        record_repository.list_records.await_args.kwargs["enforce_user_scope"] is False
+    )
 
 
 async def test_rls_list_records_admin_mode_rejected_for_non_admin():
@@ -925,9 +935,9 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     ctx = AsyncMock()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([], 0)
+    record_repository.execute_readonly_query.return_value = ([], 0, False)
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
@@ -941,24 +951,31 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
         ctx=ctx,
     )
 
-    table_service.get_table.assert_awaited_once()  # per-table read authorization
+    table_service.get_tables.assert_awaited_once()  # per-table read authorization
     ctx.can.assert_not_awaited()
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is False
+    )
 
 
 async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on_all_rls_tables():
     ctx = AsyncMock()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([{"merchant": "x"}], 1)
+    record_repository.execute_readonly_query.return_value = (
+        [{"merchant": "x"}],
+        1,
+        False,
+    )
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
     )
 
-    rows, total = await service.execute_readonly_query(
+    rows, total, truncated = await service.execute_readonly_query(
         pod_id=uuid4(),
         query="SELECT merchant FROM expenses",
         user_id=uuid4(),
@@ -968,8 +985,11 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     )
 
     assert (rows, total) == ([{"merchant": "x"}], 1)
-    table_service.get_table.assert_awaited_once()  # per-table read authorization
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is True
+    table_service.get_tables.assert_awaited_once()  # per-table read authorization
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is True
+    )
 
 
 async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin():
@@ -978,7 +998,7 @@ async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin()
     ctx = AsyncMock()
     ctx.can.return_value = False  # caller does not administer the table
     table_service = AsyncMock()
-    table_service.get_table.return_value = _rls_table_entity()
+    table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
     record_repository = AsyncMock()
     service = RecordService(
         record_repository=record_repository,
@@ -1002,7 +1022,7 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     ctx = AsyncMock()
     table_service = AsyncMock()
     record_repository = AsyncMock()
-    record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1)
+    record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1, False)
     service = RecordService(
         record_repository=record_repository,
         authorization_service=AsyncMock(),
@@ -1019,4 +1039,139 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     # No registered table to authorize against -> falls back to a pod-level read check.
     ctx.require.assert_awaited()
     table_service.get_table.assert_not_awaited()
-    assert record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"] is False
+    assert (
+        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        is False
+    )
+
+
+async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypatch):
+    """Bulk work must cost one authorization check, not one per record.
+
+    `bulk_update_records` looped over `update_record`, which re-runs the whole
+    single-record preamble every time: a DATASTORE_RECORD_WRITE check against
+    the database and a connection release, a row-scope decision, and an event
+    dispatch. All of them are invariant across the loop -- same caller, same
+    table, same mode -- so a 100-record update paid for 100 of each.
+
+    `bulk_create_records` in the same service already hoists its permission
+    check and stages events for one dispatch. This is that shape, applied to
+    update, and the difference showed up as `records/bulk/update` latency that
+    scaled with the batch instead of staying flat.
+
+    The rows themselves are now written by one repository call in one
+    transaction, rather than N calls that each opened a session, set the RLS
+    context, staged an event and committed.
+    """
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    batched: list[tuple] = []
+
+    async def _fake_bulk_update(repository, ctx_arg, updates_arg, user_arg, **kwargs):
+        batched.append((repository, updates_arg))
+        return len(updates_arg)
+
+    monkeypatch.setattr(
+        "app.modules.datastore.services.record_service.write_bulk_updates",
+        _fake_bulk_update,
+    )
+
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = False
+    service.authz = authz
+    service.events = AsyncMock()
+
+    updates = [{"id": str(uuid4()), "status": "done"} for _ in range(5)]
+    count = await service.bulk_update_records(ctx, updates, user_id)
+
+    assert count == 5
+    assert len(batched) == 1, (
+        "five rows must be one transaction, not five -- update_record opened a "
+        "session, set RLS, staged an event and committed for every row"
+    )
+    assert record_repository.update_record.await_count == 0, (
+        "the per-row path must not be reachable from a bulk call"
+    )
+    assert len(batched[0][1]) == 5, "every row still reaches the writer"
+    assert authz.require_record_write.await_count == 1, (
+        f"{authz.require_record_write.await_count} permission checks for one bulk "
+        "call; the caller and table do not change inside the loop"
+    )
+    assert authz.should_enforce_record_user_scope.await_count == 1, (
+        f"{authz.should_enforce_record_user_scope.await_count} scope decisions "
+        "for one bulk call; the mode does not change inside the loop"
+    )
+    assert service.events.dispatch.await_count == 1, (
+        f"{service.events.dispatch.await_count} event dispatches for one bulk call"
+    )
+
+
+async def test_bulk_delete_checks_permission_once_and_still_publishes_events(
+    monkeypatch,
+):
+    """Same preamble hoist as bulk update, and the events must still be flushed.
+
+    The batch writer stages a DELETE event per row and deliberately does not
+    dispatch, so the batch has to flush once at the end. Getting that wrong
+    would publish nothing at all, which is worse than the slowness this fixes.
+    """
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    batched: list[list] = []
+
+    async def _fake_bulk_delete(repository, ctx_arg, ids_arg, user_arg, **kwargs):
+        batched.append(list(ids_arg))
+        return len(ids_arg)
+
+    monkeypatch.setattr(
+        "app.modules.datastore.services.record_service.write_bulk_deletes",
+        _fake_bulk_delete,
+    )
+
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = False
+    service.authz = authz
+    service.events = AsyncMock()
+
+    count = await service.bulk_delete_records(ctx, [uuid4() for _ in range(4)], user_id)
+
+    assert count == 4
+    assert len(batched) == 1, (
+        "four rows must be one transaction, not four -- delete_record opened a "
+        "session, set RLS, staged an event and committed for every row, so a "
+        "batch that failed halfway left the first half destroyed"
+    )
+    assert record_repository.delete_record.await_count == 0, (
+        "the per-row path must not be reachable from a bulk call"
+    )
+    assert authz.require_record_write.await_count == 1
+    assert authz.should_enforce_record_user_scope.await_count == 1
+    assert service.events.dispatch.await_count == 1, (
+        "staged DELETE events were never flushed"
+    )
+
+
+async def test_a_single_update_still_checks_permission_and_dispatches():
+    """The split must not weaken the single-record path it was extracted from."""
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_repository = AsyncMock()
+    record_repository.update_record.return_value = {"id": "x"}
+    service = RecordService(record_repository=record_repository)
+    authz = AsyncMock()
+    authz.should_enforce_record_user_scope.return_value = True
+    service.authz = authz
+    service.events = AsyncMock()
+
+    await service.update_record(ctx, "row-1", {"status": "done"}, user_id)
+
+    assert authz.require_record_write.await_count == 1
+    assert service.events.dispatch.await_count == 1
+    # The scope decision still reaches the repository.
+    assert (
+        record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True
+    )

@@ -31,9 +31,13 @@ classifiers = [
 dependencies = [
   # Track the SDK released alongside this CLI (mono-version). The floor must be
   # >= the version that has the endpoints the current commands use, so a fresh
-  # `uv tool install` upgrades an already-installed older lemma-sdk. The release
-  # workflow rewrites this to the release version on every tagged build.
-  "lemma-sdk>=0.7.0",
+  # `uv tool install` upgrades an already-installed older lemma-sdk. The ceiling
+  # is the next minor: the CLI calls the SDK's hand-written facades, not just its
+  # HTTP surface, and before 1.0 a minor bump is where those are free to change
+  # — an unbounded floor lets a `pip install lemma-cli` a year from now resolve
+  # a CLI against an SDK nobody ever ran it with. The release workflow rewrites
+  # both halves on every tagged build.
+  "lemma-sdk>=0.7.2,<0.8",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",
@@ -58,10 +62,19 @@ dev = [
   # exist. Resolved from ../lemma-pod-bundle via [tool.uv.sources] for local
   # work and the test suite.
   "lemma-pod-bundle>=0.1.0",
+  # Same floor as lemma-backend, so the two trees are measured by the same
+  # checker at the same version. See [tool.basedpyright] at the foot of this
+  # file for what it is set to and why the gate that runs it is advisory.
+  "basedpyright>=1.39.9",
   "pytest",
   "pytest-asyncio",
   "textual-dev",
-  "ruff",
+  # Bounded, matching lemma-backend and lemma-python. Unpinned, this resolves
+  # to whatever is current, and ruff 0.16 widened its *default* rule selection:
+  # this tree is clean today and reports 264 findings under 0.16. That would
+  # have landed on whoever next refreshed the lockfile, in a PR about something
+  # else. Lift the bound for all three components together.
+  "ruff>=0.14.8,<0.16",
   # e2e test infra: the e2e suite spins up the real backend (subprocess uvicorn
   # + docker postgres/redis/supertokens) and drives the CLI against it over TCP.
   # httpx provisions test users/orgs/pods over HTTP; psycopg truncates the
@@ -136,3 +149,53 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # from PyPI (see [project.dependencies]).
 lemma-sdk = { path = "../lemma-python" }
 lemma-pod-bundle = { path = "../lemma-pod-bundle" }
+
+# Ruff config. `select` is explicit because ruff's default is four families
+# (E4, E7, E9, F): "lint passes" meant unused imports and syntax errors, and
+# nothing else. The list matches lemma-backend's so that one habit works in both
+# trees; see lemma-backend/pyproject.toml for what is deliberately left out and
+# what it would cost to add.
+#
+# TID is absent on purpose: this package uses relative imports within itself
+# (327 sites), which is a house style rather than a defect.
+[tool.ruff.lint]
+select = [
+    "F", "E4", "E7", "E9", "W",
+    "C4", "DTZ", "G", "ISC", "LOG", "PIE", "PLE", "RET", "T20",
+]
+ignore = ["G201"]
+
+[tool.ruff.lint.per-file-ignores]
+# `print` is how a command-line program talks. CONVENTIONS.md still requires
+# command *results* to go through `cli_core/io.py:emit`; the exceptions in
+# cli_core carry a `# noqa: T201` naming why, rather than being ignored here.
+"tests/**" = ["T20"]
+
+# The CLI shipped without a type checker of any kind. `ruff check` above is a
+# linter -- it never reads a signature against a call site -- so the 356 `Any`
+# and bare-container annotations in this package were not lax typing, they were
+# the absence of typing, and nothing said so. Settings copied from
+# lemma-backend/pyproject.toml so that one habit works in both trees.
+#
+# `standard` rather than basedpyright's default `recommended`: the same choice
+# the backend made, and for the same reason. `recommended` turns on every
+# strict rule at once, which on a tree that has never been checked reports tens
+# of thousands of findings and buys nothing you can act on. `standard` is what
+# the backend is held to, and the point of this section is to measure the
+# clients against the backend's bar rather than against a new one.
+#
+# The gate that runs this (`make typecheck-clients-record`) is advisory. It
+# records a number; it does not yet defend one.
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+exclude = [
+    # Gitignored copies that setup.py mirrors in at build time. The canonical
+    # sources are ../lemma-pod-bundle and ../lemma-skills, and checking the copy
+    # would report the same finding twice -- against a path that does not exist
+    # on a fresh checkout.
+    "lemma_pod_bundle/**",
+    "lemma_cli/skills/**",
+    "build/**",
+    "tests/**",
+]

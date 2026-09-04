@@ -48,7 +48,9 @@ def _load(start, *, server_flag=None, config_file=NONEXISTENT):
 
 def test_anchors_on_base_or_server_file(tmp_path):
     root = _repo(tmp_path)
-    (root / ".lemma.lemma-cloud.env").write_text("LEMMA_POD_ID=p\n")  # no base .lemma.env
+    (root / ".lemma.lemma-cloud.env").write_text(
+        "LEMMA_POD_ID=p\n"
+    )  # no base .lemma.env
     assert find_project_dir(root / "apps" / "web") == root
 
 
@@ -168,11 +170,59 @@ def test_real_token_skips_all_files(tmp_path):
     assert "LEMMA_SERVER" not in os.environ
 
 
-def test_token_in_committed_base_flagged(tmp_path):
+def test_token_in_committed_base_flagged_and_not_applied(tmp_path):
+    """A committed file is documented as safe to commit, so a token in one is a
+    leaked secret. Applying it used to switch the CLI onto the read-only `env`
+    server, after which `lemma auth login` told the user to unset a variable
+    they had never set."""
     root = _repo(tmp_path)
     (root / ".lemma.env").write_text("LEMMA_TOKEN=tok\nLEMMA_POD_ID=p\n")
     info = _load(root)
     assert info["token_in_committed_file"] is True
+    assert info["token_file"] == ".lemma.env"
+    assert "LEMMA_TOKEN" not in os.environ
+    assert "LEMMA_TOKEN" not in info["applied"]
+    assert os.environ["LEMMA_POD_ID"] == "p"  # the rest of the file still applies
+
+
+def test_token_in_committed_server_file_flagged_and_not_applied(tmp_path):
+    root = _repo(tmp_path)
+    (root / ".lemma.env").write_text("LEMMA_SERVER=local\n")
+    (root / ".lemma.local.env").write_text("LEMMA_TOKEN=tok\n")
+    info = _load(root)
+    assert info["token_in_committed_file"] is True
+    assert info["token_file"] == ".lemma.local.env"
+    assert "LEMMA_TOKEN" not in os.environ
+
+
+def test_token_in_gitignored_local_file_is_applied(tmp_path):
+    """The `.local` variants are gitignored — the user's own machine — so a
+    token there is a deliberate choice and still works."""
+    root = _repo(tmp_path)
+    (root / ".lemma.env").write_text("LEMMA_SERVER=local\n")
+    (root / ".lemma.local.env.local").write_text("LEMMA_TOKEN=mine\n")
+    info = _load(root)
+    assert info["token_in_committed_file"] is False
+    assert info["token_file"] == ".lemma.local.env.local"
+    assert os.environ["LEMMA_TOKEN"] == "mine"
+    assert "LEMMA_TOKEN" in info["applied"]
+
+
+def test_a_local_token_overrides_a_committed_one(tmp_path):
+    root = _repo(tmp_path)
+    (root / ".lemma.env").write_text("LEMMA_TOKEN=committed\n")
+    (root / ".lemma.env.local").write_text("LEMMA_TOKEN=mine\n")
+    info = _load(root)
+    assert info["token_in_committed_file"] is False
+    assert os.environ["LEMMA_TOKEN"] == "mine"
+
+
+def test_no_token_anywhere_reports_no_source(tmp_path):
+    root = _repo(tmp_path)
+    (root / ".lemma.env").write_text("LEMMA_POD_ID=p\n")
+    info = _load(root)
+    assert info["token_in_committed_file"] is False
+    assert info["token_file"] is None
 
 
 # --- write helper ---------------------------------------------------------
@@ -181,7 +231,9 @@ def test_token_in_committed_base_flagged(tmp_path):
 def test_write_server_env_writes_binding_and_seeds_default(tmp_path):
     root = (tmp_path / "bundle").resolve()
     root.mkdir()
-    path = write_server_env(root, "lemma-cloud", {"LEMMA_POD_ID": "p1", "LEMMA_ORG_ID": "o1"})
+    path = write_server_env(
+        root, "lemma-cloud", {"LEMMA_POD_ID": "p1", "LEMMA_ORG_ID": "o1"}
+    )
     assert path.name == ".lemma.lemma-cloud.env"
     text = path.read_text()
     assert "LEMMA_POD_ID=p1" in text and "LEMMA_ORG_ID=o1" in text

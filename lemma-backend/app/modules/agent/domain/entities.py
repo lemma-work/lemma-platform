@@ -9,7 +9,9 @@ from uuid import UUID
 from pydantic import Field
 
 from app.core.authorization.context import ResourceType
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -23,11 +25,15 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 
+
 class Agent(Entity):
     """Reusable agent definition.
 
-    Persisted agents are pod-owned. The service may also build a virtual pod
-    assistant entity with the same pod_id and no persisted agent row.
+    Every agent is pod-owned and every agent has a row, the pod's own assistant
+    included -- ``kind`` says which of them nobody created. It used to be the
+    one exception, synthesised on the way past with no row behind it, which is
+    why so much of this module still asks "is there an agent?" when it means
+    "is this the pod's own".
     """
 
     resource_type: ClassVar[ResourceType] = ResourceType.AGENT
@@ -35,6 +41,7 @@ class Agent(Entity):
     pod_id: UUID
     user_id: UUID
     name: str
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"
@@ -59,7 +66,12 @@ class Message(CreatedEntity):
     conversation_id: UUID
     sequence: int
     agent_run_id: UUID | None = None
-    role: str
+    # An enum, like `kind`. It used to be a bare `str` while `kind` next to it
+    # was an enum, so every reader had to know which of the two it was holding
+    # and normalize accordingly -- and one that forgot compared `str(kind)`
+    # against a value and silently never matched. `MessageRole` subclasses
+    # `str`, so `role == "user"` still holds and nothing downstream had to move.
+    role: MessageRole
     kind: MessageKind
     text: str | None = None
     tool_name: str | None = None
@@ -67,10 +79,6 @@ class Message(CreatedEntity):
     tool_args: JsonValue | None = None
     tool_result: JsonValue | None = None
     metadata: JsonObject | None = None
-
-    @property
-    def is_visible(self) -> bool:
-        return True
 
     @classmethod
     def create(
@@ -88,12 +96,11 @@ class Message(CreatedEntity):
         tool_result: JsonValue | None = None,
         metadata: JsonObject | None = None,
     ) -> "Message":
-        role_value = role.value if isinstance(role, MessageRole) else str(role)
         return cls(
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
-            role=role_value,
+            role=MessageRole(role),
             kind=kind,
             text=text,
             tool_name=tool_name,
@@ -116,7 +123,7 @@ class Message(CreatedEntity):
             conversation_id=conversation_id,
             sequence=sequence,
             agent_run_id=agent_run_id,
-            role=draft.role.value,
+            role=draft.role,
             kind=draft.kind,
             text=draft.text,
             tool_name=draft.tool_name,
@@ -144,6 +151,7 @@ class Conversation(Entity):
     status: ConversationStatus | None = None
     output: JsonValue | None = None
     metadata: JsonObject | None = None
+    is_archived: bool = False
     # Diagnostics from the most recent agent run, so a single `conversations get`
     # can explain a failure without separately fetching runs.
     last_run_status: AgentRunStatus | None = None
@@ -155,7 +163,15 @@ class Conversation(Entity):
 
     @property
     def is_pod_assistant(self) -> bool:
-        return self.agent_id is None
+        """Whether the pod's own assistant answers here.
+
+        This drives which base prompt the run is built from, so reading it
+        wrongly does not raise -- it quietly makes the assistant a different
+        agent. Which is why it delegates rather than testing ``agent_id is
+        None`` in place: a conversation now names the assistant by its row, and
+        older rows still name it by naming nobody.
+        """
+        return is_pod_default_agent(self.agent_id, pod_id=self.pod_id)
 
     def next_sequence(self) -> int:
         if not self.messages:
@@ -211,8 +227,10 @@ class AgentRun(Entity):
 
     @property
     def is_safely_retryable(self) -> bool:
-        return self.status == AgentRunStatus.FAILED and bool(self.messages) and all(
-            message.role == MessageRole.USER.value for message in self.messages
+        return (
+            self.status == AgentRunStatus.FAILED
+            and bool(self.messages)
+            and all(message.role is MessageRole.USER for message in self.messages)
         )
 
     def ordered_messages(self) -> list[Message]:

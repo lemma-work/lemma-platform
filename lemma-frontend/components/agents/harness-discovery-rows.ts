@@ -10,12 +10,30 @@
  * row stays "not installed", which is the honest answer for an agent Lemma no
  * longer drives. A key that joins it arrives from the host as a real row.
  */
+
+import type { ComputerNoun } from '@/lib/desktop/this-computer';
+
 export const KNOWN_HARNESSES: ReadonlyArray<{ key: string; displayName: string }> = [
     { key: 'claude-code', displayName: 'Claude Code' },
     { key: 'codex', displayName: 'Codex' },
     { key: 'opencode', displayName: 'OpenCode' },
     { key: 'cursor', displayName: 'Cursor' },
 ];
+
+/**
+ * How long "Rescan" stays busy after asking the host to look again.
+ *
+ * Rescan does not fetch anything. It asks the Agent Host to re-probe, and the
+ * host reads that request off its control file on a five-second beat before it
+ * starts spawning agents — so the answer arrives over the following seconds
+ * through the poll this screen already runs, not at any moment worth refetching
+ * at. The button stays busy for long enough to cover both, because a control
+ * that finishes before anything can possibly have changed reads as a control
+ * that did nothing.
+ *
+ * It used to wait 1.2s, which expired before the host had even read the request.
+ */
+export const RECHECK_SETTLE_MS = 9000;
 
 export type DiscoveryPhase = 'starting' | 'connecting' | 'scanning' | 'settled' | 'unavailable';
 
@@ -87,27 +105,87 @@ export function harnessRowStates<T extends DiscoveredHarness>(
     return [...known, ...extra];
 }
 
-/** What the panel says while it resolves, in one voice. */
-export function discoveryHeadline(phase: DiscoveryPhase, foundCount: number): string {
-    if (phase === 'unavailable') return 'This build of Lemma cannot run local agents';
-    if (phase === 'starting') return 'Starting the agent host on this Mac';
-    if (phase === 'connecting') return 'Connecting this computer';
-    if (phase === 'scanning') return 'Looking for coding agents on this Mac';
-    if (foundCount === 0) return 'No coding agents found on this Mac';
-    return foundCount === 1 ? 'Found 1 coding agent on this Mac' : `Found ${foundCount} coding agents on this Mac`;
+/**
+ * How long a first probe runs before the wait deserves an explanation.
+ *
+ * Under this, saying "this can take a minute" is borrowing trouble; over it,
+ * saying nothing reads as a screen that has given up. The number is the point at
+ * which a person starts wondering, not a measurement of the probe.
+ */
+export const DISCOVERY_PATIENCE_MS = 15_000;
+
+/**
+ * The one live line about what is happening, for the column the user is reading.
+ *
+ * All the progress copy used to live in the preview pane, which is `hidden
+ * lg:flex` — so on a narrow window the screen said nothing at all while it
+ * worked. This is what the left column shows beside the agents.
+ *
+ * `null` once there is nothing left to report: a settled screen is described by
+ * its rows, and a status line that stays put after the work is done is the thing
+ * that makes people distrust the next one.
+ */
+export function discoveryStatusLine(input: {
+    phase: DiscoveryPhase;
+    foundCount: number;
+    elapsedMs: number;
+    /// Passed in rather than read here. `thisComputer()` answers differently on
+    /// the server and the first client render, and these strings are rendered
+    /// -- so reading it inside made every caller a hydration mismatch. The
+    /// component holds `useThisComputer()`, which is the same answer in both.
+    computer: ComputerNoun;
+}): string | null {
+    if (input.phase === 'settled' || input.phase === 'unavailable') return null;
+    if (input.phase === 'starting') return `Starting the agent host on ${input.computer}…`;
+    if (input.phase === 'connecting') return 'Connecting this computer…';
+    // Counted, not promised. Some of the four are simply not installed and will
+    // never report, so "2 of 4" would be a progress bar that stops at 2 and
+    // reads as stuck.
+    const found =
+        input.foundCount === 0
+            ? 'Looking for coding agents'
+            : `Found ${input.foundCount} so far, still looking`;
+    return input.elapsedMs >= DISCOVERY_PATIENCE_MS
+        ? `${found} — each one is started once, which can take a minute the first time`
+        : `${found}…`;
 }
 
-export function discoveryLines(phase: DiscoveryPhase, foundCount: number): string[] {
+/** What the panel says while it resolves, in one voice. */
+export function discoveryHeadline(
+    phase: DiscoveryPhase,
+    foundCount: number,
+    computer: ComputerNoun,
+): string {
+    if (phase === 'unavailable') return 'This build of Lemma cannot run local agents';
+    if (phase === 'starting') return `Starting the agent host on ${computer}`;
+    if (phase === 'connecting') return 'Connecting this computer';
+    if (phase === 'scanning') return `Looking for coding agents on ${computer}`;
+    if (foundCount === 0) return `No coding agents found on ${computer}`;
+    return foundCount === 1
+        ? `Found 1 coding agent on ${computer}`
+        : `Found ${foundCount} coding agents on ${computer}`;
+}
+
+export function discoveryLines(
+    phase: DiscoveryPhase,
+    foundCount: number,
+    computer: ComputerNoun,
+): string[] {
     if (phase === 'unavailable') {
         return [
             'Connect an API provider below to get a working model.',
-            'Ollama and LM Studio run on this Mac and need no key.',
+            `Ollama and LM Studio run on ${computer} and need no key.`,
         ];
     }
     if (phase !== 'settled') {
         return [
             'Each agent is started once to see what it offers.',
-            'macOS may ask for file access — allow it.',
+            // Two lines, always. This used to drop the second one off macOS,
+            // which changes the array's *length* between the server render and
+            // the first client one -- and React repairs a structural mismatch
+            // by discarding the server subtree, not by patching the text. The
+            // sentence is true everywhere; only macOS is loud about it.
+            'Your system may ask for file access — allow it.',
         ];
     }
     if (foundCount === 0) {
@@ -127,7 +205,7 @@ export function discoveryLines(phase: DiscoveryPhase, foundCount: number): strin
     }
     return [
         'A coding agent needs no API key and no model id.',
-        'It runs on this Mac with its own credentials.',
+        `It runs on ${computer} with its own credentials.`,
         'Add one to use it in chats; you can add more later.',
     ];
 }

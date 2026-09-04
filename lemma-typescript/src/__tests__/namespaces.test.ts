@@ -7,10 +7,12 @@ import {
 } from "../namespaces/agent-runtime.js";
 import { AgentsNamespace } from "../namespaces/agents.js";
 import { FunctionsNamespace } from "../namespaces/functions.js";
+import { RecordsNamespace } from "../namespaces/records.js";
 import type { ConversationsNamespace } from "../namespaces/conversations.js";
 import { AgentHostService } from "../openapi_client/services/AgentHostService.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
+import { RecordsService } from "../openapi_client/services/RecordsService.js";
 
 // A pass-through adapter: invoke the thunk and return its result (no retry/timeout needed here).
 const passthroughAdapter = { request: (op: () => unknown) => op() } as unknown as GeneratedClientAdapter;
@@ -135,5 +137,108 @@ describe("AgentsNamespace.run", () => {
   it("throws a clear error when the conversations namespace is unavailable", async () => {
     const agents = new AgentsNamespace(passthroughAdapter, () => "pod1");
     await expect(agents.run("my_agent", "hello")).rejects.toThrow(/conversations namespace/);
+  });
+});
+
+describe("RecordsNamespace.bulk", () => {
+  it("sends every row in a single request", async () => {
+    const spy = vi
+      .spyOn(RecordsService, "recordBulkCreate")
+      .mockResolvedValue({ count: 50 } as never);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+    const rows = Array.from({ length: 50 }, (_, index) => ({ title: `row-${index}` }));
+
+    await expect(records.bulk.create("tickets", rows)).resolves.toEqual({ count: 50 });
+
+    // The whole point of a bulk endpoint: 50 rows cost one round trip.
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy).toHaveBeenCalledWith("pod1", "tickets", { records: rows, upsert: false });
+  });
+
+  it("forwards upsert, which re-seeding depends on", async () => {
+    const spy = vi
+      .spyOn(RecordsService, "recordBulkCreate")
+      .mockResolvedValue({ count: 1 } as never);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await records.bulk.create("tickets", [{ id: "rec-1" }], { upsert: true });
+
+    expect(spy).toHaveBeenCalledWith("pod1", "tickets", {
+      records: [{ id: "rec-1" }],
+      upsert: true,
+    });
+  });
+
+  it("delegates update and delete with the pod bound", async () => {
+    const updateSpy = vi
+      .spyOn(RecordsService, "recordBulkUpdate")
+      .mockResolvedValue({ count: 2 } as never);
+    const deleteSpy = vi
+      .spyOn(RecordsService, "recordBulkDelete")
+      .mockResolvedValue({ count: 3 } as never);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await records.bulk.update("tickets", [{ id: "rec-1" }, { id: "rec-2" }]);
+    await records.bulk.delete("tickets", ["rec-1", "rec-2", "rec-3"]);
+
+    expect(updateSpy).toHaveBeenCalledWith("pod1", "tickets", {
+      records: [{ id: "rec-1" }, { id: "rec-2" }],
+    });
+    expect(deleteSpy).toHaveBeenCalledWith("pod1", "tickets", {
+      record_ids: ["rec-1", "rec-2", "rec-3"],
+    });
+  });
+});
+
+describe("RecordsNamespace.listAll", () => {
+  /** Answers recordList with fixed-size pages, the way the API does. */
+  function pagedRecordList(rows: Record<string, unknown>[], pageSize: number) {
+    return vi.spyOn(RecordsService, "recordList").mockImplementation(
+      ((
+        _podId: string,
+        _table: string,
+        _limit?: number,
+        _offset?: number,
+        _filters?: string[],
+        _sort?: string[],
+        pageToken?: string,
+      ) => {
+        const start = pageToken ? Number(pageToken) : 0;
+        const next = start + pageSize;
+        return Promise.resolve({
+          items: rows.slice(start, next),
+          limit: pageSize,
+          next_page_token: next < rows.length ? String(next) : null,
+        });
+      }) as never,
+    );
+  }
+
+  it("pages to exhaustion, so a complete read is not a prefix", async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => ({ id: `rec-${index}` }));
+    const spy = pagedRecordList(rows, 3);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await expect(records.listAll("tickets", { pageSize: 3 })).resolves.toEqual(rows);
+
+    // 3 + 3 + 1: the last page carries no token and ends the walk.
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it("re-sends the filter on every page", async () => {
+    const rows = Array.from({ length: 4 }, (_, index) => ({ id: `rec-${index}` }));
+    const spy = pagedRecordList(rows, 2);
+    const records = new RecordsNamespace(passthroughAdapter, () => "pod1");
+
+    await records.listAll("tickets", {
+      pageSize: 2,
+      filters: [{ field: "status", op: "eq", value: "open" }],
+    });
+
+    // A predicate dropped after page one would silently widen the result set.
+    expect(spy).toHaveBeenCalledTimes(2);
+    for (const call of spy.mock.calls) {
+      expect(call[4]).toEqual(['{"field":"status","op":"eq","value":"open"}']);
+    }
   });
 });

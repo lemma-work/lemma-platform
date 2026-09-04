@@ -242,8 +242,8 @@ export class AgentSurfacesService {
      * Proactively send a message to a pod member on this surface.
      *
      * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread on the surface (bots can't cold-DM), so a 404 means the member has no
-     * reachable conversation here yet.
+     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
+     * reached, in the vocabulary the notification API uses.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -272,8 +272,9 @@ export class AgentSurfacesService {
     /**
      * Get Surface Setup
      * Live setup state for an existing surface: static platform checklist plus
-     * webhook URL and admin-consent status. For the pre-creation checklist (before
-     * any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+     * webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+     * own shared secrets in it are not. For the pre-creation checklist (before any
+     * surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
      * @param podId
      * @param surfaceName
      * @returns SurfaceSetupResponse Successful Response
@@ -352,14 +353,24 @@ export class AgentSurfacesService {
      *
      * Signed-in access is the only gate, and that is enough: every value in here
      * is already public — this deployment's URLs and the scopes its own code
-     * asks for. It carries no credential and reveals nothing about a pod.
+     * asks for. It carries no credential and reveals nothing about a pod: the
+     * agent name is supplied by the caller and echoed back, never read from one.
+     * @param agentName Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.
      * @returns any Successful Response
      * @throws ApiError
      */
-    public static agentSurfaceSlackManifest(): CancelablePromise<Record<string, any>> {
+    public static agentSurfaceSlackManifest(
+        agentName?: (string | null),
+    ): CancelablePromise<Record<string, any>> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/surface-setup/slack/manifest',
+            query: {
+                'agent_name': agentName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
 }

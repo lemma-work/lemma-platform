@@ -14,13 +14,15 @@ from slack_sdk.errors import SlackApiError
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
-    app_home_view,
     channel_setup_confirmation_blocks,
     channel_setup_modal,
     channel_setup_prompt_blocks,
-    dm_agent_modal,
     truncate_slack_text as _truncate_slack_text,
+)
+from app.modules.agent_surfaces.platforms.slack.home_blocks import (
+    app_home_view,
 )
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
@@ -57,7 +59,8 @@ class SlackHomeSurface:
         if not token or not channel_id or not user_id:
             return False
         try:
-            await build_slack_client(self.credentials).chat_postEphemeral(
+            client = await build_slack_client(self.credentials)
+            await client.chat_postEphemeral(
                 channel=str(channel_id),
                 user=str(user_id),
                 text=(
@@ -84,9 +87,7 @@ class SlackHomeSurface:
             )
             return True
         except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_channel_setup_prompt.diagnostic'
-            )
+            logger.debug("agent_surfaces.service.slack_channel_setup_prompt.diagnostic")
             return False
 
     async def open_channel_setup_modal(
@@ -95,7 +96,7 @@ class SlackHomeSurface:
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         """Open the "who answers here?" modal.
@@ -107,19 +108,20 @@ class SlackHomeSurface:
         if not token or not trigger_id:
             return False
         try:
-            await build_slack_client(self.credentials).views_open(
+            client = await build_slack_client(self.credentials)
+            await client.views_open(
                 trigger_id=trigger_id,
                 view=channel_setup_modal(
                     channel_id=channel_id,
                     channel_label=channel_label,
-                    agent_names=agent_names,
+                    agent_name=agent_name,
                     surface_id=surface_id,
                 ),
             )
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_open_setup_modal.diagnostic',
+                "agent_surfaces.service.slack_open_setup_modal.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -135,7 +137,7 @@ class SlackHomeSurface:
         token = slack_access_token(self.credentials)
         if not token or not user_id or not prompt:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             opened = await client.conversations_open(users=str(user_id))
             channel = ((opened.get("channel") or {}).get("id")) or ""
@@ -155,35 +157,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_starter_prompt.diagnostic',
-                error_code=str((exc.response or {}).get("error") or "unknown"),
-            )
-            return False
-
-    async def open_dm_agent_modal(
-        self,
-        *,
-        trigger_id: str,
-        agent_names: list[str],
-        current: str | None,
-        surface_id: str | None = None,
-    ) -> bool:
-        token = slack_access_token(self.credentials)
-        if not token or not trigger_id:
-            return False
-        try:
-            await build_slack_client(self.credentials).views_open(
-                trigger_id=trigger_id,
-                view=dm_agent_modal(
-                    agent_names=agent_names,
-                    current=current,
-                    surface_id=surface_id,
-                ),
-            )
-            return True
-        except SlackApiError as exc:
-            logger.debug(
-                'agent_surfaces.service.slack_open_setup_modal.diagnostic',
+                "agent_surfaces.service.slack_starter_prompt.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -193,8 +167,8 @@ class SlackHomeSurface:
         *,
         user_id: str,
         pod_name: str | None,
-        dm_agent_name: str | None,
-        channel_routes: list,
+        agent_name: str,
+        channel_ids: list[str],
         agents: list | None = None,
         apps: list | None = None,
         workspace_url: str | None = None,
@@ -207,12 +181,13 @@ class SlackHomeSurface:
         if not token or not user_id:
             return False
         try:
-            await build_slack_client(self.credentials).views_publish(
+            client = await build_slack_client(self.credentials)
+            await client.views_publish(
                 user_id=str(user_id),
                 view=app_home_view(
                     pod_name=pod_name,
-                    dm_agent_name=dm_agent_name,
-                    channel_routes=channel_routes,
+                    agent_name=agent_name,
+                    channel_ids=channel_ids,
                     agents=agents,
                     apps=apps,
                     workspace_url=workspace_url,
@@ -224,7 +199,7 @@ class SlackHomeSurface:
             return True
         except SlackApiError as exc:
             logger.debug(
-                'agent_surfaces.service.slack_publish_home_view.diagnostic',
+                "agent_surfaces.service.slack_publish_home_view.diagnostic",
                 error_code=str((exc.response or {}).get("error") or "unknown"),
             )
             return False
@@ -235,9 +210,8 @@ class SlackHomeSurface:
         if not token or not channel_id:
             return None
         try:
-            response = await build_slack_client(self.credentials).conversations_info(
-                channel=str(channel_id)
-            )
+            client = await build_slack_client(self.credentials)
+            response = await client.conversations_info(channel=str(channel_id))
             name = ((response.get("channel") or {}).get("name") or "").strip()
             return name or None
         except SlackApiError:
@@ -264,16 +238,15 @@ class SlackHomeSurface:
         if not event.is_dm or "assistant:write" not in slack_scopes(self.credentials):
             return False
         try:
-            await build_slack_client(self.credentials).assistant_threads_setTitle(
+            client = await build_slack_client(self.credentials)
+            await client.assistant_threads_setTitle(
                 channel_id=str(channel),
                 thread_ts=str(thread_ts),
                 title=clean_title,
             )
             return True
         except SlackApiError:
-            logger.debug(
-                'agent_surfaces.service.slack_set_thread_title.diagnostic'
-            )
+            logger.debug("agent_surfaces.service.slack_set_thread_title.diagnostic")
             return False
 
     async def set_suggested_prompts(
@@ -318,12 +291,11 @@ class SlackHomeSurface:
         if title:
             kwargs["title"] = _truncate_slack_text(str(title).strip(), 100)
         try:
-            await build_slack_client(
-                self.credentials
-            ).assistant_threads_setSuggestedPrompts(**kwargs)
+            client = await build_slack_client(self.credentials)
+            await client.assistant_threads_setSuggestedPrompts(**kwargs)
             return True
         except SlackApiError:
             logger.debug(
-                'agent_surfaces.service.slack_set_suggested_prompts.diagnostic'
+                "agent_surfaces.service.slack_set_suggested_prompts.diagnostic"
             )
             return False

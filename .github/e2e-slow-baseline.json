@@ -1,0 +1,4 @@
+{
+  "_comment": "Fast-lane e2e tests allowed past the PR-lane duration budget in scripts/e2e_durations.py. Every entry is a test a pull request waits for, so keep this list short and shrinking. Adding one needs a reason; the usual answer is @pytest.mark.slow instead.",
+  "allowed": []
+}

@@ -31,10 +31,10 @@ function BuildMock() {
           <i />
           <i />
           <i />
-          <small>support-desk</small>
+          <small>support-ops</small>
         </header>
         <p>
-          <b>$</b> lemma pod import ./support-desk
+          <b>$</b> lemma pod import ./support-ops
         </p>
         {[
           ["tables", "tickets, customers, refunds"],
@@ -224,7 +224,7 @@ const LAYERS = [
     key: "build",
     step: "01",
     title: "Build it where you already work.",
-    body: "Claude Code, Codex, Cursor, OpenCode — or inside Lemma itself. The agent authors the tables, agents, workflows, permissions, and the app, then verifies them through the same CLI.",
+    body: "Claude Code, Codex, Cursor, OpenCode, or inside Lemma itself. The agent authors the tables, agents, workflows, permissions, and the app, then verifies them through the same CLI.",
     depth: ["Any coding agent", "Authored as plain files", "Verified by the agent that wrote it"],
     Mock: BuildMock,
   },
@@ -232,7 +232,7 @@ const LAYERS = [
     key: "deploy",
     step: "02",
     title: "The app and its agents go live together.",
-    body: "One URL for the people who use it. The agents start working on schedules, webhooks, and table events — not only when someone is watching.",
+    body: "One URL for the people who use it. The agents start working on schedules, webhooks, and table events, and keep working while everyone is logged off.",
     depth: ["Deployed at a URL", "Agents run in the background", "Versioned and rollback-able"],
     Mock: DeployMock,
   },
@@ -240,7 +240,7 @@ const LAYERS = [
     key: "invite",
     step: "03",
     title: "Bring your team. And anyone else who needs it.",
-    body: "Teammates, clients, friends. They get working software, not a repository — an invite link and the app, with their own account inside the pod.",
+    body: "Teammates, clients, friends. They each get an invite link, the app, and their own account inside the pod.",
     depth: ["Invite by link or email", "Teammates, clients, guests", "Humans and agents are both members"],
     Mock: InviteMock,
   },
@@ -256,7 +256,7 @@ const LAYERS = [
     key: "use",
     step: "05",
     title: "Use it from wherever you already are.",
-    body: "Telegram, ChatGPT, Slack, email — or open it as an app. Every entry point reads and writes the same records and respects the same permissions.",
+    body: "Telegram, Slack, WhatsApp, and email. Or open it as an app. Every entry point reads and writes the same records and respects the same permissions.",
     depth: ["Chat surfaces", "Your own UI or API", "The app itself"],
     Mock: UseMock,
   },

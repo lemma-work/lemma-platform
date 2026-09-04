@@ -124,9 +124,7 @@ async def test_redis_down_degrades_to_unapproved_with_one_incident(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_ttl_zero_disables_session_approvals(monkeypatch):
-    monkeypatch.setattr(
-        session_approvals.settings, "session_approval_ttl_seconds", 0
-    )
+    monkeypatch.setattr(session_approvals.settings, "session_approval_ttl_seconds", 0)
     monkeypatch.setattr(session_approvals, "_approval_cache", None)
     assert session_approvals._get_approval_cache() is None
     assert not await session_approvals.has_session_approval(
@@ -173,5 +171,7 @@ def test_exact_command_permission_id_differs_for_different_args():
 
 def test_exact_command_permission_id_differs_by_tool_name():
     key_a = session_approvals.exact_command_permission_id("exec_command", {"cmd": "ls"})
-    key_b = session_approvals.exact_command_permission_id("execute_python", {"cmd": "ls"})
+    key_b = session_approvals.exact_command_permission_id(
+        "execute_python", {"cmd": "ls"}
+    )
     assert key_a != key_b

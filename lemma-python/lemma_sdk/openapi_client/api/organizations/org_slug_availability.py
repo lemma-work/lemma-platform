@@ -78,8 +78,9 @@ def sync_detailed(
 ) -> Response[ErrorResponse | OrganizationSlugAvailabilityResponse]:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available, and optionally whether a candidate name is still
-    free
+     Check whether an organization slug — the handle, and the only unique one of the two — is available.
+    `name_available` is deprecated and always true: display names are labels, and two organizations may
+    share one.
 
     Args:
         slug (str):
@@ -113,8 +114,9 @@ def sync(
 ) -> ErrorResponse | OrganizationSlugAvailabilityResponse | None:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available, and optionally whether a candidate name is still
-    free
+     Check whether an organization slug — the handle, and the only unique one of the two — is available.
+    `name_available` is deprecated and always true: display names are labels, and two organizations may
+    share one.
 
     Args:
         slug (str):
@@ -143,8 +145,9 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | OrganizationSlugAvailabilityResponse]:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available, and optionally whether a candidate name is still
-    free
+     Check whether an organization slug — the handle, and the only unique one of the two — is available.
+    `name_available` is deprecated and always true: display names are labels, and two organizations may
+    share one.
 
     Args:
         slug (str):
@@ -176,8 +179,9 @@ async def asyncio(
 ) -> ErrorResponse | OrganizationSlugAvailabilityResponse | None:
     """Check Organization Slug Availability
 
-     Check whether an organization slug is available, and optionally whether a candidate name is still
-    free
+     Check whether an organization slug — the handle, and the only unique one of the two — is available.
+    `name_available` is deprecated and always true: display names are labels, and two organizations may
+    share one.
 
     Args:
         slug (str):

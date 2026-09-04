@@ -51,7 +51,8 @@ def sync_detailed(
     """List My Surfaces
 
      Every surface across the current user's pods, grouped by platform, with
-    the chosen default and a ``conflict`` flag when more than one could answer.
+    the chosen default and a ``conflict`` flag when two of them answer at the
+    same address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -77,7 +78,8 @@ def sync(
     """List My Surfaces
 
      Every surface across the current user's pods, grouped by platform, with
-    the chosen default and a ``conflict`` flag when more than one could answer.
+    the chosen default and a ``conflict`` flag when two of them answer at the
+    same address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -99,7 +101,8 @@ async def asyncio_detailed(
     """List My Surfaces
 
      Every surface across the current user's pods, grouped by platform, with
-    the chosen default and a ``conflict`` flag when more than one could answer.
+    the chosen default and a ``conflict`` flag when two of them answer at the
+    same address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -123,7 +126,8 @@ async def asyncio(
     """List My Surfaces
 
      Every surface across the current user's pods, grouped by platform, with
-    the chosen default and a ``conflict`` flag when more than one could answer.
+    the chosen default and a ``conflict`` flag when two of them answer at the
+    same address.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

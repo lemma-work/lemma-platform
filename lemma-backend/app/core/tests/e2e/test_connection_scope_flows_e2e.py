@@ -30,7 +30,6 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 pytestmark = [pytest.mark.e2e, pytest.mark.connection_scope]
 
 # The full request stack, because the point is to watch real routes.
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 redis_container = e2e_fixtures.redis_container
 supertokens_container = e2e_fixtures.supertokens_container
@@ -90,7 +89,7 @@ async def test_listing_pods_holds_no_connection_across_slow_work(
     await _create_pod(authenticated_client, fixed_test_org["id"])
     org_id = fixed_test_org["id"]
     async with scoped_connection_guard():
-        response = await authenticated_client.get(f"/pods/organization/{org_id}")
+        response = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert response.status_code == 200, response.text
 
 

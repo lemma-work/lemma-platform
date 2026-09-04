@@ -37,6 +37,8 @@ import {
 import { useAssistants } from '@/lib/hooks/use-assistants';
 import { useAccounts, useAuthConfigs } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
+import { useProfile } from '@/lib/hooks/use-user';
+import { trackSurfaceConnected } from '@/lib/analytics/onboarding';
 import {
     useAvailableSurfaces,
     useCreatePodSurface,
@@ -118,6 +120,7 @@ export function SurfaceModal({
     const definition = getSurfaceDefinition(target?.platform);
 
     const { data: pod } = usePod(podId);
+    const { data: profile } = useProfile();
     const { data: surfaces = [] } = usePodSurfaces(target ? podId : undefined);
     const { data: catalog } = useAvailableSurfaces(podId, Boolean(target));
     const { data: assistantsData } = useAssistants(target ? podId : '');
@@ -276,15 +279,12 @@ export function SurfaceModal({
         const base = draftFromSurface(existingSurface);
         if (pendingChannelRow.current) {
             pendingChannelRow.current = false;
-            // Routed to the agent whose page opened this, because that is the
-            // whole reason someone clicked "add channel" from there.
-            setDraft({ ...base, channels: [...base.channels, blankChannelRow(agentName)] });
+            // No agent to carry: the surface has one, and clicking "add
+            // channel" from its page is only saying where it may answer.
+            setDraft({ ...base, channels: [...base.channels, blankChannelRow()] });
             return;
         }
         setDraft(base);
-        // `agentName` is fixed for the life of a modal target; re-reading it here
-        // would only rebuild the draft and discard edits in flight.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [existingSurface]);
 
     // The manager bot creates the surface server-side, so completion arrives by
@@ -300,8 +300,11 @@ export function SurfaceModal({
                 ? `@${managedSetup.bot_username} is connected`
                 : 'Your Telegram bot is connected',
         );
+        if (definition) {
+            trackSurfaceConnected(definition.platform, profile?.created_at ?? null);
+        }
         setStep('live');
-    }, [managedSetup, podId, queryClient]);
+    }, [definition, managedSetup, podId, profile?.created_at, queryClient]);
 
     const patchDraft = useCallback(
         (patch: Partial<ConfigureDraft>) => setDraft((current) => ({ ...current, ...patch })),
@@ -399,6 +402,7 @@ export function SurfaceModal({
             })) as AssistantSurface;
 
             setCreatedSurface(created);
+            trackSurfaceConnected(definition.platform, profile?.created_at ?? null);
             // A surface Lemma can't wire up itself isn't reachable yet, so the
             // proof state would be a lie — go straight to what's left to do.
             // The setup read resolves against the surface we just created.
@@ -461,15 +465,11 @@ export function SurfaceModal({
                 ? {
                       channels: draft.channels
                           .filter((route) => route.channel_id)
+                          // A channel is a place, not a choice: the surface's
+                          // one agent answers everywhere it is allowed.
                           .map((route) => ({
                               channel_id: route.channel_id,
                               channel_name: route.channel_name || null,
-                              // Sent apart, never derived from an empty name:
-                              // "the pod assistant answers here" and "nobody has
-                              // said" both leave agent_name null, and the API
-                              // rejects a route that claims to be both.
-                              agent_name: route.use_pod_assistant ? null : route.agent_name,
-                              use_pod_assistant: route.use_pod_assistant,
                           })),
                   }
                 : {}),
@@ -630,6 +630,7 @@ export function SurfaceModal({
                             accounts={platformAccounts}
                             accountId={accountId}
                             onAccountChange={setAccountId}
+                            agentName={agentName}
                             credentials={credentials}
                             onCredentialsChange={setCredentials}
                             podId={podId}
@@ -702,7 +703,6 @@ export function SurfaceModal({
                                 onDraftChange={patchDraft}
                                 availableChannels={availableChannels}
                                 isLoadingChannels={isLoadingChannels}
-                                defaultRouteAgent={agentName}
                                 customAppHref={
                                     definition.platform === 'SLACK' && !usesOwnApp
                                         ? `/pod/${podId}/connectors`
@@ -883,15 +883,10 @@ function defaultMode(entry: Parameters<typeof hasSystemIdentity>[0]): SurfaceIde
     return hasSystemIdentity(entry) ? 'SYSTEM' : 'CUSTOM';
 }
 
-/** An unfilled route row. The channel is picked in the modal; the agent is not,
- * because the page that opened it already answered that. */
-function blankChannelRow(agentName: string | null) {
-    return {
-        channel_id: '',
-        channel_name: '',
-        agent_name: agentName,
-        use_pod_assistant: agentName === null,
-    };
+/** An unfilled row on the channel allow-list. Only the channel is asked for:
+ * who answers is the surface's one agent. */
+function blankChannelRow() {
+    return { channel_id: '', channel_name: '' };
 }
 
 function emptyDraft(): ConfigureDraft {
@@ -912,8 +907,6 @@ function draftFromSurface(surface: AssistantSurface): ConfigureDraft {
         channels: (config.channels || []).map((route) => ({
             channel_id: route.channel_id || '',
             channel_name: route.channel_name || '',
-            agent_name: route.agent_name ?? null,
-            use_pod_assistant: Boolean(route.use_pod_assistant),
         })),
         allowedDomains: (identity.allowed_domains || []).join(', '),
         allowedEmails: (identity.allowed_email_addresses || []).join(', '),

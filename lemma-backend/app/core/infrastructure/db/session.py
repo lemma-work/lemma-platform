@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime, date
 from uuid import UUID
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.config import settings
@@ -143,6 +143,20 @@ async def close_engine() -> None:
         await current_engine.dispose()
 
 
+async def database_reachable() -> bool:
+    """Can this process get a connection and run a statement on it?
+
+    Lives beside the engine rather than in the health endpoint because what
+    "reachable" means here is a property of this engine's configuration --
+    ``max_overflow=0`` with a bounded ``pool_timeout``, so a saturated pool
+    fails this too, which is the honest answer for a process being asked
+    whether it can take more work.
+    """
+    async with get_engine().connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    return True
+
+
 def reset_engine_state() -> None:
     """Synchronously dispose and clear the shared engine for test bootstrap."""
     try:
@@ -156,7 +170,7 @@ def reset_engine_state() -> None:
 
 
 class LazyAsyncSessionMaker:
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs) -> AsyncSession:
         return get_session_maker()(*args, **kwargs)
 
     def configure(self, **kwargs):

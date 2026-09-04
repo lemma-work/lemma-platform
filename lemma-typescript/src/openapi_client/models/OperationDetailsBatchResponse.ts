@@ -19,4 +19,8 @@ export type OperationDetailsBatchResponse = {
      * Number of operation details returned in this response.
      */
     returned_count: number;
+    /**
+     * Operations the connector exposes in total. Greater than `returned_count` means the unnamed request was capped.
+     */
+    total_operations?: number;
 };

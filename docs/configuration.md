@@ -37,6 +37,8 @@ default. `[frontend.env]` does the same for the frontend.
 # local | development | production | testing. Outside local/testing, some
 # settings stop having safe defaults and are required — APP_BASE_DOMAIN is one.
 ENVIRONMENT=production
+# Off by default, and refused outside local/testing: it replaces the standard
+# error envelope with a source-annotated traceback on every unhandled error.
 DEBUG=false
 LOG_LEVEL=INFO
 # Structured JSON on stdout. Turn it off locally if you read logs by eye.
@@ -384,11 +386,22 @@ Email transport, sender identity, and the sign-up abuse controls are covered in
 each default. The short version:
 
 ```dotenv
-EMAIL_TRANSPORT=resend        # smtp | resend | filesystem
+EMAIL_TRANSPORT=smtp          # smtp | filesystem
 EMAIL_OUTPUT_DIR=/tmp/lemma-emails   # filesystem transport only
 AUTH_EMAIL_VERIFICATION_REQUIRED=true
 AUTH_ABUSE_PROTECTION_ENABLED=true
 ```
+
+**Resend is not a transport.** To send through Resend, leave
+`EMAIL_TRANSPORT=smtp`, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, and leave
+`SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM_EMAIL` unset — the
+sender then dials `smtp.resend.com:465` with the key as the password. Setting
+all four explicit SMTP values wins over Resend, which is how a deployment ends
+up sending through a server it configured months ago and forgot.
+
+`EMAIL_TRANSPORT=resend` was documented here and is not a value the setting
+accepts. It aborts `Settings()` at import, before logging is set up, so the
+operator gets a bare pydantic traceback rather than a message.
 
 `RESEND_FROM_EMAIL` has **no default**. It used to fall back to a Lemma-owned
 domain, which meant an unconfigured deployment sent password resets from a
@@ -417,11 +430,20 @@ Point a Resend webhook at `POST /surfaces/webhooks/resend` and select
   addresses are minted on it (`{agent}.{pod}@{domain}`, and `{pod}@{domain}` for
   the pod's own assistant) and inbound routing matches on it, so a wrong value
   means mail that bounces on the way out and matches no surface on the way back.
-- **The key and the domain together are the switch.** Set both and agents get
-  mailboxes; leave either unset and they do not. There is no separate enable
-  flag — there was one, and being read per process it could be on where the
-  surfaces catalog runs and off where sends run, which presents as the UI
-  offering email while delivery reports that the pod has no surface.
+  The domain is one catch-all shared by every organization, so role addresses
+  are reserved: a pod named "Postmaster" gets `postmaster-k3p9@`, never
+  `postmaster@`. Matching ignores separators, so "Post Master" and "Post-Master"
+  are the same request and get the same answer.
+- **The key and the domain together are the switch.** Set both and every pod and
+  agent gets a mailbox as it is created; leave either unset and they do not.
+  There is no separate enable flag — there was one, and being read per process
+  it could be on where the surfaces catalog runs and off where sends run, which
+  presents as the UI offering email while delivery reports that the pod has no
+  surface.
+- **One mailbox per agent, and connecting email returns it.** The address exists
+  from the moment the agent does, so `POST /pods/{id}/surfaces` with no `name`
+  hands back the surface already carrying it rather than minting a second one.
+  Pass a `name` to create a genuinely separate Resend surface.
 - **`RESEND_WEBHOOK_SECRET` is per *endpoint*.** Svix derives the signature from
   the secret of the endpoint that sent the request, so if bounces are a separate
   Resend endpoint, its secret differs — set `RESEND_BOUNCE_WEBHOOK_SECRET` for
@@ -465,14 +487,19 @@ LOCAL_FILE_STORAGE_ROOT=/var/lib/lemma/files
 ## Secret encryption
 
 Connector credentials and other stored secrets are encrypted at rest. The
-provider decides where the key comes from; `auto` uses an explicit key if one is
-set and falls back to a local key otherwise.
+provider decides where the key comes from. `auto` resolves by what you have
+configured, in this order: `gcp_kms` when `GCP_KMS_KEY_NAME` is set, else
+`gcp_secret_manager` when `GCP_SECRET_MANAGER_SECRET_NAME` is set, else
+`static`.
 
 ```dotenv
-SECRET_KEY_PROVIDER=auto      # auto | env | gcp_kms | gcp_secret_manager | keychain
+SECRET_KEY_PROVIDER=auto      # auto | static | gcp_kms | gcp_secret_manager | keychain
 SECRET_ENCRYPTION_KEY=
 GCP_KMS_KEY_NAME=
 ```
+
+The local-key provider is named `static`. This said `env`, which the setting
+does not accept and which aborts `Settings()` at import.
 
 Rotating or losing this key makes every encrypted row unreadable. Treat it as
 durable state, not configuration.
@@ -504,6 +531,36 @@ WEB_SEARCH_PROVIDER=auto      # auto | duckduckgo | searxng | brave
 BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
+
+## Spend limits
+
+Nothing is limited by default: usage is metered but never refused. Set any of
+these and model work that would take an organization or a person past the limit
+is refused with `USAGE_LIMIT_EXCEEDED`, naming which limit was reached. A
+billing or plan module, where one is installed, takes precedence over all of it.
+
+```dotenv
+# USD. Unset means unlimited.
+USAGE_ORG_MONTHLY_LIMIT_USD=
+USAGE_USER_WEEKLY_LIMIT_USD=
+USAGE_USER_MONTHLY_LIMIT_USD=
+
+# Per-organization monthly caps, overriding USAGE_ORG_MONTHLY_LIMIT_USD.
+# A JSON list; each entry names either an exact `slug` or a `slug_prefix`.
+USAGE_ORG_LIMIT_OVERRIDES_JSON=
+```
+
+An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
+`{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
+organizations at once. Slugs are organization handles, not display names.
+`0` refuses all model work for that organization, which is how you park one
+without deleting it.
+
+The most specific rule wins, not the last one written: an exact `slug` beats
+any `slug_prefix`, and a longer prefix beats a shorter one. Two rules of equal
+specificity are settled by the later one. Malformed JSON applies **no**
+per-organization caps and logs a warning at startup — check for
+`usage.limit_overrides.unparseable` if a cap you expected is not biting.
 
 ## Document processing
 
@@ -579,8 +636,12 @@ per-minute dispatcher drains it round-robin across pods. So one tenant uploading
 a thousand documents cannot monopolise ingestion, Redis depth stays bounded, and
 every file is still processed eventually.
 
-Leaving `WORKER_LANES` empty runs both lanes in one process, which is what the
-local stack and desktop do. Split deployments set `WORKER_LANES=interactive` on
+Leaving `WORKER_LANES` empty runs both lanes in one process. The local stack,
+desktop and `make dev` embed the worker inside the API process and run *every*
+lane unconditionally, ignoring `WORKER_LANES` — that process is the whole
+deployment, so there is no second one a lane could be delegated to, and honouring
+the variable there would let it silently leave a queue unconsumed. Split
+deployments (a separate `python -m app.worker`) set `WORKER_LANES=interactive` on
 one worker and `WORKER_LANES=bulk` on another; the interactive lane owns
 process-wide startup, so at least one process must run it.
 

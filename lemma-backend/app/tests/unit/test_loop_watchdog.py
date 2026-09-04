@@ -85,7 +85,8 @@ def _capture_events():
     setup("development", service_name="lemma-test", json_logs=True, log_level="DEBUG")
     buf = io.StringIO()
     handler = next(
-        h for h in logging.getLogger().handlers
+        h
+        for h in logging.getLogger().handlers
         if isinstance(h.formatter, structlog.stdlib.ProcessorFormatter)
     )
     handler.stream = buf
@@ -94,6 +95,7 @@ def _capture_events():
 
 def _events(buf):
     import json
+
     return [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
 
 
@@ -280,3 +282,91 @@ def test_a_recovered_process_reports_healthy_again_well_before_a_probe_kills_it(
         assert loop_watchdog.is_loop_healthy() is True
     finally:
         loop_watchdog.reset_loop_watchdog_state()
+
+
+async def _stop(task: asyncio.Task) -> None:
+    """Cancel the watchdog and wait for it to actually be gone.
+
+    Awaiting matters: the watchdog's own ``finally`` joins its tick task, and a
+    test that only cancelled would go on to count ticks while that teardown was
+    still running.
+    """
+    task.cancel()
+    # The CancelledError this raises is the expected outcome, not a swallowed
+    # error, which is why it is collected rather than excepted away.
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_loop_is_ticked_far_faster_than_the_watchdog_interval(
+    monkeypatch,
+):
+    """The stall counter must not be measuring the watchdog's own cadence.
+
+    A stall is reported as time since the loop last said it was alive, so the
+    tick interval is a floor under every stall the sampler can see. The
+    watchdog ticked once per interval (0.5s in production) and did so *after*
+    awaiting an offloaded heartbeat write, which on the worker queues behind
+    the cpu_bound limiter. Every stall was therefore inflated by up to half a
+    second, and a busy worker could report one with the loop perfectly healthy.
+    That is why loop lag improved 29 -> 6 while the stall count did not move.
+    """
+    monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.5)
+    monkeypatch.setattr(settings, "loop_stall_tick_seconds", 0.01)
+    ticks: list[float] = []
+
+    class _Sampler:
+        def note_loop_alive(self) -> None:
+            ticks.append(asyncio.get_running_loop().time())
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        loop_watchdog, "start_loop_stall_sampler", lambda **_kwargs: _Sampler()
+    )
+    monkeypatch.setattr(loop_watchdog, "stop_loop_stall_sampler", lambda: None)
+
+    task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
+    try:
+        await asyncio.sleep(0.2)
+    finally:
+        await _stop(task)
+
+    # Within one 0.5s watchdog interval the loop has been ticked many times.
+    # Tying this to the watchdog interval rather than a raw count keeps it
+    # honest on a loaded machine: the point is the ratio, not the throughput.
+    assert len(ticks) > 5, f"only {len(ticks)} ticks in 0.2s; the tick is too coarse"
+    gaps = [later - earlier for earlier, later in zip(ticks, ticks[1:])]
+    assert max(gaps) < settings.loop_lag_watchdog_interval_seconds, (
+        "a gap as wide as the watchdog interval means the tick is still riding "
+        f"on it: {max(gaps):.3f}s"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_tick_stops_when_the_watchdog_does(monkeypatch):
+    """It is a second task now, so it has to be cancelled with the first."""
+    monkeypatch.setattr(settings, "loop_lag_watchdog_interval_seconds", 0.05)
+    monkeypatch.setattr(settings, "loop_stall_tick_seconds", 0.01)
+    ticks: list[int] = []
+
+    class _Sampler:
+        def note_loop_alive(self) -> None:
+            ticks.append(1)
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        loop_watchdog, "start_loop_stall_sampler", lambda **_kwargs: _Sampler()
+    )
+    monkeypatch.setattr(loop_watchdog, "stop_loop_stall_sampler", lambda: None)
+
+    task = asyncio.create_task(loop_watchdog.loop_lag_watchdog(service_name="test"))
+    await asyncio.sleep(0.1)
+    await _stop(task)
+
+    settled = len(ticks)
+    await asyncio.sleep(0.1)
+    assert len(ticks) == settled, "the tick task outlived the watchdog"

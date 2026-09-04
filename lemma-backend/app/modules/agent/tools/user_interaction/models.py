@@ -56,7 +56,8 @@ class DisplayResourceRequest(BaseModel):
     content: str | None = Field(
         default=None,
         description=(
-            "Inline SVG or HTML, for WIDGET. No DOCTYPE/<html>/<head>/<body>."
+            "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. "
+            "An SVG image is a pod file, shown with type=FILE."
         ),
     )
     loading_messages: list[str] = Field(
@@ -85,66 +86,120 @@ def validate_display_payload(request: "DisplayResourceRequest") -> str | None:
     keeping it out of argument validation lets ``display_resource`` surface a
     bad payload as the uniform ``success: false`` / ``error`` tool result (seen
     by both the model and the frontend) instead of a retry / validation error.
+
+    One validator per resource type, because the message is what the model reads
+    to fix its own call: a single condition covering four types can only say
+    something vague, and a vague error is one the model retries verbatim.
     """
-    if request.type == DisplayResourceType.BROWSER:
-        if (
-            any(
-                value is not None
-                for value in (
-                    request.name,
-                    request.path,
-                    request.public_url,
-                    request.content,
-                    request.filters,
-                    request.query,
-                )
-            )
-            or request.loading_messages
-        ):
-            return "BROWSER resources only accept type."
+    for check in (
+        _reject_browser_extras,
+        _reject_fields_from_other_types,
+        _check_file,
+        _check_widget,
+        _check_table,
+    ):
+        error = check(request)
+        if error is not None:
+            return error
+    return None
+
+
+def _reject_browser_extras(request: "DisplayResourceRequest") -> str | None:
+    """BROWSER opens the pod browser and takes nothing else."""
+    if request.type != DisplayResourceType.BROWSER:
         return None
+    named = (
+        request.name,
+        request.path,
+        request.public_url,
+        request.content,
+        request.filters,
+        request.query,
+    )
+    if any(value is not None for value in named) or request.loading_messages:
+        return "BROWSER resources only accept type."
+    return None
 
-    if request.type != DisplayResourceType.FILE:
-        if request.path is not None:
-            return "path is only valid for FILE resources."
 
+def _reject_fields_from_other_types(
+    request: "DisplayResourceRequest",
+) -> str | None:
+    """Fields that belong to one type and were sent with another."""
+    if request.type != DisplayResourceType.FILE and request.path is not None:
+        return "path is only valid for FILE resources."
     if request.type != DisplayResourceType.WIDGET:
         if request.public_url is not None or request.content is not None:
             return "public_url and content are only valid for WIDGET resources."
         if request.loading_messages:
             return "loading_messages is only valid for WIDGET resources."
-    if request.type == DisplayResourceType.FILE:
-        if request.path is not None and request.path.startswith(
-            ("/tmp/", "/private/", "/Users/")
-        ):
-            return (
-                "FILE resources must reference pod-visible paths, not private "
-                "workspace paths."
-            )
-
-    if request.type == DisplayResourceType.WIDGET:
-        payload_count = sum(
-            bool(value and value.strip())
-            for value in (request.public_url, request.content)
-        )
-        if payload_count != 1:
-            return "WIDGET resources must provide exactly one of public_url or content."
-        if request.public_url:
-            parsed = urlparse(request.public_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                return "WIDGET public_url must be an absolute http or https URL."
-
     if request.type != DisplayResourceType.TABLE and (
         request.filters is not None or request.query is not None
     ):
         return "filters and query are only valid for TABLE resources."
+    return None
 
-    if request.type == DisplayResourceType.TABLE:
-        if request.filters is not None and request.query is not None:
-            return "TABLE resources must not provide both filters and query."
-        if request.filters is not None and request.name is None:
-            return "TABLE filters require name to identify the table."
 
+# Roots that belong to the machine or the sandbox rather than the pod. A path
+# under any of these resolves for the agent and for nobody else.
+#
+# ``/workspace`` is the one that actually gets sent. It is the agent's own cwd,
+# so it is the path it has in hand when it decides to show a file it just made,
+# and it used to pass this check — leaving the delivery to fail three layers
+# down, where the only thing left to do was render a card whose "Open file"
+# button pointed into a pod directory that does not exist. Caught here, the
+# agent is told the one thing that fixes it while it can still act on it.
+_NON_POD_FILE_ROOTS = ("/workspace", "/tmp", "/private", "/Users")
+
+
+def _check_file(request: "DisplayResourceRequest") -> str | None:
+    """A FILE has to be somewhere the pod can actually see.
+
+    The agent's own workspace is a sandbox nobody else can read, so a path into
+    it renders as a broken resource for every viewer but the agent.
+    """
+    if request.type != DisplayResourceType.FILE:
+        return None
+    path = request.path
+    if path is None:
+        return None
+    root = path.rstrip("/")
+    if any(
+        root == prefix or path.startswith(f"{prefix}/")
+        for prefix in _NON_POD_FILE_ROOTS
+    ):
+        return (
+            f"'{path}' is a sandbox path, which only exists inside your "
+            "workspace. FILE takes a pod path, such as /me/reports/q3.pdf. "
+            "Upload it first with `lemma files upload` and display the pod "
+            "path it returns."
+        )
+    return None
+
+
+def _check_widget(request: "DisplayResourceRequest") -> str | None:
+    """A WIDGET is either hosted somewhere or inline here, never both."""
+    if request.type != DisplayResourceType.WIDGET:
+        return None
+    payload_count = sum(
+        bool(value and value.strip()) for value in (request.public_url, request.content)
+    )
+    if payload_count != 1:
+        return "WIDGET resources must provide exactly one of public_url or content."
+    if request.public_url:
+        parsed = urlparse(request.public_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "WIDGET public_url must be an absolute http or https URL."
+    return None
+
+
+def _check_table(request: "DisplayResourceRequest") -> str | None:
+    """A TABLE is selected by filters or by a query, and filters need a table."""
+    if request.type != DisplayResourceType.TABLE:
+        return None
+    if request.filters is not None and request.query is not None:
+        return "TABLE resources must not provide both filters and query."
+    if request.filters is not None and request.name is None:
+        return "TABLE filters require name to identify the table."
     return None
 
 
@@ -160,17 +215,6 @@ class DisplayResourceResponse(BaseToolResponse):
     expires_at: datetime | None = Field(
         default=None,
         description="ISO timestamp when the app access URL expires.",
-    )
-
-
-class UserApprovalResponse(BaseToolResponse):
-    decision: AgentRunApprovalDecision | None = Field(
-        default=None,
-        description="User approval decision returned by the approval API.",
-    )
-    response: JsonObject = Field(
-        default_factory=dict,
-        description="Optional structured response submitted with the approval decision.",
     )
 
 
@@ -205,6 +249,15 @@ class RequestApprovalResponse(BaseToolResponse):
             "for confirmation conversationally instead."
         ),
     )
+    parked_tool_call_id: str | None = Field(
+        default=None,
+        description=(
+            "Set when the decision is not in yet and the caller must wait for "
+            "it. The Agent Host MCP bridge holds the tool response open and "
+            "polls this id until the person decides, so the model sits inside "
+            "its turn exactly as it does for its own native approvals."
+        ),
+    )
 
 
 class AskUserOption(BaseModel):
@@ -212,6 +265,14 @@ class AskUserOption(BaseModel):
     description: str = Field(default="", description="One-line explanation.")
     recommended: bool = Field(
         default=False, description="Highlight this as your recommendation."
+    )
+    icon: str = Field(
+        default="",
+        max_length=8,
+        description=(
+            "Optional single emoji shown before the label (e.g. '📊'). "
+            "Omit it when no glyph genuinely fits."
+        ),
     )
 
 
@@ -251,5 +312,14 @@ class AskUserResponse(BaseToolResponse):
             "True when a remote harness runtime could not pause and the model must "
             "ask "
             "the question conversationally instead."
+        ),
+    )
+    parked_tool_call_id: str | None = Field(
+        default=None,
+        description=(
+            "Set when the answer is not ready yet and the caller must wait for "
+            "it. The Agent Host MCP bridge holds the tool response open and "
+            "polls this id until the person decides, so the model sits inside "
+            "its turn exactly as it does for its own native approvals."
         ),
     )

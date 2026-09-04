@@ -20,13 +20,21 @@ import type {
 // now lives in the framework-agnostic core; the product consumes it from lemma-sdk.
 import {
   buildDisplayMessageRows,
-  collectCompletedRunTraceGroups,
   findPendingUserApprovalInvocation,
+  isAskUserToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
+// Rows → turns: the conversation-shaped model (ask, work pill, speech,
+// artifacts, interaction cards) the transcript renders.
+import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
 import { toast } from "sonner";
+import { thisComputer } from "@/lib/desktop/this-computer";
 import { cn } from "@/lib/utils";
+import { DEFAULT_RESPONDER_NAME } from "@/lib/utils/agents";
+import { LEM_SEED } from "@/lib/identity/seeded-identity";
+import { ResourceIdentity } from "@/components/shared/resource-identity";
+import { Button } from "@/components/ui/button";
 import type {
   AssistantRenderableMessage,
 } from "lemma-sdk/react";
@@ -46,22 +54,20 @@ import {
 } from "@/lib/assistant/display-resource";
 // Pure formatting / label / tool-payload helpers (extracted from this file).
 import {
-  currentRunStatusLabel,
+  currentRunStatusModel,
   currentToolStatusLabel,
-  isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
 // Message rendering cluster (tool rollups, run traces, approvals, resource cards,
 // per-message group) extracted; AssistantExperienceView consumes these pieces.
 import {
-  collectDisplayResourceCardsByRow,
   currentPodIdFromBrowserPath,
   pluralize,
 } from "./assistant-message-group";
 // Standalone presentational parts (plan strip, thinking, empty state, icons) extracted.
 import {
   EmptyState,
-  LemmaMarkIcon,
+  LiveRunStatusLine,
   ThinkingIndicator,
 } from "./assistant-parts";
 // Pure presentational helpers (class names, runtime labels, default renderers,
@@ -83,7 +89,6 @@ import { useTranscriptScroll } from "./use-transcript-scroll";
 import { AssistantExperienceSidebar } from "./assistant-experience-sidebar";
 import { AssistantExperienceHeader } from "./assistant-experience-header";
 import {
-  AssistantDisplayRow,
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
@@ -114,6 +119,41 @@ export interface ActiveToolBanner {
   activeCount: number;
 }
 
+/** How long typing has to pause before the draft is written to localStorage. */
+const DRAFT_PERSIST_DEBOUNCE_MS = 400;
+
+/**
+ * Does the browser grow the composer on its own?
+ *
+ * `composer.css` asks for `field-sizing: content` with a `min-height` and a
+ * `max-height`, which is the whole of what the JS fallback below computes.
+ * Where it is honoured — Chrome and Edge 123+, Safari 26+ — the fallback has to
+ * stay out of the way, because measuring costs a forced layout per keystroke
+ * and buys nothing. Firefox has no support yet, so the fallback is not dead
+ * code; it is the only thing sizing the box there.
+ *
+ * Answered once and cached: the support does not change under a running tab,
+ * and this is asked on the keystroke path. Lazily, not at module scope, so the
+ * server's evaluation of this module never decides it for the browser.
+ */
+let fieldSizingSupport: boolean | null = null;
+function cssSizesTheComposer(): boolean {
+  if (fieldSizingSupport === null) {
+    fieldSizingSupport = typeof CSS !== "undefined"
+      && typeof CSS.supports === "function"
+      && CSS.supports("field-sizing", "content");
+  }
+  return fieldSizingSupport;
+}
+
+function writeDraft(key: string, draft: string) {
+  if (draft) {
+    localStorage.setItem(key, draft);
+  } else {
+    localStorage.removeItem(key);
+  }
+}
+
 const SPARSE_HISTORY_ROW_TARGET = 8;
 const SPARSE_HISTORY_AUTO_LOAD_LIMIT = 3;
 
@@ -140,7 +180,7 @@ export interface AssistantExperienceViewProps extends AssistantExperienceCustomi
 
 export function AssistantExperienceView({
   controller,
-  title = "Lemma Assistant",
+  title = DEFAULT_RESPONDER_NAME,
   subtitle = "Ask across your workspace and organization.",
   badge,
   headerLeadingActions,
@@ -149,7 +189,7 @@ export function AssistantExperienceView({
   className,
   contentWidthClassName,
   composerWidthClassName,
-  placeholder = "Message Lemma Assistant",
+  placeholder = `Message ${DEFAULT_RESPONDER_NAME}`,
   emptyState,
   emptyStateSuggestions,
   emptyStateFillsViewport = false,
@@ -174,18 +214,27 @@ export function AssistantExperienceView({
   const [draft, setDraft] = useControllableDraft(controlledDraft, onDraftChange);
   const [isPlanHidden, setIsPlanHidden] = useState(false);
   const [isUpdatingModel, setIsUpdatingModel] = useState(false);
-  const [runStatusNow, setRunStatusNow] = useState(() => Date.now());
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftRestoredRef = useRef(false);
+  const pendingDraftWriteRef = useRef<{ key: string; draft: string } | null>(null);
   const autoLoadedOlderConversationRef = useRef<string | null>(null);
   const autoLoadedOlderPageCountRef = useRef(0);
   const transcriptScroll = useTranscriptScroll({
     activeConversationId: controller.activeConversationId,
     onReachTop: () => loadOlderIfPossibleRef.current?.(),
   });
-  const { scrollToBottom } = transcriptScroll;
+  // Destructured rather than read off the hook's return object: the object is
+  // rebuilt every render, the callbacks inside it are not, and the memoized
+  // transcript below can only see that if these keep their identities.
+  const {
+    containerRef: transcriptContainerRef,
+    onScroll: transcriptOnScroll,
+    isFollowing: transcriptIsFollowing,
+    scrollToBottom,
+    preserveAcross: preserveTranscriptScroll,
+  } = transcriptScroll;
   const loadOlderIfPossibleRef = useRef<(() => void) | null>(null);
   const isRunActive = controller.isActiveConversationRunning;
   const isConversationBusy = controller.isLoading || isRunActive;
@@ -202,19 +251,33 @@ export function AssistantExperienceView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId]);
 
-  // Persist draft to localStorage on change (skip the write immediately after a restore)
+  // Persist draft to localStorage on change (skip the write immediately after a
+  // restore). Deferred rather than written inline: `localStorage` is
+  // synchronous, and this used to run once per keystroke — a main-thread write
+  // between the keypress and the frame that draws it. The draft only has to
+  // survive a reload, so a pause in typing is soon enough, and the cleanup
+  // flushes it if the composer goes away first.
   useEffect(() => {
+    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
+    // Recorded on every commit, debounced or not, so the unmount flush below
+    // always has the latest draft and the key it belongs to.
+    pendingDraftWriteRef.current = { key, draft };
     if (draftRestoredRef.current) {
       draftRestoredRef.current = false;
       return;
     }
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    if (draft) {
-      localStorage.setItem(key, draft);
-    } else {
-      localStorage.removeItem(key);
-    }
+    const timer = window.setTimeout(() => writeDraft(key, draft), DRAFT_PERSIST_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [draft, activeConversationId]);
+
+  // A draft still sitting in the debounce when the composer unmounts would
+  // otherwise be lost, so the last one is written out on the way down.
+  useEffect(() => () => {
+    const pending = pendingDraftWriteRef.current;
+    if (pending) writeDraft(pending.key, pending.draft);
+  }, []);
   const hasOlderMessages = controller.hasOlderMessages;
   const isLoadingMessages = controller.isLoadingMessages;
   const isLoadingOlderMessages = controller.isLoadingOlderMessages;
@@ -222,6 +285,7 @@ export function AssistantExperienceView({
   const isConversationEmpty = controllerMessages.length === 0 && !isConversationBusy && !isInitialMessageLoading;
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
+  const steerMessage = controller.steerMessage;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -258,15 +322,35 @@ export function AssistantExperienceView({
     const textarea = inputRef.current;
     if (!textarea) return;
 
+    // Where the browser sizes the box itself, this measurement is not merely
+    // redundant — it is the flicker. `field-sizing: content` in `composer.css`
+    // grows the input from its own content between the same floor and ceiling
+    // this computes, so all the work below buys is a write of `height:auto`, a
+    // forced synchronous layout to read `scrollHeight`, and a write of the
+    // height back: the composer collapsing and returning inside one keystroke.
+    // A mobile browser with the keyboard up answers any layout change around
+    // the caret by scrolling it back into view, and with the keyboard owning
+    // the bottom of the screen that scroll moves the transcript. Once per
+    // character typed, the whole conversation jumped.
+    if (cssSizesTheComposer()) return;
+
     const minHeight = density === "compact" ? 32 : 32;
     const maxHeight = density === "compact" ? 112 : 220;
 
+    // An empty composer is always one row, and reading `scrollHeight` after
+    // resetting the height is a forced synchronous layout — so the common
+    // keystroke, the one that leaves the box a single line, no longer pays for
+    // one. Only text that could wrap measures.
+    if (draft.trim().length === 0) {
+      textarea.style.height = `${minHeight}px`;
+      textarea.style.overflowY = "hidden";
+      return;
+    }
+
     textarea.style.height = "auto";
-    const nextHeight = draft.trim().length === 0
-      ? minHeight
-      : Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    const scrollHeight = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(maxHeight, Math.max(minHeight, scrollHeight))}px`;
+    textarea.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
   }, [density, draft]);
 
   useEffect(() => {
@@ -275,16 +359,50 @@ export function AssistantExperienceView({
 
   const displayMessageRows = useMemo(() => buildDisplayMessageRows(controllerMessages), [controllerMessages]);
 
-  const completedRunTraceGroups = useMemo(
-    () => collectCompletedRunTraceGroups(displayMessageRows, controllerMessages, isRunActive),
-    [controllerMessages, displayMessageRows, isRunActive],
+  const displayResourcePodId = currentPodIdFromBrowserPath();
+  const chatTurns = useMemo(
+    () => buildChatTurns({
+      rows: displayMessageRows,
+      messages: controllerMessages,
+      // A send in flight counts as live, not just a run the server has already
+      // confirmed. The turn goes on screen the moment you press enter, but the
+      // conversation is not reported RUNNING for a few hundred milliseconds
+      // after that — and the transcript's arrival motion is keyed off the
+      // turn's liveness, so the gap meant your message painted solid and then
+      // replayed its entrance once the status caught up. That flicker was the
+      // whole of it: nothing remounted, a CSS rule simply started matching an
+      // element that was already on screen.
+      isRunActive: isConversationBusy,
+      podId: displayResourcePodId,
+      conversationId: activeConversationId,
+    }),
+    [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId],
   );
+  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
+  // A pending question or approval lives in the transcript as a card now, so
+  // the composer stays put — but answering is the card's job, so the composer
+  // refuses to send until the interaction resolves.
+  const interactionPending = !!activePendingApprovalInvocation;
+  // A blocked composer has to be able to point at what is blocking it. The card
+  // is the only way to answer and the input refuses to send until it resolves,
+  // so if the reader has scrolled away from it — or a tall card below it pushed
+  // it off screen — the conversation has no visible way forward.
+  const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
+  const pendingInteractionIsAsk = !!activePendingApprovalInvocation
+    && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  const scrollToPendingInteraction = useCallback(() => {
+    if (!pendingInteractionCallId) return;
+    document
+      .getElementById(interactionAnchorId(pendingInteractionCallId))
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [pendingInteractionCallId]);
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {
     if (!canLoadOlder) return;
-    void transcriptScroll.preserveAcross(loadOlderMessages);
-  }, [canLoadOlder, loadOlderMessages, transcriptScroll]);
+    void preserveTranscriptScroll(loadOlderMessages);
+  }, [canLoadOlder, loadOlderMessages, preserveTranscriptScroll]);
   useEffect(() => {
     loadOlderIfPossibleRef.current = loadOlder;
   }, [loadOlder]);
@@ -322,14 +440,17 @@ export function AssistantExperienceView({
   useEffect(() => {
     setIsPlanHidden(false);
   }, [activeConversationId, latestUserMessageId, planIdentity]);
-  const inlineRunStatus = useMemo(
-    () => currentRunStatusLabel({
+  // The run's live status, clockless: the elapsed second is owned by the two
+  // leaves that display it — the live turn's pill and the composer's line — so
+  // a ticking clock never re-renders the transcript. (It used to: a setInterval
+  // here, a `nowMs` prop fanned out to every turn, once a second, all run.)
+  const runStatusModel = useMemo(
+    () => currentRunStatusModel({
       messages: controllerMessages,
       rows: displayMessageRows,
       isConversationBusy: isRunActive,
-      nowMs: runStatusNow,
     }),
-    [controllerMessages, displayMessageRows, isRunActive, runStatusNow],
+    [controllerMessages, displayMessageRows, isRunActive],
   );
   const inlineToolStatus = useMemo(
     () => currentToolStatusLabel({
@@ -339,28 +460,46 @@ export function AssistantExperienceView({
     }),
     [controller.streamingTool, controllerMessages, isRunActive],
   );
-
-  useEffect(() => {
-    if (!isRunActive) return;
-    setRunStatusNow(Date.now());
-    const interval = window.setInterval(() => setRunStatusNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [isRunActive]);
+  // The live turn's status pill wears these. When the composer owns status
+  // display instead, the pill falls back to a bare "Working".
+  const liveToolLabel = statusPlacement === "inline"
+    ? inlineToolStatus?.label ?? null
+    : null;
+  const liveRunStatus = statusPlacement === "inline" ? runStatusModel : null;
 
   const handleSubmit = useCallback(async () => {
-    if ((!draft.trim() && !hasPendingFileUploads) || isConversationBusy) return;
+    if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
     const message = draft.trim();
     setDraft("");
     scrollToBottom("smooth");
-    await sendMessage(message);
-  }, [draft, hasPendingFileUploads, isConversationBusy, scrollToBottom, sendMessage, setDraft]);
+    // A run already in flight takes the follow-up as a steer: it joins that run
+    // rather than starting a second one. Otherwise identical to a send —
+    // attachments included, because the two go to the same endpoint shape and a
+    // dropped file with no explanation is worse than either outcome.
+    await (isConversationBusy ? steerMessage(message) : sendMessage(message));
+  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
+  // Only the empty state offers suggestions, and it renders under
+  // `showEmptyState={isConversationEmpty}` — which requires nothing to be
+  // running. So there is no busy case to handle here; a branch for one was
+  // unreachable code that read like a second, disagreeing rule.
   const handleSuggestionSend = useCallback(async (suggestion: string) => {
     const message = suggestion.trim();
-    if (!message || isConversationBusy) return;
+    if (!message || interactionPending) return;
     scrollToBottom("smooth");
     await sendMessage(message);
-  }, [isConversationBusy, scrollToBottom, sendMessage]);
+  }, [interactionPending, scrollToBottom, sendMessage]);
+
+  // Stable identities for the memoized transcript: an inline lambda here would
+  // be a new prop every render and defeat the memo.
+  const handleScrollToBottom = useCallback(() => {
+    scrollToBottom("smooth");
+  }, [scrollToBottom]);
+  const retryFailedMessage = controller.retryFailedMessage;
+  const canRetryFailedMessage = controller.canRetryFailedMessage;
+  const handleRetryFailedMessage = useCallback(() => {
+    if (canRetryFailedMessage && retryFailedMessage) void retryFailedMessage();
+  }, [canRetryFailedMessage, retryFailedMessage]);
 
   const handleUploadSelection = useCallback(async (files: FileList | null) => {
     const selectedFiles = files ? Array.from(files) : [];
@@ -443,7 +582,7 @@ export function AssistantExperienceView({
   // it -- the harness list and the composer both re-read it on their own.
   const recheckLocalAgents = useCallback(() => {
     void agentHostBridge.refresh().then(
-      () => toast.success("Rechecking the coding agents on this Mac"),
+      () => toast.success(`Rechecking the coding agents on ${thisComputer()}`),
       (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
     );
   }, []);
@@ -456,16 +595,12 @@ export function AssistantExperienceView({
   const canRecheckLocalAgents = isDesktopShell && isLocalAgentSignInFailure(assistantErrorDetails);
   const assistantErrorTitle = assistantErrorDetails && assistantErrorDetails.length <= 120 && !assistantErrorDetails.includes("\n")
     ? assistantErrorDetails
-    : "Assistant error";
+    : `${DEFAULT_RESPONDER_NAME} hit an error`;
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
-  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
-  // No arbitration left to do. Nothing in the transcript competes for the word
-  // "Thinking" any more — a streaming thought renders as prose and a tool group
-  // renders as "Ran 3 commands" — so this line simply shows whenever the run is
-  // doing something.
-  const showThinkingStatus = !!inlineRunStatus;
-  const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
+  // The transcript's live status is the running turn's pill, not a bottom line.
+  // The composer only carries it when a mount asks for that placement.
+  const showThinkingStatus = !!runStatusModel;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
     ? uploadingFileCount > 0
@@ -474,72 +609,55 @@ export function AssistantExperienceView({
     : failedFileCount > 0
       ? `${pluralize(failedFileCount, "file")} failed to upload`
       : null;
-  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel;
+  const hasComposerStatus = showComposerStatus || !!uploadStatusLabel || interactionPending;
   const composerStatus = (
     <>
-      {showComposerStatus ? (
-        <ThinkingIndicator label={inlineRunStatus?.label} shimmer={inlineRunStatus?.shimmer} />
+      {interactionPending ? (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          onClick={scrollToPendingInteraction}
+          className="h-auto px-0 text-xs font-normal"
+        >
+          {pendingInteractionIsAsk
+            ? "Answer the question to continue"
+            : "Approve or reject to continue"}
+        </Button>
+      ) : null}
+      {showComposerStatus && runStatusModel ? (
+        <LiveRunStatusLine status={runStatusModel} />
       ) : null}
       {uploadStatusLabel ? (
         <ThinkingIndicator label={uploadStatusLabel} shimmer={controller.isUploadingFiles} />
       ) : null}
     </>
   );
-  const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
-    rows: displayMessageRows,
-    latestUser: currentRunLatestUserIndex,
-    status: inlineToolStatus,
-  });
-  const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
-  const displayResourcePodId = currentPodIdFromBrowserPath();
-  const displayResourceCardsByRow = useMemo(
-    () => collectDisplayResourceCardsByRow({
-      activeConversationId,
-      isConversationBusy,
-      messages: controllerMessages,
-      podId: displayResourcePodId,
-      rows: displayMessageRows,
-    }),
-    [activeConversationId, controllerMessages, displayMessageRows, displayResourcePodId, isConversationBusy],
-  );
-  // One indicator, at the end of the transcript, and nowhere else.
-  //
-  // There used to be three placements — a header injected above the first row of
-  // the live run, a line at the bottom, and a separate tool status — each with
-  // its own suppression rules, and they still collided: a streaming thought drew
-  // "Thinking" in its own card while one of these drew "Thinking" underneath it.
-  // Content blocks say what they are; this line says what the run is doing.
-  const inlineRunStatusRowIndex = -1;
-  const showInlineStatusAtBottom = showInlineStatus;
-  const showInlineToolStatus = statusPlacement === "inline"
-    && !!inlineToolStatus
-    && !showInlineStatusAtBottom
-    && !activePendingApprovalInvocation
-    && !inlineToolStatusAlreadyVisible
-    && inlineToolStatus.label !== inlineRunStatus?.label;
+  // The dock's badge is Lem itself, drawn by the same renderer as the sidebar
+  // row and the front door, so the thing answering here is visibly the thing
+  // you clicked. It was a generic shield-and-check glyph on a brand tile, which
+  // named a category rather than a responder.
   const resolvedHeaderBadge = badge === undefined
-    ? <LemmaMarkIcon className="size-4.5 text-[var(--text-on-brand)]" />
+    ? (
+      <ResourceIdentity
+        seed={LEM_SEED}
+        label={DEFAULT_RESPONDER_NAME}
+        kind="being"
+        size={density === "compact" ? 28 : 36}
+      />
+    )
     : badge;
-
-  const renderDisplayRow = (row: DisplayMessageRow, index: number, previousRow: DisplayMessageRow | null) => (
-    <AssistantDisplayRow
-      key={row.id || index}
-      row={row}
-      index={index}
-      previousRow={previousRow}
-      controller={controller}
-      activeConversationId={activeConversationId}
-      displayResourceCardsByRow={displayResourceCardsByRow}
-      completedRunTraceGroups={completedRunTraceGroups}
-      inlineRunStatusRowIndex={inlineRunStatusRowIndex}
-      inlineRunStatus={inlineRunStatus}
-      isConversationBusy={isConversationBusy}
-      isRunActive={isRunActive}
-      currentRunLatestUserIndex={currentRunLatestUserIndex}
-      onNavigateResource={onNavigateResource}
-      renderMessageContent={renderMessageContent}
-      renderToolInvocation={renderToolInvocation}
-    />
+  // Memoized element: the transcript is memoized on its props, and an element
+  // rebuilt every render is a changed prop.
+  const emptyStateElement = useMemo(
+    () => emptyState || (
+      <EmptyState
+        onSendMessage={(message) => { void handleSuggestionSend(message); }}
+        suggestions={emptyStateSuggestions}
+        density={density}
+      />
+    ),
+    [emptyState, emptyStateSuggestions, density, handleSuggestionSend],
   );
 
   return (
@@ -596,41 +714,36 @@ export function AssistantExperienceView({
           ) : null}
 
           <AssistantExperienceConversation
-            messagesContainerRef={transcriptScroll.containerRef}
-            onScroll={transcriptScroll.onScroll}
+            messagesContainerRef={transcriptContainerRef}
+            onScroll={transcriptOnScroll}
             contentWidthClassName={contentWidthClassName}
             activeConversationId={activeConversationId}
             showEmptyState={isConversationEmpty}
             fillEmptyState={emptyStateFillsViewport}
-            emptyState={emptyState || (
-              <EmptyState
-                onSendMessage={(message) => { void handleSuggestionSend(message); }}
-                suggestions={emptyStateSuggestions}
-                density={density}
-              />
-            )}
+            emptyState={emptyStateElement}
             isInitialMessageLoading={isInitialMessageLoading}
             hasOlderMessages={hasOlderMessages}
             isLoadingMessages={isLoadingMessages}
             isLoadingOlderMessages={isLoadingOlderMessages}
             hasMessages={controller.messages.length > 0}
             onLoadOlder={loadOlder}
-            displayMessageRows={displayMessageRows}
-            completedRunTraceGroups={completedRunTraceGroups}
-            renderDisplayRow={renderDisplayRow}
-            showInlineStatusAtBottom={showInlineStatusAtBottom}
-            inlineRunStatus={inlineRunStatus}
-            showInlineToolStatus={showInlineToolStatus}
-            inlineToolStatus={inlineToolStatus}
+            turns={chatTurns}
+            podId={displayResourcePodId}
+            onResolveUserApproval={controller.resolveUserApproval}
+            liveToolLabel={liveToolLabel}
+            liveRunStatus={liveRunStatus}
+            onNavigateResource={onNavigateResource}
+            renderMessageContent={renderMessageContent}
+            renderToolInvocation={renderToolInvocation}
             showAssistantErrorInTranscript={showAssistantErrorInTranscript}
             assistantErrorTitle={assistantErrorTitle}
             assistantErrorDetails={assistantErrorDetails}
-            onRetryFailedMessage={controller.canRetryFailedMessage && controller.retryFailedMessage
-              ? () => { void controller.retryFailedMessage?.(); }
+            onRetryFailedMessage={canRetryFailedMessage && retryFailedMessage
+              ? handleRetryFailedMessage
               : undefined}
             onRecheckLocalAgents={canRecheckLocalAgents ? recheckLocalAgents : undefined}
-            showScrollToBottom={!transcriptScroll.isFollowing}
-            onScrollToBottom={() => scrollToBottom("smooth")}
+            showScrollToBottom={!transcriptIsFollowing}
+            onScrollToBottom={handleScrollToBottom}
             isConversationBusy={isConversationBusy}
           />
         </div>
@@ -647,7 +760,7 @@ export function AssistantExperienceView({
           pendingFileUploads={pendingFileUploads}
           renderPendingFile={renderPendingFile}
           controller={controller}
-          activePendingApprovalInvocation={activePendingApprovalInvocation}
+          interactionPending={interactionPending}
           activeResourceMention={activeResourceMention}
           insertResourceMention={insertResourceMention}
           radius={radius}
@@ -655,7 +768,7 @@ export function AssistantExperienceView({
           fileInputRef={fileInputRef}
           inputRef={inputRef}
           draft={draft}
-          placeholder={placeholder}
+          placeholder={interactionPending ? "Respond above to continue" : placeholder}
           isConversationBusy={isConversationBusy}
           hasPendingFileUploads={hasPendingFileUploads}
           runtimeLabel={runtimeLabel}

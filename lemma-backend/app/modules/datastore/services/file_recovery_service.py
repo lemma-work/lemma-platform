@@ -6,12 +6,15 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import (
     DatastoreFileRepositoryPort,
     DatastoreReindexQueuePort,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class DatastoreFileRecoveryService:
             per_pod_limit=effective_per_pod,
             global_limit=global_limit,
         )
+        defer_until = self._backoff_while_the_extractor_is_down()
         batch_size = max(1, datastore_settings.recovery_enqueue_batch_size)
         enqueued_count = 0
         # The candidates are already read; everything below is Redis. Holding
@@ -87,7 +91,7 @@ class DatastoreFileRecoveryService:
                     file_id=file_entity.id,
                     pod_id=file_entity.pod_id,
                     metadata=file_entity.metadata or {},
-                    defer_until=None,
+                    defer_until=defer_until,
                     bypass_admission=True,
                 )
                 if queued:
@@ -103,6 +107,44 @@ class DatastoreFileRecoveryService:
             enqueued_count=enqueued_count,
             pod_count=len({file_entity.pod_id for file_entity in candidates}),
         )
+
+    def _backoff_while_the_extractor_is_down(self) -> datetime | None:
+        """When to run this batch, given what we know about the extractor.
+
+        ``None`` — meaning now — unless the extractor is known-down, in which
+        case the batch is deferred until its circuit would next let a trial
+        through.
+
+        This is the *rate* limit that `PS-DATA-041` needs in order to be
+        affordable. That promise is deliberate and works: a document whose
+        converter is unreachable is returned to PENDING with its attempt
+        refunded, so an outage never exhausts a file's retry budget. What it
+        does not do is bound how often the hopeless claim is retried -- and this
+        dispatcher re-picks every PENDING file on every pass. Four unreadable
+        files were enough to re-drive continuously and stall the worker's event
+        loop, in a deployment where the visible symptom was agent replies going
+        slow in unrelated pods. One tenant's unreadable PDFs became everybody's
+        latency, which is the shape `PS-DATA-042`'s backpressure exists to stop
+        for uploads.
+
+        Deferring rather than skipping matters: the files stay queued and still
+        drain by themselves once the extractor returns, so nothing waits on the
+        next cron tick. The attempt counter is untouched either way, so
+        `PS-DATA-041` is unaffected -- what changes is how often a hopeless
+        claim is retried, not how many failures it is charged with.
+        """
+        from app.modules.datastore.infrastructure.kreuzberg_circuit import (
+            get_kreuzberg_circuit,
+        )
+
+        cooldown = get_kreuzberg_circuit().seconds_until_trial()
+        if cooldown <= 0:
+            return None
+        logger.info(
+            "datastore.file_recovery_service.dispatch_deferred_extractor_down.degraded",
+            cooldown_seconds=round(cooldown, 1),
+        )
+        return datetime.now(timezone.utc) + timedelta(seconds=cooldown)
 
     async def recover_stale_files(
         self,

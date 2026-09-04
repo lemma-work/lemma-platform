@@ -8,7 +8,18 @@ the ones a given deployment will never install.
 
 from __future__ import annotations
 
+from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
+
+logger = get_logger(__name__)
+
+# Environments whose name is shared by many deployments at once. Every
+# developer's machine reports `local`, and every CI run reports `testing`, so a
+# namespace derived from either would be identical across all of them -- which
+# is the same collision the derivation exists to prevent, just between
+# colleagues instead of between dev and prod. These must say who they are.
+_AMBIGUOUS_ENVIRONMENTS = frozenset({"local", "testing"})
+
 
 def build_provider(name: str | None = None):
     """Construct the configured sandbox provider.
@@ -99,10 +110,66 @@ def _build_e2b_provider():
             workspace_template=workspace_settings.e2b_workspace_template,
             function_template=workspace_settings.e2b_function_template,
             domain=workspace_settings.e2b_domain,
-            # Carried explicitly. The provider defaults this, and defaulting it
-            # here too is what let a test run share production's namespace --
-            # which the orphan sweep reads as "these are mine and have no row",
-            # against a database where nothing does.
-            metadata_namespace=workspace_settings.e2b_metadata_namespace,
+            metadata_namespace=resolve_metadata_namespace(),
         )
     )
+
+
+def resolve_metadata_namespace(
+    configured: str | None = None, environment: str | None = None
+) -> str:
+    """Which metadata namespace this deployment writes and queries E2B under.
+
+    This is the boundary that decides whether two deployments can see each
+    other's sandboxes, and it used to have a shared default. Both `lemma-dev`
+    and `lemma-prod` held their own `E2B_API_KEY`, but the two keys resolved to
+    one E2B team, and neither set a namespace -- so each backend enumerated the
+    other's sandboxes, found no row for them in its own database, and destroyed
+    them as orphans. One user's workspace was wiped five times inside a single
+    twenty-minute conversation, each kill landing seconds after the other
+    environment rebuilt it.
+
+    So there is no shared default any more. An explicit `E2B_METADATA_NAMESPACE`
+    always wins; otherwise the namespace is derived from `ENVIRONMENT`, which
+    already distinguishes the deployments that collided.
+
+    `local` and `testing` are refused rather than derived. Deriving would give
+    every developer's machine and every CI run the same namespace, which
+    rebuilds the same collision at a smaller scale -- and those are precisely
+    the deployments that pair a throwaway database with a real E2B account, the
+    combination that turns a sweep into a deletion. A warning would not do:
+    warnings in local development are not read, and the cost of missing one is
+    somebody else's work.
+    """
+
+    from app.core.config import settings
+
+    explicit = (
+        configured
+        if configured is not None
+        else workspace_settings.e2b_metadata_namespace
+    )
+    if explicit:
+        return explicit
+
+    resolved_environment = environment or settings.environment
+    if resolved_environment in _AMBIGUOUS_ENVIRONMENTS:
+        raise RuntimeError(
+            "E2B_METADATA_NAMESPACE must be set explicitly when ENVIRONMENT is "
+            f"{resolved_environment!r}. It is the only thing keeping this "
+            "deployment from seeing sandboxes that belong to another one: the "
+            "orphan sweep destroys any sandbox it can identify as this "
+            "platform's but cannot find a row for, and on E2B destroying a "
+            f"sandbox destroys the user's files. Every {resolved_environment} "
+            "deployment reports the same environment name, so a derived value "
+            "would not tell them apart. Pick something unique, for example "
+            f"'lemma-{resolved_environment}-<your-name>'."
+        )
+
+    namespace = f"lemma-{resolved_environment}"
+    logger.info(
+        "workspace.provider_factory.metadata_namespace_derived",
+        namespace=namespace,
+        environment=resolved_environment,
+    )
+    return namespace

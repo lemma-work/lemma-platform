@@ -16,19 +16,24 @@ from __future__ import annotations
 
 import re
 
+from app.core.text.thinking_tags import (
+    ThinkingStreamSplitter,
+    strip_thinking_tokens as core_strip_thinking_tokens,
+)
+
 # Characters MarkdownV2 reserves in normal text; each must be backslash-escaped.
 _MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
 # Ordered alternation: fenced code and inline code first (so their contents are
 # protected), then bold/strikethrough before italic (so ``**`` is not mistaken
 # for two italics), then links.
 _TOKEN_RE = re.compile(
-    r"```[\s\S]*?```"            # fenced code block
-    r"|`[^`\n]+`"                # inline code
-    r"|\*\*[\s\S]+?\*\*"         # **bold**
-    r"|__[\s\S]+?__"             # __bold__
-    r"|~~[\s\S]+?~~"             # ~~strikethrough~~
-    r"|\*[^*\n]+?\*"             # *italic*
-    r"|_[^_\n]+?_"               # _italic_
+    r"```[\s\S]*?```"  # fenced code block
+    r"|`[^`\n]+`"  # inline code
+    r"|\*\*[\s\S]+?\*\*"  # **bold**
+    r"|__[\s\S]+?__"  # __bold__
+    r"|~~[\s\S]+?~~"  # ~~strikethrough~~
+    r"|\*[^*\n]+?\*"  # *italic*
+    r"|_[^_\n]+?_"  # _italic_
     r"|\[[^\]\n]+\]\([^)\n]+\)"  # [text](url)
 )
 
@@ -139,103 +144,52 @@ def chunk_text(text: str, *, limit: int) -> list[str]:
 
 # --- Thinking / reasoning token stripping ------------------------------------
 #
-# Some OpenAI-compatible models (e.g. Fireworks MiniMax M3) emit chain-of-
-# thought reasoning inline in the text content as ``<think>…</think>`` tags
-# rather than as a separate reasoning/thinking part. Without stripping, these
-# tags leak to surfaces as normal chat messages. The regex below removes:
-#
-#   - self-closing tags: ``<think/>``, ``<thinking foo="bar"/>``
-#   - closed blocks:     ``<think>reasoning</think>``
-#   - unclosed blocks:   ``<think>reasoning`` (model forgot to close — strip
-#                         everything from the open tag to end of string)
-#
-# Case-insensitive to handle ``<THINK>``, ``<Think>``, etc.
-_THINK_TAG_RE = re.compile(
-    r"<think(?:ing)?[^>]*/>"  # self-closing (empty)
-    r"|<think(?:ing)?[^>]*>.*?</think(?:ing)?>"  # closed block (non-greedy)
-    r"|<think(?:ing)?[^>]*>.*",  # unclosed open tag to end (greedy)
-    re.DOTALL | re.IGNORECASE,
-)
+# The convention itself -- which tags, how a straddled tag is handled, what an
+# unclosed block means -- lives in `app/core/text/thinking_tags`, because the
+# agent module needs the same answers and a module may not import another's
+# infrastructure. What is left here is the surfaces *policy*: reasoning must
+# never reach Slack or Telegram at all, so the split is taken and the reasoning
+# half thrown away. The agent module takes the same split and keeps both halves.
 
 
 def strip_thinking_tokens(text: str) -> str:
-    """Remove ``<think>…</think>`` reasoning blocks from model output.
-
-    Returns the text with all thinking/reasoning blocks removed and
-    surrounding whitespace collapsed. If the text contains no thinking tags it
-    is returned unchanged (after stripping). An empty/whitespace-only result
-    after stripping returns ``""``.
-    """
-    if not text:
-        return ""
-    stripped = _THINK_TAG_RE.sub("", text)
-    return stripped.strip()
+    """Remove reasoning blocks from model output. See `core.text.thinking_tags`."""
+    return core_strip_thinking_tokens(text)
 
 
 def sanitize_user_visible_text(text: str | None) -> str:
     """The single boundary every model-authored string passes through before it
     leaves the backend for a surface.
 
-    Strips ``<think>…</think>`` reasoning so it can never reach a user on any
-    path — progress updates, questions, approvals, captions, final answers.
-    Safe on ``None``/empty input.
+    Strips reasoning so it can never reach a user on any path -- progress
+    updates, questions, approvals, captions, final answers. Safe on
+    ``None``/empty input.
     """
-    return strip_thinking_tokens(text or "")
-
-
-# Longest tag we must never emit half of: ``</thinking>``.
-_MAX_THINK_TAG = len("</thinking>")
-_OPEN_THINK_RE = re.compile(r"<think(?:ing)?[^>]*>", re.IGNORECASE)
-_CLOSE_THINK_RE = re.compile(r"</think(?:ing)?>", re.IGNORECASE)
+    return core_strip_thinking_tokens(text or "")
 
 
 class ThinkingStreamFilter:
-    """Strip ``<think>…</think>`` from a *token stream*.
+    """Drop reasoning from a *token stream*.
 
     ``strip_thinking_tokens`` works on a whole message. Streaming has neither
     luxury: a tag can straddle two deltas, so a naive per-delta strip lets
     ``<thi`` + ``nk>`` through and the user reads the model's reasoning.
 
-    This holds back trailing text that could still turn out to be the start of a
-    tag, emitting it once the next delta proves otherwise. Anything between an
-    opening and closing tag is dropped entirely.
+    A thin policy over `ThinkingStreamSplitter`: the splitter decides what is
+    reasoning, this decides that reasoning is not for surfaces.
     """
 
     def __init__(self) -> None:
-        self._buffer = ""
-        self._inside = False
+        self._splitter = ThinkingStreamSplitter()
 
     def feed(self, delta: str) -> str:
         """Return the part of ``delta`` that is safe to show now."""
-        self._buffer += delta
-        out: list[str] = []
-        while True:
-            if self._inside:
-                match = _CLOSE_THINK_RE.search(self._buffer)
-                if match is None:
-                    if len(self._buffer) > _MAX_THINK_TAG:
-                        self._buffer = self._buffer[-(_MAX_THINK_TAG - 1) :]
-                    break
-                self._buffer = self._buffer[match.end() :]
-                self._inside = False
-                continue
-            match = _OPEN_THINK_RE.search(self._buffer)
-            if match is not None:
-                out.append(self._buffer[: match.start()])
-                self._buffer = self._buffer[match.end() :]
-                self._inside = True
-                continue
-            safe_upto = len(self._buffer)
-            last_open = self._buffer.rfind("<")
-            if last_open != -1 and (len(self._buffer) - last_open) <= _MAX_THINK_TAG:
-                safe_upto = last_open
-            out.append(self._buffer[:safe_upto])
-            self._buffer = self._buffer[safe_upto:]
-            break
-        return "".join(out)
+        return "".join(
+            chunk for kind, chunk in self._splitter.feed(delta) if kind == "text"
+        )
 
     def flush(self) -> str:
         """Emit whatever is safely left once the stream ends."""
-        remainder = "" if self._inside else self._buffer
-        self._buffer = ""
-        return remainder
+        return "".join(
+            chunk for kind, chunk in self._splitter.flush() if kind == "text"
+        )

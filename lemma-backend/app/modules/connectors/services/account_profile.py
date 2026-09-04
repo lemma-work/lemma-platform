@@ -8,6 +8,7 @@ it is a self-contained concern that only reads.
 from __future__ import annotations
 
 from contextlib import suppress
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.connector import AuthProvider, ConnectorEntity
 from app.modules.connectors.infrastructure.adapters.lemma_connector_factory import (
@@ -54,15 +55,18 @@ async def load_native_account_profile(
 
     operation_name, payload = config
     with suppress(Exception):
-        client = create_lemma_execution_client(
+        client = await run_blocking(
+            create_lemma_execution_client,
             connector,
             credentials.model_dump(exclude_none=True),
+            limiter="cpu_bound",
         )
         profile = await client.execute_operation(operation_name, payload)
         profile_dict = profile_to_dict(profile)
         if profile_dict is not None:
             return profile_dict
     return None
+
 
 async def _load_slack_account_profile(
     connector: ConnectorEntity,
@@ -72,9 +76,11 @@ async def _load_slack_account_profile(
         return None
 
     with suppress(Exception):
-        client = create_lemma_execution_client(
+        client = await run_blocking(
+            create_lemma_execution_client,
             connector,
             credentials.model_dump(exclude_none=True),
+            limiter="cpu_bound",
         )
         auth_profile = profile_to_dict(
             await client.execute_operation(
@@ -98,16 +104,18 @@ async def _load_slack_account_profile(
                 if user_info:
                     profile["user_info"] = user_info
             except Exception:
-                logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
+                logger.debug(
+                    "connectors.connector_service.enrich_slack_user_profile_s.diagnostic",
+                    user_id=user_id,
+                )
         return profile
     return None
+
 
 def profile_to_dict(profile: object) -> dict | None:
     if isinstance(profile, dict):
         return profile
     if hasattr(profile, "model_dump"):
-        data = profile.model_dump(
-            exclude_none=True, exclude_unset=True, mode="json"
-        )
+        data = profile.model_dump(exclude_none=True, exclude_unset=True, mode="json")
         return data if isinstance(data, dict) else None
     return None

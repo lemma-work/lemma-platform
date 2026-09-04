@@ -14,7 +14,7 @@ from supertokens_python.recipe.thirdparty.provider import (
     ProviderClientConfig,
 )
 from supertokens_python.recipe import thirdparty
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.modules.identity.infrastructure.supertokens_auth.override_email_password import (
     override_emailpassword_functions,
 )
@@ -83,7 +83,7 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     clients=[
                         ProviderClientConfig(
                             client_id=settings.google_client_id,
-                            client_secret=settings.google_client_secret,
+                            client_secret=reveal_secret(settings.google_client_secret),
                         ),
                     ],
                 ),
@@ -104,7 +104,9 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     clients=[
                         ProviderClientConfig(
                             client_id=settings.microsoft_client_id,
-                            client_secret=settings.microsoft_client_secret,
+                            client_secret=reveal_secret(
+                                settings.microsoft_client_secret
+                            ),
                             scope=["openid", "email", "profile"],
                         ),
                     ],
@@ -130,6 +132,18 @@ def initialize_supertokens():
         recipe_list=[
             session.init(
                 cookie_domain=settings.session_cookie_domain,
+                # The domain we are migrating *away* from, for one release.
+                #
+                # Changing `cookie_domain` does not replace the cookies already
+                # in a browser -- it mints a second set beside them. The browser
+                # then sends both, and SuperTokens answers the refresh with
+                # `The request contains multiple session cookies`, a 500. The
+                # SDK reads a 500 as retryable and asks again, per query, for
+                # ever: an install that had crossed the host-only ->
+                # `.lemma.localhost` change logged 30 of those and 17 500s.
+                #
+                # Set, this clears the old pair instead of colliding with it.
+                older_cookie_domain=settings.session_cookie_older_domain,
                 cookie_secure=settings.session_cookie_secure,
                 cookie_same_site=settings.session_cookie_same_site,
             ),

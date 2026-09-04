@@ -9,7 +9,6 @@ with a fake GithubOps.
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 import pytest
@@ -19,20 +18,29 @@ from app.modules.datastore.tests.e2e.harness import (
     auth_headers,
     invite_to_pod,
 )
+from app.modules.test_support.e2e.waiters import wait_for_status
 from app.modules.test_support.e2e_authz import signup_user
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
 
 
 async def _wait(client, pod_id, publish_id, *, until, timeout=60) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/publishes/{publish_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in until:
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Publish stuck at {body['status']}")
+        return res.json()
+
+    # failed=set(): the module's own docstring says FAILED is this file's
+    # deterministic, expected outcome (no connected GitHub account) -- only
+    # stop on a status in `until`, never fail-fast on FAILED itself.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle publish {publish_id} to reach {until}",
+        probe=probe,
+        expected=set(until),
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def test_publish_without_github_account_fails_cleanly(
@@ -54,16 +62,18 @@ async def test_publish_without_github_account_fails_cleanly(
 
     # No GitHub connection in the harness → the job resolves to a terminal FAILED
     # (never hangs, never 500s the request).
-    final = await _wait(authenticated_client, pod_id, publish_id, until={"COMPLETED", "FAILED"})
+    final = await _wait(
+        authenticated_client, pod_id, publish_id, until={"COMPLETED", "FAILED"}
+    )
     assert final["status"] == "FAILED", final
     assert final["error"]
 
 
-async def test_publish_status_expired_returns_410(authenticated_client, test_pod, worker):
+async def test_publish_status_expired_returns_410(
+    authenticated_client, test_pod, worker
+):
     pod_id = test_pod["id"]
-    res = await authenticated_client.get(
-        f"/pods/{pod_id}/bundle/publishes/{uuid4()}"
-    )
+    res = await authenticated_client.get(f"/pods/{pod_id}/bundle/publishes/{uuid4()}")
     assert res.status_code == status.HTTP_410_GONE, res.text
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 

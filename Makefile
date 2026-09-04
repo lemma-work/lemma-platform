@@ -21,16 +21,25 @@ SHELL := /bin/bash
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
-        desktop-lint desktop-guestd desktop-concepts desktop-concepts-check \
+        desktop-lint desktop-guestd desktop-check-windows desktop-check \
+        desktop-host-pack desktop-host-pack-check \
+        desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
-        version-check \
+        version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
+        scenarios scenarios-guards scenarios-sandbox scenarios-live scenarios-images \
+        scenarios-standing-down \
+        scenarios-deployment scenarios-provision scenarios-reset \
+        scenarios-desktop scenarios-desktop-provision \
+        scenarios-record scenarios-replay \
+        scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint quality check codeql codeql-python codeql-javascript codeql-all migrate
+        lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
+        quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -43,12 +52,28 @@ OTEL          ?= 0
 OTEL_LOGS     ?= 1
 LLM_OTEL      ?= 0
 
+# What the backend unit lane selects. One variable because two targets run it
+# -- `test-backend-unit` locally and `coverage-backend-unit` in CI -- and they
+# had already drifted: only the second excluded `local_guest`, so the lane a
+# person runs before pushing collected seventeen tests the lane that gates the
+# merge did not. Every exclusion here is an environment-gated suite that would
+# otherwise skip green; `scripts/check_pytest_census.py` fails when a new one
+# appears.
+# Where `desktop-e2e-temp` builds its throwaway stack. Removed on teardown,
+# and the harness refuses to delete anything outside it.
+E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
+
+UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
+
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
+STACK_DIR     := lemma-stack
+BUNDLE_DIR    := lemma-pod-bundle
 DESKTOP_DIR   := desktop
+SCENARIOS_DIR := tests/scenarios
 
 # Desktop is one cargo workspace: the app shell, the durable daemon, the Agent
 # Host, and the runtime helpers share a lockfile and a target directory. That
@@ -204,6 +229,24 @@ BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
 BACKEND_TELEGRAM_POLLING        ?= true
 BACKEND_SLACK_SOCKET_MODE       ?= true
 
+# The auth gates a local install turns off, and why each one is here.
+#
+# `lemma-stack` already renders exactly this set for the Docker local stack and
+# the desktop install (`lemma_stack/config/render.py`), and its own tests pin
+# them. `make dev` set only the first, so the documented way to run Lemma on
+# your own machine behaved differently from every other local path -- and worse
+# than all of them: signing up refused an `@example.com` address, and the sixth
+# account in fifteen minutes locked the developer out of their own laptop for
+# four minutes. None of these gates protects anything on localhost; they exist
+# to stop strangers abusing a public deployment.
+DEV_LOCAL_AUTH_ENV := \
+	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
+	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
+	AUTH_ABUSE_PROTECTION_ENABLED=false \
+	AUTH_ALTCHA_ENABLED=false
+DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
+
 BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
@@ -226,13 +269,13 @@ BACKEND_DEV_ENV := \
 	DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL) \
 	REDIS_URL=$(DEV_REDIS_URL) \
 	KREUZBERG_URL= \
-	DOCUMENT_PROCESSOR=markitdown \
+	DOCUMENT_PROCESSOR=xberg \
 	STORAGE_BACKEND=local \
 	LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage) \
 	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
 	EMAIL_TRANSPORT=filesystem \
 	EMAIL_OUTPUT_DIR=$(abspath .local/emails) \
-	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	$(DEV_LOCAL_AUTH_ENV) \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
@@ -299,6 +342,7 @@ help:
 	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation (CI-safe, no dashboards)"
 	@echo ""
 	@echo "  Desktop (one cargo workspace: app, locald, Agent Host, runtime helpers)"
+	@echo "    make desktop-check      every desktop gate that runs locally — before pushing"
 	@echo "    make desktop-dev        run Desktop from this checkout (macOS; CONTROL=1 opens Local settings)"
 	@echo "    make desktop-test       Rust tests across the whole desktop workspace"
 	@echo "    make desktop-test-app   desktop crate tests only (fast loop)"
@@ -309,6 +353,8 @@ help:
 	@echo "    make desktop-dmg        self-contained macOS test DMG (needs runtime-fetch first)"
 	@echo "    make desktop-exe        Windows installer — says how to build it on Windows"
 	@echo "    make desktop-guestd     build and test the Linux guest daemon (Linux only)"
+	@echo "    make desktop-check-windows  compile the Windows paths from a Mac"
+	@echo "    make desktop-host-pack  build the shipped host pack and run its interpreters"
 	@echo "    make desktop-verify-guest  workspace sandbox + file persistence in the real VM"
 	@echo "    make desktop-clean      remove desktop build output and staged runtime"
 	@echo ""
@@ -322,6 +368,16 @@ help:
 	@echo "    make test-cli           lemma-cli unit + e2e tests"
 	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
+	@echo "    make scenarios          product scenarios over real HTTP (needs docker)"
+	@echo "    make scenarios-guards   scenario suite guards only (fast, no docker)"
+	@echo "    SCENARIOS_STANDING_STACK=1 make scenarios   keep the database between runs"
+	@echo "    make scenarios-standing-down   and remove it again"
+	@echo "    make scenarios-images   build the sandbox images the lane below needs"
+	@echo "    make scenarios-sandbox  scenarios that execute functions and workflows"
+	@echo "    make scenarios-live     scenarios against real Google, GitHub, Telegram"
+	@echo "    make scenarios-provision  build the standing tenant on a deployment"
+	@echo "    make scenarios-deployment run the suite against a deployment"
+	@echo "    make scenario-coverage  regenerate docs/product/coverage.md"
 	@echo "    make test-python        lemma-python SDK tests (non-integration)"
 	@echo ""
 	@echo "  Coverage"
@@ -335,9 +391,18 @@ help:
 	@echo "    make coverage-cli-e2e         lemma-cli e2e coverage (needs docker)"
 	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
-	@echo "  Other"
+	@echo "  Gates (what CI blocks on)"
+	@echo "    make pre-push           alias for quality — run this on every push"
+	@echo "    make quality            every gate the 'quality gates' CI job runs"
+	@echo "    make architecture       backend architecture ratchet + route inventory"
+	@echo "    make measure-clients    ADVISORY: size/complexity/typing in lemma-cli + lemma-python"
+	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
+	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
+	@echo "    make local-auth-gate-check  make dev and the local stack relax the same auth gates"
+	@echo ""
+	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
 	@echo ""
 
@@ -417,13 +482,13 @@ _init-backend-env:
 			echo "DATASTORE_DATABASE_URL=$(DEV_DATASTORE_DATABASE_URL)"; \
 			echo "REDIS_URL=$(DEV_REDIS_URL)"; \
 			echo "KREUZBERG_URL="; \
-			echo "DOCUMENT_PROCESSOR=markitdown"; \
+			echo "DOCUMENT_PROCESSOR=xberg"; \
 			echo "STORAGE_BACKEND=local"; \
 			echo "LOCAL_OBJECT_STORAGE_ROOT=$(abspath .local/object-storage)"; \
 			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
 			echo "EMAIL_TRANSPORT=filesystem"; \
 			echo "EMAIL_OUTPUT_DIR=$(abspath .local/emails)"; \
-			echo "AUTH_EMAIL_VERIFICATION_REQUIRED=false"; \
+			for pair in $(DEV_LOCAL_AUTH_ENV); do echo "$$pair"; done; \
 			echo "ENABLE_TELEGRAM_POLLING_MODE=true"; \
 			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -448,7 +513,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
+	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR $(DEV_LOCAL_AUTH_KEYS) ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -475,13 +540,15 @@ _ensure-backend-env-keys:
 		append DATABASE_URL '$(DEV_DATABASE_URL)'; \
 		append DATASTORE_DATABASE_URL '$(DEV_DATASTORE_DATABASE_URL)'; \
 		append REDIS_URL '$(DEV_REDIS_URL)'; \
-		append DOCUMENT_PROCESSOR markitdown; \
+		append DOCUMENT_PROCESSOR xberg; \
 		append STORAGE_BACKEND local; \
 		append LOCAL_OBJECT_STORAGE_ROOT '$(abspath .local/object-storage)'; \
 		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
 		append EMAIL_TRANSPORT filesystem; \
 		append EMAIL_OUTPUT_DIR '$(abspath .local/emails)'; \
-		append AUTH_EMAIL_VERIFICATION_REQUIRED false; \
+		for pair in $(DEV_LOCAL_AUTH_ENV); do \
+			append "$${pair%%=*}" "$${pair#*=}"; \
+		done; \
 		append ENABLE_TELEGRAM_POLLING_MODE true; \
 		append ENABLE_SLACK_SOCKET_MODE true; \
 		append CORS_ORIGINS '["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -542,7 +609,7 @@ dev:
 	@echo ""
 	@# The readiness check is what confirms the unified application finished
 	@# starting; sandbox provisioning is part of it rather than a second service.
-	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	@trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 		$(MAKE) --no-print-directory _run-backend & \
 		$(MAKE) --no-print-directory _run-frontend & \
 		$(MAKE) --no-print-directory _wait-backend || { \
@@ -566,7 +633,7 @@ dev-public:
 	echo "  Debug and safe request-access logs are enabled."; \
 	echo "  Press Ctrl-C or run 'make stop' to stop."; \
 	echo ""; \
-	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM; \
+	trap '$(MAKE) --no-print-directory stop; exit 0' INT TERM HUP; \
 	$(MAKE) --no-print-directory _run-backend \
 		BACKEND_API_URL="$$public_api_url" \
 		BACKEND_SESSION_COOKIE_DOMAIN= \
@@ -645,7 +712,7 @@ _ensure-init:
 	@test -f $(TS_DIR)/dist/index.js || { echo "  ! $(TS_DIR)/dist missing — run 'make init' (or cd $(TS_DIR) && npm run build)"; exit 1; }
 	@$(MAKE) --no-print-directory _ensure-backend-env-keys
 	@$(MAKE) --no-print-directory _ensure-frontend-env-keys
-	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import markitdown, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
+	@cd $(BACKEND_DIR) && uv run --extra local python -c 'import xberg, psycopg, psycopg_pool' >/dev/null || { echo "  ! Local backend dependencies missing — run 'make init'"; exit 1; }
 	@echo "  Using $(BACKEND_DIR)/.env + $(FRONTEND_DIR)/.env.local"
 
 _infra-up:
@@ -931,6 +998,83 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Memory balloon policy…"
 	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
+# Build the ~1 GB artifact the app ships, and prove its interpreters run.
+#
+# This is what CI's `host-pack-macos` job does, runnable by hand. It is the only
+# check that catches a relocatable CPython whose baked `sys.prefix` still points
+# at the build machine -- which unpacks perfectly, reports the right version,
+# and fails the instant it is asked to import anything, on a user's machine,
+# four minutes into a first run.
+#
+# ~15 minutes and ~1 GB. PACK_OUT to keep the result; the default is a
+# throwaway. PYTHON_ROOT to copy an interpreter you already have, which is the
+# fix when your `uv` predates the pinned CPython patch version.
+PACK_OUT     ?= out/host-pack
+PYTHON_ROOT  ?=
+
+desktop-host-pack:
+	@echo "→ Building the host pack (this takes a while and ~1 GB)…"
+	@mkdir -p $(PACK_OUT)
+	@python3 -c "import json,pathlib,sys; \
+	  image=lambda n: {'ref': f'ghcr.io/lemma-work/{n}:0.0.0-local', 'digest': 'sha256:'+'0'*64}; \
+	  pathlib.Path(sys.argv[1]).write_text(json.dumps({'schema_version': 1, \
+	    'version': '0.0.0-local', 'min_admin_version': '0.1.0', \
+	    'images': {n: image('lemma-'+n) for n in ('backend','frontend','workspace','function')}, \
+	    'infra': {'postgres': image('postgres'), 'redis': image('redis')}}, indent=2)+chr(10))" \
+	  $(PACK_OUT)/host-release.json
+	@uv run --no-project python scripts/build_local_host_pack.py 		--output $(PACK_OUT)/local-runtime 		--release-manifest $(PACK_OUT)/host-release.json 		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),)
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Just the checks, against a pack you already have.
+desktop-host-pack-check:
+	@uv run --no-project python scripts/check_host_pack.py $(PACK_OUT)/local-runtime
+
+# Compile the Windows code paths from a Mac, before pushing.
+#
+# The `desktop-windows` CI job is not in the desktop path filter, so its result
+# arrives a push later -- and it has now caught four separate things one round
+# at a time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
+# breaking source searches, and tests that spawn `/bin/sh`.
+#
+# This catches the *compile* half of that class locally. `lemma-agent-host` is
+# left out on purpose: it pulls `libsqlite3-sys`, whose build script needs a
+# Windows C toolchain that a Mac does not have. locald is where every one of
+# those failures was.
+#
+# The runtime half -- a POSIX binary that is simply not there -- is not a
+# compile error, and is caught by the source lint in `host_process.rs` instead.
+# The desktop gates that can run on a developer machine, cheapest first.
+#
+# Not all of CI: bundling and codesigning need release certificates, and the app
+# crate cannot cross-compile to msvc from macOS (libsqlite3-sys wants a C
+# toolchain), so `desktop-check-windows` covers locald and the runtime manager
+# only. desktop/README.md has the gnu-target recipe for the rest.
+#
+# The pieces already existed; nothing ran them together, so "I ran the desktop
+# checks" meant whichever two someone remembered. Both halves of that bit this
+# repo in one afternoon: `desktop-lint` does not run rustfmt, so a formatting
+# diff reached CI green-locally, and `desktop-check-windows` is the only thing
+# that compiles the Windows cfg paths, so a `#[cfg(unix)]` helper called from an
+# ungated one failed a 90-minute Windows job that a 15-second local check would
+# have caught.
+#
+# Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
+# They need release certificates, so they cannot run on a contributor's machine
+# -- `make desktop-dmg` is the local approximation.
+desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+	@echo ""
+	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+
+desktop-check-windows:
+	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
+		echo "→ Adding the Windows target…"; \
+		rustup target add x86_64-pc-windows-msvc)
+	@echo "→ Windows compile check (locald, runtime manager, tests included)…"
+	@cd $(DESKTOP_DIR) && cargo clippy \
+		-p lemma-locald -p lemma-runtime-manager \
+		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+	@echo "  ✓ the Windows code paths compile and lint"
+
 # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
 # compiles, so a green macOS run says nothing about the code that actually runs
 # in the guest.
@@ -1087,6 +1231,80 @@ desktop-verify-guest:
 	@cd $(BACKEND_DIR) && LEMMA_LOCAL_REAL_GUEST=1 uv run pytest -m local_guest -q
 	@echo "  ✓ the guest runs workspaces and keeps their files"
 
+# The journeys that only exist on the desktop build, run for real.
+#
+# Apps served by host, functions dispatched into the guest, pod files on local
+# disk, and a pod app loaded in WKWebView. Every one of these differs from the
+# server build, and two of them have already shipped broken to users while the
+# whole server-side suite stayed green:
+#
+#   * pod apps rendered signed out -- WebKit will not send the session cookie
+#     between two `.localhost` hosts, and Chromium will, so nothing that drives
+#     Chromium could see it;
+#   * every function died at `getaddrinfo`, because sandboxes were handed an
+#     address only the Mac can resolve.
+#
+# Nothing here is mocked. The suite signs up its own user, makes its own pod,
+# app, function and files, and removes them again -- it never reads or writes
+# anything that was already in the install.
+#
+# Needs Lemma Desktop installed and running; it reads that install's own ports
+# out of locald/network.json rather than guessing. Point it at a different
+# install with LEMMA_DESKTOP_E2E_LOCALD_ROOT.
+#
+# Agents are a separate lane (`desktop-verify-agents`), because they drive real
+# Claude Code / Codex / OpenCode and spend real provider quota. `AGENTS=1` runs
+# them too. They are named here rather than left unmentioned so that a green run
+# of this target is not mistaken for agent coverage.
+desktop-e2e:
+	@test "$$(uname -s)" = "Darwin" || \
+		(echo "  ✗ the desktop build and its guest are macOS-only"; exit 1)
+	@command -v swift >/dev/null 2>&1 || \
+		(echo "  ✗ swift not found — the WKWebView probe needs Xcode's toolchain"; exit 1)
+	@echo "→ Desktop journeys against the running install…"
+	@cd $(BACKEND_DIR) && LEMMA_DESKTOP_E2E=1 uv run pytest -m desktop_e2e -q
+	@echo "  ✓ apps, functions, files and the WKWebView session all work"
+	@if [ "$(AGENTS)" = "1" ]; then \
+		$(MAKE) desktop-verify-agents; \
+	else \
+		echo "  · agents not run — they spend real provider quota."; \
+		echo "    Add AGENTS=1, or run 'make desktop-verify-agents' on its own."; \
+	fi
+
+# The same journeys, against a stack built from YOUR WORKING TREE.
+#
+# `desktop-e2e` tests the install you have; this tests the code you just wrote,
+# without waiting for a DMG. It stands up its own backend from this checkout --
+# in the packed shape a release ships, with the environment rendered by this
+# checkout's own locald -- on its own port, its own databases and its own
+# storage, then tears all of it down.
+#
+# Postgres, Redis and SuperTokens are borrowed from the running install's guest
+# VM. A second VM would cost ~4 GiB for infrastructure this cannot affect; the
+# throwaway databases live beside the install's and are dropped afterwards, and
+# Redis is isolated to its own numbered database so the two backends never join
+# each other's consumer groups.
+#
+# Not covered here: functions. They are dispatched into guest sandboxes by
+# locald, and this stack has none -- that lane needs `desktop-e2e` against a
+# packaged install, and it says so rather than timing out.
+desktop-e2e-temp:
+	@test "$$(uname -s)" = "Darwin" || \
+		(echo "  ✗ the desktop build and its guest are macOS-only"; exit 1)
+	@command -v swift >/dev/null 2>&1 || \
+		(echo "  ✗ swift not found — the WKWebView probe needs Xcode's toolchain"; exit 1)
+	@command -v psql >/dev/null 2>&1 || \
+		(echo "  ✗ psql not found — brew install libpq (the throwaway databases need it)"; exit 1)
+	@set -e; \
+	stack="$$PWD/desktop/e2e/throwaway_stack.py"; \
+	trap 'python3 '"$$stack"' down --root $(E2E_TEMP_ROOT) >/dev/null 2>&1 || true' EXIT INT TERM; \
+	python3 "$$stack" down --root $(E2E_TEMP_ROOT) >/dev/null 2>&1 || true; \
+	python3 "$$stack" up --root $(E2E_TEMP_ROOT) >/dev/null; \
+	cd $(BACKEND_DIR) && LEMMA_DESKTOP_E2E=1 \
+		LEMMA_DESKTOP_E2E_LOCALD_ROOT=$(E2E_TEMP_ROOT)/locald \
+		uv run pytest -m desktop_e2e -q
+	@echo "  ✓ this working tree serves apps with a session, and cleans up after itself"
+
 # Everything a build produces. desktop/capabilities/ is hand-written and stays;
 # desktop/permissions/autogenerated/ is written by build.rs and regenerates on
 # the next build of the app crate.
@@ -1137,6 +1355,27 @@ version-check:
 	@echo "→ Component versions…"
 	@python3 scripts/check_version_consistency.py
 
+# The base domain an install serves under is decided at runtime and spelled out
+# in four places, in three languages. Nothing tied them together, and the cost
+# was a shipped build where this computer could not pair with its own workspace:
+# two loopback checks still said `.localhost` after the base had moved, so the
+# refusal was silent and onboarding waited for ever.
+local-domain-check:
+	@echo "→ Local domain lists…"
+	@python3 scripts/check_local_domain_consistency.py
+
+local-auth-gate-check:
+	@echo "→ Local auth gates…"
+	@python3 scripts/check_local_auth_gates.py
+
+# CI runs scripts/ with a bare `python`, which on the Windows and macOS runners
+# is not the 3.14 the backend pins. Syntax they cannot parse is not a failing
+# step, it is a SyntaxError before the first line -- which is how one
+# unparenthesised `except` stopped every Windows host pack from building.
+script-portability-check:
+	@echo "→ Script portability…"
+	@python3 scripts/check_script_portability.py
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
@@ -1152,7 +1391,7 @@ test-backend:
 
 test-backend-unit:
 	@echo "→ Backend unit tests…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" -q
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" -q
 
 test-backend-e2e:
 	@echo "→ Backend e2e tests (workers=$(E2E_WORKERS))…"
@@ -1186,7 +1425,195 @@ test-cli-e2e:
 
 test-python:
 	@echo "→ lemma-python SDK tests (non-integration)…"
-	@cd $(PYTHON_DIR) && uv run --with pytest pytest tests/ -m "not integration" -q
+	@cd $(PYTHON_DIR) && uv run --with pytest --with pytest-asyncio pytest tests/ -m "not integration" -q
+
+# ── Product scenarios ─────────────────────────────────────────────────────────
+# The black-box suite: it boots the real stack (postgres/redis/supertokens +
+# uvicorn) and drives it over HTTP as an external client, so it needs docker.
+# Output is grouped by product journey rather than by module — see
+# docs/product/README.md for what each scenario is proving, and
+# tests/scenarios/README.md for how the suite is put together.
+
+scenarios:
+	@echo "→ Product scenarios (real HTTP, needs docker)…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q
+
+# Build the sandbox images the `sandbox` lane needs. Local tags rather than the
+# content-addressed names the backend's own e2e uses: those rebuild whenever
+# anything in the repo changes, which is right for a release gate and wrong for
+# a suite meant to be run constantly. Rebuild when sandbox-images/ changes.
+SCENARIOS_PLATFORM ?= linux/$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+
+scenarios-images:
+	@echo "→ Building sandbox images ($(SCENARIOS_PLATFORM))…"
+	@docker build --platform $(SCENARIOS_PLATFORM) \
+		-f $(BACKEND_DIR)/sandbox-images/Dockerfile.function \
+		-t lemma-function:scenarios .
+	@docker build --platform $(SCENARIOS_PLATFORM) \
+		-f $(BACKEND_DIR)/sandbox-images/Dockerfile.workspace \
+		-t lemma-workspace:scenarios .
+	@echo "✓ sandbox images ready; run 'make scenarios-sandbox'"
+
+# The sandbox lane: functions executing, workflows running their graphs, and
+# bundle imports that build what they import. Needs `make scenarios-images`
+# first — minutes, not seconds, which is why they are not in `scenarios`.
+scenarios-sandbox:
+	@echo "→ Product scenarios needing a sandbox…"
+	@cd $(SCENARIOS_DIR) && uv run pytest -q -m sandbox
+
+# The live lane: the same platform, driven against the real third parties people
+# connect — Google, GitHub, Telegram, Composio — and a real model. Credentials
+# come from the backend's own .env (or LEMMA_ENV_FILE) — there are no test-only
+# credential variables; providers you have not configured are skipped with a
+# reason naming what is missing. See tests/scenarios/LIVE.md.
+scenarios-live:
+	@echo "→ Product scenarios against real providers…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
+		SCENARIOS_CONNECTOR_CATALOGUE=all SCENARIOS_TELEGRAM_POLLING=true \
+		uv run pytest -q -m live --timeout=900 journeys/live
+
+# ── Real providers, recorded once ─────────────────────────────────────────────
+# Everything Lemma sends outward goes through one proxy. `record` drives the
+# real Telegram, Google, GitHub and Slack with real credentials and writes what
+# happened to tests/scenarios/cassettes/; `replay` serves that back and refuses
+# anything it has not seen, so a run cannot quietly reach the internet.
+#
+# The recordings are committed and reviewed like code: a diff in one is a third
+# party changing its API, which is the signal a hand-written fake could never
+# give. See tests/scenarios/harness/egress.py.
+#
+# `CASSETTE` names the recording — one per journey keeps the diffs small.
+CASSETTE ?= all
+
+scenarios-record:
+	@echo "→ Recording against the real providers…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=record SCENARIOS_CASSETTE="$(CASSETTE)" \
+		SCENARIOS_USE_DEPLOYMENT_ENV=1 SCENARIOS_LLM_MODE=real \
+		uv run pytest -q --timeout=900 $(ARGS)
+
+scenarios-replay:
+	@echo "→ Replaying $(CASSETTE)…"
+	@cd $(SCENARIOS_DIR) && SCENARIOS_EGRESS=replay SCENARIOS_CASSETTE="$(CASSETTE)" \
+		uv run pytest -q $(ARGS)
+
+# ── The standing tenant ───────────────────────────────────────────────────────
+# The suite runs as a fixed cast of colleagues at Vantage Freight who sign *in*
+# rather than up — which is what lets it run against a deployment whose
+# registration gates are on, and what keeps a run from leaving another
+# organization behind. See tests/scenarios/harness/tenant.py.
+#
+# `TARGET` names the deployment; `SCENARIOS_BASE_URL` does the same thing if you
+# would rather set it once. There is no default, on purpose: these register
+# accounts and create organizations, and an organization cannot be deleted.
+TARGET ?= $(SCENARIOS_BASE_URL)
+
+# Extra pytest arguments for the desktop lane, so a `-k` filter or `-x` does
+# not mean copying the target's body out of here to run one journey.
+SCENARIOS_ARGS ?=
+
+# Run once per environment, by a person who can see what it did. Never part of
+# a run: this is the only thing that registers anybody, and a deployment counts
+# every call to its auth routes. Idempotent — run it twice and the second run
+# reports it had nothing to do.
+scenarios-provision:
+	@echo "→ Provisioning the standing tenant…"
+	@cd $(SCENARIOS_DIR) && uv run python -m harness.provision --base-url "$(TARGET)"
+
+# For when a run died partway through and left somebody promoted. Clears what
+# runs left behind — matched on the `scn` mark, so it can only ever touch
+# things a run made — and puts the cast's roles back to what tenant.py declares.
+scenarios-reset:
+	@echo "→ Resetting the standing tenant…"
+	@cd $(SCENARIOS_DIR) && uv run python -m harness.provision --reset --base-url "$(TARGET)"
+
+# The suite against a real Lemma, with whatever model that deployment is
+# configured with. Boots nothing; the tenant must already be there.
+scenarios-deployment:
+	@echo "→ Product scenarios against $(TARGET)…"
+	@test -n "$(TARGET)" || { echo "set TARGET=https://your-lemma (or SCENARIOS_BASE_URL)"; exit 1; }
+	@cd $(SCENARIOS_DIR) && uv run pytest -q --base-url "$(TARGET)" --timeout=900
+
+# The suite against the Lemma Desktop install running on this machine.
+#
+# This is the widest coverage the desktop build has by a distance: the journey
+# scenarios exercise orgs, pods, tables, files, agents, functions, workflows,
+# schedules, bundles and app publishing, and against a desktop install they do
+# it through the real host pack, the real guest VM and the real services rather
+# than a stack booted for the occasion. No new test code -- `--base-url` was
+# already plumbed; what was missing was the address, which locald allocates at
+# first launch and so cannot be written down here.
+#
+# Provisioning is separate and deliberate: a deployment run refuses to register
+# anybody (see `sessions` in tests/scenarios/conftest.py), so the standing cast
+# has to exist first. Run `make scenarios-desktop-provision` once per install.
+#
+# SCENARIOS_TARGET_INSTANCE_ID is set from the install's own id, so if the app
+# is restarted onto a different install mid-session the run stops instead of
+# writing into it -- the suite creates organizations and the product cannot
+# delete one.
+scenarios-desktop:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Product scenarios against the desktop install at $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	uv run pytest -q --base-url "$$LEMMA_DESKTOP_API_URL" --timeout=900 $(SCENARIOS_ARGS)
+
+# The standing cast, on the desktop install. Once per install, not per run.
+#
+# A never-provisioned install trips the harness's own guard, which stops before
+# making anything and asks for SCENARIOS_ALLOW_NEW_CAST=1. That is deliberate
+# and is not passed for you: on a shared deployment the same symptom means the
+# cast already exists under different addresses, and answering it blindly would
+# build a second parallel one out of organizations nothing can delete. On a
+# fresh install it just means "yes, this is the first time":
+#
+#   make scenarios-desktop-provision SCENARIOS_ALLOW_NEW_CAST=1
+scenarios-desktop-provision:
+	@set -e; \
+	eval "$$(python3 desktop/e2e/install_address.py)"; \
+	echo "→ Provisioning the standing tenant on $$LEMMA_DESKTOP_API_URL…"; \
+	cd $(SCENARIOS_DIR) && \
+	SCENARIOS_TARGET_INSTANCE_ID="$$LEMMA_DESKTOP_INSTANCE_ID" \
+	SCENARIOS_ALLOW_NEW_CAST="$(SCENARIOS_ALLOW_NEW_CAST)" \
+	uv run python -m harness.provision --base-url "$$LEMMA_DESKTOP_API_URL"
+
+# The guards on the suite itself: no imports of the app under test, no mocking,
+# no sleeping, every test declaring what it proves. No docker, no stack, ~20ms —
+# so this is the one to run in a tight loop while writing scenarios.
+scenarios-guards:
+	@echo "→ Scenario suite guards…"
+	@cd $(SCENARIOS_DIR) && uv run pytest journeys/test_harness_contract.py -q
+
+# Infrastructure that stands between runs, so a connected account survives.
+#
+# GitHub, Slack and Gmail accounts exist only after a person consented in a
+# browser, and the product has no way to store one without that. A throwaway
+# database therefore discards the one thing the suite cannot recreate for
+# itself — so every re-run asked somebody to click through OAuth again.
+#
+# Opt-in: `SCENARIOS_STANDING_STACK=1 make scenarios`. Anything that would be
+# rude to leave behind is removed by the target below.
+scenarios-standing-down:
+	@echo "→ Removing the standing scenario infrastructure…"
+	@docker rm -f lemma-scenarios-postgres lemma-scenarios-redis \
+		lemma-scenarios-supertokens >/dev/null 2>&1 || true
+	@docker volume rm lemma-scenarios-postgres-data >/dev/null 2>&1 || true
+	@docker network rm lemma-scenarios >/dev/null 2>&1 || true
+	@echo "  gone — the tenant and every connected account with it."
+
+# What the scenario suite actually executes in the backend. Instruments the
+# uvicorn and worker subprocesses, so this measures the product being driven
+# over HTTP rather than functions being called directly.
+scenarios-code-coverage:
+	@echo "→ Product scenarios under coverage…"
+	@cd $(BACKEND_DIR) && uv run coverage erase
+	@cd $(SCENARIOS_DIR) && SCENARIOS_COVERAGE=1 uv run pytest -q || true
+	@cd $(BACKEND_DIR) && uv run coverage combine && uv run coverage report | tail -30
+
+# Regenerate docs/product/coverage.md. `make quality` checks it is current.
+scenario-coverage:
+	@python3 scripts/check_scenario_coverage.py --write
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
@@ -1198,9 +1625,21 @@ coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-front
 
 coverage-backend: coverage-backend-unit coverage-backend-e2e
 
+# `local_guest` and `provider` are excluded explicitly rather than left to skip.
+#
+# The seventeen `local_guest` tests need Lemma Desktop installed with its VM
+# booted, and the three `provider` ones need real E2B credentials. Neither is
+# marked `e2e` -- so `-m "not e2e"` collected all twenty on every backend CI run
+# and they reported green skips. A suite that always skips is indistinguishable
+# from one that has quietly stopped existing. Deselecting says so in the
+# summary instead, and `scripts/check_pytest_census.py` now fails if another
+# environment-gated suite drifts back into this lane.
+#
+# Keep this expression identical to `test-backend-unit`'s and to the two
+# entries in that script's LANES table.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "not e2e" \
+	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:
@@ -1235,17 +1674,131 @@ coverage-frontend:
 	@cd $(FRONTEND_DIR) && npx vitest run --coverage 2>/dev/null || \
 		(echo "  Install @vitest/coverage-v8: npm install -D @vitest/coverage-v8"; exit 1)
 
+# Ruff cannot float. Two versions disagree about formatting output, and 0.16
+# widened the default rule selection enough to turn 1 finding into 711 on the
+# same tree -- so both the `--check` gate and `lint` have to name a version.
+#
+# Most components resolve one from their own `ruff>=0.14.8,<0.16` bound and use
+# `uv run ruff`. `lemma-pod-bundle` and `tests/scenarios` carry no ruff
+# dependency, so this is where they get one. EVERY PLACE THAT NAMES A VERSION
+# has to move together: this line and that bound in each pyproject.
+RUFF := uvx ruff@0.15.22
+
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
+# Every component's linter, and all four can fail. Three of them used to end
+# in `2>/dev/null || true`, so `make lint` printed four arrows and could only
+# ever report the backend -- a green run here meant nothing for the other
+# three. Components whose toolchain is not installed are skipped out loud
+# rather than silently passed.
 lint:
 	@echo "→ Backend (ruff)…"
-	@cd $(BACKEND_DIR) && uv run ruff check . --quiet
-	@echo "→ CLI (ruff)…"
-	@cd $(CLI_DIR) && uv run ruff check . --quiet 2>/dev/null || true
-	@echo "→ Python SDK (ruff)…"
-	@cd $(PYTHON_DIR) && uv run ruff check . --quiet 2>/dev/null || true
+	@# Delegates rather than running `ruff check .`, which walked into the
+	@# vendored lemma-backend/lemma-connectors tree and failed on generated
+	@# code. That is why this target had been red for a while without anyone
+	@# noticing: the backend line was the one line here that could fail, and
+	@# `make quality` -- the documented gate -- calls the scoped target below.
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+	@$(MAKE) --no-print-directory lint-clients
 	@echo "→ Frontend (eslint)…"
-	@cd $(FRONTEND_DIR) && npm run lint --silent 2>/dev/null || true
+	@if [ -d $(FRONTEND_DIR)/node_modules ]; then \
+		cd $(FRONTEND_DIR) && npm run lint --silent; \
+	else \
+		echo "  skipped: run 'npm ci' in $(FRONTEND_DIR) first"; \
+	fi
+
+# Every first-party Python package except the backend, which has its own gates.
+# Extracted from `lint` so that `quality` -- the documented pre-PR command and
+# the one CI runs -- covers them too. It did not: four of these were linted by
+# `make lint`, which no CI job called, so a finding in the CLI or the scenario
+# suite reached main unnoticed.
+# All five run the same pinned ruff rather than each project's own venv: linting
+# needs no imports, so a venv per package bought nothing and made this the only
+# gate that could not run on a clean checkout without syncing three projects.
+lint-clients:
+	@echo "→ CLI (ruff)…"
+	@cd $(CLI_DIR) && $(RUFF) check . --quiet
+	@echo "→ Python SDK (ruff)…"
+	@cd $(PYTHON_DIR) && $(RUFF) check . --quiet
+	@echo "→ Stack (ruff)…"
+	@cd $(STACK_DIR) && $(RUFF) check . --quiet
+	@echo "→ Pod bundle (ruff)…"
+	@cd $(BUNDLE_DIR) && $(RUFF) check . --quiet
+	@echo "→ Scenarios (ruff)…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
+
+# Every project whose uv.lock can go stale, which is every one that depends on a
+# sibling by path: change a dependency in `lemma-python` and eight other locks
+# are suddenly out of date. Two of these are the sandbox image templates, and
+# their Dockerfiles run `uv sync --locked` -- so a stale lock is not a warning
+# there, it fails the image build. That is a slow way to find out: it cost two
+# CI round trips before this gate existed, once for each template.
+#
+# `--check` resolves without writing, and the whole sweep is well under a second.
+LOCKED_PROJECTS = \
+	$(BACKEND_DIR) \
+	$(BACKEND_DIR)/lemma-connectors \
+	$(BACKEND_DIR)/sandbox-images/templates/function-python \
+	$(BACKEND_DIR)/sandbox-images/templates/workspace-python \
+	$(CLI_DIR) \
+	$(PYTHON_DIR) \
+	$(BUNDLE_DIR) \
+	$(STACK_DIR) \
+	$(SCENARIOS_DIR)
+
+lint-lockfiles:
+	@for project in $(LOCKED_PROJECTS); do \
+		(cd $$project && uv lock --check --quiet) \
+			|| { echo "  $$project/uv.lock is stale — run 'uv lock' there"; exit 1; }; \
+	done
+	@echo "9 lockfiles current."
+
+# ── Format ────────────────────────────────────────────────────────────────────
+#
+# Every first-party Python file is `ruff format` clean. Generated trees are
+# excluded and stay excluded: `lemma-backend/lemma-connectors/` comes from
+# provider OpenAPI specs and `lemma-python/lemma_sdk/openapi_client/` from the
+# API spec, so formatting either one would be reverted by the next generation
+# and read as codegen drift.
+#
+# `format-check` is part of `quality`, so formatting is a merge requirement.
+# It was held back through the reformat so open branches could rebase first;
+# in the fortnight that took, main merged seven unformatted files that the next
+# branch had to re-flatten. Enforced is the only state that stays true.
+SDK_FORMAT_EXCLUDE = --exclude lemma_sdk/openapi_client
+
+
+
+format:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format .
+	@# Scenarios was in `lint` but in neither of these, so `ruff check` held
+	@# while formatting drifted across 51 files. A directory that is checked
+	@# but never formatted is the one that drifts, because nothing says so.
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format .
+
+format-check:
+	@echo "→ Backend…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format-check
+	@echo "→ CLI…"
+	@cd $(CLI_DIR) && $(RUFF) format --check .
+	@echo "→ Python SDK…"
+	@cd $(PYTHON_DIR) && $(RUFF) format --check $(SDK_FORMAT_EXCLUDE) .
+	@echo "→ Stack…"
+	@cd $(STACK_DIR) && $(RUFF) format --check .
+	@echo "→ Pod bundle…"
+	@cd $(BUNDLE_DIR) && $(RUFF) format --check .
+	@echo "→ Scenarios…"
+	@cd $(SCENARIOS_DIR) && $(RUFF) format --check .
 
 # ── Static analysis ───────────────────────────────────────────────────────────
 #
@@ -1257,24 +1810,120 @@ lint:
 # the runtime connection-scope suite, which needs Docker. Run that with
 # `make -C lemma-backend test-connection-scope`. Stated rather than implied,
 # because the last comment here claiming parity was wrong for weeks.
+#
+# `lint-e2e-waits` used to be the other exception, and it had no reason to be:
+# it is an AST pass over the test tree that needs nothing running, so leaving
+# it out only meant learning about a new clock-wait from CI.
 quality:
+	@echo "→ Formatting…"
+	@$(MAKE) --no-print-directory format-check
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+	@echo "→ Ruff (CLI, SDK, stack, bundle, scenarios)…"
+	@$(MAKE) --no-print-directory lint-clients
+	@echo "→ Lockfiles…"
+	@$(MAKE) --no-print-directory lint-lockfiles
+	@echo "→ Client structure (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-structure-record
+	@echo "→ Client types (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-typecheck-record
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+	@echo "→ Connector package (ruff, excludes generated clients)…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-connectors
 	@echo "→ DB connection scope…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
+	@echo "→ Import-bound defaults…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
+	@echo "→ Swallowed errors…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ In-subject test doubles…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
 	@echo "→ Critical domain types…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
 	@echo "→ Architecture ratchet + route inventory…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+	@echo "→ Logging event catalog freshness…"
+	@# The catalog is generated from the literal logger calls in the tree and is
+	@# what the logging contract is enforced against. Nothing ran the generator,
+	@# so nothing noticed when the two diverged.
+	@cd $(BACKEND_DIR) && uv run python ../scripts/generate_logging_event_catalogs.py --check
 	@echo "→ OpenAPI spec freshness…"
 	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
+	@echo "→ Module contract coverage…"
+	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
+	@echo "→ E2E wait patterns…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
+	@echo "→ Local domain lists…"
+	@$(MAKE) --no-print-directory local-domain-check
+	@echo "→ Local auth gates…"
+	@$(MAKE) --no-print-directory local-auth-gate-check
+	@echo "→ Script portability…"
+	@$(MAKE) --no-print-directory script-portability-check
+	@echo "→ CI aggregators + job timeouts…"
+	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Test census (no suite has quietly stopped running)…"
+	@python3 scripts/check_pytest_census.py
+	@echo "→ E2E shard layout…"
+	@python3 scripts/plan_e2e_shards.py --verify
+	@echo "→ Product scenario traceability…"
+	@python3 scripts/check_scenario_coverage.py
 	@echo "✓ quality gates pass"
+
+# The backend's architecture ratchet, from the repo root. AGENTS.md and
+# CONTRIBUTING.md both tell you to run `make architecture`; until now only one
+# of them mentioned that it exists solely inside lemma-backend.
+architecture:
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+
+# ── Client measurement (advisory) ─────────────────────────────────────────────
+#
+# `quality` runs twenty-odd gates and fifteen of them begin `cd lemma-backend`.
+# The two packages a user actually installs got three: `format-check`, a bare
+# `ruff check`, and the lockfile sweep. Nothing counted a file's length, a
+# function's branchiness or an annotation that gave up -- so all three grew with
+# no number attached, and the first measurement found nine CLI files over the
+# backend's 600-line ceiling and a command function scoring 103 against a
+# backend worst case of 56.
+#
+# Both targets below are ADVISORY: they compare against a recorded baseline,
+# print anything that grew, and exit 0. That is deliberate and temporary. A
+# baseline this size arms into a gate that fails a hundred unrelated branches on
+# the day it is taken, and a gate people have to route around teaches that gates
+# can be routed around. Drop `--advisory` from each line to arm the ratchet;
+# nothing else has to change.
+measure-clients: client-structure-record client-typecheck-record
+
+# Size, complexity and untyped escapes, at lemma-backend's own thresholds.
+# Through `uv run` from lemma-cli rather than a bare `python3`: it parses 3.14
+# source, and macOS's system interpreter reports valid PEP 758 syntax as a
+# SyntaxError.
+client-structure-record:
+	@cd $(CLI_DIR) && uv run python ../scripts/check_client_structure.py --advisory
+
+# basedpyright over lemma_cli and lemma_sdk. Runs in each project's own
+# environment -- outside it, every `typer`/`textual`/`httpx` import is an error
+# that says nothing about this code. That has a price worth stating: this is
+# the only step in `quality` that installs an environment other than the
+# backend's, so the CI job now syncs lemma-cli and lemma-python too. Locally
+# they are already synced and it costs about four seconds.
+client-typecheck-record:
+	@python3 scripts/check_client_types.py --advisory
+
+# The tight loop before pushing: the gates that catch the most per second.
+# `quality` is the full pre-PR pass, but two of its steps import the whole app
+# (~16s each), which is too slow to run on every save.
+# A third list of gates, kept as a "fast subset" of `quality` — which is how it
+# came to omit format-check, the swallowed-errors gate and everything covering
+# the CLI and the SDKs, and to tell you that you had passed when CI would not
+# agree. `quality` is ~35s in total, so the subset was buying seconds and
+# costing a category of surprise. One list.
+pre-push: quality
 
 # CodeQL, the same suites CI runs. Reports only what this branch changed;
 # `codeql-all` reports the repository's full backlog.
@@ -1290,8 +1939,34 @@ codeql-javascript:
 codeql-all:
 	@./scripts/run_codeql.sh --all
 
+# The frontend half of the pre-PR pass.
+#
+# `quality` above is entirely Python: `format-check` covers the backend, the
+# CLI, both SDKs and the scenarios, and stops at the language boundary. So a
+# frontend-only change could pass every gate this repository offers locally and
+# still meet eslint, tsc, the design-system audit and the education-anchor
+# check for the first time in CI, ten minutes after pushing -- which is the
+# shape of gate `rust-toolchain.toml`'s own comment argues against.
+#
+# Skipped rather than failed when the dependencies are not installed. A backend
+# contributor who has never run `npm ci` should not have `make check` break on
+# them; CI is the gate, this is the shortcut.
+# Missing dependencies are a refusal, not a pass. This used to print "skipped"
+# and exit 0, which meant `make check` -- documented as "quality plus the
+# frontend plus CodeQL" -- reported success on a machine where not one frontend
+# gate had run, and said so in a line that scrolled past.
+quality-frontend:
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
+		echo "make: *** cannot run the frontend gates: node_modules is missing."; \
+		echo "    run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR),"; \
+		echo "    or run 'make quality' if your change is Python-only."; \
+		exit 1; \
+	fi
+	@echo "→ Frontend lint, types, design audit, education anchors…"
+	@cd $(FRONTEND_DIR) && npm run --silent check
+
 # Everything a PR is judged on, short of the test suites themselves.
-check: quality codeql
+check: quality quality-frontend codeql
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 

@@ -26,6 +26,8 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
+      desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
     steps:
       - uses: actions/checkout@v7
@@ -67,6 +69,12 @@ jobs:
               - 'lemma-typescript/scripts/generate_openapi_client.sh'
               - 'lemma-typescript/scripts/generate_l2.mjs'
               - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              # The published copy of the spec is generated from it too. It
+              # belongs to this filter and not `frontend`, because the change
+              # that staled it is a spec regeneration -- a lemma-python edit,
+              # which never starts the frontend job.
+              - 'lemma-frontend/public/openapi.json'
+              - 'lemma-frontend/scripts/sync-openapi-spec.mjs'
               - '.github/workflows/ci.yml'
             desktop:
               # desktop/** is now every Rust crate the app ships: the shell,
@@ -81,9 +89,52 @@ jobs:
               - 'scripts/prepare_desktop_test_runtime.py'
               - 'scripts/build_local_guest_runtime.sh'
               - '.github/actions/setup-apple-signing/**'
-              - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
               - '.github/workflows/release-local-images.yml'
+              # Deliberately NOT '.github/workflows/ci.yml'. Every other filter
+              # lists it, which is right for a cheap job, but these two are the
+              # 940-second Windows check and the 476-second macOS check -- so
+              # any PR that touched this file at all, including one that only
+              # tuned CI, paid for both. If you change the desktop jobs
+              # themselves, validate them with Actions -> CI -> Run workflow.
+            # What can change how the app is *packaged*, as opposed to what it
+            # does. Bundling is the expensive half of the Windows check -- 255s
+            # of a 707s job, for an installer that is then thrown away -- and
+            # nothing outside this list can alter its result. Ordinary Rust
+            # changes still get compiled, linted and tested on Windows; they
+            # just stop paying to watch NSIS produce the same installer again.
+            desktop_packaging:
+              - 'desktop/tauri*.conf.json'
+              - 'desktop/Cargo.toml'
+              - 'desktop/Cargo.lock'
+              - 'desktop/icons/**'
+              - 'desktop/capabilities/**'
+              - 'desktop/permissions/**'
+              - 'desktop/build.rs'
+              - 'desktop/scripts/build-sidecar.ps1'
+              - 'desktop/scripts/tauri-cli-version.txt'
+              - 'desktop/runtime/lemma-local.json'
+              # See the note in the `desktop` filter above: ci.yml is left out
+              # on purpose.
+            # What can change the *desktop* meaning of a backend or frontend
+            # edit. `desktop` deliberately does not list these -- it starts two
+            # 90-minute jobs -- but `build_local_host_pack.py` packs the backend
+            # and the frontend into the host pack the app ships and supervises,
+            # and no CI job ran that script at all. A backend dependency without
+            # an arm64 wheel, or a Next config change that breaks the standalone
+            # output, merged green and was discovered in a release run.
+            #
+            # This one is cheap enough to list ci.yml, so a change to the
+            # desktop CI steps finally runs something desktop-shaped.
+            desktop_contract:
+              - 'lemma-backend/**'
+              - 'lemma-frontend/**'
+              - 'scripts/build_local_host_pack.py'
+              - 'scripts/build_local_guest_runtime.sh'
+              - 'desktop/locald/src/native_host_pack.rs'
+              - 'desktop/contracts/**'
+              - 'desktop/local-runtime/guest-image/**'
+              - '.github/workflows/ci.yml'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -94,27 +145,51 @@ jobs:
               # desktop job and skipped the test that reads it.
               - 'scripts/build_local_host_pack.py'
               - 'scripts/prepare_desktop_test_runtime.py'
+              # The host-pack layout contract. Both halves of it have to run
+              # when it changes, and this is the half that lives in tests/.
+              - 'desktop/contracts/**'
               # These tests assert on the env names the backend settings read,
               # so the drift they exist to catch lands in the settings module,
               # not only in the Makefile that writes it.
               - 'lemma-backend/app/modules/workspace/config.py'
               - '.github/workflows/ci.yml'
+              # This job carries the two gates that watch .github itself: the
+              # aggregator/timeout check over every workflow, and the e2e shard
+              # layout. Both are cheap and neither is backend-specific, so they
+              # cannot live in the backend-gated quality job.
+              - '.github/workflows/**'
+              - '.github/e2e-shards.json'
+              - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_ci_job_results.py'
+              - 'scripts/check_pytest_census.py'
+              - 'scripts/check_test_run.py'
+              # The recorded floors and ceilings themselves. Without these a PR
+              # that edits only a baseline runs nothing at all.
+              - '.github/pytest-census.json'
+              - '.github/test-run-baseline.json'
+              - 'scripts/_pytest_census_plugin.py'
+              - 'scripts/check_host_pack.py'
+              - 'scripts/plan_e2e_shards.py'
   backend-unit:
     name: lemma-backend unit
     timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
+    # Inherits the workflow's `contents: read` / `pull-requests: read`. This
+    # job asked for `pull-requests: write` and `issues: write` back when it
+    # posted the coverage table as a PR comment; that moved to the job summary
+    # and then to backend-coverage.yml, and the grant stayed behind. Nothing
+    # here writes anything to GitHub but an artifact.
     defaults:
       run:
         working-directory: lemma-backend
     services:
       redis:
-        image: redis:7
+        # The same tag `test_utils.py` pins and the e2e workflow caches.
+        # This said `redis:7`, a second, different image (192MB against
+        # 42MB) pulled fresh for this job alone.
+        image: redis:7.4-alpine
         ports:
           - 6379:6379
         options: >-
@@ -122,9 +197,33 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # This lane runs `$(UNIT_MARKERS)`, which includes the integration tests,
+      # and those skip themselves when no database answers. Without this service 57
+      # of them did -- the whole workspace integration suite: the sandbox state
+      # machine, the repository, and every one of the sweeper's decisions about
+      # what it may destroy. They passed locally and were absent here, which is
+      # how a sweep that deleted live user workspaces reached production with 24
+      # tests written about it.
+      #
+      # The two that need a Docker daemon or a cargo-built bridge are marked
+      # `local_host` and deselected instead: a database this lane can be given,
+      # and those it cannot, so here they could only ever skip.
+      postgres:
+        image: pgvector/pgvector:0.8.3-pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lemma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lemma"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
@@ -133,71 +232,89 @@ jobs:
         run: make coverage-backend-unit
         env:
           REDIS_URL: redis://localhost:6379
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
+      # Collection-time checks cannot see a test that starts and then skips
+      # itself from a fixture. 72 of this lane's tests do exactly that when
+      # Postgres is unreachable, and this job's own comment records what the
+      # same suite silently skipping 57 tests once cost.
+      - name: No suite skipped itself at runtime
+        if: always()
+        run: >-
+          python3 ../scripts/check_test_run.py --lane unit
+          coverage-backend/junit-unit.xml
+
       - name: Add backend coverage to job summary
         if: always()
         run: |
           if [ -f coverage-backend/comment.md ]; then
             cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Record the commit this coverage was measured on
+        if: always()
+        run: |
+          mkdir -p coverage-backend
+          echo "$GITHUB_SHA" > coverage-backend/measured-sha.txt
       - name: Upload backend unit coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-unit-coverage
           include-hidden-files: true
           path: |
             lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/measured-sha.txt
             lemma-backend/coverage-backend/comment.md
             lemma-backend/coverage-backend/summary.json
             lemma-backend/coverage-backend/coverage.json
             lemma-backend/coverage-backend/coverage.xml
-            lemma-backend/coverage-backend/html
+            # `make coverage-backend-unit` has always written this and nothing
+            # has ever collected it, so the unit lane's slow tail is invisible
+            # -- 195 seconds with no way to see whether that is a broad spread
+            # or three slow tests, which is the difference between needing
+            # per-worker database isolation for xdist and needing to split
+            # three tests. The e2e shards upload theirs and get a slowest-tests
+            # summary out of it; this is the same line.
+            lemma-backend/coverage-backend/junit-*.xml
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates
     timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    # Deliberately not path-filtered. `make quality` now covers the CLI, both
+    # SDKs, the stack, the bundle and the scenario suite as well as the backend,
+    # and it also checks repo-wide things -- the scenario/spec traceability, the
+    # CI aggregator lists, the test census. A filter would skip it for exactly
+    # the change that breaks one of those, and a skipped required check counts
+    # as satisfied. It is ~40s of work.
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync deps
         run: uv sync --extra local
-      - name: Ruff handwritten backend
-        run: make lint
-      - name: Async-safety lint
-        run: make lint-async
-      # The pool is sized on the promise that a connection is never held across
-      # non-database work, and worker concurrency is sized on the promise that
-      # blocking work is bounded. These two gates are what keep both true.
-      - name: DB connection scope
-        run: make lint-session-scope
-      - name: I/O hygiene (bounded offloads, timed HTTP sessions)
-        run: make lint-io-hygiene
-      # The static gates above check the shapes they can see. This one runs the
-      # flows and measures: a connection checked out with no statement running
-      # is a hold, whatever the code looks like. Deliberately a small marked
-      # subset rather than the whole e2e suite — this gates merges, so it has to
-      # stay hermetic and fast. The full suite stays advisory in e2e.yml.
+      # One command, and it is the one the contributing guide tells a person to
+      # run before opening a pull request. This job used to enumerate the gates
+      # itself, which is drift waiting to happen: `make quality` gained
+      # format-check and the CI list did not, so formatting was advisory here
+      # for months. Anything added to `quality` is now run by CI for free, and
+      # a green local run means the same thing as a green job.
+      - name: Quality gates (`make quality`)
+        working-directory: .
+        run: make quality
+      # Not part of `quality`: these two run code rather than reading it.
+      - name: Connector package tests
+        run: make test-connectors
+      # The static gates check the shapes they can see. This one runs the flows
+      # and measures: a connection checked out with no statement running is a
+      # hold, whatever the code looks like. Deliberately a small marked subset
+      # rather than the whole e2e suite -- this gates merges, so it has to stay
+      # hermetic and fast. The full suite stays advisory in e2e.yml.
       - name: DB connection scope (runtime)
         run: make test-connection-scope
-      - name: Critical domain type safety
-        run: make typecheck-critical
-      - name: Architecture, complexity, and broad-catch ratchet
-        run: make architecture
-      # The codegen-drift gate only proves the SDKs match the committed spec.
-      # Nothing proved the committed spec matches the routes this app defines,
-      # so a new endpoint could ship with both SDKs silently lacking it. This
-      # compares the two, and belongs here rather than in codegen-drift because
-      # it needs the backend's dependencies to import the app.
-      - name: OpenAPI spec matches the routes the app defines
-        run: uv run python scripts/dump_openapi_spec.py --check
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade
@@ -210,7 +327,7 @@ jobs:
         working-directory: lemma-backend
     services:
       postgres:
-        image: pgvector/pgvector:0.8.3-pg15
+        image: pgvector/pgvector:0.8.3-pg18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -224,7 +341,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync
@@ -232,21 +349,58 @@ jobs:
         run: uv run python scripts/verify_reliability_migration.py
         env:
           MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
+      # Seeds the shapes the verifier above does not: an agentless surface, a
+      # conversation naming nobody. Resets the schema first, so it must run
+      # after that one rather than beside it.
+      - name: Verify pod default agent migration
+        run: uv run python scripts/verify_pod_default_agent_migration.py
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
 
+  # Was three jobs -- "Python SDK + CLI tests" (48s), "lemma-stack unit" (24s)
+  # and "Install experience" (50s). All three were gated on the same filter,
+  # and the last two ran the same pytest directory split in half. Three job
+  # slots and three runner boots for under two minutes of work, on a plan that
+  # allows twenty concurrent jobs and where CI alone used to define eighteen.
   python-sdk:
-    name: Python SDK + CLI tests
+    name: Python SDK, CLI, and stack tests
     timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # Shared with release-lemma-python.yml and release-lemma-terminal.yml, so
       # what a release verifies cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-python-sdk
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-stack/uv.lock
+      # Deliberately here and not in verify-python-sdk: that action is shared
+      # with the release workflows, and a release should be gated on whether
+      # the distribution is correct, not on whether the source is tidy. Source
+      # quality is a pull-request concern.
+      #
+      # lemma-python had no ruff dependency at all, so the root Makefile's line
+      # for it could only ever fail to spawn -- which its `2>/dev/null || true`
+      # then swallowed as a pass. Its own dev group now pins the same ruff
+      # bound lemma-backend does; see the comment there for why the bound is
+      # load-bearing.
+      - name: Python SDK lint
+        working-directory: lemma-python
+        run: uv run ruff check .
+      # lemma-stack renders the environment the backend actually boots with, so
+      # its tests are the only thing that catches a writer drifting from the
+      # settings class that reads it. test_install_experience.py is the one
+      # that needs Docker; the runner has it, which is why it no longer needs
+      # a job of its own to say so.
+      - name: Run lemma-stack tests
+        working-directory: lemma-stack
+        run: uv run python -m pytest tests/ -q
 
   cli-packaging:
     name: lemma-terminal wheel (clean checkout)
@@ -263,7 +417,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - name: Build sdist + wheel the way the release does
@@ -285,7 +439,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -302,15 +456,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: lemma-typescript/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Regenerate Python client from committed spec
@@ -325,7 +479,7 @@ jobs:
         run: OPENAPI_FILE=../lemma-python/lemma_sdk/openapi_spec.json bash scripts/generate_openapi_client.sh
       - name: Fail on TypeScript drift
         run: |
-          git diff --exit-code lemma-typescript/src/openapi_client \
+          git diff --exit-code lemma-typescript/src/openapi_client lemma-typescript/src/openapi_spec.json \
             || { echo "::error::Committed TypeScript client is out of sync — run scripts/generate_openapi_client.sh and commit"; exit 1; }
       - name: Regenerate L2 hooks from x-lemma metadata
         working-directory: lemma-typescript
@@ -334,25 +488,50 @@ jobs:
         run: |
           git diff --exit-code lemma-typescript/src/react/generated \
             || { echo "::error::Generated L2 hooks are stale — run 'npm run generate:l2' and commit"; exit 1; }
+      # lemma-frontend/public/openapi.json is what lemma.work/openapi.json
+      # serves, generated from the same committed spec. `npm run check` in the
+      # frontend job verifies it too, but that job does not run on a
+      # lemma-python-only change -- so this is the gate that sees a spec
+      # regeneration. No `npm ci`: the script is dependency-free Node.
+      - name: Fail on published OpenAPI spec drift
+        run: node lemma-frontend/scripts/sync-openapi-spec.mjs --check
 
-  frontend-check:
-    name: Frontend lint, design audit, test
+  # Was two jobs. They were byte-identical for their first four steps -- two
+  # checkouts, two `npm ci` pairs, and the lemma-typescript build that every
+  # `pre*` hook in lemma-frontend/package.json triggers -- so the split cost a
+  # full install (~90s of the ~100s each) to gain nothing but two separate
+  # check names. One job, and the install is paid once.
+  frontend:
+    name: Frontend lint, test, build
     timeout-minutes: 30
     needs: changes
     # Also on an SDK change: the frontend typechecks against lemma-typescript,
-    # so an SDK signature change breaks `npm run check` here while only
-    # "Frontend build" was watching for it.
+    # so an SDK signature change breaks `npm run check` here while only the
+    # build step was watching for it.
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             lemma-typescript/package-lock.json
             lemma-frontend/package-lock.json
+      # Next keeps its own compilation cache, and without it every build here
+      # is cold. Keyed on the lockfile plus the source, restoring from any
+      # earlier build of the same dependency set.
+      - name: Cache the Next.js build
+        uses: actions/cache@v6
+        with:
+          path: lemma-frontend/.next/cache
+          key: >-
+            next-${{ hashFiles('lemma-frontend/package-lock.json') }}-${{
+              hashFiles('lemma-frontend/app/**', 'lemma-frontend/components/**',
+                        'lemma-frontend/lib/**') }}
+          restore-keys: |
+            next-${{ hashFiles('lemma-frontend/package-lock.json') }}-
       - name: Install TypeScript SDK dependencies
         working-directory: lemma-typescript
         run: npm ci
@@ -365,28 +544,6 @@ jobs:
       - name: Frontend unit tests
         working-directory: lemma-frontend
         run: npm test
-
-  frontend-build:
-    name: Frontend build (SDK integration)
-    timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: |
-            lemma-typescript/package-lock.json
-            lemma-frontend/package-lock.json
-      - name: Install TypeScript SDK dependencies
-        working-directory: lemma-typescript
-        run: npm ci
-      - name: Install frontend dependencies
-        working-directory: lemma-frontend
-        run: npm ci
       - name: Build frontend (builds the SDK via prebuild)
         working-directory: lemma-frontend
         run: npm run build
@@ -398,37 +555,18 @@ jobs:
       - name: Verify generated SDK browser bundles are committed
         run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
 
-  # lemma-stack renders the environment the backend actually boots with, so its
-  # tests are the only thing that catches a writer drifting from the settings
-  # class that reads it. They need no Docker and finish in seconds; only
-  # test_install_experience.py does, and it keeps its own job below.
-  lemma-stack-unit:
-    name: lemma-stack unit
-    timeout-minutes: 10
-    needs: changes
-    if: needs.changes.outputs.python_sdk == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Run lemma-stack unit tests
-        working-directory: lemma-stack
-        run: uv run python -m pytest tests/ --ignore=tests/test_install_experience.py -q
-
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
   # them outside `make test-dev-workflow`.
   dev-workflow:
-    name: Dev workflow
+    name: Repo tooling and .github gates
     timeout-minutes: 10
     needs: changes
     if: needs.changes.outputs.repo_tooling == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Run dev workflow tests
@@ -437,23 +575,23 @@ jobs:
       # workflow file was ever run. The other two cover the scripts that build
       # the host pack and stage a bundled runtime -- both of which the desktop
       # installers now depend on.
+      # pyyaml because two of these gates read the workflow files themselves --
+      # the aggregator check and the skipped-job check. Without it their tests
+      # fail to *import*, which pytest reports as a collection error rather
+      # than a failure, and which is easy to skim past.
       - name: Run repo tooling tests
-        run: uv run --with pytest python -m pytest tests/ -q
-
-  install-experience:
-    name: Install experience (Linux Docker)
-    timeout-minutes: 30
-    needs: changes
-    if: needs.changes.outputs.python_sdk == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Run install experience tests
-        working-directory: lemma-stack
-        run: uv run python -m pytest tests/test_install_experience.py -v
+        run: uv run --with pytest --with pyyaml python -m pytest tests/ -q
+      # The two required checks are aggregator jobs, so their `needs:` lists
+      # are the merge gate. This asserts nothing has fallen out of one -- the
+      # failure ci.yml's own comment records -- and that every job still
+      # declares a timeout.
+      - name: CI aggregators watch every job
+        run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
+      # The e2e shard layout is generated from measured timings. This is the
+      # static half of keeping it honest: every e2e directory on disk lands in
+      # exactly one shard, so a new module's tests cannot go quietly unrun.
+      - name: E2E shard layout covers every module
+        run: python3 scripts/plan_e2e_shards.py --verify
 
   windows-cli:
     name: Windows CLI smoke test
@@ -463,10 +601,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install lemma-cli from local checkout
@@ -495,9 +633,10 @@ jobs:
           $env:PATH = "$lemmaBin;$env:PATH"
           lemma doctor 2>&1
           # doctor may exit 1 if no server; just verify it doesn't crash
-      # Absorbed from windows-cli-smoke.yml, which ran a second Windows runner
-      # on every push to main to assert these two and nothing else this job did
-      # not already cover.
+      # Absorbed from the old windows-cli-smoke.yml, which spent a second
+      # Windows runner asserting these two and nothing else this job did not
+      # already cover. That workflow has since been deleted; this job is the
+      # only Windows CLI check.
       - name: lemma servers list / auth status
         run: |
           $ErrorActionPreference = "Stop"
@@ -523,6 +662,46 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  # The cheap desktop lane: contract checks only, no app compiler and no VM.
+  #
+  # This exists because the expensive `desktop` job is deliberately not
+  # triggered by backend or frontend changes -- it costs 476s on macOS and 940s
+  # on Windows -- while `build_local_host_pack.py` packs both of them into the
+  # host pack the app ships. Nothing connected the two, so a backend change
+  # that broke the desktop stack merged with CI fully green.
+  #
+  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  desktop-contract:
+    timeout-minutes: 20
+    name: Desktop contracts
+    needs: changes
+    if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-contract
+
+      # The host-pack layout locald hard-codes, and the guest protocol the
+      # backend's stub stands in for. Both are pure assertions over committed
+      # files, so they need neither the app crate nor a runtime.
+      - name: Host pack and guest contracts
+        working-directory: desktop
+        run: cargo test -p lemma-locald -p lemma-guestd --locked
+
+      # `make desktop-lint` has always run this; CI never did, and it guards a
+      # guest-kernel Oops during first setup.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
+
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
   # most of managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build
@@ -539,21 +718,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
+          # is re-downloaded on every run of both 90-minute desktop jobs.
+          cache: npm
+          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       # The Agent Host's ACP integration tests spawn a scripted Python agent
       # over stdio, and panic outright when there is no interpreter to spawn.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -574,15 +757,21 @@ jobs:
         working-directory: desktop
         run: cargo fmt --all --check
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-ci-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-ci-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-ci
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -618,6 +807,11 @@ jobs:
       # before this step.
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
+
+      # One second, and it guards a guest-kernel Oops during first setup.
+      # `make desktop-lint` has always run it; CI never did.
+      - name: Memory balloon policy
+        run: desktop/scripts/check-balloon-policy.sh
 
       - name: Lint
         working-directory: desktop
@@ -658,9 +852,25 @@ jobs:
         run: |
           echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      - name: Build and codesign online DMG
+      # The .app always; the .dmg only where a broken one would be caught.
+      #
+      # The same trade the Windows job already makes for NSIS, for the same
+      # reason: wrapping the .app in a disk image is the one step here whose
+      # output is discarded, and nothing outside `desktop_packaging` can change
+      # its result. It is also the flakiest thing in this job -- `bundle_dmg.sh`
+      # fails on a busy `hdiutil` often enough to have shown up twice in the
+      # last twenty runs -- so on an ordinary Rust pull request it is pure
+      # noise. Everything this job actually asserts (it compiles, it codesigns,
+      # the sidecars are embedded, the refusal marker survives) is asserted on
+      # the .app, which is built either way.
+      - name: Build and codesign the online app
         working-directory: desktop
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+        env:
+          BUNDLES: >-
+            ${{ (github.event_name == 'push'
+            || needs.changes.outputs.desktop_packaging == 'true')
+            && 'app,dmg' || 'app' }}
+        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
 
       - name: Verify application signature
         shell: bash
@@ -698,8 +908,34 @@ jobs:
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
 
+      # The build-check DMG is meant to refuse to install, by name rather than
+      # by failing a DNS lookup -- `artifact_install.rs` recognises
+      # `artifact_source: ci-build-check` and says so specifically. There is a
+      # unit test for the recognition; nothing checked that the *shipped
+      # artifact* still carries the marker. A packaging change that dropped it
+      # would leave whoever tried it debugging a network error for an hour.
+      - name: The build-check app refuses to install, and says why
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="desktop/target/release/bundle/macos/Lemma.app/Contents/Resources/lemma-local.json"
+          test -f "${manifest}"
+          python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          if data.get("artifact_source") != "ci-build-check":
+              raise SystemExit(
+                  "the build-check app lost its refusal marker, so it now fails "
+                  "with a generic network error instead of naming itself"
+              )
+          ' "${manifest}"
+
+      # Only exists when the step above was asked for it.
       - name: Upload macOS build-check DMG
-        uses: actions/upload-artifact@v4
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
@@ -709,6 +945,103 @@ jobs:
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  # Build the artifact the app actually ships, and prove its interpreters run.
+  #
+  # `desktop-contract` proves the *layout* both sides agree on; nothing proved
+  # the pack can be produced at all. It is built by a release job, from the
+  # backend and the frontend, using a relocatable CPython and a copied Node --
+  # and the ways that breaks are all invisible to every other job here: a
+  # backend dependency with no arm64 wheel, a Next config change that stops
+  # emitting standalone output, an interpreter whose baked prefix points at the
+  # build machine.
+  #
+  # That last one is the reason this cannot just be a build. A relocatable
+  # CPython with a wrong `sys.prefix` unpacks, passes every file-existence
+  # check, has the right version, and fails the moment it is asked to import
+  # anything -- on a user's machine, four minutes into a first run. So the
+  # packed interpreters are executed here, not merely produced.
+  #
+  # Merge-to-main only. It is ~25 minutes on a macOS runner and it guards
+  # release-time breakage rather than review-time correctness, so a red one is
+  # "look in the morning", not a blocked PR. It is deliberately absent from the
+  # `ci` aggregator for the same reason, and exempted in
+  # scripts/check_ci_aggregators.py where that decision is written down.
+  host-pack-macos:
+    name: Host pack builds and runs (macOS)
+    timeout-minutes: 60
+    needs: changes
+    if: >-
+      github.event_name == 'push' &&
+      (needs.changes.outputs.desktop_contract == 'true' ||
+       needs.changes.outputs.desktop == 'true')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # `.nvmrc`, like every other Node job here and — the reason this matters
+      # — like release-local-images.yml, which builds the pack that actually
+      # ships. This said `node-version: 22`, the one literal pin left in the
+      # repository, and the two facts it hid took three days of red main to
+      # surface: both package.json files declare `engines: node >=24 <25`, so
+      # the frontend was built by an interpreter it does not support, and the
+      # runner's tool-cache build of 22.23.1 links `@rpath/libnode.127.dylib`
+      # while 24.x is a single static executable. `copy_node_runtime` copies
+      # the executable alone, so the packed Node could not start at all.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # Digests nobody resolves. The pack embeds a release manifest, and this
+      # job is about the pack's own layout and interpreters -- not about which
+      # images a release points at. Placeholders keep it off the network and
+      # out of the release workflow's way.
+      - name: Stage a release manifest
+        run: |
+          mkdir -p host-pack-out
+          python3 - <<'PY'
+          import json, pathlib
+          image = lambda name: {
+              "ref": f"ghcr.io/lemma-work/{name}:0.0.0-ci",
+              "digest": "sha256:" + "0" * 64,
+          }
+          pathlib.Path("host-pack-out/host-release.json").write_text(
+              json.dumps(
+                  {
+                      "schema_version": 1,
+                      "version": "0.0.0-ci",
+                      "min_admin_version": "0.1.0",
+                      "images": {
+                          name: image(f"lemma-{name}")
+                          for name in ("backend", "frontend", "workspace", "function")
+                      },
+                      "infra": {
+                          "postgres": image("postgres"),
+                          "redis": image("redis"),
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n"
+          )
+          PY
+
+      # The build smoke-executes the packed Python itself, importing FastMCP,
+      # uvicorn, keyring and the local sandbox provider. That is the check a
+      # wrong `sys.prefix` fails.
+      - name: Build the host pack
+        run: |
+          uv run --no-project python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-pack-out/host-release.json
+
+      # And the same question asked of the frontend half, which the build does
+      # not ask: a copied Node that cannot resolve its own standalone server is
+      # a frontend that never serves.
+      - name: The packed runtimes execute
+        run: uv run --no-project python scripts/check_host_pack.py host-pack-out/local-runtime
 
   # guestd's vsock listener is behind a Linux cfg that only a Linux build ever
   # compiles, so the macOS workspace run says nothing about the code that
@@ -723,19 +1056,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-guestd-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-guestd-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-guestd
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint
         working-directory: desktop
@@ -761,24 +1100,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
+          # is re-downloaded on every run of both 90-minute desktop jobs.
+          cache: npm
+          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
           targets: x86_64-pc-windows-msvc
 
-      - name: Cache Cargo
-        uses: actions/cache@v4
+      # Swatinem/rust-cache, not a hand-rolled actions/cache. The old key was
+      # `hashFiles('desktop/Cargo.lock')` alone, so it changed only when a
+      # dependency changed -- which meant an ordinary Rust edit restored a
+      # `desktop/target` full of stale artifacts and recompiled 46k lines
+      # anyway, and every run re-uploaded a multi-gigabyte cache of build
+      # output it had just invalidated. rust-cache keys on the toolchain,
+      # profile and job as well, and prunes the registry down to what the
+      # lockfile actually references before saving.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-win-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-win-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-win
+          # PRs restore from main's cache but do not write their own, so one
+          # branch's build output cannot evict another's.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -811,13 +1160,27 @@ jobs:
       # Unsigned: the Authenticode path needs release secrets. This proves the
       # bundler runs and the payload stays within budget, not that the artifact
       # is installable.
+      # Skipped on a pull request that cannot have changed the result. The
+      # bundle is the single most expensive step in CI's Windows job and its
+      # output is discarded, so it runs where a regression would actually be
+      # caught by it: every push to main, and any branch that touches packaging.
+      # A compile or test regression -- the thing this job exists to catch, and
+      # the thing that has actually caught real bugs -- is still gated on every
+      # pull request by the clippy and test steps above.
       - name: Build online NSIS installer
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         working-directory: desktop
         run: |
           npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
           if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
 
+      # Measures what the step above produced, so it goes wherever that goes.
       - name: Enforce small online application payload
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
         run: |
           $ErrorActionPreference = "Stop"
           $payload = @(
@@ -852,13 +1215,11 @@ jobs:
       - cli-packaging
       - typescript-sdk
       - codegen-drift
-      - frontend-check
-      - frontend-build
-      - lemma-stack-unit
+      - frontend
       - dev-workflow
-      - install-experience
       - windows-cli
       - desktop
+      - desktop-contract
       - desktop-guestd
       - desktop-windows
     runs-on: ubuntu-latest
@@ -868,4 +1229,20 @@ jobs:
         run: |
           echo "::error::One or more required CI suites failed or were cancelled."
           exit 1
+      # The step above cannot see the third way this check goes green: a job
+      # that skipped although its filter said to run it. `skipped` is not
+      # `failure`, so a suite that stopped running reads exactly like a suite
+      # that was correctly unaffected. This compares each job's result against
+      # the filter it actually gates on, read back out of this file.
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: No gated job skipped while its filter was live
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          # So a merge-to-main-only job's skip on a PR reads as correct rather
+          # than as one more job this gate stopped covering.
+          CI_EVENT_NAME: ${{ github.event_name }}
+        run: uv run --no-project --with pyyaml python scripts/check_ci_job_results.py
       - run: echo "All required CI suites passed (or were skipped as unaffected)."

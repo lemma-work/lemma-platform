@@ -35,11 +35,7 @@ def test_the_e2b_surface_is_exactly_five_settings() -> None:
     whether `docs/configuration.md` is still true.
     """
     declared = {
-        (
-            field.validation_alias.choices[0]
-            if field.validation_alias
-            else name.upper()
-        )
+        (field.validation_alias.choices[0] if field.validation_alias else name.upper())
         for name, field in WorkspaceSettings.model_fields.items()
     }
 
@@ -85,9 +81,7 @@ def test_each_provider_declares_where_storage_lives() -> None:
 
     assert DockerSandboxProvider.storage_kind is ProviderStorageKind.VOLUME
     assert E2BSandboxProvider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
-    assert (
-        LemmaLocalSandboxProvider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
-    )
+    assert LemmaLocalSandboxProvider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
 
 
 def test_an_unknown_provider_is_refused_at_startup(monkeypatch) -> None:

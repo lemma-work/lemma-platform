@@ -269,6 +269,23 @@ fn local_root() -> PathBuf {
 // unix-only rather than skipped.
 #[cfg(all(test, unix))]
 mod tests {
+
+    /// Join the server thread, or fail rather than hang the binary.
+    ///
+    /// It blocks in `accept()`; if the client under test never connects, an
+    /// unconditional `join()` waits forever and takes every remaining test with
+    /// it. `lemma-locald` has the same helper for the same reason -- a separate
+    /// crate, and one function does not justify sharing one.
+    fn join_within<T>(handle: std::thread::JoinHandle<T>, what: &str) -> T {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            if handle.is_finished() {
+                return handle.join().expect("the server thread panicked");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("{what} never finished; it is still blocked on the socket");
+    }
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
@@ -312,7 +329,7 @@ mod tests {
         )
         .unwrap();
 
-        server.join().unwrap();
+        join_within(server, "the stand-in guest");
         assert!(ok);
         assert_eq!(
             serde_json::from_slice::<Value>(&output).unwrap()["result"]["status"],

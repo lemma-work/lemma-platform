@@ -20,6 +20,7 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { BundleProgressBar } from '@/components/bundle/bundle-progress';
 import { AccountVariableField } from '@/components/bundle/account-variable-field';
+import { KIND } from '@/components/connectors/connector-utils';
 import { SocialCardPanel } from '@/components/share/social-card-panel';
 import {
     getPublish,
@@ -462,11 +463,16 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                                         placeholder="my-pod"
                                     />
                                 </div>
+                                {/* GitHub is Lemma's own `http`-kind connector, not a Composio
+                                    toolkit: publishing runs its native git-data operations, and a
+                                    workspace agent needs the account's real OAuth token. Retired
+                                    Composio installs are disabled rather than deleted, so pinning
+                                    the kind is what keeps their accounts out of this picker. */}
                                 <AccountVariableField
                                     organizationId={pod?.organization_id}
                                     podId={podId}
                                     connectorId="github"
-                                    connectorKind="composio"
+                                    connectorKind={KIND.HTTP}
                                     label="GitHub account"
                                     description="The connected account that owns and publishes the repository."
                                     required

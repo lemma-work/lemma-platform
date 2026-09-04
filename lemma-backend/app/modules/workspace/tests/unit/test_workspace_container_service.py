@@ -296,19 +296,31 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
 
-    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 0.05)
+    # Deliberately generous for the reuse half. What is under test is that a
+    # call inside the window skips the mkdir, not that three in-memory calls
+    # finish within 50ms of each other -- and with the window set to 50ms that
+    # is what the assertion below was really measuring. On a loaded runner
+    # under coverage tracing it would start reporting a second mkdir for
+    # reasons that have nothing to do with reuse. Production allows 60s.
+    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 30.0)
 
     await asyncio.gather(
         service.get_session(user_id=user_id, pod_id=None, session_id="first"),
         service.get_session(user_id=user_id, pod_id=None, session_id="second"),
     )
     # Inside the readiness window, a later call reuses the directory rather than
-    # re-running the mkdir round trip -- 833ms at p50 against a real sandbox, on
-    # a directory created by the first command of the run.
+    # re-running the mkdir round trip -- a real sandbox round trip, on a
+    # directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
     assert manager_client.directories == [(user_id, "/workspace")]
 
     # It is a window, not a permanent answer: the check comes back afterwards.
+    # The window is compared against the loop clock on every read
+    # (`loop.time() - ready_at < _DIRECTORY_READY_SECONDS`), so shrinking it
+    # here expires the entry recorded above without waiting out the 30s. This
+    # direction is safe to race: a slow machine only makes *more* time pass,
+    # which is exactly what the assertion wants.
+    monkeypatch.setattr(container_service, "_DIRECTORY_READY_SECONDS", 0.05)
     await asyncio.sleep(0.08)
     await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 

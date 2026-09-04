@@ -68,9 +68,7 @@ class DatastoreEventHandler:
         fired_schedule_ids: list[UUID] = []
         for schedule in schedules:
             if not self._matches_conditions(schedule, event, operation):
-                await self._record_fire(
-                    schedule.id, status=ScheduleFireStatus.FILTERED
-                )
+                await self._record_fire(schedule.id, status=ScheduleFireStatus.FILTERED)
                 continue
 
             # Let the connection go before processing. A schedule carrying a
@@ -99,10 +97,10 @@ class DatastoreEventHandler:
                     )
             except Exception as exc:
                 logger.debug(
-                    'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated',
+                    "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated",
                     record_id=event.record_id,
-                exc_info=True,
-            )
+                    exc_info=True,
+                )
                 await self._record_fire(
                     schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
                 )
@@ -155,6 +153,20 @@ class DatastoreEventHandler:
             return False
         if config is None or not config.when:
             return True
+        if event.payload_truncated:
+            # The body was too large to carry, so the conditions cannot be
+            # evaluated against it. Firing on an empty payload would match the
+            # wrong rows in both directions, so the event is dropped and said
+            # out loud -- a schedule that is silently 4 days behind is the
+            # failure this codebase has already been bitten by. The durable fix
+            # is to re-read the row here; until then this is visible, not quiet.
+            logger.warning(
+                "schedule.datastore_event_handler.truncated_payload.degraded",
+                schedule_id=str(schedule.id),
+                table_name=event.table_name,
+                record_id=event.record_id,
+            )
+            return False
         return evaluate_match_conditions(
             config.when,
             operation=operation,
@@ -194,10 +206,19 @@ class DatastoreEventHandler:
                 pod_id=event.pod_id,
             )
         except Exception:
+            # Degraded, not failed: this lookup only decides the severity of the
+            # unmatched-event record below, so nothing user-facing breaks. But
+            # "no schedules are configured" and "the database is down" must not
+            # render as the same sentence, which is what an empty list did.
+            logger.warning(
+                "schedule.datastore_event_handler.active_schedule_lookup.degraded",
+                pod_id=str(event.pod_id),
+                exc_info=True,
+            )
             active = []
         if active:
             logger.debug(
-                'schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic',
+                "schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic",
                 record_id=event.record_id,
                 count=len(active),
                 pod_id=event.pod_id,

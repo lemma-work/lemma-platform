@@ -43,6 +43,13 @@ export interface AssistantRenderableMessage {
   parts?: AssistantMessagePart[];
   createdAt?: Date;
   conversation_id?: string;
+  /**
+   * The provisional id this message replaced, when it is the server's echo of a
+   * turn that was already on screen. Consumers key turns by identity, and this
+   * is what lets the echo inherit the turn the provisional message opened
+   * instead of mounting a second one in its place.
+   */
+  optimistic_id?: string;
   sequence?: number;
   agent_run_id?: string | null;
   metadata?: Record<string, unknown> | null;

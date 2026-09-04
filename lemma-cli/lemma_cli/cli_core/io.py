@@ -179,7 +179,9 @@ def table(
 
 def _emit_fold_hint(ctx: _Ctx) -> None:
     if ctx.folded:
-        console.print("[dim]… some fields were folded; pass --full for complete output[/dim]")
+        console.print(
+            "[dim]… some fields were folded; pass --full for complete output[/dim]"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -236,7 +238,9 @@ def _file_content_header(data: dict[str, Any]) -> str:
         end = data.get("page_end") or start
         if start:
             span = f"{start}" if end == start else f"{start}-{end}"
-            facts.append(f"pages {span}/{page_count}" if page_count else f"pages {span}")
+            facts.append(
+                f"pages {span}/{page_count}" if page_count else f"pages {span}"
+            )
         elif page_count:
             facts.append(f"{page_count} page{_plural(page_count)}")
     if data.get("line_start") or data.get("line_end"):
@@ -341,7 +345,9 @@ def _render_message(message: dict[str, Any], ctx: _Ctx) -> None:
         meta = " ".join(
             str(part)
             for part in (
-                f"#{message.get('sequence')}" if message.get("sequence") is not None else "",
+                f"#{message.get('sequence')}"
+                if message.get("sequence") is not None
+                else "",
                 message.get("id") or "",
                 message.get("created_at") or "",
             )
@@ -361,12 +367,16 @@ def _render_message(message: dict[str, Any], ctx: _Ctx) -> None:
     elif kind == "tool_call":
         name = message.get("tool_name") or "?"
         args = _compact_value(message.get("tool_args"), ctx, _TOOL_ARGS_MAX)
-        console.print(f"[yellow]{_plain_role(role)} ⚙ [bold]{name}[/bold]([/yellow]"
-                      f"{args}[yellow])[/yellow]")
+        console.print(
+            f"[yellow]{_plain_role(role)} ⚙ [bold]{name}[/bold]([/yellow]"
+            f"{args}[yellow])[/yellow]"
+        )
     elif kind == "tool_return":
         name = message.get("tool_name") or "?"
         result = _compact_value(message.get("tool_result"), ctx, _TOOL_RESULT_MAX)
-        console.print(f"[yellow]{_plain_role(role)} ↩ [bold]{name}[/bold][/yellow] {result}")
+        console.print(
+            f"[yellow]{_plain_role(role)} ↩ [bold]{name}[/bold][/yellow] {result}"
+        )
     else:
         text = _trunc(str(message.get("text") or ""), ctx, 200)
         console.print(f"{_role_tag(role, 'white')} [dim]({kind})[/dim] {text}")
@@ -565,7 +575,9 @@ def _render_mapping(value: dict[str, Any], ctx: _Ctx, *, depth: int) -> list[str
 # --------------------------------------------------------------------------- #
 
 
-def format_schema(schema: Any, ctx: _Ctx | None = None, *, _depth: int = 0) -> list[str]:
+def format_schema(
+    schema: Any, ctx: _Ctx | None = None, *, _depth: int = 0
+) -> list[str]:
     """Render a JSON Schema as a compact ``field: type`` tree (list of lines)."""
     if ctx is None:
         ctx = _Ctx(True)
@@ -620,7 +632,9 @@ def _schema_type(sub: Any) -> str:
     for combinator in ("anyOf", "oneOf", "allOf"):
         members = sub.get(combinator)
         if isinstance(members, list) and members:
-            non_null = [m for m in members if isinstance(m, dict) and m.get("type") != "null"]
+            non_null = [
+                m for m in members if isinstance(m, dict) and m.get("type") != "null"
+            ]
             nullable = len(non_null) != len(members)
             parts = [_schema_type(m) for m in non_null] or ["any"]
             base = " | ".join(dict.fromkeys(parts))
@@ -656,7 +670,10 @@ def _looks_like_schema(value: Any) -> bool:
 def _columns_for_rows(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
     keys: list[str] = []
     for preferred in LIST_KEYS:
-        if any(preferred in row and row.get(preferred) not in (None, "", [], {}) for row in rows):
+        if any(
+            preferred in row and row.get(preferred) not in (None, "", [], {})
+            for row in rows
+        ):
             keys.append(preferred)
     if len(keys) < 3:
         for row in rows:
@@ -686,7 +703,9 @@ def format_columns(
     if not isinstance(raw_columns, list):
         return ""
 
-    valid = [item for item in raw_columns if isinstance(item, dict) and item.get("name")]
+    valid = [
+        item for item in raw_columns if isinstance(item, dict) and item.get("name")
+    ]
     if not valid:
         return ""
 
@@ -707,7 +726,9 @@ def format_columns(
     return ", ".join(part for part in parts if part)
 
 
-def _is_hidden_system_column(column: dict[str, Any], *, primary_key: str | None) -> bool:
+def _is_hidden_system_column(
+    column: dict[str, Any], *, primary_key: str | None
+) -> bool:
     name = str(column.get("name") or "")
     if primary_key and name == primary_key:
         return False
@@ -818,9 +839,12 @@ def _title_from_item(data: dict[str, Any]) -> str:
 
 
 def _emit_page_hint(data: dict[str, Any]) -> None:
-    token = data.get("next_page_token") or data.get("nextPageToken")
-    if token:
-        console.print(f"[dim]More results available. page_token={token}[/dim]")
+    # Name the lever the user actually has. No command in the app declares a
+    # --page-token, so printing the token handed them a value with nowhere to
+    # put it; --limit is the whole of pagination today. The token still reaches
+    # scripts through --json, where the payload is passed straight through.
+    if data.get("next_page_token") or data.get("nextPageToken"):
+        console.print("[dim]More results available — raise --limit.[/dim]")
 
 
 def _humanize(value: str) -> str:

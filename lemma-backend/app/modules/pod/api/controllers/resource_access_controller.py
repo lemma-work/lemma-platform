@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.context import ResourceType
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.grants import (
@@ -22,7 +23,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import resolve_resource_id_by_name
 from app.core.authorization.service import AuthorizationDataService
-from app.composition.pod_identity_wiring import OrganizationMember, User
+from app.modules.identity.contracts.orm import OrganizationMember, User
 from app.modules.pod.api.schemas.pod_schemas import (
     ResourceAccessGrantRequest,
     ResourceAccessGrantResponse,
@@ -114,6 +115,14 @@ async def replace_resource_access_grant(
                 permission_ids=data.permission_ids,
             )
         ]
+    )
+    # `pod.role.manage` says who may share, not what they may share: the
+    # conferral bound is what stops it from being a way to mint access the
+    # sharer does not have (PS-ACCESS-010).
+    assert_can_confer(
+        ctx,
+        data.permission_ids,
+        action="grant permissions you do not hold",
     )
     await _require_grantee(
         uow,
@@ -228,9 +237,7 @@ async def _resolve_resource_id(
     if resource_id is None:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"{resource_type.value} '{resource_name}' not found in this pod"
-            ),
+            detail=(f"{resource_type.value} '{resource_name}' not found in this pod"),
         )
     return resource_id
 
@@ -316,9 +323,7 @@ async def _role_names_by_id(
     grouped: dict[tuple[str, UUID], list[str]],
 ) -> dict[UUID, str]:
     role_ids = [
-        grantee_id
-        for (grantee_type, grantee_id) in grouped
-        if grantee_type == "ROLE"
+        grantee_id for (grantee_type, grantee_id) in grouped if grantee_type == "ROLE"
     ]
     if not role_ids:
         return {}
@@ -326,7 +331,7 @@ async def _role_names_by_id(
         RoleModel.pod_id == pod_id,
         RoleModel.id.in_(role_ids),
     )
-    return {role_id: name for role_id, name in (await uow.session.execute(stmt)).all()}
+    return dict((await uow.session.execute(stmt)).all())
 
 
 async def _pod_members_by_id(
@@ -364,9 +369,9 @@ async def _pod_members_by_id(
     for pod_member_id, user_id, email, first_name, last_name in (
         await uow.session.execute(stmt)
     ).all():
-        display_name = " ".join(
-            part for part in [first_name, last_name] if part
-        ) or None
+        display_name = (
+            " ".join(part for part in [first_name, last_name] if part) or None
+        )
         result[pod_member_id] = {
             "user_id": user_id,
             "email": email,

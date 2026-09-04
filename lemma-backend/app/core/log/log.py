@@ -16,6 +16,13 @@ from uuid import UUID
 from opentelemetry import trace
 import structlog
 
+from app.core.log.contract import (
+    CONTRACT_METADATA_FIELDS as _CONTRACT_METADATA_FIELDS,
+    LoggingContractError,
+    STABLE_EVENT_RE as _STABLE_EVENT_RE,
+    strict_logging_contract_enabled as _strict_logging_contract_enabled,
+    violation_offender,
+)
 from app.core.log.event_catalog import EVENT_CATALOG
 from app.core.redaction import redact_event_dict
 from app.core.request_context import current_observability_context
@@ -23,42 +30,12 @@ from app.core.request_context import current_observability_context
 
 _logging_context: dict[str, Any] = {}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_STABLE_EVENT_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _RELEASE_SHA_UNKNOWN = "unknown"
 _CONSOLE_HANDLER_MARKER = "_lemma_json_console_handler"
 _APP_RECORD_MARKER = "_lemma_app_owned"
 _release_warning_emitted: set[str] = set()
-_contract_violation_emitted = False
-_configured_log_level = logging.INFO
 
-_CONTRACT_METADATA_FIELDS = {
-    "causation_id",
-    "consumer",
-    "correlation_id",
-    "deployment.environment",
-    "dropped_field_count",
-    "dropped_fields",
-    "error_frames",
-    "error_message",
-    "error_stack_hash",
-    "error_traceback",
-    "error_type",
-    "event",
-    "event_id",
-    "event_type",
-    "job_attempt",
-    "job_id",
-    "level",
-    "logger",
-    "release.sha",
-    "request_id",
-    "service.name",
-    "service.version",
-    "span_id",
-    "task_name",
-    "timestamp",
-    "trace_id",
-}
+_configured_log_level = logging.INFO
 
 _FOREIGN_LOGGER_PREFIXES = frozenset(
     {
@@ -232,29 +209,12 @@ def _renderable(value: object) -> str:
         import json as _json
 
         return _json.dumps(value, default=repr, sort_keys=True)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return repr(value)
 
 
 class ReleaseIdentityError(RuntimeError):
     """Raised when a production process cannot identify its deployed source."""
-
-
-class LoggingContractError(ValueError):
-    """Raised when local code violates the exact structured-log contract."""
-
-
-def _strict_logging_contract_enabled() -> bool:
-    configured = os.getenv("LEMMA_LOGGING_CONTRACT_STRICT")
-    if configured is None:
-        configured = os.getenv("LOGGING_CONTRACT_STRICT")
-    enabled = (configured or "").strip().lower() in {"1", "true", "yes", "on"}
-    raw_environment = (
-        (os.getenv("LEMMA_ENVIRONMENT") or os.getenv("ENVIRONMENT") or "local")
-        .strip()
-        .lower()
-    )
-    return enabled and raw_environment in {"local", "test", "testing"}
 
 
 class Logger(Protocol):
@@ -417,18 +377,27 @@ class _SafeExceptionFilter(logging.Filter):
 # resulting `ConnectionClosedError` surfaces through asyncio's default exception
 # handler -- which logs at ERROR. It is the ordinary end of a websocket: a
 # browser tab suspended, a laptop closed, a network dropped. Production logged
-# 129 of them a day, in bursts of ten as one client's subscriptions died
-# together, and they were indistinguishable from real faults in every error-rate
-# view.
+# them steadily, in bursts as one client's subscriptions died together, and they
+# were indistinguishable from real faults in every error-rate view.
 #
 # Not our code, so it cannot be fixed at the source: the record comes from
 # uvicorn's websocket layer via the `asyncio` logger, and that logger must stay
 # loud for everything else it says.
 _CLIENT_DISCONNECT_LOGGERS = ("asyncio", "uvicorn.error")
 _CLIENT_DISCONNECT_EXCEPTION = "ConnectionClosed"
-# Both markers must appear. `ConnectionClosed` alone is too broad -- it also
-# covers a socket that failed mid-write, which is worth seeing.
-_CLIENT_DISCONNECT_MARKERS = ("keepalive ping timeout", "no close frame received")
+# One marker, deliberately. This required both `keepalive ping timeout` *and*
+# `no close frame received`, which is only one of the four strings
+# `ConnectionClosed.__str__` can build. The other three still logged at ERROR
+# and went on doing so in production, all of them the branch where the client
+# misses the pong deadline and *then* echoes a close frame -- a slow client,
+# which is exactly what this exists to ignore.
+#
+# The second marker was justified on the grounds that `ConnectionClosed` alone
+# is too broad, covering a socket that failed mid-write. That check is real but
+# it is the separate `_CLIENT_DISCONNECT_EXCEPTION` test below; the marker was
+# not carrying the weight it was credited with. A keepalive timeout is a
+# keepalive timeout however the peer chose to close.
+_CLIENT_DISCONNECT_MARKERS = ("keepalive ping timeout",)
 
 
 class _ClientDisconnectFilter(logging.Filter):
@@ -525,7 +494,6 @@ def _bound_fields(event_dict: dict[str, Any]) -> dict[str, Any]:
 
 def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     """Drop unsafe/unbounded values before they can reach stdout or OTLP."""
-    global _contract_violation_emitted
     app_owned = bool(event_dict.pop(_APP_RECORD_MARKER, False))
     event = event_dict.get("event")
     violation: str | None = None
@@ -561,9 +529,9 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
     if violation is not None:
         if _strict_logging_contract_enabled():
             raise LoggingContractError(violation)
-        if _contract_violation_emitted:
+        offender = violation_offender(event, violation)
+        if offender is None:
             raise structlog.DropEvent
-        _contract_violation_emitted = True
         safe = {
             key: value
             for key, value in event_dict.items()
@@ -574,6 +542,9 @@ def _bounded_contract(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, 
         event_dict["event"] = "logging.contract.violation"
         event_dict["level"] = "error"
         event_dict["contract_violation"] = violation
+        # Which event broke the contract. Without it the record says only that
+        # *something* did, and finding the call site means reading the diff.
+        event_dict["offending_event"] = offender
 
     return _bound_fields(event_dict)
 
@@ -660,6 +631,65 @@ def _add_log_level(logger: Any, method_name: str, event_dict: Any) -> Any:
     return structlog.stdlib.add_log_level(logger, method_name, event_dict)
 
 
+# A container log viewer shows one line per record, clipped at the pane width,
+# and `JSONRenderer` serialises in insertion order. That order put `logger` and
+# the static resource context first, so every line began with the same forty
+# characters and `event` -- and, on a failure, `error_message` -- sat off the
+# right-hand edge. Reading why something broke meant scrolling each line
+# sideways, which is why an error in a busy log reads as noise.
+#
+# Presentation only: the same keys are emitted with the same values.
+_LEADING_KEYS = ("timestamp", "level", "event", "error_type", "error_message")
+
+# Bulk and constants. A traceback runs to thousands of characters and
+# `service.name` is identical on every line of the process; both are worth
+# keeping and neither is worth reading before the event.
+_TRAILING_KEYS = (
+    "error_frames",
+    "error_traceback",
+    "exception",
+    "logger",
+    "trace_id",
+    "span_id",
+    "request_id",
+    "correlation_id",
+    "event_id",
+    "event_type",
+    "consumer",
+    "job_id",
+    "task_name",
+    "job_attempt",
+    "service.name",
+    "service.version",
+    "deployment.environment",
+    "release.sha",
+)
+
+
+def _order_for_reading(
+    _logger: Any, _name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Put what happened at the front of the line and context at the back.
+
+    Every key is preserved, including structlog's own `_record` /
+    `_from_structlog` meta -- which lands in the middle and is stripped later by
+    `remove_processors_meta`.
+    """
+    trailing = set(_TRAILING_KEYS)
+    ordered = {key: event_dict[key] for key in _LEADING_KEYS if key in event_dict}
+    ordered.update(
+        {
+            key: value
+            for key, value in event_dict.items()
+            if key not in ordered and key not in trailing
+        }
+    )
+    ordered.update(
+        {key: event_dict[key] for key in _TRAILING_KEYS if key in event_dict}
+    )
+    return ordered
+
+
 def _shared_processors() -> list[Any]:
     return [
         structlog.contextvars.merge_contextvars,
@@ -672,6 +702,8 @@ def _shared_processors() -> list[Any]:
         _add_safe_exception,
         redact_event_dict,
         _bounded_contract,
+        # Last: it orders whatever the chain above produced.
+        _order_for_reading,
     ]
 
 

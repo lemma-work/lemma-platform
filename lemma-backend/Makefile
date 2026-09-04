@@ -16,6 +16,24 @@ OUTPUT ?= $(TEAMS_MANIFEST_DIR)/lemma-teams.zip
 E2E_WORKERS ?= 2
 E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 
+# What the unit lane selects. Every exclusion is an environment-gated suite
+# that would otherwise be collected and skipped, and a suite that always skips
+# reports the same green as a suite that proves something.
+#
+# This is the expression CI runs -- the job sets `working-directory:
+# lemma-backend`, so `make coverage-backend-unit` resolves here and not to the
+# same-named target in the root Makefile. The two had already drifted: the root
+# one excluded `local_guest`, this one did not, so the fix went in where CI
+# could not see it. `scripts/check_pytest_census.py` reads both and fails if
+# they differ again.
+UNIT_MARKERS ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
+
+# The marker filter a CI shard runs under. Defaults to the standard fast-lane
+# exclusions (matches test-e2e-fast); a shard whose module structurally needs
+# real sandbox execution to be covered at all (function -- see e2e.yml) can
+# override this to drop "not workspace" instead of forking the whole target.
+E2E_SHARD_MARKERS ?= e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected
+
 # Load test settings (override on the command line)
 LOAD_TEST_COMPOSE := load_tests/docker-compose.load-test.yml
 LOAD_TEST_ENV     := load_tests/.env.load_test
@@ -39,7 +57,9 @@ BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 # key and immutable profile IDs are read from lemma-backend/.env or the
 # environment.
 FUNCTION_BENCH_CONCURRENCY ?= 5
-FUNCTION_BENCH_INVOCATIONS ?= 5
+# 20, not 5: `_percentile` puts p95 at `(n - 1) * 0.95`, so five samples make
+# the "p95" budgets the slowest of five. See load_tests/function_execution.py.
+FUNCTION_BENCH_INVOCATIONS ?= 20
 FUNCTION_BENCH_BATCH_ROWS ?= 1000
 FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
@@ -60,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate test-collect lint lint-async lint-session-scope lint-io-hygiene lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -79,6 +99,11 @@ help:
 	@echo "  make lint-async        # blocking-call gate for async code"
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
+	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
+	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
+	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
+	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
 	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
 	@echo "  make architecture      # dependency/complexity/exception ratchet"
@@ -110,13 +135,20 @@ help:
 	@echo "  make load-test-down    # tear down containers and clean up"
 	@echo "  Override: MAX_SUBSCRIBERS=200 WRITER_VUS=4 make load-test"
 	@echo ""
+	@echo "  make docker-reap       # remove stopped lemma.e2e / sandbox / load-test"
+	@echo "                         #   Docker containers+volumes past their grace"
+	@echo "                         #   period. Safe to run anytime, including next"
+	@echo "                         #   to a live test run — never touches anything"
+	@echo "                         #   still running. Run this if your machine is"
+	@echo "                         #   sluggish from accumulated test leftovers."
+	@echo ""
 	@echo "Run app-level commands such as setup/start/logs from the repository root."
 
 test:
 	uv run pytest
 
 test-unit:
-	uv run pytest -m "not e2e"
+	uv run pytest -m "$(UNIT_MARKERS)"
 
 # Default e2e gate: fast + deterministic. The agent LLM is a mocked
 # FunctionModel and workspace tools hit the in-process fake sandbox, so there
@@ -153,6 +185,18 @@ test-e2e-indexing:
 	uv run pytest $(E2E_PARALLEL) -m "e2e and indexing and not provider and not local_cli" -o timeout=180
 
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
+# The real-model agent suite. Every `real_llm` test lives here and, until this
+# target existed, ran in no lane at all: the PR lane uses the mock, and the
+# weekly protected lane sets E2E_REAL=1 *and* E2E_LLM_MODE=mock, which
+# conftest reads first -- so they skipped there too.
+#
+# Reads the key from lemma-backend/.env like every other local target. Runs
+# serial: these make real provider calls, and running them concurrently buys
+# little while making a rate-limit failure look like a flake.
+test-e2e-real-llm:
+	E2E_LLM_MODE=real uv run pytest -m "e2e and not slow and not workspace and not local_cli and not indexing" \
+		app/modules/agent -o timeout=300
+
 test-e2e-runtime:
 	E2E_REAL=1 uv run pytest -m "e2e and (slow or workspace or provider or local_cli or indexing or surface_live or protected)"
 
@@ -163,17 +207,17 @@ test-module:
 coverage: coverage-unit coverage-e2e
 
 coverage-unit:
-	uv run pytest -m "not e2e" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
+	uv run pytest -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
 
 coverage-e2e:
 	uv run pytest -m e2e --cov=app --cov-report=term-missing --cov-report=xml:coverage-e2e.xml
 
 coverage-backend-unit:
 	@mkdir -p $(BACKEND_COVERAGE_DIR)
-	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
+	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
-		-m "not e2e" \
+		-m "$(UNIT_MARKERS)" \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit
 
@@ -181,11 +225,11 @@ coverage-backend-e2e-shard:
 	@test -n "$(E2E_ARGS)" || (echo "E2E_ARGS is required" && exit 1)
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required, e.g. e2e-surfaces" && exit 1)
 	@mkdir -p $(BACKEND_COVERAGE_DIR)
-	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
+	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
 		$(E2E_PARALLEL) $(E2E_ARGS) \
-		-m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" \
+		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=$(COVERAGE_PHASE)
@@ -197,7 +241,17 @@ coverage-backend-report:
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage report --skip-covered --sort=cover
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage json -o $(BACKEND_COVERAGE_DIR)/coverage.json
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage xml -o $(BACKEND_COVERAGE_DIR)/coverage.xml
-	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage html -d $(BACKEND_COVERAGE_DIR)/html
+# Opt-in: 1248 annotated HTML files that nothing reads. It ran here on the
+# unit job *and* on all eight e2e shards, ~10s of each shard's critical path
+# and ~15s of the unit required check, purely to be uploaded and browsed --
+# no gate, script or workflow consumes the directory. The artifacts still
+# carry `.coverage.backend`, so anyone who wants the report runs
+# `COVERAGE_HTML=1 make coverage-backend-report` against it in ~8 seconds.
+	@if [ "$(COVERAGE_HTML)" = "1" ]; then \
+		$(BACKEND_COVERAGE_DATA_ENV) uv run coverage html -d $(BACKEND_COVERAGE_DIR)/html; \
+	else \
+		echo "coverage html skipped (COVERAGE_HTML=1 to generate)"; \
+	fi
 	uv run python scripts/backend_coverage_report.py \
 		--phase $(COVERAGE_PHASE) \
 		--coverage-json $(BACKEND_COVERAGE_DIR)/coverage.json \
@@ -211,9 +265,17 @@ coverage-backend-gate:
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage xml -o $(BACKEND_COVERAGE_DIR)/coverage.xml
 	uv run python scripts/check_coverage_thresholds.py \
 		$(BACKEND_COVERAGE_DIR)/coverage.json \
-		--min-total 70 --min-module schedule=65
+		--lane combined --min-total 70
 	uv run diff-cover $(BACKEND_COVERAGE_DIR)/coverage.xml \
 		--compare-branch origin/main --fail-under=85
+
+# Refresh the recorded floors from a run's reports. Only raises, so it locks in
+# a gain and cannot be used to clear a failure.
+coverage-baseline:
+	uv run python scripts/check_coverage_thresholds.py \
+		$(BACKEND_COVERAGE_DIR)/coverage.json --lane combined --write
+	uv run python scripts/check_coverage_thresholds.py \
+		$(BACKEND_COVERAGE_DIR)/e2e-union.json --lane e2e_union --write
 
 coverage-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make coverage-module MODULE=agent" && exit 1)
@@ -228,6 +290,53 @@ test-collect:
 lint:
 	uv run ruff check app migrations scripts
 
+# Formatting, over first-party code only. The exclusion of `lemma-connectors/`
+# here is deliberately broader than `lint-connectors` below: only
+# `src/lemma_connectors/*/generated/**` comes from provider specs, but the whole
+# package is left alone by the formatter because reformatting the generated half
+# would be undone by the next generation run and read as codegen drift. Linting
+# is the finer instrument -- the package's own `[tool.ruff]` scopes past the
+# generated clients so the hand-written half stays enforceable.
+FORMAT_PATHS = app migrations scripts sandbox_runtime load_tests standalone_app.py sitecustomize.py
+
+format:
+	uv run ruff format $(FORMAT_PATHS)
+
+format-check:
+	uv run ruff format --check $(FORMAT_PATHS)
+
+# lemma-connectors is vendored here but was outside every gate: not in `lint`'s
+# paths, excluded from basedpyright, and its tests are outside pytest.ini's
+# testpaths. Its own pyproject scopes ruff past the generated clients, so the
+# hand-written half is enforceable -- see the comment there.
+lint-connectors:
+	uv run ruff check lemma-connectors/src lemma-connectors/tests lemma-connectors/scripts
+
+test-connectors:
+	uv run pytest lemma-connectors/tests -q
+
+# `app/modules/agent/api/dependencies.py` is in the list for one line it holds:
+# it hands the concrete `ConversationRepository` to a parameter typed as the
+# port, which is the only place basedpyright checks the two against each other.
+# Without it the port can drift *ahead* of its implementation and nothing fails
+# -- the mirror image of the drift the services directory now catches.
+#
+# `app/modules/connectors/api/dependencies.py` earns its place the same way, and
+# the cost of its absence was measured: adding `code_verifier` to the auth port
+# left `ComposioAuthProvider` behind, and because nothing type-checked the line
+# handing it to a `dict[str, AuthProviderPort]`, every Composio OAuth connect
+# raised TypeError into a broad except and returned 502. Structural, not a test:
+# no amount of test writing catches a port that drifts from an implementation
+# nobody exercises.
+#
+# `app/modules/agent_surfaces/api/controllers` is the same argument one level
+# out: not a port, but a call site whose only reader is the type checker. A
+# rename of `publish_home_view`'s `channel_routes` swept up a call to
+# `surface_config_from_input` -- a different function that kept the parameter --
+# and `POST /surfaces/telegram/managed` raised `TypeError` before it reached
+# Telegram. A controller is exactly where that goes unnoticed: it is the layer
+# tests reach through a client rather than by calling, so a keyword nobody
+# passes in a test is a keyword nobody checks.
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \
@@ -235,7 +344,17 @@ typecheck-critical:
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
 		app/core/infrastructure/events \
+		app/modules/agent/api/dependencies.py \
+		app/modules/agent/domain/ports.py \
+		app/modules/agent/services \
+		app/modules/agent_surfaces/api/controllers \
 		app/modules/agent_surfaces/domain/ports.py \
+		app/modules/connectors/domain/ports.py \
+		app/modules/connectors/api/dependencies.py \
+		app/modules/connectors/services/install_service_seam.py \
+		app/modules/connectors/services/install_provisioning.py \
+		app/modules/connectors/services/install_update.py \
+		app/modules/connectors/services/account_credential_rotation.py \
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
@@ -277,12 +396,57 @@ lint-session-scope:
 lint-io-hygiene:
 	uv run python scripts/check_io_hygiene.py
 
-# Import-budget gate (enforced in CI). Importing the api loads ~5,400 modules
-# and ~323 MiB before it can serve a request, and the worker is larger still.
-# Most of that is structural — openai, mcp and fastmcp arrive through
-# pydantic_ai, which the agent runtime needs — so this does not ask anyone to
-# shrink it. It asks that growth be a decision rather than a side effect of a
-# new dependency. Ratcheted against import-budget-baseline.json.
+# Unbounded queues and caches, and CPU-heavy work on the event loop.
+# Ratcheted against unbounded-baseline.json.
+lint-unbounded:
+	uv run python scripts/check_unbounded.py
+
+# A default argument naming something tests replace by patching a module
+# attribute. Defaults bind at import, so the patch never reaches them -- and
+# the test usually still passes. No baseline: the rule is quiet by
+# construction, and somewhere to hide a finding is the one thing it must not
+# have.
+lint-import-bound-defaults:
+	uv run python scripts/check_import_bound_defaults.py
+
+# Swallowed-error gate (enforced in CI). A broad `except` must leave a trace of
+# what it caught: production runs at INFO, so a debug record with no exc_info
+# is emitted nowhere, and a handler that also stops the exception propagating
+# makes the job report success. That combination is why 2,146 conversation
+# title jobs reported `succeeded` while the LLM path was failing. Re-raising,
+# recording a DependencyIncident, or logging above debug all satisfy it.
+# Ratcheted against swallowed-errors-baseline.json.
+lint-swallowed-errors:
+	uv run python scripts/check_swallowed_errors.py
+
+# In-subject test doubles (enforced in CI). A double in front of a collaborator
+# isolates the unit; one *inside* it certifies the half you did not write, so a
+# rename behind the patched name lands green in the test named after it.
+# Ratcheted against test-doubles-baseline.json — the number only goes down.
+lint-test-doubles:
+	uv run python scripts/check_test_doubles.py
+
+# e2e wait-pattern gate (enforced in CI). A test waiting for async state to
+# settle must go through waiters.eventually()/wait_for_status(), not a
+# hand-rolled for/while-plus-sleep loop — that shared helper is what keeps the
+# suite's ~50 poll sites at one real timeout, one real interval, and one real
+# failure message apiece instead of quietly regrowing a duplicate.
+# Ratcheted against e2e-wait-patterns-baseline.json.
+lint-e2e-waits:
+	uv run python scripts/check_e2e_wait_patterns.py
+
+# Import-budget gate (enforced in CI). Importing the api loads ~4,600 modules
+# before it can serve a request, and the worker is larger still. Much of that is
+# structural — fastapi, sqlalchemy and supertokens_python are all needed before
+# the first authenticated request — so this does not ask anyone to shrink it. It
+# asks that growth be a decision rather than a side effect of a new dependency.
+# Ratcheted against import-budget-baseline.json.
+#
+# This used to say openai arrived structurally through pydantic_ai and so could
+# not be deferred. That was measured and is wrong: it arrived through composio,
+# from one module-scope line of ours, and deferring that line removed 993
+# modules. A note in a gate saying "not worth looking at" is worse than no note,
+# because it is believed.
 lint-import-budget:
 	uv run python scripts/check_import_budget.py
 
@@ -453,6 +617,16 @@ load-test-down:
 load-test: load-test-build load-test-up load-test-migrate load-test-setup load-test-run
 	@echo ""
 	@echo "Done. Run 'make load-test-down' to remove containers and credentials."
+
+# Age-gated, so safe to run any time — including while another test/sandbox/
+# load-test session is active on the same Docker daemon. Only ever touches
+# containers that are already STOPPED and volumes with zero references, past
+# a generous grace period per resource kind (see test_utils.py). This is the
+# same sweep that already runs automatically around e2e sessions; this target
+# is for manual/periodic cleanup (e.g. a crashed run from yesterday, or a
+# machine that's accumulated cruft across many worktrees).
+docker-reap:
+	uv run python -m app.core.test_utils
 
 # ── Sandbox images ────────────────────────────────────────────────────────────
 # The two images the workspace module provisions. They live here because the

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.api.schemas import (
@@ -23,6 +25,10 @@ from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import get_ready_pod_app_by_name
 from app.modules.connectors.contracts import AccountNotFoundError
 
+# Asserts that this person owns this account, raising ``AccountNotFoundError``
+# when they do not. Bound to a unit of work by the caller.
+AssertAccountOwner = Callable[..., Awaitable[None]]
+
 
 async def require_surface_agent_action(
     *,
@@ -31,7 +37,11 @@ async def require_surface_agent_action(
     agent_id: UUID | None,
     action: str,
 ) -> None:
-    if agent_id is None:
+    # The pod's own assistant is asked about pod-scoped, the same as everywhere
+    # else. Its row's id is the pod's, so both arms would name the same thing --
+    # but grants match on (type, id), and an AGENT-typed check would newly hit
+    # the resource-owner shortcut for whoever created the pod.
+    if agent_id is None or is_pod_default_agent(agent_id, pod_id=pod_id):
         return
     await ctx.require(
         action,
@@ -43,12 +53,62 @@ async def require_surface_agent_action(
     )
 
 
+async def _may_perform_surface_agent_action(
+    *,
+    ctx,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    action: str,
+) -> bool:
+    """``require_surface_agent_action``'s question, asked rather than told.
+
+    Same two arms — a pod-scoped check for the pod's own assistant, an
+    agent-scoped one otherwise — so the two cannot disagree about what an
+    editor is.
+    """
+    if agent_id is None or is_pod_default_agent(agent_id, pod_id=pod_id):
+        return await ctx.can(action)
+    return await ctx.can(
+        action,
+        ResourceRef(
+            resource_type=ResourceType.AGENT,
+            resource_id=agent_id,
+            pod_id=pod_id,
+        ),
+    )
+
+
+async def surface_setup_for_reader(
+    *, service, ctx, pod_id: UUID, surface_name: str
+) -> dict[str, object]:
+    """This surface's setup state, with only what this reader may be shown.
+
+    ``SurfaceSetupActionField.secret`` is a rendering hint, not an access
+    control, and the WhatsApp verify token in one of those fields is what
+    re-points the org's webhook subscription. The endpoint is readable with
+    ``AGENT_READ``, so every pod member who can list agents was handed it;
+    refusing them the whole checklist would be wrong, so the one value goes to a
+    reader who could change the surface anyway.
+    """
+    surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
+    return await service.get_surface_setup_by_name(
+        pod_id=pod_id,
+        name=surface_name,
+        reveal_secrets=await _may_perform_surface_agent_action(
+            ctx=ctx,
+            pod_id=pod_id,
+            agent_id=surface.agent_id,
+            action=Permissions.AGENT_UPDATE,
+        ),
+    )
+
+
 async def require_own_account(
     account_id: UUID | None,
     *,
     user_id: UUID,
     organization_id: UUID | None,
-    connector_service,
+    assert_owner: AssertAccountOwner,
 ) -> None:
     """A caller may only point a surface at an account they own.
 
@@ -60,12 +120,12 @@ async def require_own_account(
     if account_id is None:
         return
     try:
-        await connector_service.get_account(account_id, user_id, organization_id)
-    # `get_account` answers "not yours" and "no such account" with the same
-    # AccountNotFoundError, which is the whole point: the caller learns nothing
-    # about accounts they do not own. Caught by its own name rather than through
-    # a base class, because which 404 base it carries is exactly what this
-    # branch changes.
+        await assert_owner(account_id, user_id=user_id, organization_id=organization_id)
+    # `assert_owner` answers "not yours" and "no such account" with the
+    # same AccountNotFoundError, which is the whole point: the caller learns
+    # nothing about accounts they do not own. Caught by its own name rather than
+    # through a base class, because which 404 base it carries is exactly what
+    # this branch changes.
     except AccountNotFoundError as exc:
         raise HTTPException(
             status_code=403,
@@ -76,40 +136,23 @@ async def require_own_account(
         ) from exc
 
 
-async def _resolve_channel_routes(
+def _resolve_channel_routes(
     *,
-    pod_id: UUID,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
-    ctx,
 ) -> list[SurfaceChannelRoute]:
-    routes: list[SurfaceChannelRoute] = []
-    for route in config_input.channels:
-        agent_name = None
-        if route.agent_name:
-            agent = await agent_service.get_agent_by_name(
-                pod_id=pod_id,
-                name=route.agent_name,
-            )
-            await require_surface_agent_action(
-                ctx=ctx,
-                pod_id=pod_id,
-                agent_id=agent.id,
-                action=Permissions.AGENT_UPDATE,
-            )
-            agent_name = agent.name
-        routes.append(
-            SurfaceChannelRoute(
-                channel_id=route.channel_id,
-                channel_name=route.channel_name,
-                agent_name=agent_name,
-                # Carried, not derived. "The pod assistant answers here" and
-                # "nobody has said" both leave agent_name empty, and dropping
-                # the flag turned the first into the second on every save.
-                use_pod_assistant=route.use_pod_assistant,
-            )
+    """The channels this surface's agent may be spoken to in.
+
+    No agent resolution and no per-route permission check: a channel is an
+    allow-list entry now, so there is no second agent to be authorized against.
+    Whoever may configure the surface may say where its one agent answers.
+    """
+    return [
+        SurfaceChannelRoute(
+            channel_id=route.channel_id,
+            channel_name=route.channel_name,
         )
-    return routes
+        for route in config_input.channels
+    ]
 
 
 async def resolve_telegram_config(
@@ -146,19 +189,17 @@ async def resolve_slack_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     app_name: str | None,
-    existing: SurfaceSlackConfig | None = None,
     ctx,
 ) -> SurfaceSlackConfig:
-    """Resolve the Slack block, keeping everyone's DM choices.
+    """Resolve the Slack block.
 
-    ``dm_agent_by_user`` is carried from ``existing`` rather than taken from
-    the request: it is written from inside Slack, one person at a time, and a
-    settings save from the web UI has no business replacing it.
+    Only the featured app is left. This used to carry everyone's per-person DM
+    agent choices forward across a save, and a flag saying whether to honour
+    them; both went with the shared bot they were written for.
     """
-    chosen = dict(existing.dm_agent_by_user) if existing else {}
     resolved_name = str(app_name or "").strip()
     if not resolved_name:
-        return SurfaceSlackConfig(dm_agent_by_user=chosen)
+        return SurfaceSlackConfig()
     if platform is not SurfacePlatform.SLACK:
         raise AgentSurfaceValidationError(
             "A Slack app can only be featured on a Slack surface"
@@ -173,7 +214,7 @@ async def resolve_slack_config(
         raise AgentSurfaceValidationError(
             "The selected app must belong to this pod and be deployed"
         )
-    return SurfaceSlackConfig(app_name=app.name, dm_agent_by_user=chosen)
+    return SurfaceSlackConfig(app_name=app.name)
 
 
 async def resolve_surface_config(
@@ -182,15 +223,9 @@ async def resolve_surface_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
     ctx,
 ) -> SurfaceConfig:
-    channel_routes = await _resolve_channel_routes(
-        pod_id=pod_id,
-        config_input=config_input,
-        agent_service=agent_service,
-        ctx=ctx,
-    )
+    channel_routes = _resolve_channel_routes(config_input=config_input)
     config = surface_config_from_input(config_input, channel_routes=channel_routes)
     config.telegram = await resolve_telegram_config(
         uow=uow,
@@ -216,7 +251,6 @@ async def merge_surface_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
     ctx,
 ) -> SurfaceConfig:
     updates: dict = {}
@@ -226,12 +260,7 @@ async def merge_surface_config(
             allowed_email_addresses=config_input.identity.allowed_email_addresses,
         )
     if "channels" in config_input.model_fields_set:
-        updates["channels"] = await _resolve_channel_routes(
-            pod_id=pod_id,
-            config_input=config_input,
-            agent_service=agent_service,
-            ctx=ctx,
-        )
+        updates["channels"] = _resolve_channel_routes(config_input=config_input)
     if "dm_conversation_reset_after_hours" in config_input.model_fields_set:
         updates["dm_conversation_reset_after_hours"] = (
             config_input.dm_conversation_reset_after_hours
@@ -254,7 +283,6 @@ async def merge_surface_config(
             pod_id=pod_id,
             platform=platform,
             app_name=config_input.slack.app_name,
-            existing=existing.slack,
             ctx=ctx,
         )
     return existing.model_copy(update=updates)

@@ -15,12 +15,12 @@ from uuid import uuid7
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.modules.agent.infrastructure.agent_host_event_stream import (
+from app.modules.agent.infrastructure.agent_host.event_stream import (
     AgentHostEventStream,
     StreamBatch,
     run_events_stream_key,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_stream_reader import (
+from app.modules.agent.infrastructure.harnesses.agent_host.stream_reader import (
     MAX_CONSECUTIVE_STREAM_FAILURES,
     StreamReader,
     StreamUnavailable,
@@ -38,7 +38,7 @@ class _FakeRedis:
         self.requested_after: list[str] = []
 
     async def xread(self, streams: dict, count: int, block: int):
-        (key, after_id), = streams.items()
+        ((key, after_id),) = streams.items()
         self.requested_after.append(after_id)
         pending = [
             (stream_id, fields)
@@ -146,7 +146,7 @@ class TestReadFailuresSurface:
     async def test_a_blip_is_ridden_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "app.modules.agent.infrastructure.harnesses"
-            ".agent_host_stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
+            ".agent_host.stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
             0,
         )
         stream = _FailingStream(failures=1)
@@ -163,7 +163,7 @@ class TestReadFailuresSurface:
         than an error, because it is reported as the host's fault."""
         monkeypatch.setattr(
             "app.modules.agent.infrastructure.harnesses"
-            ".agent_host_stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
+            ".agent_host.stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
             0,
         )
         stream = _FailingStream(failures=MAX_CONSECUTIVE_STREAM_FAILURES + 5)
@@ -180,7 +180,7 @@ class TestReadFailuresSurface:
     ) -> None:
         monkeypatch.setattr(
             "app.modules.agent.infrastructure.harnesses"
-            ".agent_host_stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
+            ".agent_host.stream_reader.STREAM_FAILURE_BACKOFF_SECONDS",
             0,
         )
         stream = _FailingStream(failures=MAX_CONSECUTIVE_STREAM_FAILURES - 1)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.api.controllers.webhook_controller import (
-    _normalize_resend_inbound,
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    normalize_resend_inbound as _normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -30,7 +31,7 @@ def test_resend_is_email_and_default_webhook_binding():
     surface = AgentSurfaceEntity.create(
         pod_id=uuid4(),
         surface_type=SurfacePlatform.RESEND,
-        agent_id=None,
+        agent_id=uuid4(),
         config=SurfaceConfig(),
         credential_mode=SurfaceCredentialMode.SYSTEM,
         account_id=None,
@@ -66,7 +67,11 @@ def test_resend_inbound_parser_threads_and_builds_reply_target():
 @pytest.mark.asyncio
 async def test_resend_send_email_builds_resend_api_payload():
     service = ResendPlatformService(
-        {"api_key": "re_test", "from_address": "pod-1@ops.asur.work", "from_name": "Lemma"}
+        {
+            "api_key": "re_test",
+            "from_address": "pod-1@ops.asur.work",
+            "from_name": "Lemma",
+        }
     )
     captured = {}
 
@@ -103,40 +108,335 @@ async def test_resend_send_email_builds_resend_api_payload():
     body = captured["json"]
     assert body["from"] == "Lemma <pod-1@ops.asur.work>"
     assert body["to"] == ["bob@example.com"]
-    assert "<strong>hi</strong>" in body["html"]
+    # Bold survives; the tag now carries inline styling, because a mail client
+    # cannot be relied on for a stylesheet. See email_styles.
+    assert "<strong style=" in body["html"] and ">hi</strong>" in body["html"]
     assert body["headers"]["In-Reply-To"] == "<m1@example.com>"
     assert body["attachments"][0]["filename"] == "note.txt"
 
 
-def test_provision_resend_address_is_unique_per_pod(monkeypatch):
-    from app.modules.agent_surfaces.config import surface_settings
+async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
+    """The `pod-<hex>@` fallback is gone, and its absence is the point.
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
-    pod_id = uuid4()
-    address = AgentSurfaceService._provision_resend_address(pod_id)
-    assert address.endswith("@ops.asur.work")
-    assert pod_id.hex[:12] in address
-    # Different pods get different addresses.
-    assert address != AgentSurfaceService._provision_resend_address(uuid4())
+    It existed so a caller need not know how addresses are allocated, and two of
+    the three callers duly did not: the surfaces API and the bundle applier both
+    landed on it, so whether a person got `ops.acme@` or `pod-9f3c1e…@` came down
+    to which door their surface arrived through. Neither of those paths was
+    screened against `RESERVED_LOCAL_PARTS` either. Refusing is what keeps a
+    fourth caller from re-opening that quietly.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+
+    repo = AsyncMock()
+    repo.get_by_pod_and_name.return_value = None
+    binder = AsyncMock()
+    binder.resolve_binding.return_value = (None, None, None)
+    service = AgentSurfaceService(
+        surface_repository=repo, account_binding_resolver=binder
+    )
+
+    with pytest.raises(AgentSurfaceValidationError, match="needs an inbound address"):
+        pod_id = uuid4()
+        await service.create_surface(
+            pod_id=pod_id,
+            agent_id=pod_id,
+            platform=SurfacePlatform.RESEND,
+            name="resend",
+            config=SurfaceConfig(),
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+        )
+
+    repo.create.assert_not_awaited()
 
 
-def test_provisioning_without_a_domain_says_so_instead_of_inventing_one():
+async def test_minting_without_a_domain_says_so_instead_of_inventing_one(monkeypatch):
     """A default domain is worse than an error.
 
     ``ops.asur.work`` used to be the fallback, so an unconfigured deployment
     silently minted addresses on a domain it does not own: outbound bounced and
     replies matched no surface, with nothing anywhere saying why.
     """
-    from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
 
-    original = surface_settings.resend_inbound_domain
-    surface_settings.resend_inbound_domain = None
-    try:
-        with pytest.raises(AgentSurfaceValidationError, match="RESEND_INBOUND_DOMAIN"):
-            AgentSurfaceService._provision_resend_address(uuid4())
-    finally:
-        surface_settings.resend_inbound_domain = original
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
+
+    with pytest.raises(AgentSurfaceValidationError, match="RESEND_INBOUND_DOMAIN"):
+        await email_surface_provisioning.create_surface_on_minted_address(
+            AsyncMock(),
+            AsyncMock(),
+            pod_id=uuid4(),
+            agent_id=None,
+            agent_name=None,
+            platform=SurfacePlatform.RESEND,
+            name="inbox",
+            config=SurfaceConfig(),
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+        )
+
+
+async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatch):
+    """Minting an address is not a question about whose credentials send it.
+
+    A Resend surface can authenticate with a connected account, and one did:
+    `test_resend_webhook_routes_raw_envelope_to_provisioned_address` sets the
+    inbound domain and no system key. Gating this path on `email_is_configured`
+    — key *and* domain, which is the right test for a SYSTEM mailbox — turned
+    that into a refusal. Somewhere to mint the address is all this needs.
+    """
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(core_settings, "resend_api_key", None)
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    assert not email_surface_provisioning.email_is_configured()
+
+    service = AsyncMock()
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        SimpleNamespace(session=session),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops",
+        platform=SurfacePlatform.RESEND,
+        name="inbox",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.CUSTOM,
+        account_id=uuid4(),
+    )
+
+    address = service.create_surface.await_args.kwargs["surface_identity_email"]
+    assert address == "ops.acme@ops.asur.work"
+
+
+def _minting_service(existing=None):
+    """A surface service that reports what mailbox the agent already has."""
+    service = AsyncMock()
+    service.resend_surface_for_agent = AsyncMock(return_value=existing)
+    return service
+
+
+def _minting_uow():
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+    return SimpleNamespace(session=session)
+
+
+async def test_an_unnamed_mailbox_is_named_for_its_agent(monkeypatch):
+    """The name follows whose mailbox it is, so two agents never collide.
+
+    `create_surface` defaults an unnamed surface to its platform — `resend` —
+    which is a single pod-unique name for a thing every agent has one of.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    service = _minting_service()
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert service.create_surface.await_args.kwargs["name"] == "resend-ops-assistant"
+
+
+async def test_the_pod_assistant_does_not_take_the_platform_s_own_name(monkeypatch):
+    """The branch the original test left uncovered, and the 409 it caused.
+
+    `surface_name_for(None)` returned `resend`, which is also what
+    `create_surface` picks for an unnamed surface of this platform. So from the
+    moment a pod's assistant was provisioned at creation, `POST /surfaces
+    {"platform": "RESEND"}` — no name, no agent, which the schema explicitly
+    allows — resolved to a name the pod already held and came back 409. Every
+    pod, every time.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    service = _minting_service()
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    chosen = service.create_surface.await_args.kwargs["name"]
+    assert chosen == "resend-assistant"
+    assert chosen != AgentSurfaceEntity.default_name_for(SurfacePlatform.RESEND), (
+        "the assistant is back on the name an unnamed request resolves to"
+    )
+
+
+async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypatch):
+    """ "Connect email" means use this agent's address, not mint a second one.
+
+    Both mailboxes exist before anyone asks — the assistant's from pod
+    creation, an agent's from agent creation — so minting again produced a
+    second surface whose address had to be suffixed around the first, and
+    handed whoever asked the ugly one. It is also what the UI has always said
+    this does: "Every agent already has one... reads as 'back on', not 'new'".
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
+    service = _minting_service(existing)
+    service.update_surface = AsyncMock(return_value=existing)
+    account_id = uuid4()
+
+    result = await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.CUSTOM,
+        account_id=account_id,
+    )
+
+    assert result is existing
+    service.create_surface.assert_not_awaited()
+    # The request's credentials still land — this is a connect, not a no-op.
+    updated = service.update_surface.await_args.kwargs
+    assert updated["surface_id"] == existing.id
+    assert updated["credential_mode"] is SurfaceCredentialMode.CUSTOM
+    assert updated["account_id"] == account_id
+
+
+async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
+    """A caller that names a surface is naming a distinct thing.
+
+    The bundle applier always passes a name, and its upsert is keyed on it so a
+    bundle round-trips. Adopting under a name the caller chose would rewrite
+    whichever surface happened to share the agent, not the one they meant.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+    existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
+    service = _minting_service(existing)
+    service.update_surface = AsyncMock(return_value=existing)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name="inbox",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    service.update_surface.assert_not_awaited()
+    assert service.create_surface.await_args.kwargs["name"] == "inbox"
+
+
+async def test_a_non_email_surface_passes_straight_through(monkeypatch):
+    """The helper is a substitute for `create_surface`, not a special case.
+
+    Both callers create every platform through it, so Slack and Telegram must
+    not acquire an inbound address or a domain requirement on the way past.
+    """
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", None)
+    service = AsyncMock()
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        AsyncMock(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.SLACK,
+        name="slack",
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert "surface_identity_email" not in service.create_surface.await_args.kwargs
+
+
+def test_normalize_resend_inbound_passes_the_headers_through():
+    """The headers reach the parser, not just the threading fields.
+
+    The parser authenticates the `From:` from `Authentication-Results` when the
+    payload carries it. Normalizing read the headers for subject and message-id
+    and then dropped them, so that branch never ran on this path: a payload that
+    *did* carry a verdict arrived with none, and no verdict means nobody vouched
+    for the sender — they become a stranger and no conversation opens.
+    """
+    vouched = (
+        "amazonses.com; spf=pass smtp.mailfrom=example.com; "
+        "dkim=pass header.i=@example.com; dmarc=pass header.from=example.com"
+    )
+    normalized = _normalize_resend_inbound(
+        {
+            "type": "email.received",
+            "data": {
+                "email_id": "em_1",
+                "from": "someone@example.com",
+                "to": ["inbox@pods.example"],
+                "subject": "Hello",
+                "text": "Body",
+                "headers": {
+                    "message-id": "<a@example.com>",
+                    "authentication-results": vouched,
+                },
+            },
+        }
+    )
+
+    assert normalized["headers"] == {
+        "message-id": "<a@example.com>",
+        "authentication-results": vouched,
+    }
+
+    event = ResendInboundParser().parse(normalized)
+    assert event is not None
+    assert event.sender_authentication == "PASS"
 
 
 def test_normalize_resend_inbound_handles_envelope_and_shapes():
@@ -150,7 +450,10 @@ def test_normalize_resend_inbound_handles_envelope_and_shapes():
                 "text": "body",
                 "headers": [
                     {"name": "Message-ID", "value": "<m9@example.com>"},
-                    {"name": "References", "value": "<r1@example.com> <r2@example.com>"},
+                    {
+                        "name": "References",
+                        "value": "<r1@example.com> <r2@example.com>",
+                    },
                 ],
             },
         }
@@ -174,7 +477,11 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
     nobody has ever seen arriving as "Re: Standup" reads as mail you have lost.
     """
     service = ResendPlatformService(
-        {"api_key": "re_test", "from_address": "pod-1@ops.asur.work", "from_name": "Lemma"}
+        {
+            "api_key": "re_test",
+            "from_address": "pod-1@ops.asur.work",
+            "from_name": "Lemma",
+        }
     )
     captured = {}
 
@@ -451,7 +758,7 @@ def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
     array. The reply then opens a new conversation and the notification it was
     answering stays OPEN forever.
     """
-    from app.modules.agent_surfaces.platforms.email_common import email_thread_root
+    from app.modules.agent_surfaces.platforms.email_identity import email_thread_root
     from app.modules.agent_surfaces.platforms.resend.inbound import (
         header_map,
         references_of,
@@ -470,12 +777,15 @@ def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
     refs = references_of({}, headers)
 
     assert refs[0] == seed, "the JSON array was left serialized"
-    assert email_thread_root(
-        references=refs,
-        in_reply_to=None,
-        message_id="<reply-from-outlook@outlook.com>",
-        sender="anukul@lemma.work",
-    ) == seed
+    assert (
+        email_thread_root(
+            references=refs,
+            in_reply_to=None,
+            message_id="<reply-from-outlook@outlook.com>",
+            sender="anukul@lemma.work",
+        )
+        == seed
+    )
 
 
 def test_a_header_that_merely_looks_like_json_is_left_alone():
@@ -509,6 +819,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
+        agent_id=uuid4(),
         name="resend-mailtest",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
@@ -621,7 +932,8 @@ def test_the_unique_email_index_is_declared_on_the_model_too():
 
     assert "uq_agent_surface_identity_email" in names
     index = next(
-        i for i in AgentSurface.__table__.indexes
+        i
+        for i in AgentSurface.__table__.indexes
         if i.name == "uq_agent_surface_identity_email"
     )
     assert index.unique is True
@@ -690,8 +1002,12 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
         _normalize_resend_inbound(
             _real_webhook(
                 attachments=[
-                    {"id": "att-1", "filename": "invoice.pdf",
-                     "content_type": "application/pdf", "size": 10}
+                    {
+                        "id": "att-1",
+                        "filename": "invoice.pdf",
+                        "content_type": "application/pdf",
+                        "size": 10,
+                    }
                 ]
             )
         )
@@ -710,11 +1026,16 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
 
     async def _fake_get(self, url, **kwargs):  # noqa: ANN001
         seen.setdefault("urls", []).append(url)
-        seen.setdefault("auth", []).append((kwargs.get("headers") or {}).get("Authorization"))
+        seen.setdefault("auth", []).append(
+            (kwargs.get("headers") or {}).get("Authorization")
+        )
         if "/attachments/" in url:
             return _Resp(
-                {"filename": "invoice.pdf", "content_type": "application/pdf",
-                 "download_url": "https://cdn.resend.test/signed"},
+                {
+                    "filename": "invoice.pdf",
+                    "content_type": "application/pdf",
+                    "download_url": "https://cdn.resend.test/signed",
+                },
                 b"{}",
             )
         return _Resp(None, b"%PDF-1.4 real bytes")
@@ -766,7 +1087,7 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     full and the person who wrote it heard nothing back.
     """
     import httpx
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from app.modules.agent_surfaces.platforms.resend.adapter import (
         ResendSurfaceAdapter,
@@ -789,7 +1110,9 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     )
 
     with patch.object(
-        ResendPlatformService, "fetch_received_email", new=AsyncMock(side_effect=refused)
+        ResendPlatformService,
+        "fetch_received_email",
+        new=AsyncMock(side_effect=refused),
     ):
         enriched = await ResendSurfaceAdapter().enrich_inbound_event(
             credentials={"api_key": "re_test"}, event=event
@@ -861,3 +1184,275 @@ def test_a_non_http_failure_still_reports_something_usable():
     assert failure.failure_type == "OSError"
     assert failure.status_code is None
     assert failure.provider_error is None
+
+
+@pytest.mark.asyncio
+async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
+    """The attribution has to survive an inbox list nobody has opened.
+
+    ``attribute()`` puts "On behalf of Deepak" in the body, which is the right
+    place for it and invisible until the message is opened. It does not name the
+    agent — the bot's own identity carries that on chat — so the sender column
+    is the only place "Priya" is ever shown, and it used to say "Lemma" for
+    every agent in every pod.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "priya.acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata={
+                "agent_display_name": "Priya",
+                "actor_display_name": "Deepak Jha",
+            },
+        )
+
+    # Quoted, and the quotes are load-bearing rather than cosmetic: parentheses
+    # are RFC 5322 *comment* syntax, so the same header unquoted parses as the
+    # display name "Priya via Lemma" with "(Deepak Jha)" split off as a comment
+    # that most clients never render. Which is the second reason this send path
+    # had to move off an f-string, independent of the injection one below.
+    assert (
+        captured["json"]["from"]
+        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.asur.work>'
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_agent_name_cannot_inject_a_second_address_into_from():
+    """An agent name is 255 characters of unvalidated free text.
+
+    This send path built the header with an f-string, which was safe only while
+    the display name was a fixed environment string. Putting an agent name in it
+    makes ``Priya, Ops`` a header that parses as two addresses, so the
+    construction moved to ``formataddr``.
+    """
+    from email.utils import getaddresses
+
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "priya.acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="hello",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata={"agent_display_name": "Ops <evil@example.com>, Priya"},
+        )
+
+    parsed = getaddresses([captured["json"]["from"]])
+    assert len(parsed) == 1
+    assert parsed[0][1] == "priya.acme@ops.asur.work"
+
+
+@pytest.mark.asyncio
+async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
+    """Every non-agent send — and every existing caller — is unchanged."""
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "acme@ops.asur.work",
+            "from_name": "Lemma",
+        }
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="hello",
+            thread_seed_id="<seed@ops.asur.work>",
+            metadata=None,
+        )
+
+    assert captured["json"]["from"] == "Lemma <acme@ops.asur.work>"
+
+
+async def test_a_taken_name_advances_to_the_next_candidate(monkeypatch):
+    """The name is pod-unique too, and either half can be the thing that clashes.
+
+    `create_surface` checks the name up front and raises before inserting, so a
+    name clash never reached the loop's `except IntegrityError` at all. Holding
+    the name fixed across candidates meant the same name was offered five
+    times, each refused for the same reason, and the failure was then reported
+    as "every candidate address was already taken" — the one constraint that
+    was not the problem.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceAlreadyExistsError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+
+    seen: list[str] = []
+
+    async def create(**kwargs):
+        seen.append(kwargs["name"])
+        if len(seen) == 1:
+            raise AgentSurfaceAlreadyExistsError(kwargs["name"])
+        return SimpleNamespace(id=uuid4(), name=kwargs["name"])
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops Assistant",
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert len(seen) == 2, f"the loop did not advance past the taken name: {seen}"
+    assert seen[0] == "resend-ops-assistant"
+    assert seen[1] != seen[0], "the same name was offered twice"
+    assert seen[1].startswith("resend-ops-assistant-")
+
+
+async def test_the_name_borrows_the_suffix_its_address_already_carries(monkeypatch):
+    """So the pair stays legible rather than drifting onto unrelated tails."""
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceAlreadyExistsError
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(
+        email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    async def create(**kwargs):
+        calls.append((kwargs["name"], kwargs["surface_identity_email"]))
+        if len(calls) == 1:
+            raise AgentSurfaceAlreadyExistsError(kwargs["name"])
+        return SimpleNamespace(id=uuid4())
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    await email_surface_provisioning.create_surface_on_minted_address(
+        service,
+        _minting_uow(),
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        platform=SurfacePlatform.RESEND,
+        name=None,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    name, address = calls[1]
+    suffix = address.split("@", 1)[0].rsplit("-", 1)[-1]
+    assert name == f"resend-assistant-{suffix}", (
+        f"name {name!r} and address {address!r} carry different suffixes"
+    )
+
+
+async def test_a_database_failure_degrades_rather_than_killing_the_creation(
+    monkeypatch,
+):
+    """The best-effort contract, for the failures that actually reach it.
+
+    This runs inside pod and agent creation, and only ``IntegrityError`` is
+    handled by the retry loop. Every other database failure — a savepoint that
+    cannot open on a transaction an earlier statement invalidated, a connection
+    that dropped mid-request — escaped the three-type guard and took the whole
+    creation with it. Creating a pod had no mail dependency at all before
+    mailboxes became eager; it should not have acquired one that can 500 it.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+
+    service = AsyncMock()
+    service.create_surface = AsyncMock(
+        side_effect=OperationalError("INSERT", {}, Exception("connection lost"))
+    )
+    session = AsyncMock()
+    session.begin_nested = MagicMock(return_value=AsyncMock())
+
+    surface, cause = await email_surface_provisioning.provision_email_surface(
+        service,
+        session,
+        pod_id=uuid4(),
+        agent_id=None,
+        agent_name=None,
+        pod_name="Acme",
+    )
+
+    assert surface is None
+    assert cause, "a None with no cause tells the caller nothing"

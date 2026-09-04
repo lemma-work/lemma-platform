@@ -40,6 +40,17 @@ subqueries across pod tables. Start with counts and small grouped results. Apply
 time and population filters explicitly. Use conservative SQL and test unfamiliar
 functions in a small query rather than assuming a dialect feature exists.
 
+**Read `truncated` before you read `total`.** The response is
+`{"items": [...], "total": N, "truncated": bool}`, and `total` counts the rows
+*returned*, not the rows the query matched — the two are equal only when nothing
+was cut. Results are capped at the deployment's row limit (1,000 by default);
+when the cap bites, `truncated` is `true` and `items` is a prefix of the real
+answer. A truncated result is otherwise indistinguishable from a complete one,
+so a silent cap is exactly the failure the quality gates warn about. Never
+report `total` as a population count. Get counts from SQL — `COUNT(*)`,
+`COUNT(DISTINCT …)` — and narrow or aggregate rather than paging a capped query,
+which has no cursor.
+
 ### Export row-level data
 
 ```bash
@@ -59,10 +70,11 @@ lemma files stat /data/orders.xlsx
 lemma files download /data/orders.xlsx ./inputs/orders.xlsx
 ```
 
-CSV, JSON, XLSX, and images are stored but not search-indexed. Download the exact
-bytes, preserve the original, and record the remote path plus file metadata.
-Use `lemma files cat` or `lemma files search` for indexed documents, not for
-discovering rows inside a spreadsheet.
+CSV, TSV, JSON, YAML, XLSX/ODS, presentations, images, and email are stored but
+not search-indexed — `lemma files stat` reports `NOT_REQUIRED` for them. Download
+the exact bytes, preserve the original, and record the remote path plus file
+metadata. Use `lemma files cat` or `lemma files search` for indexed documents,
+not for discovering rows inside a spreadsheet.
 
 ## Respect RLS and grants
 
@@ -73,9 +85,17 @@ data does not exist. Label every result as personal/RLS-scoped or shared.
 
 Do not switch to an admin or cross-user read merely to fill an evidence gap. If
 the requested population exceeds the current scope, report what is visible and
-request the specific authorized path. If a workload receives
-`MISSING_WORKLOAD_RESOURCE_GRANT`, preserve the exact error and ask a builder to
-grant the named resource; never bypass the grant.
+request the specific authorized path.
+
+Preserve the exact refusal code, because the three have three different fixes.
+`INSUFFICIENT_PERMISSION` means the member's pod role is short.
+`MISSING_WORKLOAD_RESOURCE_GRANT` means a workload holds no grant for the action:
+ask a builder to grant the named resource, and never bypass the grant.
+`DELEGATION_EXCEEDS_INVOKER` means the workload *is* granted it but the person it
+is acting for is not — a workload's authority is its grants intersected with the
+invoking member's access, never their union, so granting the workload more cannot
+fix it. Report that the analysis needs to run as, or on behalf of, somebody who
+holds the permission.
 
 ## Record provenance
 

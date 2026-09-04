@@ -12,14 +12,10 @@ T = TypeVar("T", bound="SurfaceSlackConfigInput")
 
 @_attrs_define
 class SurfaceSlackConfigInput:
-    """The Slack settings a *caller* owns.
+    """The Slack settings a caller owns.
 
-    Only ``app_name``. The per-person DM agent map is written from inside Slack
-    — each person picks their own in the App Home — so it is readable here and
-    never writable, which keeps one editor from reassigning everybody.
-
-        Attributes:
-            app_name (None | str | Unset):
+    Attributes:
+        app_name (None | str | Unset):
     """
 
     app_name: None | str | Unset = UNSET

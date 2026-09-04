@@ -268,9 +268,7 @@ async def test_agent_workload_folder_grant_authorizer_decision(
         pod_id=pod_uuid,
         path=SIBLING_FILE,
     )
-    denied = await ctx.authorizer.authorize(
-        ctx, Permissions.FOLDER_READ, sibling_ref
-    )
+    denied = await ctx.authorizer.authorize(ctx, Permissions.FOLDER_READ, sibling_ref)
     assert not denied.allowed
     assert denied.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT"
 
@@ -293,8 +291,8 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
 
     Reading the same file by path already worked, because the single-file path
     judges the file alone. So the two disagreed: an agent could open a file it
-    could not see listed. In production that was 241 of 241 files withheld from
-    an agent holding a real grant on the folder containing 200 of them.
+    could not see listed. In production that withheld every file from an agent
+    holding a real grant on the folder containing most of them.
     """
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     owner = DatastoreApi(authenticated_client, pod_id)
@@ -333,7 +331,7 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
     try:
         # Search is the operation that broke: it filters every file in the pod
         # through `get_visible_file_ids`, which is where the ancestor walk ran.
-        # That is also the call that logged `241 of 241 withheld`.
+        # That is also the call that logged every file as withheld.
         results = await agent_api.search_files(NEEDLE, search_method="TEXT")
         assert tree["leaf"]["id"] in {r["file_id"] for r in results["items"]}, results
 
@@ -343,9 +341,9 @@ async def test_a_grant_on_a_nested_folder_works_without_granting_its_parent(
 
         # And the grant must not have leaked upward or sideways: dropping the
         # ancestor walk must not turn "no grant" into access anywhere.
-        assert tree["sibling"]["id"] not in {
-            r["file_id"] for r in results["items"]
-        }, results
+        assert tree["sibling"]["id"] not in {r["file_id"] for r in results["items"]}, (
+            results
+        )
         await agent_api.get_file(
             SIBLING_FILE, expected_status=status.HTTP_403_FORBIDDEN
         )

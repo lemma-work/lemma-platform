@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 from app.modules.connectors.config import ConnectorSettings
 
@@ -93,6 +94,31 @@ EXPECTED = [
         90.0,
         5.0,
     ),
+    ("connector_github_app_slug", "CONNECTOR_GITHUB_APP_SLUG", None, "lemma-tester"),
+    (
+        "connector_github_app_private_key",
+        "CONNECTOR_GITHUB_APP_PRIVATE_KEY",
+        None,
+        "sentinel",
+    ),
+    (
+        "connector_github_app_private_key_path",
+        "CONNECTOR_GITHUB_APP_PRIVATE_KEY_PATH",
+        None,
+        "/tmp/app.pem",
+    ),
+    (
+        "connector_github_app_webhook_secret",
+        "CONNECTOR_GITHUB_APP_WEBHOOK_SECRET",
+        None,
+        "sentinel",
+    ),
+    (
+        "connector_github_app_webhook_secret_previous",
+        "CONNECTOR_GITHUB_APP_WEBHOOK_SECRET_PREVIOUS",
+        None,
+        "sentinel",
+    ),
 ]
 
 
@@ -119,4 +145,9 @@ def test_connector_settings_reads_legacy_env_var(
     monkeypatch.setenv(
         env, str(override).lower() if isinstance(override, bool) else str(override)
     )
-    assert getattr(ConnectorSettings(), field) == override
+    value = getattr(ConnectorSettings(), field)
+    # The App private key and webhook secret are SecretStr, so that neither can
+    # be printed by an unlucky traceback or repr.
+    if isinstance(value, SecretStr):
+        value = value.get_secret_value()
+    assert value == override

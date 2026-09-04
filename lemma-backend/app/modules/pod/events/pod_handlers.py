@@ -19,10 +19,10 @@ from app.core.infrastructure.events.inbox import (
 )
 from app.core.log.log import get_logger
 from app.modules.identity.contracts import IdentityEmailPort
-from app.composition.pod_identity_wiring import (
-    create_identity_email_port,
-    create_organization_repository,
-    create_user_repository,
+from app.modules.identity.contracts.organizations import (
+    build_identity_email_sender,
+    build_organization_membership,
+    build_user_directory,
 )
 from app.modules.pod.domain.events import PodEvents, PodJoinRequestedEvent
 from app.modules.pod.domain.pod_entities import PodRole
@@ -41,7 +41,7 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def provide_identity_email_port() -> IdentityEmailPort:
-    return create_identity_email_port()
+    return build_identity_email_sender()
 
 
 @reliable_redis_stream_subscriber(
@@ -84,13 +84,13 @@ async def _process_pod_join_requested(
     async with uow_factory() as uow:
         pod_repository = PodRepository(uow)
         pod_member_repository = PodMemberRepository(uow)
-        user_repository = create_user_repository(uow)
-        organization_repository = create_organization_repository(uow)
+        user_repository = build_user_directory(uow)
+        organization_repository = build_organization_membership(uow)
 
         pod = await pod_repository.get(parsed.pod_id)
         if not pod:
             logger.debug(
-                'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic',
+                "pod.pod_handlers.pod_not_found_skipping_notification.diagnostic",
                 pod_id=parsed.pod_id,
             )
             return
@@ -98,7 +98,7 @@ async def _process_pod_join_requested(
         requester = await user_repository.get(parsed.requester_user_id)
         if not requester:
             logger.debug(
-                'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic'
+                "pod.pod_handlers.requester_not_found_skipping_notification.diagnostic"
             )
             return
         requester_name = (

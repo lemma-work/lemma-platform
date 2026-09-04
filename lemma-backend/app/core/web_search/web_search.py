@@ -96,6 +96,23 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
             exclude_domains=request.exclude_domains,
         )
 
+        # An empty answer from a deployment with no provider is not a
+        # successful search -- it is a facility that was never available. The
+        # caller cannot tell "nothing exists" from "nothing was looked at", and
+        # the two lead to opposite decisions. See PS-OPS-030, DEV-OPS-005.
+        if not results and search_client.provider_is_unconfigured:
+            return WebSearchResponse(
+                success=False,
+                results=[],
+                message="Web search is unavailable on this deployment",
+                error=(
+                    "The configured web-search provider has no credentials, so "
+                    "no search was performed. Set SEARXNG_URL or BRAVE_API_KEY "
+                    "for the provider named by WEB_SEARCH_PROVIDER, or set "
+                    "WEB_SEARCH_PROVIDER=duckduckgo for keyless search."
+                ),
+            )
+
         return WebSearchResponse(
             success=True,
             results=results,

@@ -19,14 +19,18 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.pod import pod_common
+from app.modules.agent.tools.pod import pod_file_tools as pod_files
 from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
 from app.modules.agent.tools.pod.models import (
     GetFileUrlRequest,
     PodGetRecordsRequest,
+    QueryRequest,
     PodReadFileRequest,
     PodTablesRequest,
     PodWriteFileRequest,
     PodWriteRecordRequest,
+    SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
 from app.modules.agent.tools.registry import resolve_agent_toolsets
@@ -57,7 +61,7 @@ def _patch_services(monkeypatch, services) -> None:
         del deps
         yield services
 
-    monkeypatch.setattr(pod_adapter, "pod_services", fake_pod_services)
+    monkeypatch.setattr(pod_common, "pod_services", fake_pod_services)
 
 
 def test_pod_toolset_is_registered_under_pod_toolset_enum():
@@ -129,7 +133,7 @@ async def test_pod_write_record_without_grant_asks_for_approval(monkeypatch):
         )
         yield  # pragma: no cover - unreachable, makes this an async generator
 
-    monkeypatch.setattr(pod_adapter, "pod_services", denying_pod_services)
+    monkeypatch.setattr(pod_common, "pod_services", denying_pod_services)
 
     result = await pod_adapter.pod_write_record(
         _run_ctx(),
@@ -152,9 +156,7 @@ async def test_pod_write_record_validates_required_fields(monkeypatch):
     # update/delete require record_id; create/update require data — caught before
     # touching services (so the AsyncMock is never awaited).
     services = SimpleNamespace(
-        record=SimpleNamespace(
-            update_record=AsyncMock(), delete_record=AsyncMock()
-        ),
+        record=SimpleNamespace(update_record=AsyncMock(), delete_record=AsyncMock()),
         table=SimpleNamespace(get_table=AsyncMock()),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
@@ -285,20 +287,23 @@ async def test_pod_get_records_single_vs_list(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pod_read_file_markdown_returns_page_range(monkeypatch):
-    entity = SimpleNamespace(path="/pod/report.pdf")
+    entity = SimpleNamespace(
+        path="/pod/report.pdf", mime_type="application/pdf", size_bytes=10
+    )
     services = SimpleNamespace(
         file=SimpleNamespace(
-            get_document_markdown=AsyncMock(return_value=(entity, "## Page 2", 5))
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"%PDF-1.4\x00\xff")
+            ),
+            get_document_markdown=AsyncMock(return_value=(entity, "## Page 2", 5)),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(),
-        PodReadFileRequest(
-            path="/pod/report.pdf", format="markdown", page_start=2, page_end=2
-        ),
+        PodReadFileRequest(path="/pod/report.pdf", page_start=2, page_end=2),
     )
 
     assert result["success"] is True
@@ -315,20 +320,221 @@ async def test_pod_read_file_text_decodes_utf8(monkeypatch):
     )
     services = SimpleNamespace(
         file=SimpleNamespace(
-            download_file_content_by_path=AsyncMock(
-                return_value=(entity, b"hello")
-            )
+            download_file_content_by_path=AsyncMock(return_value=(entity, b"hello"))
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_read_file(
+    result = await pod_files.pod_read_file(
         _run_ctx(), PodReadFileRequest(path="/pod/notes.txt")
     )
     assert result["success"] is True
     assert result["format"] == "text"
     assert result["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_a_text_file_is_returned_as_its_own_original_content(monkeypatch):
+    """A file with text of its own is that text -- never a rendering of it."""
+    entity = SimpleNamespace(
+        path="/me/notes.md", mime_type="text/markdown", size_bytes=11
+    )
+    markdown = AsyncMock()
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"# hello\nyo")
+            ),
+            get_document_markdown=markdown,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/notes.md")
+    )
+
+    assert result["format"] == "text"
+    assert result["text"] == "# hello\nyo"
+    markdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_html_is_returned_as_html_not_as_prose(monkeypatch):
+    """HTML has text of its own, so converting it would discard the markup.
+
+    This is the case that decides the rule: an earlier version routed by file
+    type and would have handed back a rendering with the tags thrown away.
+    """
+    entity = SimpleNamespace(path="/me/page.html", mime_type="text/html", size_bytes=40)
+    markdown = AsyncMock()
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"<h1>Title</h1><p>body</p>")
+            ),
+            get_document_markdown=markdown,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/page.html")
+    )
+
+    assert result["format"] == "text"
+    assert result["text"] == "<h1>Title</h1><p>body</p>"
+    markdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_is_read_as_its_converted_text(monkeypatch):
+    """A PDF has no text of its own, so the conversion is the answer.
+
+    It used to need `format='markdown'`; without it a PDF came back as
+    `binary: true` and an instruction to call again -- a round trip that
+    answers itself, and one the tool sweep's agent found by failing first.
+    """
+    entity = SimpleNamespace(
+        path="/me/toolcheck/toolcheck.pdf",
+        mime_type="application/pdf",
+        size_bytes=2138,
+    )
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"%PDF-1.4\x00\xff binary")
+            ),
+            get_document_markdown=AsyncMock(
+                return_value=(entity, "# Toolcheck\n\nbody", 2)
+            ),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/toolcheck/toolcheck.pdf")
+    )
+
+    assert result["format"] == "markdown"
+    assert result["converted"] is True
+    assert result["markdown"] == "# Toolcheck\n\nbody"
+    assert result["page_count"] == 2
+    assert "binary" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_binary_with_no_conversion_says_which_kind_of_missing(monkeypatch):
+    """A PNG will never have text; a PENDING PDF does not have it yet.
+
+    Both used to be one flat "Binary file" hint. The reader's message already
+    tells them apart, so carry it through rather than restate it worse.
+    """
+    from app.modules.datastore.contracts import DatastoreFileNotFoundError
+
+    entity = SimpleNamespace(path="/me/photo.png", mime_type="image/png", size_bytes=90)
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            download_file_content_by_path=AsyncMock(
+                return_value=(entity, b"\x89PNG\r\n\x1a\n")
+            ),
+            get_document_markdown=AsyncMock(
+                side_effect=DatastoreFileNotFoundError(
+                    "/me/photo.png is not an indexable document, so no markdown "
+                    "was derived from it."
+                )
+            ),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_read_file(
+        _run_ctx(), PodReadFileRequest(path="/me/photo.png")
+    )
+
+    assert result["binary"] is True
+    assert "not an indexable document" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_empty_search_says_when_files_are_still_being_processed(monkeypatch):
+    """An empty list is two different answers, and only one of them is an answer.
+
+    A pod whose files have not been indexed searches cleanly and returns [] --
+    identical to a pod that genuinely holds nothing on the topic. An agent
+    cannot tell them apart, so it reports the second with confidence when the
+    truth is the first. This is the whole reason the sweep's `pod_search_files`
+    finding was rated more dangerous than the outright failures beside it.
+    """
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_missing_from_the_index=AsyncMock(return_value=(3, 0)),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
+    )
+
+    assert result["success"] is True
+    assert result["results"] == []
+    assert result["files_awaiting_processing"] == 3
+    assert "still being processed" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_search_on_a_fully_indexed_pod_stays_a_plain_answer(monkeypatch):
+    """No caveat when there is nothing to caveat -- that would be noise on every
+    genuine miss, and would teach a reader to ignore the field that matters.
+
+    "Fully indexed" here means both counts are zero. It used to mean only the
+    queued one, which is why a pod whose every file had FAILED read as healthy.
+    """
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_missing_from_the_index=AsyncMock(return_value=(0, 0)),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="nothing here")
+    )
+
+    assert result["results"] == []
+    assert "files_awaiting_processing" not in result
+    assert "note" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_search_with_hits_never_pays_for_the_pending_count(monkeypatch):
+    """The count is a query. A search that found something has already answered
+    the question, so it must not run."""
+    counter = AsyncMock(return_value=99)
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[{"path": "/me/a.md"}]),
+            count_files_missing_from_the_index=counter,
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_search_files(_run_ctx(), SearchFilesRequest(query="a"))
+
+    assert result["results"]
+    assert "files_awaiting_processing" not in result
+    counter.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -353,9 +559,9 @@ async def test_pod_view_document_pages_returns_images_and_url_refs(monkeypatch):
     async def fake_build_object_url(storage, key, expires_seconds=None):
         return f"https://signed/{key}", None
 
-    monkeypatch.setattr(pod_adapter, "build_object_url", fake_build_object_url)
+    monkeypatch.setattr(pod_files, "build_object_url", fake_build_object_url)
 
-    result = await pod_adapter.pod_view_document_pages(
+    result = await pod_files.pod_view_document_pages(
         _run_ctx(),
         ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
     )
@@ -386,9 +592,9 @@ async def test_pod_view_document_pages_non_pdf_returns_friendly_error(monkeypatc
         )
         yield  # pragma: no cover
 
-    monkeypatch.setattr(pod_adapter, "pod_services", denying)
+    monkeypatch.setattr(pod_common, "pod_services", denying)
 
-    result = await pod_adapter.pod_view_document_pages(
+    result = await pod_files.pod_view_document_pages(
         _run_ctx(),
         ViewDocumentPagesRequest(path="/pod/notes.docx", page_start=1),
     )
@@ -414,7 +620,7 @@ async def test_pod_get_file_url_returns_url(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_get_file_url(
+    result = await pod_files.pod_get_file_url(
         _run_ctx(), GetFileUrlRequest(path="/pod/report.pdf")
     )
 
@@ -440,7 +646,7 @@ async def test_pod_get_file_url_public_mints_signed_url(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_get_file_url(
+    result = await pod_files.pod_get_file_url(
         _run_ctx(),
         GetFileUrlRequest(
             path="/pod/report.pdf", url_type="public", expires_seconds=3600, max_hits=5
@@ -466,7 +672,7 @@ async def test_pod_write_file_creates_new_file(monkeypatch):
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(), PodWriteFileRequest(path="/me/report.md", content="hello")
     )
 
@@ -493,7 +699,7 @@ async def test_pod_write_file_relative_path_resolves_against_pod_cwd(monkeypatch
     _patch_services(monkeypatch, services)
 
     ctx = _run_ctx(pod_cwd="/me/c/2026-07-02/ab3f2k7q")
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         ctx, PodWriteFileRequest(path="notes.md", content="hey")
     )
 
@@ -514,7 +720,7 @@ async def test_pod_write_file_conflict_without_overwrite_returns_error(monkeypat
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(),
         PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=False),
     )
@@ -540,7 +746,7 @@ async def test_pod_write_file_conflict_with_overwrite_updates_existing(monkeypat
     )
     _patch_services(monkeypatch, services)
 
-    result = await pod_adapter.pod_write_file(
+    result = await pod_files.pod_write_file(
         _run_ctx(),
         PodWriteFileRequest(path="/me/report.md", content="hello", overwrite=True),
     )
@@ -555,3 +761,140 @@ async def test_pod_write_file_conflict_with_overwrite_updates_existing(monkeypat
     services.file.write_update_storage.assert_awaited_once_with(plan, ANY)
     services.file.persist_update_file.assert_awaited_once_with(plan)
     services.file.finalize_update_file.assert_awaited_once_with(plan, updated)
+
+
+@pytest.mark.asyncio
+async def test_a_pod_whose_files_all_failed_does_not_search_clean(monkeypatch):
+    """The state the sweep actually hit, and the one the first signal missed.
+
+    The queued count covers files that will become searchable by waiting. Once
+    they have all failed it is zero, so the caveat never fired and an empty
+    result was indistinguishable from a healthy pod holding nothing on the
+    subject -- while every document in it was unreadable.
+    """
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_missing_from_the_index=AsyncMock(return_value=(0, 2)),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="quokka telemetry handshake")
+    )
+
+    assert result["success"] is True
+    assert result["files_failed_processing"] == 2
+    assert "could not be processed" in result["note"]
+    # The advice for a queued file is wrong for a failed one: waiting fixes
+    # nothing, and telling an agent to retry sends it round a loop with no end.
+    assert "retry once processing finishes" not in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_queued_and_failed_files_are_reported_as_the_different_things(
+    monkeypatch,
+):
+    """A pod can be mid-backfill and holding broken files at the same time."""
+    services = SimpleNamespace(
+        file=SimpleNamespace(
+            search_files=AsyncMock(return_value=[]),
+            count_files_missing_from_the_index=AsyncMock(return_value=(4, 1)),
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+    _patch_services(monkeypatch, services)
+
+    result = await pod_files.pod_search_files(
+        _run_ctx(), SearchFilesRequest(query="anything")
+    )
+
+    assert result["files_awaiting_processing"] == 4
+    assert result["files_failed_processing"] == 1
+    assert "still being processed" in result["note"]
+    assert "could not be processed" in result["note"]
+
+
+def test_a_durable_workspace_fault_does_not_invite_a_retry():
+    """The sweep retried four times over minutes, told each time it was recoverable.
+
+    The advice was a string literal appended to everything a bare
+    `except Exception` caught, so it asserted recoverability no code had
+    evaluated -- while the underlying condition (a stopped container, surfaced as
+    `runtime_url: null`) is one of the most durable failures the system has.
+    """
+    from sandbox_runtime.errors import SandboxUnavailable
+
+    from app.modules.workspace.session_support import retry_advice
+
+    assert "retry" in retry_advice(SandboxUnavailable("no capacity")).lower()
+
+    durable = retry_advice(RuntimeError("managed workspace runtime is gone"))
+    assert "not expected to succeed on retry" in durable
+    assert "recoverable tool failure" not in durable
+
+
+def _query_services(rows: list[dict], row_count: int, truncated: bool):
+    # The repository returns `rows, len(rows), truncated` -- a fake that lets
+    # those two drift certifies a shape production cannot produce.
+    assert row_count == len(rows), "row_count must match the rows returned"
+
+    return SimpleNamespace(
+        table=SimpleNamespace(),
+        record=SimpleNamespace(
+            execute_readonly_query=AsyncMock(return_value=(rows, row_count, truncated))
+        ),
+        ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+    )
+
+
+class TestPodQueryNeverOverstatesItsResult:
+    """A capped result used to be indistinguishable from a complete one.
+
+    The repository pulled one row past the cap purely to learn the result had
+    been cut, then dropped that row and returned `len(rows)` as the total. So an
+    agent asked "how many orders do we have", got a thousand rows and a total of
+    a thousand, and told the user they had a thousand orders when they had forty
+    thousand. Missing data is recoverable; a confident wrong number is not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_complete_result_is_reported_as_complete(self, monkeypatch):
+        _patch_services(monkeypatch, _query_services([{"n": 1}], 1, False))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select 1 as n")
+        )
+
+        assert result["row_count"] == 1
+        assert result["truncated"] is False
+        assert "note" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_capped_result_says_it_was_capped(self, monkeypatch):
+        rows = [{"n": index} for index in range(1000)]
+        _patch_services(monkeypatch, _query_services(rows, 1000, True))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select * from orders")
+        )
+
+        assert result["truncated"] is True
+        assert result["row_count"] == 1000
+        # In the payload, not only in a flag: the model has to be able to read
+        # this without knowing to look for a boolean.
+        assert "note" in result
+        assert "cut" in result["note"]
+
+    @pytest.mark.asyncio
+    async def test_the_capped_count_is_not_offered_as_a_total(self, monkeypatch):
+        rows = [{"n": index} for index in range(1000)]
+        _patch_services(monkeypatch, _query_services(rows, 1000, True))
+
+        result = await pod_adapter.pod_query(
+            _run_ctx(), QueryRequest(sql="select * from orders")
+        )
+
+        assert "total" not in result

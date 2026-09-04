@@ -9,8 +9,11 @@ from sqlalchemy.orm import joinedload
 
 from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.authorization.models import RoleAssignmentModel, RoleModel
-from app.composition.pod_identity_wiring import OrganizationMember, User
+from app.core.authorization.models import (
+    RoleAssignmentModel,
+    RoleModel,
+)
+from app.modules.identity.contracts.orm import OrganizationMember, User
 from app.modules.identity.contracts import normalize_identity_email
 from app.modules.pod.domain.ports import (
     PodJoinRequestRepositoryPort,
@@ -25,6 +28,10 @@ from app.modules.pod.domain.pod_entities import (
     PodMemberEntity,
 )
 from app.modules.pod.infrastructure.models import Pod, PodJoinRequest, PodMember
+from app.modules.pod.infrastructure.pod_administration_queries import (
+    count_members_who_can,
+    roles_grant_permission,
+)
 from app.modules.pod.domain.visibility import normalize_role_list
 
 
@@ -73,6 +80,12 @@ class PodRepository(PodRepositoryPort):
 
     async def get(self, id: UUID) -> Optional[PodEntity]:
         stmt = select(Pod).where(Pod.id == id, Pod.is_deleted.is_(False))
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return instance.to_entity() if instance else None
+
+    async def get_even_if_deleted(self, id: UUID) -> Optional[PodEntity]:
+        stmt = select(Pod).where(Pod.id == id)
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
@@ -197,7 +210,9 @@ class PodMemberRepository(PodMemberRepositoryPort):
             exclude={"user_id", "user_email", "user_name", "user", "roles"}
         )
 
-    async def _member_roles_by_id(self, member_ids: Sequence[UUID]) -> dict[UUID, list[str]]:
+    async def _member_roles_by_id(
+        self, member_ids: Sequence[UUID]
+    ) -> dict[UUID, list[str]]:
         if not member_ids:
             return {}
         stmt = (
@@ -210,7 +225,9 @@ class PodMemberRepository(PodMemberRepositoryPort):
             .order_by(RoleModel.name)
         )
         rows = (await self.session.execute(stmt)).all()
-        roles_by_member_id: dict[UUID, list[str]] = {member_id: [] for member_id in member_ids}
+        roles_by_member_id: dict[UUID, list[str]] = {
+            member_id: [] for member_id in member_ids
+        }
         for member_id, role_name in rows:
             roles_by_member_id.setdefault(member_id, []).append(role_name)
         return {
@@ -219,14 +236,18 @@ class PodMemberRepository(PodMemberRepositoryPort):
         }
 
     async def _attach_member_roles(self, entities: Sequence[PodMemberEntity]) -> None:
-        roles_by_member_id = await self._member_roles_by_id([entity.id for entity in entities])
+        roles_by_member_id = await self._member_roles_by_id(
+            [entity.id for entity in entities]
+        )
         for entity in entities:
             entity.roles = roles_by_member_id.get(entity.id, [])
 
     @staticmethod
     def _member_options():
         return (
-            joinedload(PodMember.organization_member).joinedload(OrganizationMember.user),
+            joinedload(PodMember.organization_member).joinedload(
+                OrganizationMember.user
+            ),
         )
 
     async def create(self, entity: PodMemberEntity) -> PodMemberEntity:
@@ -239,9 +260,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
 
     async def get(self, id: UUID) -> Optional[PodMemberEntity]:
         stmt = (
-            select(PodMember)
-            .options(*self._member_options())
-            .where(PodMember.id == id)
+            select(PodMember).options(*self._member_options()).where(PodMember.id == id)
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
@@ -330,7 +349,10 @@ class PodMemberRepository(PodMemberRepositoryPort):
     ) -> Optional[PodMemberEntity]:
         stmt = (
             select(PodMember)
-            .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(
+                OrganizationMember,
+                PodMember.organization_member_id == OrganizationMember.id,
+            )
             .options(*self._member_options())
             .where(
                 PodMember.pod_id == pod_id,
@@ -351,7 +373,10 @@ class PodMemberRepository(PodMemberRepositoryPort):
         normalized = normalize_identity_email(email)
         stmt = (
             select(PodMember)
-            .join(OrganizationMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(
+                OrganizationMember,
+                PodMember.organization_member_id == OrganizationMember.id,
+            )
             .join(User, OrganizationMember.user_id == User.id)
             .options(*self._member_options())
             .where(
@@ -401,6 +426,21 @@ class PodMemberRepository(PodMemberRepositoryPort):
         result = await self.session.execute(stmt)
         return result.scalars().first() is not None
 
+    async def roles_grant_permission(
+        self, pod_id: UUID, role_names: Sequence[str], permission_id: str
+    ) -> bool:
+        return await roles_grant_permission(
+            self.session,
+            pod_id=pod_id,
+            role_names=role_names,
+            permission_id=permission_id,
+        )
+
+    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int:
+        return await count_members_who_can(
+            self.session, pod_id=pod_id, permission_id=permission_id
+        )
+
 
 class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
     """Pod join-request repository implementation local to pod module."""
@@ -432,9 +472,7 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         entity = instance.to_entity()
         if user is not None:
             entity.user_email = user.email
-            name = " ".join(
-                part for part in [user.first_name, user.last_name] if part
-            )
+            name = " ".join(part for part in [user.first_name, user.last_name] if part)
             entity.user_name = name or None
         return entity
 

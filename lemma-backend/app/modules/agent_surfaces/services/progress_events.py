@@ -20,14 +20,8 @@ from app.modules.agent_surfaces.platforms.rendering import (
     strip_thinking_tokens,
 )
 
-from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    PLATFORM_CAPABILITIES,
-)
 
 _MAX_PROGRESS_TEXT_LENGTH = 120
-_EMAIL_REPLY_TOOL_NAMES = {
-    caps.reply_tool for caps in PLATFORM_CAPABILITIES.values() if caps.reply_tool
-}
 
 
 def _surface_platform(conversation: Conversation) -> str | None:
@@ -38,17 +32,8 @@ def _surface_platform(conversation: Conversation) -> str | None:
 
 def _safe_run_error_text(event: AgentEvent) -> str:
     del event
-    return "I couldn’t finish that request. Try it again without resending your message."
-
-
-def _email_reply_tool_called(event: AgentEvent) -> bool:
-    if event.type != AgentEventType.MESSAGE:
-        return False
-    data = event.data
     return (
-        isinstance(data, MessageDraft)
-        and data.kind == MessageKind.TOOL_CALL
-        and data.tool_name in _EMAIL_REPLY_TOOL_NAMES
+        "I couldn’t finish that request. Try it again without resending your message."
     )
 
 
@@ -119,8 +104,7 @@ def _assistant_text_from_event(event: AgentEvent) -> str | None:
     data = event.data
     if not isinstance(data, MessageDraft):
         return None
-    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
-    if role != MessageRole.ASSISTANT.value:
+    if data.role is not MessageRole.ASSISTANT:
         return None
     if data.kind != MessageKind.TEXT:
         return None
@@ -146,8 +130,7 @@ def _assistant_text_was_all_reasoning(event: AgentEvent) -> bool:
     data = event.data
     if not isinstance(data, MessageDraft):
         return False
-    role = data.role.value if isinstance(data.role, MessageRole) else str(data.role)
-    if role != MessageRole.ASSISTANT.value or data.kind != MessageKind.TEXT:
+    if data.role is not MessageRole.ASSISTANT or data.kind is not MessageKind.TEXT:
         return False
     raw = (data.text or "").strip()
     return bool(raw) and not strip_thinking_tokens(raw)

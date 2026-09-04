@@ -12,7 +12,17 @@ from app.modules.datastore.domain.errors import DatastoreQueryError
 # (including inside a CTE, e.g. ``WITH d AS (DELETE ... RETURNING *) SELECT ...``),
 # the statement is not read-only and is rejected. ``exp.Command`` captures
 # statements sqlglot does not model structurally (SET, VACUUM, etc.).
+#
+# ``exp.Into`` is here because sqlglot parses ``SELECT * INTO t FROM x`` as an
+# ordinary ``Select`` carrying an ``Into`` node, so the root check below waves
+# it through -- and in PostgreSQL that statement creates a table. It was
+# stopped anyway, by ``SET TRANSACTION READ ONLY``, but only after the
+# authorizer had been asked for READ on the invented table name, and the caller
+# got the driver's message instead of "only read-only SELECT queries are
+# allowed". A guarantee that holds by accident of a second control is not the
+# guarantee this function documents.
 _FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
+    exp.Into,
     exp.Insert,
     exp.Update,
     exp.Delete,
@@ -56,6 +66,25 @@ class QueryAnalysis:
     tables: frozenset[str]
 
 
+def _effective_name(node: exp.Expression, raw: str) -> str:
+    """The relation name PostgreSQL will actually resolve for ``node``.
+
+    An unquoted identifier is folded to lower case at parse time; a quoted one
+    is taken literally. sqlglot preserves the text either way, so ``Users`` and
+    ``"Users"`` are indistinguishable from ``.name`` alone — and the caller
+    enforces ``DATASTORE_TABLE_READ`` on whatever this returns. Table names may
+    contain upper case (``validate_structure`` permits it) and are created
+    quoted, so a pod can hold both ``Users`` and ``users``: without this fold,
+    a read grant on ``Users`` authorized ``SELECT * FROM Users`` and PostgreSQL
+    then served ``users``. Authorize the name the database will read, not the
+    one the caller typed.
+    """
+    identifier = node.this
+    if isinstance(identifier, exp.Identifier) and not identifier.quoted:
+        return raw.lower()
+    return raw
+
+
 def analyze_query(sql: str) -> QueryAnalysis:
     """Parse and validate an ad-hoc datastore SQL query.
 
@@ -74,9 +103,7 @@ def analyze_query(sql: str) -> QueryAnalysis:
     """
     try:
         statements = [
-            stmt
-            for stmt in sqlglot.parse(sql, dialect="postgres")
-            if stmt is not None
+            stmt for stmt in sqlglot.parse(sql, dialect="postgres") if stmt is not None
         ]
     except SqlglotError as exc:
         raise DatastoreQueryError(f"Could not parse SQL query: {exc}") from exc
@@ -101,11 +128,13 @@ def analyze_query(sql: str) -> QueryAnalysis:
             else function.sql_name()
         )
         if name.lower() in _FORBIDDEN_FUNCTIONS:
-            raise DatastoreQueryError(
-                f"{name}() is not allowed in datastore queries"
-            )
+            raise DatastoreQueryError(f"{name}() is not allowed in datastore queries")
 
-    cte_aliases = {cte.alias for cte in statement.find_all(exp.CTE) if cte.alias}
+    cte_aliases = {
+        _effective_name(cte.args["alias"], cte.alias)
+        for cte in statement.find_all(exp.CTE)
+        if cte.alias
+    }
 
     tables: set[str] = set()
     for table in statement.find_all(exp.Table):
@@ -115,7 +144,12 @@ def analyze_query(sql: str) -> QueryAnalysis:
                 "reference datastore tables by their bare name."
             )
         name = table.name
-        if not name or name in cte_aliases:
+        if not name:
+            continue
+        # Both sides folded, so a CTE declared unquoted and referenced in a
+        # different case is still recognised as the CTE it is.
+        name = _effective_name(table, name)
+        if name in cte_aliases:
             continue
         tables.add(name)
 

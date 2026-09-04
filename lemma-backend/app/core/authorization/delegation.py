@@ -6,6 +6,13 @@ scope check is implication-expanded, so the implied ``function.read`` is
 admitted too). Long-lived agent contexts (sub-agent runs, pod data-access
 tools) are deliberately unscoped — the workload's explicit resource grants
 and the destructive-action gate are the limiters there.
+
+The pod-default agent's two names also live here, together and on purpose.
+``DEFAULT_POD_AGENT_NAME`` is what the row carries and what a token claims;
+``DEFAULT_RESPONDER_NAME`` is what a person reads. They were apart, and the
+display name lost: the change that gave the pod's agent a real row normalised
+every place that had faked one to the *product* name, because nothing beside the
+wire value said the actor already had a name of its own.
 """
 
 from __future__ import annotations
@@ -35,6 +42,70 @@ POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
 POD_DEFAULT_AGENT_SELECTOR_ALIASES = frozenset(
     {POD_DEFAULT_AGENT_SELECTOR, DEFAULT_POD_AGENT_NAME}
 )
+
+# What the pod's own agent is called wherever a person can read it. See
+# `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
+# reading a name in Slack and someone reading it in the app are reading about
+# the same actor.
+DEFAULT_RESPONDER_NAME = "Lem"
+
+
+def agent_display_name(name: str | None) -> str:
+    """An agent's row name → what a person reads.
+
+    The pod's own agent is stored as ``pod_default`` and claimed as
+    ``POD_DEFAULT``; both are identifiers, and neither is a name to show
+    anybody. ``None`` resolves the same way, because a surface with no agent
+    is the pod answering — the same reading :func:`is_pod_default_agent`
+    gives a null agent id.
+
+    Display only. Anything that resolves a name back to a row — conversation
+    creation, address allocation — needs the stored value and must not call
+    this.
+    """
+    if not name or name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return DEFAULT_RESPONDER_NAME
+    return name
+
+
+def is_pod_default_agent(agent_id: UUID | None, *, pod_id: UUID | None) -> bool:
+    """Whether this id names the pod's own assistant.
+
+    Three shapes answer yes, and they are three eras rather than three cases:
+
+    * ``pod_id`` -- the assistant's row, whose id *is* its pod's.
+    * ``None`` -- every conversation written before that row existed, and
+      anything an older process is still writing during a rolling deploy.
+    * ``DEFAULT_POD_AGENT_ID`` -- the sentinel the assistant was named by in
+      delegation tokens, which are signed and outlive the deploy that stopped
+      issuing them.
+
+    The null arm is not a transition measure to be tidied away later. It is
+    what makes an accidental loss of the row degrade to *correct*: the foreign
+    key from a conversation is ``ON DELETE SET NULL``, and a null still reads
+    as the assistant here rather than as a deleted named agent.
+
+    Deliberately free of I/O. The per-request check in
+    ``app/core/authorization/dependencies.py`` runs this on a token's claims,
+    and answering it with a row lookup would put a query on every request.
+    """
+    if agent_id is None:
+        return True
+    if agent_id == DEFAULT_POD_AGENT_ID:
+        return True
+    return pod_id is not None and agent_id == pod_id
+
+
+def effective_agent_id(agent_id: UUID | None, *, pod_id: UUID) -> UUID:
+    """The id this agent is known by, with the assistant's absences normalised.
+
+    Use when comparing two agent references that may have been written in
+    different eras -- a conversation backfilled to ``pod_id`` against a surface
+    route still holding ``None`` means the same agent, and comparing them raw
+    says they differ.
+    """
+    return pod_id if is_pod_default_agent(agent_id, pod_id=pod_id) else agent_id
+
 
 # No workload — the default pod agent included — performs these by default.
 # A workload needs either an explicit grant of the destructive permission

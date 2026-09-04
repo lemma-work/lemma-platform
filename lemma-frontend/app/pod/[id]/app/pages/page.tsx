@@ -3,10 +3,9 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ArrowUpRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
+import { ArrowRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
@@ -23,6 +22,7 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useDeleteApp, useAppPages, useUpdateAppVisibility } from '@/lib/hooks/use-app';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { buildResourceCreationHref } from '@/lib/pods/resource-creation';
 import { appRecipes } from '@/lib/recipes/recipes';
 import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import type { AppPageRef } from '@/lib/types/app';
@@ -52,7 +52,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const { pages, isLoading } = useAppPages(podId);
     const { mutate: deleteApp, isPending: isDeletingApp } = useDeleteApp();
     const { mutateAsync: updateAppVisibility } = useUpdateAppVisibility();
-    const assistant = useAIAssistant();
     const { launchRecipe } = useLaunchRecipe(podId);
     const [appPendingDelete, setAppPendingDelete] = useState<AppPageRef | null>(null);
 
@@ -75,21 +74,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const createAppWithAssistant = () => {
         if (!canCreateApp) return;
 
-        const params = new URLSearchParams();
-        params.set('conversationInstructions', [
-            'You are helping create a Lemma app app in the current pod.',
-            'Use the user-visible message as the product intent. Do not repeat these hidden instructions back to the user.',
-            'Start by understanding the operator workflow, then create a minimal useful Lemma app app with the right data, pages, and interactions.',
-            'Keep it minimal, calm, and operational; avoid generic dashboard chrome.',
-            'After it is built, summarize what was created and display or link the app.',
-        ].join('\n'));
-        params.set('conversationMetadata', JSON.stringify({
-            source: 'apps_page',
-            intent: 'create_resource',
-            resource_type: 'app',
-        }));
-
-        router.push(`/pod/${podId}/conversations/new?${params.toString()}`);
+        router.push(buildResourceCreationHref({ podId, kind: 'app', source: 'apps_page' }));
     };
 
     const handleDeleteApp = () => {
@@ -124,14 +109,9 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             onClick={() => {
                                 void createAppWithAssistant();
                             }}
-                            disabled={assistant.isLoading || assistant.isOpenedConversationRunning}
                             className="h-9 w-fit gap-2 rounded-md px-3 text-sm"
                         >
-                            {assistant.isLoading || assistant.isOpenedConversationRunning ? (
-                                <StepLoader size="sm" />
-                            ) : (
-                                <Plus className="h-4 w-4" />
-                            )}
+                            <Plus className="h-4 w-4" />
                             New app
                         </Button>
                     ) : null
@@ -153,7 +133,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             {appRecipes.slice(0, 5).map((recipe) => (
                                 <RecipeCard
                                     key={recipe.id}
-                                    podId={podId}
                                     recipe={recipe}
                                     onLaunch={() => launchRecipe(recipe)}
                                 />
@@ -170,13 +149,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                 <span className="text-xs leading-5 text-[var(--text-tertiary)]">Open a conversation and tell the assistant what this app should help people do.</span>
                             </button>
                         </div>
-                        <Link
-                            href={`/pod/${podId}/recipes`}
-                            className="custom-focus-ring inline-flex w-fit items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                        >
-                            Add a surface agent or automate a loop
-                            <ArrowUpRight className="h-4 w-4" />
-                        </Link>
                     </div>
                 ) : (
                     <EmptyState
@@ -287,7 +259,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                                     onChange={async (visibility: ResourceVisibilityValue) => {
                                                         await updateAppVisibility({ podId, name: appName, visibility });
                                                     }}
-                                                    className="contents"
                                                     trigger={({ openShare, disabled }) => (
                                                         <DropdownMenuItem
                                                             disabled={disabled}
@@ -331,7 +302,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     if (!open) setAppPendingDelete(null);
                 }}
                 title="Delete app"
-                description={`Delete "${appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : 'this app'}"? This removes the app app surface from this pod.`}
+                description={`Delete "${appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : 'this app'}"? This removes the app from this pod.`}
                 resourceName={appPendingDelete ? formatDisplayName(appPendingDelete.title || appPendingDelete.slug) : ''}
                 consequences={[
                     'People using this app will no longer be able to open its app surface.',

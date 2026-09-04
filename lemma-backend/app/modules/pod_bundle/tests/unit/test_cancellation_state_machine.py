@@ -362,3 +362,81 @@ async def test_checkpoint_clears_current_step_and_reports_progress(monkeypatch):
 
 class SimplePlan:
     steps: list[object] = []
+
+
+async def test_partial_cancellation_says_the_pod_was_changed(monkeypatch):
+    """`PARTIALLY_CANCELLED` used to arrive with no message at all.
+
+    Cancelling mid-apply does not undo the steps that already committed, and the
+    enum name was the only place that fact appeared -- so a person who cancelled
+    a slow import was never told their pod had been modified."""
+    state = _state(ImportStatus.CANCELLING, committed_steps=[0, 1, 2])
+    state.plan = ImportPlan(
+        format_version=1,
+        steps=[
+            PlanStep(
+                index=i, kind=StepKind.TABLE, name=f"t{i}", action=StepAction.CREATE
+            )
+            for i in range(5)
+        ],
+    )
+    monkeypatch.setattr(handlers, "publish_bundle_event", AsyncMock())
+
+    await handlers._finalize_import_cancellation(_Store(state), AsyncMock(), state)
+
+    assert state.status is ImportStatus.PARTIALLY_CANCELLED
+    assert state.error is not None
+    assert "3 of 5" in state.error
+    assert "not undone" in state.error
+
+
+async def test_a_clean_cancellation_says_nothing(monkeypatch):
+    """Nothing was applied, so there is nothing to warn about."""
+    state = _state(ImportStatus.CANCELLING)
+    monkeypatch.setattr(handlers, "publish_bundle_event", AsyncMock())
+
+    await handlers._finalize_import_cancellation(_Store(state), AsyncMock(), state)
+
+    assert state.status is ImportStatus.CANCELLED
+    assert state.error is None
+
+
+def test_apply_failure_names_what_landed_and_how_to_continue():
+    """ "Step X failed" alone leaves a person with half a pod and no way forward.
+
+    Apply commits per step with no rollback, and re-applying resumes from the
+    failed step rather than duplicating -- neither of which the message said."""
+    state = _state(ImportStatus.APPLYING, committed_steps=[0, 1])
+    state.plan = ImportPlan(
+        format_version=1,
+        steps=[
+            PlanStep(
+                index=i, kind=StepKind.TABLE, name=f"t{i}", action=StepAction.CREATE
+            )
+            for i in range(4)
+        ],
+    )
+    step = state.plan.steps[2]
+
+    message = handlers._apply_failure_message(state, step, RuntimeError("boom"))
+
+    assert "2 of 4" in message
+    assert "not undone" in message
+    assert "apply this import again" in message.lower()
+    assert step.name in message
+
+
+def test_a_failure_before_anything_landed_says_so():
+    state = _state(ImportStatus.APPLYING)
+    state.plan = ImportPlan(
+        format_version=1,
+        steps=[
+            PlanStep(index=0, kind=StepKind.TABLE, name="t0", action=StepAction.CREATE)
+        ],
+    )
+
+    message = handlers._apply_failure_message(
+        state, state.plan.steps[0], RuntimeError("boom")
+    )
+
+    assert "Nothing was applied" in message

@@ -13,11 +13,11 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
-from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
-from app.modules.agent_surfaces.domain.models import SurfaceQuestionRenderPlan
-from app.modules.agent_surfaces.domain.models import SurfaceApprovalRenderPlan
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
+from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.identity.contracts import UserPreferences
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -134,10 +134,6 @@ class SurfaceInstallationRepositoryPort(Protocol):
         platforms: set[SurfacePlatform],
     ) -> list[AgentSurfaceEntity]: ...
 
-    async def get_by_email_schedule_id(
-        self, schedule_id: UUID
-    ) -> AgentSurfaceEntity | None: ...
-
     async def get_by_platform_and_account_id(
         self,
         *,
@@ -185,6 +181,10 @@ class SurfaceAccountBindingPort(Protocol):
 class SurfacePlatformAdapterPort(Protocol):
     platform: str
 
+    def split_inbound_payloads(
+        self, payload: dict[str, Any]
+    ) -> list[dict[str, Any]]: ...
+
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None: ...
@@ -206,54 +206,30 @@ class SurfacePlatformAdapterPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> None: ...
 
-    async def send_display_resource(
+    # The text primitive `deliver` degrades onto, and the only way to say
+    # something before a conversation exists (the signup and setup replies).
+
+    async def deliver(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
-        render_plan: SurfaceDisplayRenderPlan,
+        envelope: SurfaceEnvelope,
         metadata: dict[str, Any] | None = None,
-    ) -> None: ...
+    ) -> DeliveryReceipt:
+        """The one outbound seam for conversation content.
 
-    async def send_questions(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        question_plan: "SurfaceQuestionRenderPlan",
-        metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
+        Every kind of content is a field on the envelope, and the receipt says
+        how each part landed -- natively, degraded to text or a link, or
+        reaching nobody.
 
-    async def send_approval(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        approval_plan: "SurfaceApprovalRenderPlan",
-        metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
-
-    # Render a request_approval prompt as native Approve/Deny buttons (Slack
-    # blocks / Teams card / Telegram or WhatsApp buttons). True → rendered
-    # natively; False → caller falls back to a formatted text prompt.
-
-    async def send_voice_note(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        file_name: str,
-        audio_bytes: bytes,
-        mime: str,
-        caption: str | None = None,
-    ) -> bool: ...
-
-    # Deliver audio as a native voice note (Telegram sendVoice, etc.). True →
-    # delivered natively; False → caller falls back to a normal file attachment.
-
-    # Render ask_user questions as native tappable choices (Slack input blocks /
-    # Teams Adaptive Card). True → rendered natively; False → caller falls back to
-    # a formatted text message.
+        The ``_render_*`` hooks it composes are deliberately not declared on
+        this port. They are a platform's private half of this call, and naming
+        them here made the seam read as six verbs a caller could choose between
+        -- which is how content came to be rendered past ``deliver`` in the
+        first place.
+        """
+        ...
 
     async def fetch_thread_context(
         self,
@@ -329,20 +305,6 @@ class SurfacePlatformAdapterPort(Protocol):
     # (content, file_name, mime_type) for a user-provided inbound attachment, or
     # None when it cannot be downloaded. Used by inbound auto-ingest; not an
     # agent tool.
-
-    async def send_file_attachment(
-        self,
-        *,
-        credentials: dict[str, Any],
-        event: ParsedInboundSurfaceEvent,
-        file_name: str,
-        file_bytes: bytes,
-        mime_type: str,
-        caption: str | None = None,
-    ) -> bool: ...
-
-    # True when the file was delivered natively; False → caller should fall back
-    # to sending an app/public URL link instead.
 
     async def list_channels(
         self, *, credentials: dict[str, Any]
@@ -421,8 +383,8 @@ class SurfaceNotificationEgressPort(Protocol):
         """First contact by email, returning the thread the reply will land in.
 
         ``None`` means this platform cannot start a thread it has no prior
-        message for — Outlook and Composio-backed Gmail both reply through
-        endpoints keyed by a provider message id. That is a clean "no", not a
+        message for — every chat platform, and any mailbox reached through an
+        endpoint keyed by a provider message id. That is a clean "no", not a
         failure to be retried on another channel.
         """
         ...
@@ -438,6 +400,61 @@ class SurfaceEventDedupStorePort(Protocol):
         external_thread_id: str | None,
         external_message_id: str | None,
     ) -> bool: ...
+
+    async def release_message(
+        self,
+        *,
+        surface_installation_id: UUID | None,
+        platform: str,
+        external_channel_id: str | None,
+        external_thread_id: str | None,
+        external_message_id: str | None,
+    ) -> None:
+        """Hand a claim back, so a redelivery of the same message is not a duplicate.
+
+        The claim is taken while the message is being prepared, but the work it
+        guards -- the queued run -- is dispatched after that. Losing the dispatch
+        with the claim still held would make the delivery unrecoverable: every
+        retry would see a duplicate and drop it.
+        """
+
+
+class SurfaceUserDirectoryPort(Protocol):
+    """Who a sender is, and what they chose to answer on.
+
+    A port rather than a direct call into identity's contract so the lookups
+    stay a collaborator the ingress path is handed: a surface that resolves an
+    inbound sender is deciding whose authority a run executes with, and a test
+    of that decision has to be able to say who the directory answers with.
+    """
+
+    async def user_id_by_email(self, email: str) -> UUID | None:
+        """The live user with this address, or nobody."""
+        raise NotImplementedError
+
+    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
+        """The live user holding this handle, or nobody.
+
+        A handle freed by a deactivated account must answer nobody: it can be
+        taken by someone else, and a surface resolving it is choosing whose
+        authority a run executes with.
+        """
+        raise NotImplementedError
+
+    async def user_ids_by_mobile_numbers(
+        self, numbers: list[str], *, verified: bool
+    ) -> list[UUID]:
+        """The live users reachable on any of these numbers."""
+        raise NotImplementedError
+
+    async def preferences(self, user_id: UUID) -> "UserPreferences":
+        """This person's surface preferences, defaults included."""
+        raise NotImplementedError
+
+    async def set_preferences(
+        self, user_id: UUID, preferences: "UserPreferences"
+    ) -> None:
+        """Record this person's surface preferences."""
 
 
 class SurfacePodMembershipPort(Protocol):
@@ -455,9 +472,7 @@ class SurfacePodMembershipPort(Protocol):
         shared system bot across pods in multiple orgs. None if unset."""
         ...
 
-    async def clear_user_default_surface_id(
-        self, user_id: UUID, platform: str
-    ) -> None:
+    async def clear_user_default_surface_id(self, user_id: UUID, platform: str) -> None:
         """Clear the user's stored default surface for ``platform``.
 
         Called when a stored default points at a surface the user is no longer a

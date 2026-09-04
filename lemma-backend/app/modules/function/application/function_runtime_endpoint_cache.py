@@ -129,7 +129,20 @@ class FunctionRuntimeEndpointCache:
                     )
                     self._inflight[key] = task
 
-            endpoint, failure = await self._wait_for_endpoint(task, wait_until)
+            try:
+                endpoint, failure = await self._wait_for_endpoint(task, wait_until)
+            except TimeoutError:
+                # Give up on this attempt *and* on the work behind it.
+                #
+                # The task outlives the caller by design -- it carries its own,
+                # much longer deadline -- so abandoning it without cancelling
+                # left it issuing guest calls for minutes after nobody wanted
+                # the answer, while still sitting in `_inflight`. The next
+                # request then *joined* that doomed task and inherited its
+                # remaining wait, which is why one slow start turned into a run
+                # of identical two-minute failures instead of one.
+                await self._stop_new_joiners(key, task)
+                raise
             if failure is not None:
                 if joined and attempt == 0:
                     continue
@@ -144,6 +157,23 @@ class FunctionRuntimeEndpointCache:
                 )
             return endpoint
         raise AssertionError("unreachable runtime endpoint cache retry state")
+
+    async def _stop_new_joiners(self, key, task) -> None:
+        """Take a load that outlived its caller out of the join table.
+
+        Evicted, not cancelled. Another caller may still be waiting on it with
+        a longer deadline of its own -- cancelling would fail them for someone
+        else's timeout -- and if nobody is, letting it finish leaves a warm
+        entry for the next request rather than throwing the work away.
+
+        What must not continue is *joining*: a request arriving after this one
+        gave up used to attach to the same task and inherit whatever was left
+        of its wait, so one slow start became a run of identical two-minute
+        failures instead of a single one.
+        """
+        async with self._lock:
+            if self._inflight.get(key) is task:
+                self._inflight.pop(key, None)
 
     def _take_cached(
         self,

@@ -18,7 +18,9 @@ def validate_slug(value: str) -> str:
     if len(normalized) > _MAX_SLUG_LENGTH:
         raise ValueError("Slug must be 255 characters or fewer")
     if not is_valid_slug(normalized):
-        raise ValueError("Slug must contain only lowercase letters, numbers, and hyphens")
+        raise ValueError(
+            "Slug must contain only lowercase letters, numbers, and hyphens"
+        )
     return normalized
 
 
@@ -30,5 +32,4 @@ def normalize_resource_name(name: str) -> str:
 def normalize_public_slug(value: str) -> str:
     """Normalize a public DNS-safe slug."""
     normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
-    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
-    return normalized
+    return re.sub(r"-{2,}", "-", normalized).strip("-")

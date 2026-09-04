@@ -21,7 +21,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { useAccounts, useConnectors, useTriggers } from '@/lib/hooks/use-connectors';
+import { useAccounts, useConnectors, useTrigger, useTriggers } from '@/lib/hooks/use-connectors';
+import { SchemaFields } from '@/components/connectors/schema-fields';
+import type { SchemaValues } from '@/components/connectors/connector-utils';
+import { cleanTriggerConfig } from './trigger-config';
 import { useTable, useTables } from '@/lib/hooks/use-datastores';
 import { useFlow } from '@/lib/hooks/use-flows';
 import { usePod } from '@/lib/hooks/use-pods';
@@ -43,7 +46,8 @@ import {
     type MatchCondition,
     type TimeCadence,
 } from '@/lib/utils/schedules';
-import { formatAgentName } from '@/lib/utils/agents';
+import { DEFAULT_RESPONDER_NAME, formatAgentName } from '@/lib/utils/agents';
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
 import { ScheduleType, type Account, type Column, type CreateScheduleRequest, type Schedule, type Workflow } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { StepLoader } from '@/components/brand/loader';
@@ -155,7 +159,11 @@ export function TriggerModal({
     canDelete?: boolean;
 }) {
     const isEditing = Boolean(schedule);
-    const targetLabel = formatAgentName(target.name);
+    // `POD_DEFAULT` is the wire selector, not a name — humanizing it would put
+    // "Pod Default" in front of a reader who has only ever seen Lem.
+    const targetLabel = target.name === POD_DEFAULT_AGENT_SELECTOR
+        ? DEFAULT_RESPONDER_NAME
+        : formatAgentName(target.name);
 
     const { data: pod } = usePod(podId);
     const { data: tablesData, isLoading: loadingTables } = useTables(open ? podId : undefined);
@@ -180,7 +188,10 @@ export function TriggerModal({
     const [connectorId, setConnectorId] = useState('');
     const [triggerId, setTriggerId] = useState('');
     const [accountId, setAccountId] = useState('');
+    // The selected trigger's own parameters, keyed by its `config_schema`.
+    const [triggerConfig, setTriggerConfig] = useState<SchemaValues>({});
     const [condition, setCondition] = useState('');
+    const [instruction, setInstruction] = useState('');
     const [conditions, setConditions] = useState<MatchCondition[]>([]);
     // Operators the builder cannot draw (`in`, `written`, `changed: false`) are
     // kept on the trigger and named, so editing one authored in a bundle or on
@@ -215,6 +226,7 @@ export function TriggerModal({
             setTriggerId('');
             setAccountId('');
             setCondition('');
+            setInstruction('');
             setConditions([]);
             setUnsupportedConditions([]);
             setVisibility('POD');
@@ -224,6 +236,7 @@ export function TriggerModal({
         setStep('details');
         setKind(schedule.schedule_type as TriggerKind);
         setCondition(schedule.filter_instruction || '');
+        setInstruction(schedule.instruction || '');
         setVisibility(schedule.visibility || 'POD');
 
         if (schedule.schedule_type === ScheduleType.TIME) {
@@ -281,6 +294,29 @@ export function TriggerModal({
     const selectedTriggerId = triggerId && connectorTriggers.some((entry) => entry.id === triggerId)
         ? triggerId
         : connectorTriggers[0]?.id ?? '';
+    // The list response is lean by design (no `config_schema`), so the selected
+    // trigger's detail is fetched to learn what it can be narrowed by. This is
+    // what makes a trigger's own parameters -- GitHub's repository and actions,
+    // Slack's channel -- fillable at all; the modal has always sent an empty
+    // `trigger_config` because it never asked for one.
+    const eventTriggerId = target.kind === 'workflow'
+        ? workflowEventStart?.connector_trigger_id || ''
+        : selectedTriggerId;
+    const { data: selectedTriggerDetail } = useTrigger({
+        organizationId: pod?.organization_id,
+        connectorId: eventConnectorId,
+        triggerName: eventTriggerId || undefined,
+        enabled: wantsConnectors && kind === ScheduleType.WEBHOOK && Boolean(eventTriggerId),
+    });
+    const triggerConfigSchema = (selectedTriggerDetail as { config_schema?: unknown } | undefined)
+        ?.config_schema as Parameters<typeof SchemaFields>[0]['schema'] | undefined;
+    const hasTriggerConfigFields = Boolean(
+        triggerConfigSchema
+        && Object.keys(
+            (triggerConfigSchema as { properties?: Record<string, unknown> }).properties || {},
+        ).length > 0,
+    );
+
     const selectedTable = tableName || tables[0]?.name || '';
     // The list endpoint returns summaries — a `column_count`, not the columns —
     // so the picker reads the selected table's own schema. Only fetched while a
@@ -331,7 +367,14 @@ export function TriggerModal({
         (entry) => !availableConditionOperators(dataOperations).includes(entry.operator),
     );
 
-    const detailsReady = kind === ScheduleType.TIME
+    // The assistant answers as the pod and carries no standing instruction of
+    // its own, so "what should it do" is the one field it cannot go without —
+    // the API refuses the schedule otherwise. A named agent already is its
+    // instruction, so there this only adds to it.
+    const instructionRequired = target.kind === 'agent'
+        && target.name === POD_DEFAULT_AGENT_SELECTOR;
+
+    const timingReady = kind === ScheduleType.TIME
         ? Boolean(cron.trim())
         : kind === ScheduleType.DATASTORE
             ? Boolean(selectedTable) && dataOperations.length > 0
@@ -341,10 +384,17 @@ export function TriggerModal({
                 : target.kind === 'agent'
                     ? Boolean(connectorId && selectedTriggerId && selectedAccountId)
                     : Boolean(!workflowEventBlocked && selectedAccountId);
+    const detailsReady = timingReady && (!instructionRequired || Boolean(instruction.trim()));
 
     const buildConfig = (): Record<string, unknown> | null => {
         if (kind === ScheduleType.TIME) {
-            return { schedule_type: 'CRON', cron_expression: cron.trim(), timezone: timezone.trim() || 'UTC' };
+            // `cron` is the key the API validates on — `validate_time_schedule_config`
+            // reads exactly `cron` or `scheduled_at` and refuses the request when it
+            // finds neither. This said `cron_expression`, so every TIME trigger built
+            // here came back 422. It was invisible from the read side because
+            // `getScheduleTimeConfig` accepts either spelling, so schedules created
+            // through the CLI still displayed correctly.
+            return { schedule_type: 'CRON', cron: cron.trim(), timezone: timezone.trim() || 'UTC' };
         }
         if (kind === ScheduleType.DATASTORE) {
             const when = buildMatchConditions(conditions, selectedTableColumnTypes);
@@ -356,11 +406,16 @@ export function TriggerModal({
                 ...(when ? { when } : {}),
             };
         }
+        // A trigger's own parameters go at the *top level*. The backend matches
+        // a delivery against this object directly, so anything nested under a
+        // `trigger_config` key is invisible to matching -- which is why the
+        // modal used to send it empty and nothing was ever narrowed.
+        const params = cleanTriggerConfig(triggerConfig);
         if (target.kind === 'agent') {
-            return { connector_id: connectorId, connector_trigger_id: selectedTriggerId, trigger_config: {} };
+            return { connector_id: connectorId, connector_trigger_id: selectedTriggerId, ...params };
         }
         // Workflow webhooks derive their connector + event from the workflow start.
-        return {};
+        return params;
     };
 
     const handleSave = async () => {
@@ -377,6 +432,7 @@ export function TriggerModal({
                         // Empty string, not null: the API drops nulls, so a null
                         // here would silently leave a removed condition in place.
                         filter_instruction: condition.trim(),
+                        instruction: instruction.trim(),
                         // Only when it actually changed, so a trigger saved with
                         // a visibility this modal does not offer keeps it — and
                         // never for a data trigger, whose choice is not shown
@@ -397,6 +453,7 @@ export function TriggerModal({
                         ? selectedTriggerId
                         : null,
                     config: buildConfig() as Record<string, unknown>,
+                    instruction: instruction.trim() || null,
                     filter_instruction: condition.trim() || null,
                     filter_output_schema: null,
                     // A data trigger is the pod's, always — see `RunsAsField`.
@@ -569,19 +626,55 @@ export function TriggerModal({
                                         onConnectorChange={(value) => {
                                             setConnectorId(value);
                                             setTriggerId('');
+                                            setTriggerConfig({});
                                         }}
                                         triggers={connectorTriggers.map((entry) => ({
                                             id: entry.id,
                                             label: getTriggerLabel(entry as { id: string } & Record<string, unknown>),
                                         }))}
                                         triggerId={selectedTriggerId}
-                                        onTriggerChange={setTriggerId}
+                                        onTriggerChange={(value) => {
+                                            setTriggerId(value);
+                                            setTriggerConfig({});
+                                        }}
+                                        configSchema={triggerConfigSchema ?? null}
+                                        configValues={triggerConfig}
+                                        onConfigChange={setTriggerConfig}
+                                        hasConfigFields={hasTriggerConfigFields}
                                         accounts={compatibleAccounts}
                                         accountId={selectedAccountId}
                                         onAccountChange={setAccountId}
                                         workflowEvent={workflowEventStart}
                                         workflowEventBlocked={workflowEventBlocked}
                                     />
+                                ) : null}
+
+                                {/* What the target should do — above the
+                                    condition, because it is the answer to the
+                                    question the modal opened with. A workflow
+                                    is its own set of steps and has nowhere to
+                                    put a sentence, so it is asked only of
+                                    agents. Required for the assistant, which
+                                    has no standing instruction to fall back on;
+                                    optional for a named agent, which is already
+                                    its own. */}
+                                {target.kind === 'agent' ? (
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs">
+                                            What should {targetLabel} do
+                                            {instructionRequired ? null : (
+                                                <span className="ml-1.5 font-normal text-[var(--text-tertiary)]">optional</span>
+                                            )}
+                                        </Label>
+                                        <Textarea
+                                            value={instruction}
+                                            onChange={(event) => setInstruction(event.target.value)}
+                                            placeholder={instructionRequired
+                                                ? 'e.g. summarise yesterday’s open tickets and post the list to #support'
+                                                : `e.g. focus on what changed since ${targetLabel} last ran`}
+                                            className="min-h-16 resize-y"
+                                        />
+                                    </div>
                                 ) : null}
 
                                 {/* A data trigger can answer "only run when" from
@@ -1129,6 +1222,10 @@ function EventFields({
     onAccountChange,
     workflowEvent,
     workflowEventBlocked,
+    configSchema,
+    configValues,
+    onConfigChange,
+    hasConfigFields,
 }: {
     targetKind: TriggerTargetKind;
     isEditing: boolean;
@@ -1143,6 +1240,10 @@ function EventFields({
     onAccountChange: (value: string) => void;
     workflowEvent: { connector_id?: string; connector_trigger_id?: string } | null;
     workflowEventBlocked: boolean;
+    configSchema: Parameters<typeof SchemaFields>[0]['schema'];
+    configValues: SchemaValues;
+    onConfigChange: (values: SchemaValues) => void;
+    hasConfigFields: boolean;
 }) {
     // Which app and event a webhook listens to is fixed when it is created —
     // the update API cannot move it — so editing states them rather than
@@ -1177,7 +1278,15 @@ function EventFields({
                     </p>
                 </div>
                 {workflowEventBlocked ? null : (
-                    <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+                    <>
+                        <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+                        <TriggerConfigFields
+                            schema={configSchema}
+                            values={configValues}
+                            onChange={onConfigChange}
+                            visible={hasConfigFields}
+                        />
+                    </>
                 )}
             </div>
         );
@@ -1214,6 +1323,49 @@ function EventFields({
                 </div>
             </div>
             <AccountField accounts={accounts} accountId={accountId} onAccountChange={onAccountChange} />
+            <TriggerConfigFields
+                schema={configSchema}
+                values={configValues}
+                onChange={onConfigChange}
+                visible={hasConfigFields}
+            />
+        </div>
+    );
+}
+
+/**
+ * A trigger's own parameters, rendered from its `config_schema`.
+ *
+ * Every one of these narrows a trigger that already works -- GitHub fires on
+ * every repository in the installation until one is named -- so the whole block
+ * is absent when a trigger declares no parameters, and nothing here is
+ * required.
+ */
+function TriggerConfigFields({
+    schema,
+    values,
+    onChange,
+    visible,
+}: {
+    schema: Parameters<typeof SchemaFields>[0]['schema'];
+    values: SchemaValues;
+    onChange: (values: SchemaValues) => void;
+    visible: boolean;
+}) {
+    if (!visible || !schema) return null;
+    return (
+        <div className="space-y-1.5">
+            <Label className="text-xs">Narrow this event</Label>
+            <SchemaFields
+                schema={schema}
+                values={values}
+                onChange={onChange}
+                followSchemaOrder
+                emptyMessage="This event takes no further settings."
+            />
+            <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                Optional. Left empty, the trigger fires on every matching event.
+            </p>
         </div>
     );
 }

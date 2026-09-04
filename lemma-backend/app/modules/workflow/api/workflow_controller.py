@@ -10,6 +10,7 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
 from app.modules.workflow.api.dependencies import (
     WorkflowServiceDep,
+    build_workflow_engine,
     WorkflowResourceDeleteDep,
     WorkflowResourceEditorDep,
     WorkflowResourceExecuteDep,
@@ -31,7 +32,6 @@ from app.modules.workflow.api.schemas import (
     workflow_start_input_to_domain,
 )
 from app.modules.workflow.domain.workflow import WorkflowEntity, WorkflowUpdateEntity
-from app.modules.workflow.execution.engine import WorkflowEngine
 
 # Setup templates
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -167,7 +167,10 @@ async def update_workflow(
         requester_user_id=user.id,
         ctx=ctx,
     )
-    updated = await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx) or updated
+    updated = (
+        await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx)
+        or updated
+    )
     return await _flow_detail_response(updated)
 
 
@@ -209,7 +212,10 @@ async def update_workflow_graph(
         requester_user_id=user.id,
         ctx=ctx,
     )
-    updated = await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx) or updated
+    updated = (
+        await service.get_workflow(workflow.id, requester_user_id=user.id, ctx=ctx)
+        or updated
+    )
     return await _flow_detail_response(updated)
 
 
@@ -239,7 +245,9 @@ async def list_workflows(
         ctx=ctx,
     )
     return WorkflowListResponse(
-        items=[WorkflowSummaryResponse.model_validate(summary) for summary in summaries],
+        items=[
+            WorkflowSummaryResponse.model_validate(summary) for summary in summaries
+        ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -304,7 +312,7 @@ async def create_workflow_run(
     _verify_pod(workflow, pod_id)
     assert workflow is not None
 
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     run = await engine.start_run(workflow.id, user.id, ctx=ctx)
     active_wait = await engine.get_active_wait(run.id)
     return run_response_from_domain(run, active_wait)
@@ -339,7 +347,7 @@ async def list_workflow_runs(
 
     cursor = parse_uuid_page_token(page_token)
 
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     runs, next_cursor = await engine.list_runs(
         workflow.id,
         limit=limit,
@@ -379,6 +387,7 @@ async def visualize_workflow(
     _verify_pod(workflow, pod_id)
 
     return templates.TemplateResponse(
+        request,
         "workflow_view.html",
-        {"request": request, "workflow": workflow.model_dump(mode="json")},
+        {"workflow": workflow.model_dump(mode="json")},
     )

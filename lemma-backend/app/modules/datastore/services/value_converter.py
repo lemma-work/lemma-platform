@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import json
 from typing import Any, Dict, List, Union
 from uuid import UUID
@@ -11,12 +11,28 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Give a zone-less datetime the one the column is stored in."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 class ValueConverter:
     @staticmethod
     def parse_datetime(value: str) -> datetime:
+        """Parse a DATETIME value, always as an instant.
+
+        A `DATETIME` column is `TIMESTAMP WITH TIME ZONE`, so a value with no
+        zone is not a time -- PostgreSQL resolves it against the session's
+        ``TimeZone``, which means the same string denotes different instants on
+        two deployments and the value read back is not the value sent. Rejecting
+        the zone-less form would break every caller that sends
+        ``"2026-01-01 09:00:00"``, so it is read as UTC, stated in the column
+        type's description, and the datastore engine pins the session zone to
+        match.
+        """
         try:
             normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
-            return datetime.fromisoformat(normalized)
+            return _as_utc(datetime.fromisoformat(normalized))
         except ValueError:
             pass
         formats = [
@@ -27,7 +43,7 @@ class ValueConverter:
         ]
         for fmt in formats:
             try:
-                return datetime.strptime(value, fmt)
+                return _as_utc(datetime.strptime(value, fmt))  # noqa: DTZ007
             except ValueError:
                 continue
         raise ValueError(f"Invalid datetime format: {value}")
@@ -39,7 +55,7 @@ class ValueConverter:
         except ValueError:
             pass
         try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime.strptime(value, "%Y-%m-%d").date()  # noqa: DTZ007
         except ValueError:
             raise ValueError(f"Invalid date format: {value}")
 
@@ -51,11 +67,11 @@ class ValueConverter:
 
         if col_type == DatastoreDataType.DATETIME:
             if isinstance(value, datetime):
-                return value
+                return _as_utc(value)
             if isinstance(value, str):
                 return ValueConverter.parse_datetime(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to datetime")
-        elif col_type == DatastoreDataType.DATE:
+        if col_type == DatastoreDataType.DATE:
             if isinstance(value, date):
                 return value
             if isinstance(value, datetime):
@@ -63,25 +79,25 @@ class ValueConverter:
             if isinstance(value, str):
                 return ValueConverter.parse_date(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to date")
-        elif col_type in {DatastoreDataType.UUID, DatastoreDataType.USER}:
+        if col_type in {DatastoreDataType.UUID, DatastoreDataType.USER}:
             if isinstance(value, UUID):
                 return value
             if isinstance(value, str):
                 return UUID(value)
             raise ValueError(f"Cannot convert {type(value).__name__} to UUID")
-        elif col_type in {DatastoreDataType.INTEGER, DatastoreDataType.SERIAL}:
+        if col_type in {DatastoreDataType.INTEGER, DatastoreDataType.SERIAL}:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
             if isinstance(value, str):
                 return int(value)
             raise ValueError("Cannot convert to integer")
-        elif col_type == DatastoreDataType.FLOAT:
+        if col_type == DatastoreDataType.FLOAT:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return float(value)
             if isinstance(value, str):
                 return float(value)
             raise ValueError("Cannot convert to float")
-        elif col_type == DatastoreDataType.BOOLEAN:
+        if col_type == DatastoreDataType.BOOLEAN:
             if isinstance(value, bool):
                 return value
             if isinstance(value, str):

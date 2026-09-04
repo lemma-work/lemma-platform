@@ -1,6 +1,6 @@
-#input_type_name: ScoreInput
-#output_type_name: ScoreResult
-#function_name: score_lead
+# input_type_name: ScoreInput
+# output_type_name: ScoreResult
+# function_name: score_lead
 
 from typing import Optional
 

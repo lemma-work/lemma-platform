@@ -25,9 +25,6 @@ Run examples::
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import importlib.util
 import json
 import os
@@ -35,7 +32,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from composio import Composio
@@ -51,6 +48,7 @@ from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.models.connect_request import ConnectRequest
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
@@ -109,6 +107,53 @@ def _require_composio() -> str:
     if not key:
         pytest.skip("Real Composio e2e requires COMPOSIO_API_KEY.")
     return key
+
+
+@pytest.fixture(autouse=True)
+def _the_code_under_test_sees_the_same_key(monkeypatch):
+    """Give the credential to the code, not only to the guard above.
+
+    The root conftest sets ``LEMMA_DISABLE_DOTENV=1`` so no ``Settings`` in the
+    suite reads ``.env`` -- deliberate, and why ``_env_value`` parses the file
+    itself. But only this file did that. ``_sync_composio_catalog`` reads
+    ``connector_settings`` and ``os.environ``, found neither, logged
+    ``connector_catalog.composio.disabled`` at debug level and returned
+    ``(0, 0, 0)``.
+
+    So the guard said "configured, run" while the importer said "not
+    configured, do nothing", and the test failed several steps later on a
+    connector row that was never written -- with the one line explaining why
+    logged below the level anybody sees. A test that decides to run because it
+    found a key has to make that key reach the thing it is testing.
+    """
+    key = _composio_api_key()
+    if not key:
+        # `yield`, not `return`. This is a generator fixture, so returning
+        # early never yields and every test using it errors with "did not
+        # yield a value" rather than simply running unconfigured. It stayed
+        # hidden while every test in this file was `provider`-marked and so
+        # never ran without a key.
+        yield
+        return
+    monkeypatch.setenv("COMPOSIO_API_KEY", key)
+    monkeypatch.setattr(connector_settings, "composio_api_key", key)
+    webhook_secret = connector_settings.composio_webhook_secret or _env_value(
+        "COMPOSIO_WEBHOOK_SECRET"
+    )
+    if webhook_secret:
+        monkeypatch.setenv("COMPOSIO_WEBHOOK_SECRET", webhook_secret)
+        monkeypatch.setattr(
+            connector_settings, "composio_webhook_secret", webhook_secret
+        )
+    # The SDK client is cached on the key it was built with, so a client made
+    # before this point holds the empty one.
+    from app.modules.connectors.infrastructure.composio_client import (
+        reset_composio_clients,
+    )
+
+    reset_composio_clients()
+    yield
+    reset_composio_clients()
 
 
 def _composio_client() -> Composio:
@@ -307,6 +352,10 @@ _SMOKE_OPS: dict[str, tuple[str, dict]] = {
 def _wait_for_active_connection(
     composio: Composio, connection_id: str, timeout: float = 300.0
 ):
+    # Plain time.sleep, not waiters.eventually(): the Composio SDK is sync, and
+    # a human is expected to be looking at a just-opened browser tab for most of
+    # this wait, so blocking the caller's event loop for it costs nothing real
+    # -- this whole file only runs with RUN_HUMAN_OAUTH=1, never in CI.
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
@@ -362,13 +411,21 @@ async def test_composio_oauth_connect_and_reconnect_human(
         print(f"\n=== {op_name} succeeded: {json.dumps(exec_resp.json())[:300]} ===\n")
 
     async def _initiate() -> tuple[str, str, str]:
-        """POST a connect request; return (state, connection_id, authorization_url)."""
+        """POST a connect request; return (state, connection_id, authorization_url).
+
+        `state` and Composio's connection id are read from the row rather than
+        the response: both are live capabilities the API deliberately does not
+        hand back, and the connection id in particular is the thing the
+        callback binding exists to keep out of anyone else's hands.
+        """
         resp = await authenticated_client.post(
             cr_url, json={"auth_config_id": str(auth_config.id)}
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        attributes = body["attributes"] or {}
+        row = await db_session.get(ConnectRequest, UUID(body["id"]))
+        assert row is not None, "the connect request was not written"
+        attributes = row.attributes or {}
         return (
             attributes["state"],
             attributes["provider_state"],
@@ -427,54 +484,3 @@ async def test_composio_oauth_connect_and_reconnect_human(
         await _run_smoke_op(original_account_id)
     finally:
         _cleanup_user_accounts(fixed_test_user["id"])
-
-
-# =============================================================================
-# Webhook — Composio webhook signature verification
-# =============================================================================
-@pytest.mark.provider
-def test_composio_webhook_signature_verification():
-    secret = connector_settings.composio_webhook_secret or _env_value(
-        "COMPOSIO_WEBHOOK_SECRET"
-    )
-    if not secret:
-        pytest.skip("Webhook verification requires COMPOSIO_WEBHOOK_SECRET.")
-
-    from app.composition.schedule_connectors import (
-        ComposioWebhookVerifier,
-    )
-
-    payload = json.dumps(
-        {
-            "trigger_name": "GMAIL_NEW_GMAIL_MESSAGE",
-            "connection_id": "ca_test_connection",
-            "trigger_id": "ti_test_trigger",
-            "payload": {"message_id": "m1", "subject": "hello"},
-            "log_id": "log_test",
-        }
-    )
-    webhook_id = "msg_test_123"
-    timestamp = str(int(time.time()))
-    to_sign = f"{webhook_id}.{timestamp}.{payload}"
-    digest = hmac.new(
-        secret.encode("utf-8"), to_sign.encode("utf-8"), hashlib.sha256
-    ).digest()
-    signature = "v1," + base64.b64encode(digest).decode("utf-8")
-
-    headers = {
-        "webhook-id": webhook_id,
-        "webhook-timestamp": timestamp,
-        "webhook-signature": signature,
-    }
-
-    verifier = ComposioWebhookVerifier()
-    result = verifier.verify(payload, headers)
-    assert result["raw_payload"]["connection_id"] == "ca_test_connection"
-
-    # A tampered signature is rejected.
-    bad_headers = {
-        **headers,
-        "webhook-signature": "v1," + base64.b64encode(b"wrong").decode(),
-    }
-    with pytest.raises(Exception):
-        verifier.verify(payload, bad_headers)

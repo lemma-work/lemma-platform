@@ -104,6 +104,7 @@ async def get_operation_details_batch(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_names=body.operation_names,
+        limit=body.limit,
     )
 
 
@@ -147,11 +148,6 @@ async def execute_operation(
     # resolves inside a short DB scope and runs the (1-45s) external operation
     # call with no pooled connection held. Authorization is preserved -- the
     # org/delegation Context is built in-scope and threaded as the actor.
-    auth_header = request.headers.get("authorization") or ""
-    auth_token = None
-    if auth_header.lower().startswith("bearer "):
-        auth_token = auth_header.split(" ", 1)[1].strip()
-
     account_id = UUID(body.account_id) if body.account_id else None
     return await use_cases.execute_operation_for_auth_config(
         organization_id=organization_id,
@@ -160,7 +156,5 @@ async def execute_operation(
         payload=body.payload,
         user_id=user.id,
         request=request,
-        auth_token=auth_token,
-        api_url=str(request.base_url).rstrip("/"),
         account_id=account_id,
     )

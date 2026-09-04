@@ -12,7 +12,7 @@ import asyncio
 from datetime import datetime, timezone
 import posixpath
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from redis.exceptions import RedisError
@@ -81,6 +81,28 @@ def sandbox_failure_types() -> tuple[type[BaseException], ...]:
     return (SandboxError,)
 
 
+def retry_advice(exc: Exception) -> str:
+    """Whether this failure is actually worth another go.
+
+    The sentence used to be unconditional -- appended to everything a bare
+    `except Exception` caught, asserting recoverability that no code had
+    evaluated. A stopped workspace container reaches here as
+    `SandboxUnavailable` only after the provider says so; anything else is a
+    durable fault, and inviting a retry on one sends an agent round a loop with
+    no exit. That is exactly what happened: four identical failures over several
+    minutes, each one advertising itself as recoverable.
+
+    `SandboxUnavailable` is how the platform already spells "transient" --
+    `session_support.sandbox_command_failure` classifies the same way.
+    """
+    if isinstance(exc, SandboxUnavailable):
+        return " Treat this as a recoverable tool failure and retry if the operation is still needed."
+    return (
+        " This is not expected to succeed on retry; report it rather than "
+        "repeating the call."
+    )
+
+
 def sandbox_command_failure(
     *,
     error: str,
@@ -127,6 +149,50 @@ async def with_backpressure(operation, deadline: datetime):
             delay = min(delay * (1.5 ** min(attempt, 4)), 5.0, remaining)
             attempt += 1
             await asyncio.sleep(delay)
+
+
+async def sandbox_is_responsive(
+    client,
+    logical_id,
+    *,
+    cwd: str,
+    deadline,
+    budget_seconds: float,
+) -> bool:
+    """Can this sandbox still run the smallest command there is?
+
+    Deliberately not `inspect`. The provider answered that a wedged workspace
+    was running for the whole time it was failing every command, because from
+    outside it *was* running -- what had stopped working was executing anything
+    inside it. So the probe is an execution.
+
+    Any failure to get the expected byte back counts as unresponsive, transport
+    errors included: the caller is being told "this will not work, restart it",
+    and every one of these means exactly that.
+    """
+    probe_id = uuid4()
+    try:
+        await client.start_process(
+            WorkloadKind.WORKSPACE,
+            logical_id,
+            operation_id=probe_id,
+            argv=("/bin/echo", "-n", "ok"),
+            cwd=cwd,
+            environment=(),
+            output_limit_bytes=64,
+            deadline_at=deadline,
+        )
+        snapshot = await client.read_process_output(
+            WorkloadKind.WORKSPACE,
+            logical_id,
+            probe_id,
+            deadline_at=deadline,
+            after_sequence=0,
+            wait_seconds=max(0.5, budget_seconds - 1),
+        )
+    except SandboxError, httpx.HTTPError, OSError:
+        return False
+    return any(b"ok" in chunk.data for chunk in snapshot.chunks)
 
 
 class OutputCursor:

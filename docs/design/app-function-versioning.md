@@ -68,4 +68,3 @@ Operator-facing settings are in [configuration.md](../configuration.md#build-ret
   `components/` is silently skipped unless the pattern covers it.
 
 ---
-

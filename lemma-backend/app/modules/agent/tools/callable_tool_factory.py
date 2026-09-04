@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.infrastructure.pydantic_ai_compat import (
     FunctionSchema,
     InlineDefsJsonSchemaTransformer,
@@ -27,7 +28,9 @@ from app.modules.agent.domain.entities import Agent
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
+from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,
@@ -35,11 +38,7 @@ from app.modules.function.contracts import (
     FunctionStatus,
     FunctionType,
 )
-from app.composition.agent_functions import (
-    create_function_repository,
-    create_function_run_repository,
-    create_function_use_cases,
-)
+from app.modules.function.contracts import agent_tools as function_tools
 
 
 logger = get_logger(__name__)
@@ -47,7 +46,7 @@ logger = get_logger(__name__)
 _SUBAGENT_TOOL_TIMEOUT_SECONDS = 300
 
 
-def _normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(schema, dict) or not schema:
         return {"type": "object", "properties": {}, "additionalProperties": True}
     normalized = dict(schema)
@@ -58,7 +57,7 @@ def _normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return normalized
 
 
-def _inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
+def inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return InlineDefsJsonSchemaTransformer(schema, strict=False).walk()
 
 
@@ -117,7 +116,7 @@ def _schema_preview(schema: dict[str, Any] | None) -> str:
     if not isinstance(schema, dict) or not schema:
         return ""
     return json.dumps(
-        _normalize_json_schema(schema), ensure_ascii=False, separators=(",", ":")
+        normalize_json_schema(schema), ensure_ascii=False, separators=(",", ":")
     )
 
 
@@ -132,22 +131,27 @@ class AgentCallableToolFactory:
         *,
         agent: Agent,
         allow_subagents: bool = True,
+        grants: AgentGrantSummary | None = None,
     ) -> list[FunctionToolset[BaseAgentContext]]:
+        """``function_<name>`` / ``agent_<name>`` tools for this agent's grants.
+
+        ``grants`` is the summary the caller already loaded for toolset
+        selection; passing it through spares a second read of the same rows.
+        """
         if agent.pod_id is None or agent.id is None:
             return []
 
         tools: list[Tool] = []
         async with self.uow_factory() as uow:
-            function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
-            function_ids, agent_ids = await self._load_callable_resource_ids(
-                uow,
-                pod_id=agent.pod_id,
-                agent_id=agent.id,
-            )
+            if grants is None:
+                grants = await self._load_grant_summary(
+                    uow, pod_id=agent.pod_id, agent_id=agent.id
+                )
+            function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
             for function_id in function_ids:
-                function = await function_repo.get(function_id)
+                function = await function_tools.get_function_by_id(uow, function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 with suppress(Exception):
@@ -175,43 +179,70 @@ class AgentCallableToolFactory:
         # conversations.
         return [FunctionToolset[BaseAgentContext](tools=tools)]
 
-    async def _load_callable_resource_ids(
+    async def load_grant_summary(
+        self, *, pod_id: UUID, agent_id: UUID
+    ) -> AgentGrantSummary:
+        """Everything one agent's grants decide, in one query.
+
+        Two consumers need this and they used to be able to disagree: the
+        callable tools below, and the toolset selection that now derives POD and
+        CONNECTORS from a grant rather than a second switch. Reading the table
+        once and handing the same answer to both is what keeps a tool from being
+        listed by one path and refused by the other.
+
+        Not filtered by permission id, unlike the callable-tool query it
+        replaces: "does this agent hold *any* grant on a folder" is a different
+        question from "may it execute this function", and a read-only grant
+        still means the agent should be able to reach pod data.
+        """
+        async with self.uow_factory() as uow:
+            return await self._load_grant_summary(uow, pod_id=pod_id, agent_id=agent_id)
+
+    async def _load_grant_summary(
         self,
         uow,
         *,
         pod_id: UUID,
         agent_id: UUID,
-    ) -> tuple[list[UUID], list[UUID]]:
+    ) -> AgentGrantSummary:
         from sqlalchemy import select
 
         stmt = select(
             ResourcePermissionGrantModel.resource_type,
             ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
         ).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
             ResourcePermissionGrantModel.grantee_type == "AGENT",
             ResourcePermissionGrantModel.grantee_id == agent_id,
-            ResourcePermissionGrantModel.permission_id.in_(
-                [Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE]
-            ),
         )
         rows = list((await uow.session.execute(stmt)).all())
-        function_ids = [
+        callable_rows = [
+            (resource_type, resource_id)
+            for resource_type, resource_id, permission_id in rows
+            if permission_id
+            in (Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE)
+        ]
+        function_ids = tuple(
             resource_id
-            for resource_type, resource_id in rows
+            for resource_type, resource_id in callable_rows
             if resource_type == "function"
-        ]
-        agent_ids = [
+        )
+        agent_ids = tuple(
             resource_id
-            for resource_type, resource_id in rows
+            for resource_type, resource_id in callable_rows
             if resource_type == "agent" and resource_id != agent_id
-        ]
-        return function_ids, agent_ids
+        )
+        return AgentGrantSummary.from_grants(
+            [(resource_type, resource_id) for resource_type, resource_id, _ in rows],
+            function_ids=function_ids,
+            agent_ids=agent_ids,
+        )
 
     def _build_function_tool(
         self, function: FunctionEntity, *, parent_agent: Agent
     ) -> Tool:
-        schema = _inline_schema(_normalize_json_schema(function.input_schema))
+        schema = inline_schema(normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
         function_name = f"function_{function.name}"
         parent_agent_id = parent_agent.id
@@ -236,18 +267,17 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            use_cases = create_function_use_cases(self.uow_factory)
-            run = await use_cases.execute_function_as_workload(
+            run = await function_tools.execute_function_for_agent(
+                self.uow_factory,
                 pod_id=function.pod_id,
                 name=function.name,
                 input_data=dict(request),
                 user_id=ctx.deps.user_id,
-                principal_type="AGENT",
-                principal_id=parent_agent_id,
+                agent_id=parent_agent_id,
+                agent_name=parent_agent_name,
                 # Minimal single-operation scope; implication-expanded, so the
                 # implied function.read is admitted (see delegation.py).
                 delegation_scope=frozenset([Permissions.FUNCTION_EXECUTE]),
-                delegation_actor_name=parent_agent_name,
             )
 
             # JOB functions enqueue a background run and return PENDING; await it.
@@ -259,7 +289,7 @@ class AgentCallableToolFactory:
 
             if run.status != FunctionRunStatus.COMPLETED:
                 raise RuntimeError(run.error or f"Function {function.name} failed")
-            return run.output_data or {}
+            return bounded_tool_payload(run.output_data or {}, what="function output")
 
         return Tool(
             _run_function,
@@ -282,7 +312,7 @@ class AgentCallableToolFactory:
         has_input_schema = bool(agent.input_schema)
         has_output_schema = bool(agent.output_schema)
         schema = (
-            _inline_schema(_normalize_json_schema(agent.input_schema))
+            inline_schema(normalize_json_schema(agent.input_schema))
             if has_input_schema
             else _single_string_input_schema()
         )
@@ -366,7 +396,12 @@ class AgentCallableToolFactory:
         )
 
     async def _await_function_run(self, run_id: UUID) -> FunctionRunEntity:
-        """Poll a JOB function run until it reaches a terminal state (bounded)."""
+        """Poll a JOB function run until it reaches a terminal state (bounded).
+
+        A deadline rather than a fixed attempt count, because the pause grows:
+        at the configured interval a five-minute wait was six hundred unit-of-
+        work checkouts, all of them asking the same question.
+        """
         terminal = {
             FunctionRunStatus.COMPLETED,
             FunctionRunStatus.FAILED,
@@ -374,13 +409,24 @@ class AgentCallableToolFactory:
         }
         run: FunctionRunEntity | None = None
         interval = agent_settings.function_run_poll_interval_seconds
-        attempts = max(1, int(_SUBAGENT_TOOL_TIMEOUT_SECONDS / interval))
-        for _ in range(attempts):
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + _SUBAGENT_TOOL_TIMEOUT_SECONDS
+        attempt = 0
+        while True:
             async with self.uow_factory() as uow:
-                run = await create_function_run_repository(uow).get_run(run_id)
+                run = await function_tools.get_function_run(uow, run_id)
             if run is not None and run.status in terminal:
                 return run
-            await asyncio.sleep(interval)
+            if loop.time() >= deadline:
+                break
+            attempt += 1
+            await asyncio.sleep(
+                poll_delay(
+                    attempt,
+                    base_seconds=interval,
+                    remaining_seconds=deadline - loop.time(),
+                )
+            )
         if run is None:
             raise RuntimeError(f"Function run {run_id} not found")
         return run

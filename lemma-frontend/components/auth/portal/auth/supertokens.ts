@@ -236,6 +236,25 @@ export function ensureSuperTokensInit(): void {
       Session.init({
         sessionTokenFrontendDomain: authConfig.sessionTokenDomain,
         tokenTransferMethod: "cookie",
+        /**
+         * How many times one request may be refreshed-and-retried before the
+         * session is called unusable. The library default is 10, which is only
+         * ever right when a refresh eventually fixes the 401.
+         *
+         * It does not always. A refresh token can be genuinely valid -- so
+         * `/auth/session/refresh` answers 200 -- while the access token it
+         * mints authorizes nothing, because the database that would recognise
+         * it has been replaced underneath. The client reads the 200 as "fixed",
+         * retries, gets 401, refreshes again. At 10 attempts per request,
+         * across the ~9 queries a workspace screen makes, on a 60s poll, one
+         * install was measured writing 8 MB of backend log an hour,
+         * indefinitely.
+         *
+         * Two is enough to ride out the case this exists for -- an access token
+         * that expired between being read and being sent -- and small enough
+         * that a session which cannot be repaired stops being hammered.
+         */
+        maxRetryAttemptsForSessionRefresh: 2,
       }),
       EmailPassword.init({
         override: {

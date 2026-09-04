@@ -31,6 +31,41 @@ class DatastoreSettings(BaseSettings):
     datastore_markdown_image_max_bytes: int = Field(default=10 * 1024 * 1024)
     datastore_markdown_batch_max_bytes: int = Field(default=50 * 1024 * 1024)
 
+    # Record value limits. Tables hold tabular data; a document belongs in a pod
+    # file with its path in a FILE_PATH column. Until these existed, every byte
+    # arriving as a file passed a ceiling and every byte arriving as a record
+    # cell passed none -- which is how a multi-megabyte column filled Redis (the
+    # whole row is copied into `datastore.events`, capped by entry count rather
+    # than bytes) and stalled the API event loop decoding it. Production rows
+    # have averaged ~2KB, so 256KB is roughly 100x real use and still makes a
+    # megabyte document impossible. 0 disables the bound.
+    datastore_cell_max_bytes: int = Field(
+        default=256 * 1024,
+        description=(
+            "Largest encoded size (bytes) of a single record value. Exceeding it "
+            "refuses the write. Env: ``DATASTORE_CELL_MAX_BYTES``."
+        ),
+    )
+    datastore_row_max_bytes: int = Field(
+        default=1024 * 1024,
+        description=(
+            "Largest encoded size (bytes) of one record across all its columns, "
+            "so a row of just-legal cells is still bounded. Env: "
+            "``DATASTORE_ROW_MAX_BYTES``."
+        ),
+    )
+    datastore_event_payload_max_bytes: int = Field(
+        default=32 * 1024,
+        description=(
+            "Largest encoded size (bytes) of the row body carried on a record "
+            "change event. Above it the body is dropped and the event is flagged "
+            "truncated; consumers read the row instead. Deliberately far below "
+            "the row limit: a row is stored once, while its event is retained "
+            "50,000 times over in a Redis stream capped by entry count. Env: "
+            "``DATASTORE_EVENT_PAYLOAD_MAX_BYTES``."
+        ),
+    )
+
     # Ad-hoc SQL query guardrails
     datastore_query_role: str = Field(
         default="lemma_datastore_query",
@@ -55,6 +90,16 @@ class DatastoreSettings(BaseSettings):
     datastore_query_max_plan_rows: int = Field(
         default=5_000_000,
         description="Reject ad-hoc datastore SQL queries whose EXPLAIN estimated row count exceeds this ceiling.",
+    )
+    datastore_search_visibility_id_soft_limit: int = Field(
+        default=20_000,
+        description=(
+            "Log a degraded event when a search's visibility filter has to send "
+            "more than this many file ids to the pod database. Deliberately a "
+            "warning threshold and not a cap: truncating the visible list would "
+            "drop results, and truncating the hidden list would leak files the "
+            "caller may not read, so neither side is ever trimmed."
+        ),
     )
 
     # Document processing
@@ -200,7 +245,12 @@ class DatastoreSettings(BaseSettings):
         ),
     )
     document_processing_table_model: Literal[
-        "tatr", "slanet_plus", "slanet_wired", "slanet_wireless", "slanet_auto", "disabled"
+        "tatr",
+        "slanet_plus",
+        "slanet_wired",
+        "slanet_wireless",
+        "slanet_auto",
+        "disabled",
     ] = Field(
         default="tatr",
         description=(
@@ -224,18 +274,21 @@ class DatastoreSettings(BaseSettings):
     )
 
     # Document-processor adapter selection
-    document_processor: Literal["auto", "kreuzberg", "markitdown", "docling"] = Field(
+    document_processor: Literal[
+        "auto", "kreuzberg", "xberg", "markitdown", "docling"
+    ] = Field(
         default="auto",
         description=(
             "Which document-processor adapter converts non-markdown files to "
-            "markdown. 'markitdown' runs IN-PROCESS (optional dep; MIT; light, no "
-            "models; strongest on office formats, weaker on PDFs). 'docling' calls "
+            "markdown. 'xberg' runs IN-PROCESS (optional dep; MIT; a Rust core "
+            "with no models and no Python dependencies; what local and desktop "
+            "installs use, since they have no container to run). 'docling' calls "
             "a Docling Serve container OVER HTTP (MIT; beautiful research-paper/"
             "book markdown with tables; ML-heavy + GPU-oriented, so it runs as "
             "its own service and the backend stays lean — opt-in only, set this "
             "to 'docling' + DOCLING_SERVE_URL). 'kreuzberg' calls the Kreuzberg "
             "REST container. 'auto' (the default) uses 'kreuzberg' when "
-            "KREUZBERG_URL is set, else the in-process 'markitdown'; it never "
+            "KREUZBERG_URL is set, else the in-process 'xberg'; it never "
             "auto-selects docling. Env: ``DOCUMENT_PROCESSOR``."
         ),
     )
@@ -399,16 +452,27 @@ class DatastoreSettings(BaseSettings):
         """Resolve ``document_processor`` to a concrete adapter name.
 
         'auto' uses Kreuzberg when a Kreuzberg URL is configured, otherwise the
-        in-process 'markitdown' adapter — so a stack that drops the Kreuzberg
+        in-process 'xberg' adapter — so a stack that drops the Kreuzberg
         container (KREUZBERG_URL="") still converts documents in-process.
+
+        Extraction is CPU-bound, which is why cloud keeps it in a container of
+        its own rather than in the API process; a local install has no container
+        fleet, so in-process is the only option there.
 
         Docling is intentionally NOT auto-selected: it is GPU-oriented (slow on
         CPU) so it is opt-in only via an explicit ``DOCUMENT_PROCESSOR=docling``
         (plus ``DOCLING_SERVE_URL``).
         """
+        if self.document_processor == "markitdown":
+            # Accepted, and resolved to its replacement. markitdown was the
+            # in-process adapter until xberg took over, and the value is written
+            # into every desktop host pack, every local stack .env, and any
+            # deployment that pinned it -- so rejecting it would turn an upgrade
+            # into a backend that refuses to start over a name.
+            return "xberg"
         if self.document_processor != "auto":
             return self.document_processor
-        return "kreuzberg" if (self.kreuzberg_url or "").strip() else "markitdown"
+        return "kreuzberg" if (self.kreuzberg_url or "").strip() else "xberg"
 
 
 datastore_settings = DatastoreSettings()

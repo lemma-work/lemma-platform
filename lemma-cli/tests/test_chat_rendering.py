@@ -12,9 +12,12 @@ text once the stream ends.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from lemma_cli.cli_core.chat import ChatRenderer, extract_final_result
+from lemma_cli.cli_core.chat import (
+    ChatRenderer,
+    StreamEvent,
+    extract_final_result,
+    iter_sse_events,
+)
 
 
 _TRANSCRIPT = (
@@ -56,8 +59,8 @@ def test_extract_final_result_survives_braces_inside_strings():
 def _render(tokens, *, verbose=False, capsys=None):
     renderer = ChatRenderer(agent="policy-lookup", verbose=verbose)
     for token in tokens:
-        renderer.handle(SimpleNamespace(type="token", data=token))
-    renderer.handle(SimpleNamespace(type="completed", data={"status": "COMPLETED"}))
+        renderer.handle(StreamEvent(type="token", data=token))
+    renderer.handle(StreamEvent(type="completed", data={"status": "COMPLETED"}))
     renderer.finish()
     return capsys.readouterr().out
 
@@ -88,8 +91,8 @@ def test_quiet_mode_falls_back_to_the_raw_text(capsys):
 def test_a_stopped_run_still_reports_its_status(capsys):
     """Suppressing "COMPLETED" must not also hide a run that did NOT complete."""
     renderer = ChatRenderer(agent="a", verbose=False)
-    renderer.handle(SimpleNamespace(type="token", data="partial"))
-    renderer.handle(SimpleNamespace(type="stopped", data={"status": "STOPPED"}))
+    renderer.handle(StreamEvent(type="token", data="partial"))
+    renderer.handle(StreamEvent(type="stopped", data={"status": "STOPPED"}))
     renderer.finish()
     assert "STOPPED" in capsys.readouterr().out
 
@@ -99,7 +102,7 @@ def test_a_stopped_run_still_reports_its_status(capsys):
 
 def _tokens(renderer: ChatRenderer, *payloads) -> str:
     for payload in payloads:
-        renderer.handle(SimpleNamespace(type="TOKEN", data=payload, agent_run_id=None))
+        renderer.handle(StreamEvent(type="TOKEN", data=payload, agent_run_id=None))
     return "".join(renderer.buffered)
 
 
@@ -164,9 +167,81 @@ def test_verbose_shows_the_answer_channel_only():
     """--verbose is for watching a run, not for leaking the tool envelope."""
     renderer = ChatRenderer(agent="pod agent", verbose=True)
     renderer.handle(
-        SimpleNamespace(
-            type="TOKEN", data={"kind": "tool", "data": '{"tool_name":"x"}'}, agent_run_id=None
+        StreamEvent(
+            type="TOKEN",
+            data={"kind": "tool", "data": '{"tool_name":"x"}'},
+            agent_run_id=None,
         )
     )
 
     assert renderer.printed_tokens is False, "a tool delta is not the answer"
+
+
+# --- the wire, not a hand-built shape ----------------------------------------
+
+
+class _SseResponse:
+    """A response that yields exactly the bytes the server sends."""
+
+    def __init__(self, *frames: str) -> None:
+        self._frames = frames
+
+    def iter_lines(self, decode_unicode: bool = False):
+        for frame in self._frames:
+            yield f"data: {frame}"
+            yield ""
+
+
+def test_a_tool_delta_never_reaches_the_answer_over_the_real_wire():
+    """The same assertion as above, driven through the actual SSE parser.
+
+    The tests above construct ``data={"kind": "tool", ...}`` — a nested shape
+    ``iter_sse_events`` can never produce. The server puts ``kind`` *beside*
+    ``data`` and makes ``data`` a bare string, pinned by the backend's own
+    ``test_sse_frames.py``. So those tests passed against a fabricated envelope
+    while every real tool call went on reaching users:
+
+        hello
+        {"tool_name":"pod_query","args":{"sql":"SELECT COUNT(*) AS count FROM items"}}332
+
+    Nothing here may hand-build a StreamEvent. That is the whole point.
+    """
+    renderer = ChatRenderer(agent="pod agent")
+    response = _SseResponse(
+        '{"type":"token","data":"hello","kind":"text"}',
+        '{"type":"token","data":"{\\"tool_name\\":\\"pod_query\\",\\"args\\":","kind":"tool"}',
+        '{"type":"token","data":"{\\"sql\\":\\"SELECT COUNT(*) AS count FROM items\\"}}","kind":"tool"}',
+        '{"type":"token","data":" There are 332.","kind":"text"}',
+    )
+
+    for event in iter_sse_events(response):
+        renderer.handle(event)
+    answer = "".join(renderer.buffered)
+
+    assert answer == "hello There are 332."
+    assert "tool_name" not in answer
+    assert "SELECT COUNT" not in answer
+
+
+def test_the_parser_carries_the_kind_tag_off_the_frame():
+    """`kind` is a sibling of `data`; reading it from inside `data` finds
+    nothing, which is why the filter that existed never once fired."""
+    response = _SseResponse('{"type":"token","data":"hi","kind":"thinking"}')
+
+    event = next(iter(iter_sse_events(response)))
+
+    assert event.kind == "thinking"
+    assert event.data == "hi", "data is a bare string on the wire, never a dict"
+
+
+def test_a_thinking_delta_over_the_wire_is_not_the_answer():
+    renderer = ChatRenderer(agent="pod agent")
+    response = _SseResponse(
+        '{"type":"token","data":"The user wants a count. I should query.","kind":"thinking"}',
+        '{"type":"token","data":"There is 1 row.","kind":"text"}',
+    )
+
+    for event in iter_sse_events(response):
+        renderer.handle(event)
+
+    assert "".join(renderer.buffered) == "There is 1 row."

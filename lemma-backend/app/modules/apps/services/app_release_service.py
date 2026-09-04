@@ -116,9 +116,7 @@ class AppReleaseService:
                 )
             release = matches[0] if matches else None
         if release is None:
-            raise AppReleaseNotFoundError(
-                f"App '{app.name}' has no release '{ref}'"
-            )
+            raise AppReleaseNotFoundError(f"App '{app.name}' has no release '{ref}'")
         if release.is_pruned and not allow_pruned:
             raise AppReleasePrunedError(
                 f"Release v{release.release_number} of '{app.name}' was removed "

@@ -43,9 +43,7 @@ class RoutingOperationGateway(AppOperationGatewayPort):
             raise ConnectorNotFoundError(connector_id)
         return connector
 
-    def _get_gateway_by_provider(
-        self, provider: str
-    ) -> AppOperationGatewayPort:
+    def _get_gateway_by_provider(self, provider: str) -> AppOperationGatewayPort:
         if provider.upper() == AuthProvider.COMPOSIO.value:
             return self._composio_gateway
         if provider.upper() == AuthProvider.LEMMA.value:
@@ -70,8 +68,6 @@ class RoutingOperationGateway(AppOperationGatewayPort):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
         # The connector lookup is pure existence-validation (the entity is
@@ -99,8 +95,6 @@ class RoutingOperationGateway(AppOperationGatewayPort):
                     operation_name=operation_name,
                     payload=payload,
                     third_party_credentials=third_party_credentials,
-                    auth_token=auth_token,
-                    api_url=api_url,
                 ),
                 timeout=timeout,
             )

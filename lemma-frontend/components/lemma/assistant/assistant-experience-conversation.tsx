@@ -1,142 +1,52 @@
 "use client";
 
-import type { ReactNode, RefObject } from "react";
+import { Fragment, memo, useState, type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { useLoadingGate } from "@/components/shared/loading";
 import { InlineLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
 import { ArrowDown, RefreshCw, RotateCcw } from "@/components/ui/icons";
-import {
-  collectCompletedRunTraceGroups,
-  messageHasToolActivity,
-  rowIsAfterIndex,
-  type DisplayMessageRow,
-} from "lemma-sdk";
-import type { AssistantControllerView } from "./assistant-types";
+import { dayMarkLabel, sameDay, turnDayDate, type ChatTurn } from "@/lib/assistant/turns";
+import type {
+  AssistantMessageRenderArgs,
+  AssistantToolRenderArgs,
+} from "./assistant-types";
+import type { LiveRunStatus } from "./assistant-format";
+import type { UserApprovalDecision } from "./assistant-experience";
 import { AssistantMessageViewport } from "./assistant-chrome";
-import {
-  CompletedRunTraceGroup,
-  DisplayResourceCards,
-  MessageGroup,
-  RunTraceHeader,
-  collectDisplayResourceCardsByRow,
-} from "./assistant-message-group";
-import { ThinkingIndicator } from "./assistant-parts";
-import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
-
-type CompletedRunTraceGroups = ReturnType<typeof collectCompletedRunTraceGroups>;
-type InlineStatus = { label?: string; shimmer?: boolean } | null | undefined;
-type DisplayResourceCardsByRow = ReturnType<typeof collectDisplayResourceCardsByRow>;
+import { AssistantTurnView } from "./assistant-turn";
 
 /** How long a transcript stays silently empty before it admits it is fetching. */
 const TRANSCRIPT_WAIT_DELAY_MS = 600;
 
-export interface AssistantDisplayRowProps {
-  row: DisplayMessageRow;
-  index: number;
-  previousRow: DisplayMessageRow | null;
-  controller: AssistantControllerView;
-  activeConversationId: string | null;
-  displayResourceCardsByRow: DisplayResourceCardsByRow;
-  completedRunTraceGroups: CompletedRunTraceGroups;
-  inlineRunStatusRowIndex: number;
-  inlineRunStatus: InlineStatus;
-  isConversationBusy: boolean;
-  isRunActive: boolean;
-  currentRunLatestUserIndex: number;
-  onNavigateResource?: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
-  renderMessageContent: MessageGroupRenderMessageContent;
-  renderToolInvocation: MessageGroupRenderToolInvocation;
-}
+/**
+ * The key the transcript column is mounted under.
+ *
+ * Keyed by conversation, so moving between two of them mounts a fresh column
+ * rather than diffing one transcript into another. A conversation created from
+ * the new-conversation screen is not such a move: the turn that created it is
+ * already in this column, and re-keying under it unmounts that turn mid-flight
+ * and replays the column's entrance animation over it — the message you just
+ * sent blinking out and back. So an id arriving where there was none is the
+ * same column, and only a move between two conversations is a new one.
+ *
+ * Adjust-during-render rather than a ref, which is the pattern React documents
+ * for state derived from a prop change (and the one `AssistantTurnView` already
+ * uses for `seenLive`).
+ */
+function useTranscriptColumnKey(activeConversationId: string | null): string {
+  const [columnKey, setColumnKey] = useState(() => activeConversationId ?? "new-conversation");
+  const [seenConversationId, setSeenConversationId] = useState(activeConversationId);
 
-type MessageGroupRenderMessageContent = Parameters<typeof MessageGroup>[0]["renderMessageContent"];
-type MessageGroupRenderToolInvocation = Parameters<typeof MessageGroup>[0]["renderToolInvocation"];
+  if (seenConversationId !== activeConversationId) {
+    const adoptedByNewConversation = seenConversationId === null && activeConversationId !== null;
+    setSeenConversationId(activeConversationId);
+    if (!adoptedByNewConversation) {
+      setColumnKey(activeConversationId ?? "new-conversation");
+    }
+  }
 
-export function AssistantDisplayRow({
-  row,
-  index,
-  previousRow,
-  controller,
-  activeConversationId,
-  displayResourceCardsByRow,
-  completedRunTraceGroups,
-  inlineRunStatusRowIndex,
-  inlineRunStatus,
-  isConversationBusy,
-  isRunActive,
-  currentRunLatestUserIndex,
-  onNavigateResource,
-  renderMessageContent,
-  renderToolInvocation,
-}: AssistantDisplayRowProps) {
-  const includesLastRawMessage = row.sourceIndexes.includes(controller.messages.length - 1);
-  const rowHasToolActivity = row.message.role === "assistant" && messageHasToolActivity(row.message);
-  const previousRowHasToolActivity = previousRow?.message.role === "assistant" && messageHasToolActivity(previousRow.message);
-  const compactAfterAssistant = row.message.role === "assistant"
-    && previousRow?.message.role === "assistant"
-    && !rowHasToolActivity
-    && !previousRowHasToolActivity;
-  // A run's trace (consecutive assistant rows — text, tool steps, thoughts)
-  // reads as one tight sequence rather than turn-spaced rows.
-  //
-  // Deliberately not a function of `isRunActive`: keying spacing off whether the
-  // run happens to be live meant the same transcript was tight while you watched
-  // it and loose after a reload. What a row is does not change; how far it sits
-  // from its neighbour should not either.
-  const rowInLatestRun = row.message.role === "assistant"
-    && rowIsAfterIndex(row, currentRunLatestUserIndex);
-  const previousRowInLatestRun = !!previousRow && previousRow.message.role === "assistant"
-    && rowIsAfterIndex(previousRow, currentRunLatestUserIndex);
-  const compactActiveRunTrace = rowInLatestRun && previousRowInLatestRun;
-  const displayResourceCards = displayResourceCardsByRow.get(index) || [];
-  // Rows folded under a "Worked for …" rollup are trace, not the final answer.
-  // Trace is about what a row *is*, not about whether its run happens to be
-  // folded. The most recent run never folds, so keying this off `groupedIndexes`
-  // alone left its narration rendering at answer weight — which is why a turn
-  // that talked before acting read as two answers.
-  const withinTrace = completedRunTraceGroups.traceIndexes.has(index);
-  // Spacing asks a different question from styling. `withinTrace` is about what
-  // a row *is*; this is about whether it already sits inside a rollup that owns
-  // its spacing. Guarding the compaction on `withinTrace` — after that flag was
-  // widened to cover unfolded runs — turned it off for the whole live trace, so
-  // every step stood a full turn-gap from the one before it.
-  const isInsideRollup = completedRunTraceGroups.groupedIndexes.has(index);
-
-  return (
-    <div
-      key={row.id || index}
-      {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: "" }}
-      className={cn((compactAfterAssistant || compactActiveRunTrace) && !isInsideRollup && "-mt-3")}
-    >
-      {index === inlineRunStatusRowIndex ? (
-        <div className="mb-3">
-          <RunTraceHeader
-            label={inlineRunStatus?.label || "Working"}
-          />
-        </div>
-      ) : null}
-      <MessageGroup
-        message={row.message}
-        onNavigateResource={onNavigateResource}
-        conversationId={controller.activeConversationId}
-        isStreaming={isConversationBusy && includesLastRawMessage && row.message.role === "assistant"}
-        isCurrentRunActive={isRunActive && row.message.role === "assistant" && rowIsAfterIndex(row, currentRunLatestUserIndex)}
-        withinTrace={withinTrace}
-        renderMessageContent={renderMessageContent}
-        renderToolInvocation={renderToolInvocation}
-        onResolveUserApproval={controller.resolveUserApproval}
-      />
-      {displayResourceCards.length > 0 ? (
-        <div className="mt-2">
-          <DisplayResourceCards
-            cards={displayResourceCards}
-            activeConversationId={activeConversationId}
-            onNavigateResource={onNavigateResource}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
+  return columnKey;
 }
 
 export interface AssistantExperienceConversationProps {
@@ -154,13 +64,16 @@ export interface AssistantExperienceConversationProps {
   isLoadingOlderMessages: boolean;
   hasMessages: boolean;
   onLoadOlder: () => void;
-  displayMessageRows: DisplayMessageRow[];
-  completedRunTraceGroups: CompletedRunTraceGroups;
-  renderDisplayRow: (row: DisplayMessageRow, index: number, previousRow: DisplayMessageRow | null) => ReactNode;
-  showInlineStatusAtBottom: boolean;
-  inlineRunStatus: InlineStatus;
-  showInlineToolStatus: boolean;
-  inlineToolStatus: InlineStatus;
+  /** The transcript as turns — ask, work pill, speech, artifacts — not rows. */
+  turns: ChatTurn[];
+  podId: string | null;
+  onResolveUserApproval?: (approvalId: string, decision: UserApprovalDecision, response?: Record<string, unknown> | null) => Promise<void>;
+  /** Live-only inputs for the running turn's pill; the pill owns the tick. */
+  liveToolLabel: string | null;
+  liveRunStatus: LiveRunStatus | null;
+  onNavigateResource?: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
+  renderMessageContent: (args: AssistantMessageRenderArgs) => ReactNode;
+  renderToolInvocation?: (args: AssistantToolRenderArgs) => ReactNode;
   showAssistantErrorInTranscript: boolean;
   assistantErrorTitle: string;
   assistantErrorDetails: string;
@@ -179,7 +92,12 @@ export interface AssistantExperienceConversationProps {
   isConversationBusy: boolean;
 }
 
-export function AssistantExperienceConversation({
+// Memoized so the transcript only re-renders when the transcript changes —
+// never on a keystroke in the composer, never on a model picker toggle. The
+// turns array changes identity on every streaming flush (it must), and the
+// turn views inside are memoized again on their fingerprints, so a flush
+// re-renders this shell and the one live turn, not the history.
+export const AssistantExperienceConversation = memo(function AssistantExperienceConversation({
   messagesContainerRef,
   onScroll,
   contentWidthClassName,
@@ -193,13 +111,14 @@ export function AssistantExperienceConversation({
   isLoadingOlderMessages,
   hasMessages,
   onLoadOlder,
-  displayMessageRows,
-  completedRunTraceGroups,
-  renderDisplayRow,
-  showInlineStatusAtBottom,
-  inlineRunStatus,
-  showInlineToolStatus,
-  inlineToolStatus,
+  turns,
+  podId,
+  onResolveUserApproval,
+  liveToolLabel,
+  liveRunStatus,
+  onNavigateResource,
+  renderMessageContent,
+  renderToolInvocation,
   showAssistantErrorInTranscript,
   assistantErrorTitle,
   assistantErrorDetails,
@@ -214,6 +133,7 @@ export function AssistantExperienceConversation({
   // centre the empty state and the composer together as one group, instead of
   // stranding the empty state at one end of a tall blank page.
   const shrinkToContent = fillEmptyState && showEmptyState;
+  const transcriptColumnKey = useTranscriptColumnKey(activeConversationId);
 
   // Far longer than the 120ms a skeleton waits, because the two are answering
   // different questions. A skeleton appears once a wait is long enough to be
@@ -240,7 +160,7 @@ export function AssistantExperienceConversation({
         aria-live="polite"
         aria-atomic="false"
       >
-      {showEmptyState ? emptyState : null}
+      {showEmptyState ? <div className="lchat-empty-in w-full">{emptyState}</div> : null}
 
       {/* Nothing for the first 600ms, and then one quiet line — never
           message-shaped placeholders. We do not know how many
@@ -278,42 +198,31 @@ export function AssistantExperienceConversation({
           announce a load. Arrival motion belongs to a message as it appears, not
           to the transcript as a whole. */}
       <div
-        key={activeConversationId || "new-conversation"}
-        className="flex w-full flex-col gap-5"
+        key={transcriptColumnKey}
+        className="lchat-col"
       >
-      {displayMessageRows.map((row, index) => {
-        if (completedRunTraceGroups.groupedIndexes.has(index)) {
-          const group = completedRunTraceGroups.groupsByStartIndex.get(index);
-          if (!group) return null;
-
-          const groupRows = displayMessageRows.slice(group.startIndex, group.endIndex + 1);
-          return (
-            <CompletedRunTraceGroup key={`completed-run-${group.startIndex}`} label={group.label}>
-              {groupRows.map((groupRow, groupOffset) => {
-                const rowIndex = group.startIndex + groupOffset;
-                const previousRow = groupOffset > 0 ? groupRows[groupOffset - 1] : null;
-                return renderDisplayRow(groupRow, rowIndex, previousRow);
-              })}
-            </CompletedRunTraceGroup>
-          );
-        }
-
-        const previousRow = index > 0 ? displayMessageRows[index - 1] : null;
-        return renderDisplayRow(row, index, previousRow);
+      {turns.map((turn, index) => {
+        const day = turnDayDate(turn);
+        const previousDay = index > 0 ? turnDayDate(turns[index - 1]) : null;
+        const showDayMark = !!day && (!previousDay || !sameDay(day, previousDay));
+        return (
+          <Fragment key={turn.id}>
+            {showDayMark ? <div className="lchat-daymark">{dayMarkLabel(day)}</div> : null}
+            <AssistantTurnView
+              turn={turn}
+              activeConversationId={activeConversationId}
+              podId={podId}
+              liveToolLabel={turn.isLive ? liveToolLabel : null}
+              liveRunStatus={turn.isLive ? liveRunStatus : null}
+              onNavigateResource={onNavigateResource}
+              onResolveUserApproval={onResolveUserApproval}
+              renderMessageContent={renderMessageContent}
+              renderToolInvocation={renderToolInvocation}
+            />
+          </Fragment>
+        );
       })}
       </div>
-
-      {showInlineStatusAtBottom ? (
-        <div>
-          <ThinkingIndicator label={inlineRunStatus?.label} shimmer={inlineRunStatus?.shimmer} />
-        </div>
-      ) : null}
-
-      {showInlineToolStatus ? (
-        <div>
-          <ThinkingIndicator label={inlineToolStatus?.label} shimmer={inlineToolStatus?.shimmer} />
-        </div>
-      ) : null}
 
       {showAssistantErrorInTranscript ? (
         <div className="state-surface-error rounded-md px-3.5 py-3 text-xs">
@@ -374,4 +283,4 @@ export function AssistantExperienceConversation({
       </div>
     </AssistantMessageViewport>
   );
-}
+});

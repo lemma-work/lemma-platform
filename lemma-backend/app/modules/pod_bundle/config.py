@@ -16,7 +16,10 @@ from app.core.settings_env import dotenv_path
 
 class PodBundleSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     pod_bundle_state_ttl_seconds: int = Field(
@@ -79,6 +82,17 @@ class PodBundleSettings(BaseSettings):
     # builds, multi-resource apply). A generous per-user daily cap stops a
     # single account from hammering the workers; buckets are independent so a
     # day of exports never blocks imports (and vice versa). 0 disables the cap.
+    #
+    # The cap is per *user*, not per organization. PS-PACK-013's wording says
+    # organization, and that difference is deliberate rather than pending: the
+    # cost being guarded is one account's worth of worker time, and a per-org
+    # bound would let one member's loop lock out everybody else in the org.
+    #
+    # Import is the more generous of the two because importing is how a pod is
+    # built: authoring a bundle means importing it, finding it wrong, and
+    # importing again, and a cap that interrupts that is felt by exactly the
+    # person doing the work rather than by an abuser. Export has no equivalent
+    # edit loop and assembles the whole archive each time, so it stays lower.
     pod_bundle_daily_export_limit: int = Field(
         default=5,
         description=(
@@ -87,7 +101,7 @@ class PodBundleSettings(BaseSettings):
         ),
     )
     pod_bundle_daily_import_limit: int = Field(
-        default=5,
+        default=10,
         description=(
             "Max import jobs a single user may start per UTC day "
             "(env: POD_BUNDLE_DAILY_IMPORT_LIMIT). 0 disables the limit."

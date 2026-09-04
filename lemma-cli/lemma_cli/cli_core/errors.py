@@ -16,6 +16,39 @@ import sys
 _CONNECTION = "LemmaConnectionError"
 _TIMEOUT = "LemmaTimeoutError"
 
+# What to try, by status. These are the lines users paste into support: the
+# server's envelope already says what happened (code, message, request_id) and
+# says nothing about what to do about it. Only statuses with one obvious action
+# are listed -- a guessed instruction is worse than none, so a 500 gets silence.
+# Lives here rather than in state.py because both error paths need it and this
+# module is the one with no SDK import at module scope.
+_NEXT_STEP: dict[int, str] = {
+    401: "Your session has expired — run `lemma auth login`.",
+    403: (
+        "You are signed in, but this token has no permission for it. "
+        "A pod grant or an org role is missing."
+    ),
+    404: "Check the pod and the server you are pointed at — `lemma config show`.",
+    409: "Something with that name already exists — pick another, or update it.",
+}
+
+
+def next_step_for(exc: object) -> str | None:
+    """The one-line "now do this" for an API error, or None if there isn't one."""
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        # 429 carries its own wait, when the server advised one. Kept out of the
+        # table because the message depends on the exception, not just the code.
+        retry_after = getattr(exc, "retry_after", None)
+        wait = (
+            f"Wait {retry_after:g}s and try again"
+            if isinstance(retry_after, (int, float))
+            else "Wait and try again"
+        )
+        return f"Rate limited. {wait}, or ask an admin to raise the limit."
+    return _NEXT_STEP.get(status) if isinstance(status, int) else None
+
+
 # The base URL the last client actually dialed. Recorded by client_session()
 # because that is the only place the server is fully resolved (config + --server
 # + env), and read only to make a failure message name the right server.
@@ -63,10 +96,12 @@ def report_cli_error(exc: BaseException, *, base_url: str | None = None) -> bool
     elif isinstance(exc, LemmaConfigError):
         message = f"{exc} Run `lemma init` to set up this CLI."
     elif isinstance(exc, LemmaAPIError):
-        status = getattr(exc, "status_code", None)
-        message = f"request failed ({status}): {exc}" if status else f"request failed: {exc}"
+        # No `({status})` prefix: LemmaAPIError.__str__ already opens with
+        # `[{status}] {code}: {message}`, so adding one printed it twice.
+        step = next_step_for(exc)
+        message = f"request failed: {exc}" + (f"\n       {step}" if step else "")
     else:
         message = str(exc) or type(exc).__name__
 
-    print(f"error  {message}", file=sys.stderr)
+    print(f"error  {message}", file=sys.stderr)  # noqa: T201 — stderr, pre-state
     return True

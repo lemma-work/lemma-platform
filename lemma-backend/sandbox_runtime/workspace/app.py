@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, suppress
 import hmac
+import logging
 import os
 from pathlib import Path
 import struct
@@ -47,6 +48,7 @@ from .filesystem_manager import (
     FilesystemManager,
     FileTooLargeError,
 )
+from .browser_guard import shed_browser_if_starved
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
 from .python_session_manager import PythonSessionManager
 from .quiescer import WorkspaceQuiescer
@@ -119,6 +121,32 @@ def create_app(
                 with suppress(Exception):
                     # One bad sweep must not end the loop; the next tick retries.
                     await manager.reap_expired()
+                with suppress(Exception):
+                    _shed_browser_under_pressure()
+
+        def _shed_browser_under_pressure() -> None:
+            """Take the browser back when the sandbox has nothing left.
+
+            Runs on the same tick as the deadline sweep because it needs no
+            timer of its own and, more usefully, because this loop is already
+            proven to keep running in a starved sandbox -- it allocates
+            nothing. Everything else that bounds the browser needs a healthy
+            process to act, which is exactly what is missing here.
+
+            Said out loud, and at warning, on purpose. A sandbox that quietly
+            repaired itself would leave whoever reads these logs with the same
+            unexplained `exit_code: 124` this was built from.
+            """
+            outcome = shed_browser_if_starved()
+            if outcome is None:
+                return
+            available_mb, killed = outcome
+            logging.getLogger(__name__).warning(
+                "workspace runtime shed the browser: %s MB available, "
+                "%s processes killed. It will start again on the next capture.",
+                available_mb,
+                killed,
+            )
 
         reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")
         try:

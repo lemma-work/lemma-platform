@@ -15,6 +15,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitWakeReason,
@@ -29,8 +30,6 @@ from app.modules.agent.tools.snooze.models import (
 )
 
 logger = get_logger(__name__)
-
-SNOOZE_TOOL_NAME = "snooze"
 
 
 class SnoozeWakeService:
@@ -71,14 +70,14 @@ class SnoozeWakeService:
         token = set_current_context(ctx)
         try:
             service = self._conversation_service()
-            await service.append_pause_tool_return(
+            await service.pauses.append_pause_tool_return(
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 tool_call_id=claimed.tool_call_id,
                 tool_name=SNOOZE_TOOL_NAME,
                 tool_result=self._tool_result(claimed, reason),
             )
-            await service.start_resume_run_if_ready(
+            await service.pauses.start_resume_run_if_ready(
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 resumed_tool_call_id=claimed.tool_call_id,
@@ -118,8 +117,8 @@ class SnoozeWakeService:
         )
 
     def _conversation_service(self):
-        from app.composition.agent_usage import build_usage_service
-        from app.composition.authorization import create_authorization_service
+        from app.modules.usage.contracts.execution import build_usage_service
+        from app.core.authorization.factory import create_authorization_data_service
         from app.modules.agent.infrastructure.repositories import AgentRepository
         from app.modules.agent.services.conversation_service import ConversationService
 
@@ -127,6 +126,6 @@ class SnoozeWakeService:
             uow=self.uow,
             conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
-            authorization_service=create_authorization_service(self.uow),
+            authorization_service=create_authorization_data_service(self.uow),
             usage_service=build_usage_service(self.uow),
         )

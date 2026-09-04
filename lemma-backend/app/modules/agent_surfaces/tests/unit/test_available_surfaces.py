@@ -20,26 +20,18 @@ from app.modules.agent_surfaces.services import available_surfaces_builder as mo
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
+from app.modules.connectors.contracts.surfaces import (
+    SurfaceConnectCapability,
+    SurfaceConnector,
+)
 from app.modules.connectors.domain.connector import (
     AuthScheme,
-    ConnectorEntity,
     LemmaProviderCapability,
 )
-from app.modules.connectors.domain.errors import ConnectorNotFoundError
 
 _CUSTOM = SurfaceCredentialMode.CUSTOM
 _SYSTEM = SurfaceCredentialMode.SYSTEM
 _NATIVE = {SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM, SurfacePlatform.RESEND}
-
-
-def _connector(connector_id: str, *, is_active=True, capability=None) -> ConnectorEntity:
-    return ConnectorEntity(
-        id=connector_id,
-        title=connector_id.replace("_", " ").title(),
-        icon=f"{connector_id}.png",
-        is_active=is_active,
-        provider_capabilities=[] if capability is None else [capability],
-    )
 
 
 def _default_cap() -> LemmaProviderCapability:
@@ -48,23 +40,33 @@ def _default_cap() -> LemmaProviderCapability:
     )
 
 
-def _connector_service(
-    *, missing=(), inactive=(), no_lemma=(), capability=None
-) -> AsyncMock:
+def _catalog(*, missing=(), inactive=(), no_lemma=(), capability=None):
+    """Connectors' catalog read, answering for every surface connector."""
     cap = capability or _default_cap()
 
-    def _get(connector_id: str) -> ConnectorEntity:
+    async def _get(connector_id: str) -> SurfaceConnector | None:
         if connector_id in missing:
-            raise ConnectorNotFoundError(connector_id)
-        if connector_id in no_lemma:
-            return _connector(connector_id, capability=None)  # no LEMMA capability
-        if connector_id in inactive:
-            return _connector(connector_id, is_active=False, capability=cap)
-        return _connector(connector_id, capability=cap)
+            return None
+        return SurfaceConnector(
+            connector_id=connector_id,
+            title=connector_id.replace("_", " ").title(),
+            description=None,
+            icon=f"{connector_id}.png",
+            is_active=connector_id not in inactive,
+            connect=(
+                None
+                if connector_id in no_lemma
+                else SurfaceConnectCapability(
+                    auth_scheme=cap.auth_scheme,
+                    auth_config_schema=cap.auth_config_schema,
+                    credential_schema=cap.credential_schema,
+                    system_oauth_available=cap.system_default_available,
+                    supports_org_custom_oauth=cap.supports_org_custom_oauth,
+                )
+            ),
+        )
 
-    svc = AsyncMock()
-    svc.get_connector.side_effect = _get
-    return svc
+    return _get
 
 
 def _by_platform(resp) -> dict[SurfacePlatform, object]:
@@ -73,23 +75,19 @@ def _by_platform(resp) -> dict[SurfacePlatform, object]:
 
 async def test_modes_reflect_native_credentials(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
-    surfaces = _by_platform(
-        await build_available_surfaces(connector_service=_connector_service())
-    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     for platform in _NATIVE:
         assert surfaces[platform].supported_credential_modes == [_CUSTOM, _SYSTEM]
     for platform in (
         SurfacePlatform.SLACK,
         SurfacePlatform.TEAMS,
-        SurfacePlatform.GMAIL,
-        SurfacePlatform.OUTLOOK,
     ):
         assert surfaces[platform].supported_credential_modes == [_CUSTOM]
 
 
 async def test_modes_drop_system_when_no_native_credentials(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
-    resp = await build_available_surfaces(connector_service=_connector_service())
+    resp = await build_available_surfaces(read_connector=_catalog())
     for surface in resp.surfaces:
         assert surface.supported_credential_modes == [_CUSTOM]
 
@@ -103,9 +101,7 @@ async def test_connect_descriptor_maps_capability(monkeypatch):
         system_default_available=True,
         supports_org_custom_oauth=True,
     )
-    resp = await build_available_surfaces(
-        connector_service=_connector_service(capability=cap)
-    )
+    resp = await build_available_surfaces(read_connector=_catalog(capability=cap))
     teams = _by_platform(resp)[SurfacePlatform.TEAMS]
     assert teams.connector_id == "microsoft_teams"
     assert teams.connector_available is True
@@ -120,9 +116,7 @@ async def test_connect_descriptor_maps_capability(monkeypatch):
 async def test_missing_connector_marked_unavailable(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
     telegram = surface_connector_id(SurfacePlatform.TELEGRAM)
-    resp = await build_available_surfaces(
-        connector_service=_connector_service(missing={telegram})
-    )
+    resp = await build_available_surfaces(read_connector=_catalog(missing={telegram}))
     surface = _by_platform(resp)[SurfacePlatform.TELEGRAM]
     assert surface.connector_available is False
     assert surface.connect is None
@@ -135,9 +129,7 @@ async def test_missing_connector_marked_unavailable(monkeypatch):
 async def test_inactive_connector_marked_unavailable(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
     slack = surface_connector_id(SurfacePlatform.SLACK)
-    resp = await build_available_surfaces(
-        connector_service=_connector_service(inactive={slack})
-    )
+    resp = await build_available_surfaces(read_connector=_catalog(inactive={slack}))
     surface = _by_platform(resp)[SurfacePlatform.SLACK]
     assert surface.connector_available is False
     assert surface.connect is None
@@ -145,11 +137,9 @@ async def test_inactive_connector_marked_unavailable(monkeypatch):
 
 async def test_no_lemma_capability_does_not_raise(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
-    gmail = surface_connector_id(SurfacePlatform.GMAIL)
-    resp = await build_available_surfaces(
-        connector_service=_connector_service(no_lemma={gmail})
-    )
-    surface = _by_platform(resp)[SurfacePlatform.GMAIL]
+    resend = surface_connector_id(SurfacePlatform.RESEND)
+    resp = await build_available_surfaces(read_connector=_catalog(no_lemma={resend}))
+    surface = _by_platform(resp)[SurfacePlatform.RESEND]
     assert surface.connector_available is False
     assert surface.connect is None
 
@@ -170,7 +160,7 @@ async def test_system_claim_absent_for_platforms_without_a_system_mode(monkeypat
     # None rather than a misleading "available".
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
     resp = await build_available_surfaces(
-        connector_service=_connector_service(),
+        read_connector=_catalog(),
         pod_id=uuid4(),
         surface_repository=_claim_repository(),
     )
@@ -180,7 +170,7 @@ async def test_system_claim_absent_for_platforms_without_a_system_mode(monkeypat
 async def test_system_claim_available_when_org_has_not_claimed_it(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     resp = await build_available_surfaces(
-        connector_service=_connector_service(),
+        read_connector=_catalog(),
         pod_id=uuid4(),
         surface_repository=_claim_repository(None),
     )
@@ -196,7 +186,7 @@ async def test_system_claim_names_the_pod_holding_it(monkeypatch):
     conflict = SimpleNamespace(pod_id=holder_pod_id, name="whatsapp")
     monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
     resp = await build_available_surfaces(
-        connector_service=_connector_service(),
+        read_connector=_catalog(),
         pod_id=uuid4(),
         surface_repository=_claim_repository(conflict),
     )
@@ -212,7 +202,7 @@ async def test_system_claim_degrades_to_available_when_lookup_fails(monkeypatch)
     # still enforces the claim, so optimistic is the safe direction.
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     resp = await build_available_surfaces(
-        connector_service=_connector_service(),
+        read_connector=_catalog(),
         pod_id=uuid4(),
         surface_repository=_claim_repository(raises=True),
     )
@@ -223,7 +213,7 @@ async def test_system_claim_degrades_to_available_when_lookup_fails(monkeypatch)
 async def test_system_claim_skipped_without_pod_context(monkeypatch):
     # The builder stays usable as a pure registry join.
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
-    resp = await build_available_surfaces(connector_service=_connector_service())
+    resp = await build_available_surfaces(read_connector=_catalog())
     claim = _by_platform(resp)[SurfacePlatform.TELEGRAM].system_claim
     assert claim is not None and claim.available is True
 
@@ -236,11 +226,12 @@ async def test_managed_setup_offered_only_where_a_manager_bot_exists(monkeypatch
         mod.surface_settings, "telegram_manager_bot_token", "123:abc", raising=False
     )
     monkeypatch.setattr(
-        mod.surface_settings, "telegram_manager_bot_username", "lemma_manager", raising=False
+        mod.surface_settings,
+        "telegram_manager_bot_username",
+        "lemma_manager",
+        raising=False,
     )
-    surfaces = _by_platform(
-        await build_available_surfaces(connector_service=_connector_service())
-    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     assert surfaces[SurfacePlatform.TELEGRAM].managed_setup_available is True
     # It is a Telegram-only path; nothing else claims it.
     assert all(
@@ -258,9 +249,7 @@ async def test_managed_setup_hidden_without_a_manager_bot(monkeypatch):
     monkeypatch.setattr(
         mod.surface_settings, "telegram_manager_bot_username", None, raising=False
     )
-    surfaces = _by_platform(
-        await build_available_surfaces(connector_service=_connector_service())
-    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     assert surfaces[SurfacePlatform.TELEGRAM].managed_setup_available is False
 
 
@@ -268,7 +257,7 @@ async def test_one_row_per_registry_platform(monkeypatch):
     # The endpoint is registry-driven, so a newly-registered surface (Discord)
     # appears with no builder change.
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
-    resp = await build_available_surfaces(connector_service=_connector_service())
+    resp = await build_available_surfaces(read_connector=_catalog())
     platforms = [s.platform for s in resp.surfaces]
     assert set(platforms) == set(SURFACE_CONNECTOR_BINDINGS)
     assert len(platforms) == len(SURFACE_CONNECTOR_BINDINGS)
@@ -289,7 +278,7 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     holder = SimpleNamespace(pod_id=uuid4(), name="resend")
 
     resp = await build_available_surfaces(
-        connector_service=_connector_service(),
+        read_connector=_catalog(),
         pod_id=uuid4(),
         # A repository that reports a conflict for *every* platform.
         surface_repository=_claim_repository(holder),
@@ -304,7 +293,9 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
 
 
-async def test_email_domain_is_published_so_the_builder_can_name_an_address(monkeypatch):
+async def test_email_domain_is_published_so_the_builder_can_name_an_address(
+    monkeypatch,
+):
     """The agent builder shows the address before the agent exists.
 
     Every other part of that address is derivable in the client — it comes from
@@ -316,9 +307,7 @@ async def test_email_domain_is_published_so_the_builder_can_name_an_address(monk
     monkeypatch.setattr(
         mod.surface_settings, "resend_inbound_domain", "ops.lemma.work", raising=False
     )
-    surfaces = _by_platform(
-        await build_available_surfaces(connector_service=_connector_service())
-    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     assert surfaces[SurfacePlatform.RESEND].email_domain == "ops.lemma.work"
     # Nothing else mints addresses: Gmail and Outlook read a mailbox somebody
     # else owns, and its domain is not ours to name.
@@ -336,7 +325,5 @@ async def test_no_email_domain_without_the_key_that_makes_it_work(monkeypatch):
     monkeypatch.setattr(
         mod.surface_settings, "resend_inbound_domain", "ops.lemma.work", raising=False
     )
-    surfaces = _by_platform(
-        await build_available_surfaces(connector_service=_connector_service())
-    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     assert surfaces[SurfacePlatform.RESEND].email_domain is None

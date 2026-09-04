@@ -1,6 +1,6 @@
 [project]
 name = "lemma-stack"
-version = "0.7.0"
+version = "0.7.1"
 description = "Installer and management tool for a fully-local Lemma stack"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -17,7 +17,10 @@ lemma-stack = "lemma_stack.app:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
-    "ruff>=0.9.0",
+    # Bounded like lemma-backend, lemma-cli and lemma-python: ruff 0.16 widened
+    # its default rule selection, so an unbounded dependency means the gate
+    # changes what it enforces the day a new ruff ships.
+    "ruff>=0.14.8,<0.16",
 ]
 
 [build-system]

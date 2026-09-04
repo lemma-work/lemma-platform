@@ -110,9 +110,7 @@ class FunctionArtifactBuilder:
                 output_model=header.output_model,
                 entrypoint=header.entrypoint,
                 config_model=header.config_model,
-                dependency_path=(
-                    "site-packages" if python_packages else None
-                ),
+                dependency_path=("site-packages" if python_packages else None),
             )
             archive = await run_blocking(
                 self._archive,
@@ -127,9 +125,7 @@ class FunctionArtifactBuilder:
             digest = await run_blocking(lambda: hashlib.sha256(archive).hexdigest())
             revision_hash = f"sha256:{digest}"
             artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
-            await self._storage_factory(function_id).write_file(
-                artifact_path, archive
-            )
+            await self._storage_factory(function_id).write_file(artifact_path, archive)
             return FunctionArtifact(
                 revision_hash=revision_hash,
             )
@@ -177,12 +173,11 @@ class FunctionArtifactBuilder:
             "--no-build",
             "--no-cache",
         )
-        lines = tuple(
+        return tuple(
             line.strip()
             for line in (await run_blocking(lock.read_text, "utf-8")).splitlines()
             if line.strip() and not line.startswith("#")
         )
-        return lines
 
     async def _run_builder(self, *arguments: str) -> None:
         try:

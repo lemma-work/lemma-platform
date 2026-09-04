@@ -13,24 +13,104 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleFireStatus,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 
 
+def _schedule(**overrides) -> SimpleNamespace:
+    """A stand-in schedule row, with every field the dispatcher reads.
+
+    One factory rather than six inline namespaces: the dispatcher's view of a
+    schedule grows, and six copies means six places to miss. ``has_target`` is
+    a property on the real entity and a plain attribute here, so it is derived
+    from the same three columns the entity derives it from.
+    """
+    fields = {
+        "id": uuid4(),
+        "pod_id": uuid4(),
+        "user_id": uuid4(),
+        "workflow_id": None,
+        "agent_id": None,
+        "instruction": None,
+        "is_active": True,
+        "is_internal": False,
+        "schedule_type": SimpleNamespace(value="TIME"),
+        "config": {},
+        **overrides,
+    }
+    fields["has_target"] = (
+        fields["agent_id"] is not None or fields["workflow_id"] is not None
+    )
+    return SimpleNamespace(**fields)
+
+
 def _engine_with_mocks() -> WorkflowEngine:
     uow = Mock()
     uow.commit = AsyncMock()
     uow.session = Mock()
-    engine = WorkflowEngine(
+    return WorkflowEngine(
         uow,
         agent_adapter=Mock(),
         function_adapter=Mock(),
         schedule_adapter=Mock(),
+        notification_adapter=AsyncMock(),
     )
-    return engine
+
+
+def _stub_schedule_operations(monkeypatch, schedule_repo):
+    """The schedule-side companion of `_stub_run_operations`."""
+    for operation, method in (("get_schedule", "get"), ("record_fire", "record_fire")):
+        behaviour = getattr(schedule_repo, method, None)
+        if behaviour is None:
+            continue
+        monkeypatch.setattr(
+            f"app.modules.workflow.services.schedule_start_service.{operation}",
+            behaviour if operation == "get_schedule" else _ignoring_uow(behaviour),
+        )
+
+
+def _stub_run_operations(monkeypatch, run_repo):
+    """Point every schedule-run operation at one repository-shaped double.
+
+    These used to come free: the test replaced `ScheduleRunRepository` itself,
+    so all of its methods were mocked at once. The operations are named
+    individually now, which is the point — a test says which ones it stands in
+    for — but the three always move together for one fire, so they are stubbed
+    together here rather than three times in every test.
+    """
+    for operation, method in (
+        ("claim_schedule_run", "claim"),
+        ("mark_run_dispatched", "mark_dispatched"),
+        ("mark_run_failed", "mark_failed"),
+    ):
+        behaviour = getattr(run_repo, method, None)
+        if behaviour is None:
+            continue
+        monkeypatch.setattr(
+            f"app.modules.workflow.services.schedule_start_service.{operation}",
+            _ignoring_uow(behaviour),
+        )
+
+
+def _ignoring_uow(behaviour):
+    """Adapt a repository-method double to a contract operation's signature.
+
+    The operations take the unit of work first; the methods they replaced were
+    bound to a repository that already held it. Every assertion below — call
+    counts, arguments — is still made against `behaviour`.
+    """
+
+    async def call(_uow, *args, **kwargs):
+        return await behaviour(*args, **kwargs)
+
+    return call
 
 
 @pytest.mark.anyio
@@ -128,7 +208,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     engine = _engine_with_mocks()
     engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=uuid4())
 
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -143,18 +223,13 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     # Schedule lookup returns our agent-target schedule.
     import app.modules.workflow.services.schedule_start_service as repo_mod
 
-    monkeypatch.setattr(
-        repo_mod,
-        "ScheduleRepository",
-        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
-    )
+    monkeypatch.setattr(repo_mod, "get_schedule", AsyncMock(return_value=schedule))
 
     # The durable dedup claim reports "already delivered".
-    import app.modules.workflow.services.schedule_start_service as run_repo_mod
 
     run_repo = Mock()
     run_repo.claim = AsyncMock(return_value=None)
-    monkeypatch.setattr(run_repo_mod, "ScheduleRunRepository", lambda uow: run_repo)
+    _stub_run_operations(monkeypatch, run_repo)
 
     await svc.handle_schedule_fired(
         schedule_id=str(schedule.id),
@@ -173,7 +248,7 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
 ):
     engine = _engine_with_mocks()
     scheduled_at = datetime(2026, 7, 10, tzinfo=timezone.utc)
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -185,14 +260,8 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
     )
     schedule_repo = Mock(get=AsyncMock(return_value=schedule))
     run_repo = Mock(claim=AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
 
     await ScheduleStartService(engine).handle_schedule_fired(
         schedule_id=str(schedule.id),
@@ -251,7 +320,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
     engine = _engine_with_mocks()
     conversation_id = uuid4()
     engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=conversation_id)
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -273,14 +342,8 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     context = AsyncMock()
     service = ScheduleStartService(engine)
     service._build_user_context = AsyncMock(return_value=context)
@@ -309,7 +372,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
 @pytest.mark.anyio
 async def test_workflow_schedule_run_uses_event_user(monkeypatch):
     engine = _engine_with_mocks()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -331,14 +394,8 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     service = ScheduleStartService(engine)
     service._start_workflow_for_schedule = AsyncMock(return_value="workflow-run-1")
     service._record_fire = AsyncMock()
@@ -366,7 +423,7 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
 ):
     engine = _engine_with_mocks()
     engine.agent_adapter.run_agent_by_id = AsyncMock()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -387,14 +444,8 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
         claim=AsyncMock(return_value=schedule_run),
         mark_failed=AsyncMock(return_value=ScheduleRunStatus.FAILED),
     )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
-        lambda uow: schedule_repo,
-    )
-    monkeypatch.setattr(
-        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
-        lambda uow: run_repo,
-    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     context = AsyncMock()
     context.require.side_effect = PermissionError("agent.execute denied")
     service = ScheduleStartService(engine)
@@ -453,7 +504,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
     monkeypatch,
 ) -> None:
     engine = _engine_with_mocks()
-    schedule = SimpleNamespace(
+    schedule = _schedule(
         id=uuid4(),
         user_id=uuid4(),
         pod_id=uuid4(),
@@ -462,13 +513,12 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         is_active=True,
         schedule_type=SimpleNamespace(value="TIME"),
     )
-    import app.modules.workflow.services.schedule_start_service as svc_mod
 
     schedule_repo = Mock(
         get=AsyncMock(return_value=schedule),
         record_fire=AsyncMock(),
     )
-    monkeypatch.setattr(svc_mod, "ScheduleRepository", lambda uow: schedule_repo)
+    _stub_schedule_operations(monkeypatch, schedule_repo)
     schedule_run = SimpleNamespace(
         id=uuid4(),
         user_id=schedule.user_id,
@@ -479,7 +529,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         claim=AsyncMock(return_value=schedule_run),
         mark_dispatched=AsyncMock(),
     )
-    monkeypatch.setattr(svc_mod, "ScheduleRunRepository", lambda uow: run_repo)
+    _stub_run_operations(monkeypatch, run_repo)
     service = ScheduleStartService(engine)
     service._start_workflow_for_schedule = AsyncMock(
         return_value=schedule_run.target_run_id
@@ -559,3 +609,196 @@ async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -
             job_queue,
         )
         assert job_queue.enqueue.await_args.kwargs["user_id"] == expected
+
+
+@pytest.mark.anyio
+async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
+    monkeypatch,
+):
+    """A schedule pointed at the pod's own assistant is an agent schedule.
+
+    It used to need a second dispatch arm, because the assistant had no
+    ``agents`` row and ``run_agent_by_id`` -- which looks one up -- could only
+    raise for it. Its row's id is the pod's now, so there is one arm.
+
+    The instruction rides along because nothing else on the run says what it is
+    for. A named agent's standing instruction answers that; the assistant has
+    none, so without this it wakes to a JSON payload and no job.
+    """
+    engine = _engine_with_mocks()
+    conversation_id = uuid4()
+    pod_id = uuid4()
+    engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=conversation_id)
+    schedule = _schedule(
+        pod_id=pod_id,
+        agent_id=pod_id,  # the assistant's row id *is* its pod's
+        workflow_id=None,
+        instruction="Summarise yesterday's open tickets.",
+        schedule_type=SimpleNamespace(value="TIME"),
+    )
+    target_run_id = uuid4()
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=schedule.user_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(target_run_id),
+    )
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_dispatched=AsyncMock(),
+    )
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    _stub_run_operations(monkeypatch, run_repo)
+    context = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id="cron:lem-1",
+    )
+
+    call = engine.agent_adapter.run_agent_by_id.await_args.kwargs
+    assert call["agent_id"] == pod_id
+    assert call["conversation_id"] == target_run_id
+    assert call["instructions"] == "Summarise yesterday's open tickets."
+    # The ledger still records it as an agent target: Lem is an agent, it just
+    # has no row. A third `target_kind` would make every consumer of the run
+    # ledger learn a distinction that does not exist downstream.
+    assert run_repo.claim.await_args.kwargs["target_kind"] == "AGENT"
+    run_repo.mark_dispatched.assert_awaited_once_with(schedule_run.id)
+
+
+@pytest.mark.anyio
+async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
+    monkeypatch,
+):
+    """The assistant is asked about pod-scoped, even though it now has a row.
+
+    Both arms would name the same id -- its row's id is the pod's -- so this is
+    a choice about the resource *type*, not the value. Grants match on
+    (type, id), and an AGENT-typed check would newly hit the resource-owner
+    shortcut for whoever created the pod: a silent widening nobody asked for.
+    """
+    from app.core.authorization.context import ResourceType
+
+    engine = _engine_with_mocks()
+    engine.agent_adapter.run_agent_by_id = AsyncMock(return_value=uuid4())
+    pod_id = uuid4()
+    schedule = _schedule(
+        pod_id=pod_id,
+        agent_id=pod_id,
+        instruction="Check the overnight queue.",
+        schedule_type=SimpleNamespace(value="TIME"),
+    )
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=schedule.user_id,
+        status=ScheduleRunStatus.PROCESSING,
+        target_run_id=str(uuid4()),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.get_schedule",
+        AsyncMock(return_value=schedule),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.claim_schedule_run",
+        AsyncMock(return_value=schedule_run),
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.mark_run_dispatched",
+        AsyncMock(),
+    )
+    context = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=context)
+    service._record_fire = AsyncMock()
+
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id="cron:lem-2",
+    )
+
+    permission, ref = context.require.await_args.args
+    assert permission == "agent.execute"
+    assert ref.resource_type is ResourceType.POD
+    assert ref.resource_id == schedule.pod_id
+
+
+@pytest.mark.anyio
+async def test_a_schedule_whose_target_was_deleted_records_the_firing_as_failed(
+    monkeypatch,
+):
+    """PS-SCHED-030: say the target is missing rather than failing silently.
+
+    Deleting the workflow now leaves the schedule behind holding no target
+    (the FK is SET NULL), which is the only reason a person's schedule can
+    reach the dispatcher with nothing to start. It used to be dropped into a
+    debug log; the ledger row is what the failure breaker counts, so without it
+    the schedule fired into nothing forever and nobody was told.
+    """
+    engine = _engine_with_mocks()
+    schedule = _schedule(workflow_id=None, agent_id=None)
+
+    schedule_repo = Mock(
+        get=AsyncMock(return_value=schedule),
+        record_fire=AsyncMock(),
+    )
+    outcome_service = Mock(record_pre_dispatch_failure=AsyncMock(return_value=True))
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.record_pre_dispatch_failure",
+        _ignoring_uow(outcome_service.record_pre_dispatch_failure),
+    )
+
+    await ScheduleStartService(engine).handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id=f"cron:{schedule.id}:2026-09-03T09:00:00+00:00",
+    )
+
+    outcome_service.record_pre_dispatch_failure.assert_awaited_once()
+    assert (
+        outcome_service.record_pre_dispatch_failure.await_args.kwargs["error_type"]
+        == "ScheduleTargetMissing"
+    )
+    schedule_repo.record_fire.assert_awaited_once()
+    recorded = schedule_repo.record_fire.await_args.kwargs
+    assert recorded["status"] == ScheduleFireStatus.ERROR
+    assert "no longer exists" in recorded["error"]
+
+
+@pytest.mark.anyio
+async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch):
+    """Internal schedules are wait timers and never had a target.
+
+    Counting one against the failure breaker would pause a workflow's own
+    machinery and email its owner about it.
+    """
+    engine = _engine_with_mocks()
+    schedule = _schedule(workflow_id=None, agent_id=None, is_internal=True)
+
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule), record_fire=AsyncMock())
+    outcome_service = Mock(record_pre_dispatch_failure=AsyncMock())
+    _stub_schedule_operations(monkeypatch, schedule_repo)
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.record_pre_dispatch_failure",
+        _ignoring_uow(outcome_service.record_pre_dispatch_failure),
+    )
+
+    await ScheduleStartService(engine).handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id=f"cron:{schedule.id}:2026-09-03T09:00:00+00:00",
+    )
+
+    outcome_service.record_pre_dispatch_failure.assert_not_awaited()
+    schedule_repo.record_fire.assert_not_awaited()

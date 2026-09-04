@@ -80,7 +80,10 @@ def test_parse_revision_ref(ref, expected):
 @pytest.mark.asyncio
 async def test_resolve_by_number_and_by_hash_prefix():
     function = _function()
-    revisions = [_revision(function.id, 1, seed="a"), _revision(function.id, 2, seed="b")]
+    revisions = [
+        _revision(function.id, 1, seed="a"),
+        _revision(function.id, 2, seed="b"),
+    ]
     service, _ = _service(function, revisions)
 
     assert (await service.resolve_revision(function, "r2")).revision_number == 2

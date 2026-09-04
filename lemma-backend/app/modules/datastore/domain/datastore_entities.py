@@ -92,7 +92,7 @@ def validate_computed_expression(
         if match is None:
             raise DatastoreValidationError(
                 "Computed expression contains an unsupported character near "
-                f"{expr[pos:pos + 16]!r}"
+                f"{expr[pos : pos + 16]!r}"
             )
         pos = match.end()
         kind = match.lastgroup
@@ -232,7 +232,9 @@ class ColumnSchema(BaseModel):
             DatastoreDataType.TEXT,
             DatastoreDataType.FILE_PATH,
         }:
-            raise ValueError("max_length is only supported for TEXT and FILE_PATH columns")
+            raise ValueError(
+                "max_length is only supported for TEXT and FILE_PATH columns"
+            )
 
         allowed_auto_types = {
             DatastoreDataType.INTEGER,
@@ -578,3 +580,21 @@ class DatastoreUpdateEntity(BaseModel):
 def ensure_table_mutable(table_name: str) -> None:
     if table_name.startswith(RESERVED_TABLE_PREFIX):
         raise DatastoreReservedResourceError("Cannot modify reserved tables")
+
+
+def ensure_table_name_available(table_name: str) -> None:
+    """Refuse a name the platform owns, at creation rather than only at use.
+
+    ``reserved_`` was enforced on record writes, on listings and on
+    ``table.get``, but nothing checked it when a table was created — so a user
+    could take ``reserved_chunks``, which the search service creates in the
+    same pod schema with ``CREATE TABLE IF NOT EXISTS``. That silently no-ops
+    against the user's column set, and every document upload in the pod then
+    fails to index, with the offending table hidden from ``table.list`` and
+    unmutable through the record API. One unlucky name, search broken pod-wide.
+    """
+    if table_name.startswith(RESERVED_TABLE_PREFIX):
+        raise DatastoreReservedResourceError(
+            f"Table names beginning with '{RESERVED_TABLE_PREFIX}' are reserved "
+            "for system-managed tables. Choose a different name."
+        )

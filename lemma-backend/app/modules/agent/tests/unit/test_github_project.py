@@ -7,7 +7,11 @@ import pytest
 from app.modules.agent.services.workspace_location import ProjectRepo
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import github_project, workspace_cli
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.agent.tools.workspace_cli.models import (
+    ExecCommandRequest,
+    ExecutePythonRequest,
+)
+from app.modules.agent.tools.workspace_entities import PythonExecutionResult
 
 
 class _FakeRedis:
@@ -137,7 +141,9 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
     assert "Repository not found." in notice
     # Cached, so a burst of commands doesn't re-run a slow failing clone...
     assert redis.values[_MARKER_KEY] == "failed"
-    assert await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    assert (
+        await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    )
     assert len(session.commands) == 1
 
 
@@ -150,7 +156,9 @@ async def test_a_session_without_an_id_is_left_alone(
     session = _FakeSession()
     session.session_id = None
 
-    assert await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    assert (
+        await github_project.ensure_project_checkout(_context(_REPO), session) is None
+    )
     assert session.commands == []
 
 
@@ -180,6 +188,16 @@ class _RecordingWorkspaceSession:
             "process_id": None,
         }
 
+    async def execute_code(self, code, timeout_seconds=60):
+        del code, timeout_seconds
+        return PythonExecutionResult(
+            success=True,
+            stdout="the code ran",
+            stderr="",
+            result=None,
+            error_in_exec=None,
+        )
+
 
 class _RecordingRuntime:
     def __init__(self, session):
@@ -201,11 +219,30 @@ def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+# Both workspace tools run in the conversation's one directory, so both have to
+# find the same thing in it. These are parametrized over the two rather than
+# written for the shell alone, which is how `execute_python` came to be the one
+# tool that opened a project and found an empty folder.
+_TOOLS = ("exec_command", "execute_python")
+
+
+async def _run_tool(name: str, ctx):
+    if name == "exec_command":
+        return await workspace_cli.exec_command_internal(
+            ctx, ExecCommandRequest(cmd="pwd")
+        )
+    return await workspace_cli.execute_python_internal(
+        ctx, ExecutePythonRequest(code="print(1)")
+    )
+
+
 @pytest.mark.asyncio
-async def test_a_project_conversation_checks_out_before_any_command(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("tool", _TOOLS)
+async def test_a_project_conversation_checks_out_before_any_tool_call(
+    tool: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Not just git-looking ones: the project has to be on disk before `ls`."""
+    """Not just git-looking commands, and not just the shell: the project has to
+    be on disk before `ls`, and before the first line of Python."""
 
     _patch_runtime(monkeypatch)
     calls: list[str] = []
@@ -217,41 +254,45 @@ async def test_a_project_conversation_checks_out_before_any_command(
     async def _checkout(ctx, session):
         del ctx, session
         calls.append("checkout")
-        return None
+        return
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _creds)
-    monkeypatch.setattr(workspace_cli, "ensure_project_checkout", _checkout)
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _creds)
+    monkeypatch.setattr(github_project, "ensure_project_checkout", _checkout)
 
-    await workspace_cli.exec_command_internal(
-        _context(_REPO), ExecCommandRequest(cmd="pwd")
-    )
+    await _run_tool(tool, _context(_REPO))
 
     # Credentials first: a private repo cannot be cloned without them.
     assert calls == ["credentials", "checkout"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TOOLS)
 async def test_a_scratchpad_conversation_is_untouched_by_the_project_step(
-    monkeypatch: pytest.MonkeyPatch,
+    tool: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_runtime(monkeypatch)
 
     async def _fail(ctx, session):
         raise AssertionError("no project, nothing to check out")
 
-    monkeypatch.setattr(workspace_cli, "ensure_project_checkout", _fail)
+    monkeypatch.setattr(github_project, "ensure_project_checkout", _fail)
 
-    result = await workspace_cli.exec_command_internal(
-        _context(None), ExecCommandRequest(cmd="pwd")
-    )
+    result = await _run_tool(tool, _context(None))
 
     assert result.success is True
 
 
 @pytest.mark.asyncio
-async def test_a_failed_checkout_reaches_the_agent_without_failing_the_command(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "tool, ran",
+    [("exec_command", "the command ran"), ("execute_python", "the code ran")],
+)
+async def test_a_failed_checkout_reaches_the_agent_without_failing_the_work(
+    tool: str, ran: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The notice is the whole point: an empty directory with no explanation is
+    what the agent is left to guess at, whichever tool it reached for."""
+
     _patch_runtime(monkeypatch)
 
     async def _creds(ctx, session):
@@ -261,15 +302,33 @@ async def test_a_failed_checkout_reaches_the_agent_without_failing_the_command(
         del ctx, session
         return "[workspace notice] acme/web could not be cloned"
 
-    monkeypatch.setattr(workspace_cli, "ensure_github_credentials", _creds)
-    monkeypatch.setattr(workspace_cli, "ensure_project_checkout", _checkout)
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _creds)
+    monkeypatch.setattr(github_project, "ensure_project_checkout", _checkout)
 
-    result = await workspace_cli.exec_command_internal(
-        _context(_REPO), ExecCommandRequest(cmd="ls")
-    )
+    result = await _run_tool(tool, _context(_REPO))
 
     assert result.success is True
     assert result.stdout is not None
     assert result.stdout.startswith("[workspace notice] acme/web could not be cloned")
-    # The command's own output is still there, under the notice.
-    assert "the command ran" in result.stdout
+    # The tool's own output is still there, under the notice.
+    assert ran in result.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", _TOOLS)
+async def test_a_broken_bridge_never_blocks_the_work_itself(
+    tool: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Redis or DB hiccup must not turn into a failed tool call: the work runs
+    uncredentialed and fails with git's own error, exactly as with no bridge."""
+
+    _patch_runtime(monkeypatch)
+
+    async def _broken(ctx, session):
+        raise RuntimeError("redis is down")
+
+    monkeypatch.setattr(github_project, "ensure_github_credentials", _broken)
+
+    result = await _run_tool(tool, _context(_REPO))
+
+    assert result.success is True

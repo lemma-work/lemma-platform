@@ -86,9 +86,10 @@ export function SurfaceLiveStep({
     );
 }
 
-/** Only renders when the same shared identity really could answer this person in
- * more than one pod — otherwise there is no choice to make and no reason to
- * raise the idea. */
+/** Only renders when the address just shown really could answer this person in
+ * more than one pod — Lemma's shared bot or number, fronting pods in several
+ * orgs. A bot the pod brought itself has its own handle, so a message to it can
+ * only land there; raising the question anyway suggests it might not. */
 function ReachableElsewhereNotice({ surface }: { surface: AssistantSurface }) {
     const platform = String(surface.platform || '').toUpperCase();
     const { data: userSurfaces, isLoading } = useUserSurfaces(Boolean(platform));
@@ -98,19 +99,23 @@ function ReachableElsewhereNotice({ surface }: { surface: AssistantSurface }) {
     const group = userSurfaces?.groups?.find(
         (candidate) => String(candidate.platform).toUpperCase() === platform,
     );
-    if (isLoading || !group?.conflict) return null;
+    // `shares_address` marks the surfaces answering at one address; the rest own
+    // theirs. The choice is only this surface's to make when it is one of them.
+    const sharing = (group?.surfaces ?? []).filter((candidate) => candidate.shares_address);
+    if (isLoading || sharing.length < 2) return null;
+    if (!sharing.some((candidate) => candidate.id === surface.id)) return null;
 
     const podNames = new Map((podsData?.items ?? []).map((pod) => [pod.id, pod.name]));
-    const selectedId = group.default_surface_id ?? surface.id;
+    const selectedId = group?.default_surface_id ?? surface.id;
 
     return (
         <div className="surface-panel-muted grid gap-2.5 p-3">
             <p className="flex items-start gap-2 text-xs leading-5 text-[var(--text-secondary)]">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                You’re in {group.surfaces.length} pods reachable this way. Your messages go to:
+                You’re in {sharing.length} pods reachable at this address. Your messages go to:
             </p>
             <div className="grid gap-1">
-                {group.surfaces.map((candidate) => {
+                {sharing.map((candidate) => {
                     const checked = candidate.id === selectedId;
                     return (
                         <button

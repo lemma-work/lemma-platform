@@ -4,6 +4,12 @@ A notification is *not* a wait. A wait suspends an execution and resumes it with
 an answer; a notification is fire-and-forget. The sender does not block on the
 recipient — it carries on, and typically ``snooze``s until answers are plausible.
 
+The one thread back is deliberately thin: when the last ask an asking
+conversation made is answered, that conversation gets a fresh turn. Nothing
+about this row becomes a wait — no execution hangs off it, no value crosses, and
+the agent still has to go and read the answers itself. Being *told* there is
+something to read is the whole of what it gets.
+
 That asymmetry is the whole design. Resolution is done by the *recipient's own*
 agent, in the recipient's own thread, under the recipient's own authority: the
 ``background_instruction`` tells that agent what to do with the reply, and
@@ -214,8 +220,7 @@ class NotificationEntity(AggregateRoot):
             )
         if not self.expects_response:
             raise NotificationTransitionError(
-                "This notification did not ask for a response; acknowledge it "
-                "instead.",
+                "This notification did not ask for a response; acknowledge it instead.",
                 notification_id=self.id,
                 status=self.status.value,
             )

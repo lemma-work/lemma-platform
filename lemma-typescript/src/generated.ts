@@ -75,10 +75,18 @@ export class GeneratedClientAdapter {
             this.auth.markUnauthenticated();
           }
 
-          // Retry transient gateway/rate-limit statuses. The generated client
-          // doesn't expose response headers, so there's no Retry-After to honor
-          // (retryDelayForStatus falls back to jittered backoff).
-          const retryDelay = retryDelayForStatus(error.status, attempt, this.maxRetries, null);
+          // Retry transient gateway/rate-limit statuses, and only for a method
+          // that can be replayed — the error carries the request it came from.
+          // The generated client doesn't expose response headers, so there's no
+          // Retry-After to honor (retryDelayForStatus falls back to jittered
+          // backoff).
+          const retryDelay = retryDelayForStatus(
+            error.status,
+            error.request?.method,
+            attempt,
+            this.maxRetries,
+            null,
+          );
           if (retryDelay !== null) {
             await sleep(retryDelay);
             continue;

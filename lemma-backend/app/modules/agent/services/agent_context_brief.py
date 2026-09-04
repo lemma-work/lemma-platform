@@ -1,42 +1,56 @@
 """Builds the runtime-context brief appended to an agent's system prompt.
 
 The brief grounds the agent in its environment without it having to run any
-discovery commands: the current pod, the current user, and the resources it can
-work with — for the pod default assistant the full pod inventory (a server-side
-``pod describe``), for a user-created agent only the resources granted to it,
-each with name, description, and (for tables) schema.
+discovery commands: the current pod, the current user, the resources it can work
+with — for the pod default assistant the full pod inventory (a server-side ``pod
+describe``), for a user-created agent only the resources granted to it, each
+with name, description, and (for tables) schema — and, for an agent with the
+MEMORY capability, what it already knows.
+
+That last part is built and cached by ``agent_memory_brief`` and appended here
+rather than assembled inline, because it is the only half that goes stale from
+the agent's own writes: it is invalidated on write, while everything below only
+changes when somebody edits the pod.
 
 Connection discipline: each DB read runs in its own short UoW that is released
 immediately, and storage I/O (the file walk) is isolated in its own UoW so it
 never extends a span. The whole rendered brief is cached per
 (agent, pod, user, is_default) for ``agent_context_brief_cache_ttl_seconds``, so
 a user's repeated runs against the same agent skip the build (and the DB)
-entirely -- across conversations, not just within one.
+entirely -- across conversations, not just within one. The memory section has
+its own entry and its own TTL, for the reason above.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from uuid import UUID
 
 from app.core.authorization.context import ResourceType
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
+from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
+    UserProfile,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
+from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     build_file_service,
     build_table_service,
 )
-from app.composition.agent_functions import create_function_repository
-from app.composition.authorization import create_authorization_service
+from app.modules.function.contracts import agent_tools as function_tools
+from app.core.authorization.factory import create_authorization_data_service
 
 _MAX_TABLES = 50
 _MAX_RESOURCES = 50
@@ -48,10 +62,10 @@ _MAX_COLUMNS = 40
 # Redis being unavailable degrades to a miss and never fails a run.
 #
 # Deliberately NOT keyed by conversation. It used to be, and that made the cache
-# almost dead: 89.9% of production runs are the first run of their conversation
-# and therefore a guaranteed miss, and of the runs that were not, the median gap
-# to the previous one was 426.9s -- seven times the TTL. So the hot path paid a
-# full rebuild on ~90% of runs to protect against variation that does not exist.
+# almost dead: most runs are the first run of their conversation and therefore a
+# guaranteed miss, and the runs that were not typically arrived long enough after
+# the previous one to have outlived the TTL anyway. So the hot path paid a full
+# rebuild on nearly every run to protect against variation that does not exist.
 #
 # Nothing in the rendered brief is conversation-derived. The build reads the pod,
 # the user and either the pod inventory or the agent's grants; the only thing it
@@ -60,6 +74,14 @@ _MAX_COLUMNS = 40
 # the conversation id does not.
 _BriefKey = tuple[UUID, UUID, UUID, bool]
 _brief_cache: RedisJsonCache | None = None
+
+logger = get_logger(__name__)
+# Read and written on every conversation's context assembly, so a Redis outage
+# would be one record per run for a condition that is uniform. This emits one
+# degraded/recovered pair per incident instead — the alternative, staying
+# silent, is how a cache that has been down for hours degrades every
+# conversation with nothing to show for it.
+_brief_cache_incident = DependencyIncident("agent_context_brief_cache", logger=logger)
 
 
 def _get_brief_cache() -> RedisJsonCache | None:
@@ -85,10 +107,13 @@ async def _get_cached_brief(key: _BriefKey) -> str | None:
     if cache is None:
         return None
     try:
-        return await cache.get_raw(_cache_suffix(key))
-    except Exception:
+        cached = await cache.get_raw(_cache_suffix(key))
+    except Exception as exc:
         # Redis unavailable -> treat as a cache miss; never fail a run.
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
         return None
+    _brief_cache_incident.record_success()
+    return cached
 
 
 async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
@@ -97,20 +122,11 @@ async def _set_cached_brief(key: _BriefKey, brief: str) -> None:
         return
     try:
         await cache.set_raw(_cache_suffix(key), brief)
-    except Exception:
+    except Exception as exc:
         # Redis unavailable -> skip caching; never fail a run.
-        pass
-
-
-async def invalidate_brief_cache() -> None:
-    """Drop all cached briefs (test hook + future grant/table-mutation hook)."""
-    cache = _get_brief_cache()
-    if cache is None:
+        _brief_cache_incident.record_failure(error_type=type(exc).__name__)
         return
-    try:
-        await cache.clear_prefix()
-    except Exception:
-        pass
+    _brief_cache_incident.record_success()
 
 
 class AgentContextBriefBuilder:
@@ -124,20 +140,54 @@ class AgentContextBriefBuilder:
         conversation: Conversation,
         user_id: UUID,
         pod_id: UUID,
+        toolsets: Collection[AgentToolset] = (),
     ) -> str:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
         # thing the conversation contributes, so it is resolved into the key.
-        is_default = conversation.is_pod_assistant or agent.id == DEFAULT_POD_AGENT_ID
+        is_default = agent.kind is AgentKind.POD_DEFAULT
         with run_phase("context_brief") as span:
             key: _BriefKey = (agent.id, pod_id, user_id, is_default)
             cached = await _get_cached_brief(key)
             span.set_attribute("lemma.cache_hit", cached is not None)
-            if cached is not None:
-                return cached
-            return await self._build_uncached(
-                key, agent=agent, is_default=is_default, user_id=user_id, pod_id=pod_id
+            if cached is None:
+                cached = await self._build_uncached(
+                    key,
+                    agent=agent,
+                    is_default=is_default,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
+            return await self._with_memory(
+                cached, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
+
+    async def _with_memory(
+        self,
+        inventory: str,
+        *,
+        agent: Agent,
+        pod_id: UUID,
+        user_id: UUID,
+        toolsets: Collection[AgentToolset],
+    ) -> str:
+        """Append the memory section, which is cached and invalidated apart.
+
+        Outside the inventory cache above, not inside it: memory changes when
+        this agent writes a fact mid-conversation, and baking it into a 60s
+        entry is exactly how an agent ends up unable to recall what it just
+        learned. Appended last for the same reason -- the volatile part belongs
+        after the stable one, so everything before it stays cacheable.
+
+        Gated on the same predicate the prompt fragment uses: an agent with no
+        way to reach a pod file is never shown folders it cannot write to.
+        """
+        if not memory_is_active(toolsets):
+            return inventory
+        section = await AgentMemoryBriefBuilder(self.uow_factory).build(
+            agent=agent, pod_id=pod_id, user_id=user_id
+        )
+        return f"{inventory}\n{section}" if section else inventory
 
     async def _build_uncached(
         self,
@@ -152,12 +202,11 @@ class AgentContextBriefBuilder:
         async with self.uow_factory() as uow:
             repo = AgentContextBriefRepository(uow)
             pod_name = await repo.get_pod_name(pod_id) or "(unknown)"
-            email = await repo.get_user_email(user_id)
-        user_line = f"{email} ({user_id})" if email else str(user_id)
+            profile = await repo.get_user_profile(user_id)
         lines = [
             "# Runtime Context",
             f"- Pod: {pod_name} ({pod_id})",
-            f"- User: {user_line}",
+            *_user_lines(profile, user_id),
         ]
 
         if is_default:
@@ -179,15 +228,16 @@ class AgentContextBriefBuilder:
         # Tables — datastore read needs the authorization context; build ctx in
         # this uow and render the rows (lazy column access) before it closes.
         async with self.uow_factory() as uow:
-            ctx = await create_authorization_service(uow).build_user_context(
+            ctx = await create_authorization_data_service(uow).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
             token = set_current_context(ctx)
             try:
-                tables, _ = await build_table_service(uow).list_tables(
+                tables, table_total = await build_table_service(uow).list_tables(
                     pod_id, ctx, limit=_MAX_TABLES
                 )
                 table_lines = [_table_line(table) for table in tables]
+                table_lines.extend(_more_note(len(tables), table_total, "tables"))
             finally:
                 reset_current_context(token)
         if table_lines:
@@ -196,21 +246,24 @@ class AgentContextBriefBuilder:
 
         # Agents (plain query).
         async with self.uow_factory() as uow:
-            agents, _ = await AgentRepository(uow).list_by_pod(
+            agents, agent_total = await AgentRepository(uow).list_by_pod(
                 pod_id=pod_id, limit=_MAX_RESOURCES
             )
-        named = [a for a in agents if a.id != DEFAULT_POD_AGENT_ID]
+        # The assistant has a row now, so it comes back in this listing --
+        # and without this it would offer itself as an agent to delegate to.
+        named = [a for a in agents if a.kind is not AgentKind.POD_DEFAULT]
         if named:
             lines.append("\n## Agents")
             lines.extend(
                 f"- {a.name}" + (f" — {a.description}" if a.description else "")
                 for a in named
             )
+            lines.extend(_more_note(len(agents), agent_total, "agents"))
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, _ = await create_function_repository(uow).list_by_pod(
-                pod_id, limit=_MAX_RESOURCES
+            functions, function_total = await function_tools.list_pod_functions(
+                uow, pod_id, limit=_MAX_RESOURCES
             )
         if functions:
             lines.append("\n## Functions")
@@ -219,13 +272,14 @@ class AgentContextBriefBuilder:
                 + (f" — {f.description}" if f.description else "")
                 for f in functions
             )
+            lines.extend(_more_note(len(functions), function_total, "functions"))
 
         # Files — best-effort grounding, isolated in its own uow so the storage
         # walk never extends the spans above. (Removing the storage hold inside
         # this uow is the datastore file-service factory-mode refactor.)
         try:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_service(uow).build_user_context(
+                ctx = await create_authorization_data_service(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)
@@ -240,8 +294,14 @@ class AgentContextBriefBuilder:
                 lines.append("\n## Files (top level)")
                 lines.extend(f"- {entry}" for entry in entries)
         except Exception:
-            # Files are best-effort context; never fail prompt assembly on them.
-            pass
+            # Files are best-effort context; never fail prompt assembly on them
+            # -- but say so. A silently missing "Files (top level)" section reads
+            # to the model as a pod with no files in it.
+            logger.warning(
+                "agent.context_brief.file_inventory_unavailable.degraded",
+                pod_id=str(pod_id),
+                exc_info=True,
+            )
         return lines
 
     async def _granted_resources(
@@ -285,7 +345,7 @@ class AgentContextBriefBuilder:
         table_summaries: dict[str, str] = {}
         if granted_table_names:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_service(uow).build_user_context(
+                ctx = await create_authorization_data_service(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)
@@ -306,9 +366,15 @@ class AgentContextBriefBuilder:
             "tool returns a permission error (403), or for an explicitly "
             "destructive action.",
         ]
-        for (resource_type, resource_id), perms in list(perms_by_ref.items())[
-            :_MAX_RESOURCES
-        ]:
+        granted = list(perms_by_ref.items())
+        # Truncating a section headed "These are pre-authorized for you" without
+        # saying so means the agent asks for approval it already has.
+        lines.extend(
+            _more_note(
+                min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"
+            )
+        )
+        for (resource_type, resource_id), perms in granted[:_MAX_RESOURCES]:
             try:
                 ref_type = ResourceType(resource_type)
             except ValueError:
@@ -324,12 +390,73 @@ class AgentContextBriefBuilder:
         return lines
 
 
+def _more_note(shown: int, total: object, noun: str) -> list[str]:
+    """One line saying what the cap left out, or nothing when it left nothing.
+
+    Every cap in this brief used to be silent, so a pod's 51st table simply did
+    not exist as far as the agent was concerned -- and an agent that believes a
+    table is absent does not go looking for it, it tells the user there isn't
+    one.
+    """
+    # A repository that does not count returns None rather than a total; that is
+    # "unknown", not "nothing more", and must not crash prompt assembly.
+    if not isinstance(total, int) or total <= shown:
+        return []
+    return [
+        f"- … and {total - shown} more {noun} not listed here "
+        f"(showing {shown}). Use your tools to list them all."
+    ]
+
+
+def _user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
+    """Who the agent is talking to, and what time it is where they are.
+
+    Both halves used to be missing, and neither is recoverable from anywhere
+    else in the prompt. The brief named an address and a UUID, so an agent
+    asked to greet somebody by name had nothing to read one from -- it either
+    said the email address out loud or hoped a past agent had written the name
+    into `/me`. And the only clock a run is given is UTC, which is the wrong
+    answer to "this morning" and the wrong date to write into a memory file.
+
+    Said plainly when the timezone is unset, rather than left out: an agent
+    told nothing assumes the clock in front of it is the person's.
+    """
+    identity = profile.email or "(unknown)"
+    if profile.display_name:
+        identity = (
+            f"{profile.display_name} <{profile.email}>"
+            if profile.email
+            else profile.display_name
+        )
+    lines = [f"- User: {identity} ({user_id})"]
+    if profile.timezone:
+        lines.append(
+            f"- Their timezone: {profile.timezone}. The clock you are given "
+            "reads UTC — convert before naming a time of day or resolving a "
+            "date for them."
+        )
+    else:
+        lines.append(
+            "- Their timezone is not set, and the clock you are given reads "
+            "UTC, which may not be theirs. Don't name a time of day or resolve "
+            '"today" on their behalf without asking.'
+        )
+    return lines
+
+
 def _table_line(table) -> str:
+    shown = table.columns[:_MAX_COLUMNS]
     columns = ", ".join(
         f"{c.name}:{c.type.value if hasattr(c.type, 'value') else c.type}"
-        for c in table.columns[:_MAX_COLUMNS]
+        for c in shown
     )
-    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}"
+    # A column the agent cannot see is a column it will omit from a write and
+    # then be told is required, or will report to the user as not existing.
+    hidden = len(table.columns) - len(shown)
+    suffix = (
+        f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
+    )
+    return f"- {table.table_name} (pk: {table.primary_key_column}): {columns}{suffix}"
 
 
 def _top_level_file_entries(tree: object) -> list[str]:
@@ -345,4 +472,9 @@ def _top_level_file_entries(tree: object) -> list[str]:
             kind = child.get("kind") or child.get("type")
             if name:
                 entries.append(f"{name}" + (f" [{kind}]" if kind else ""))
+    if len(children) > _MAX_RESOURCES:
+        entries.append(
+            f"… and {len(children) - _MAX_RESOURCES} more top-level entries "
+            "not listed here"
+        )
     return entries

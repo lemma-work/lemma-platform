@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.sql import text
 
 from app.core.config import settings
+from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
@@ -63,6 +64,20 @@ class PostgresSearchService:
             await conn.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"),
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
+            )
+            # The key above is a single global constant, so it serialises this
+            # method against itself -- which is all the database-wide catalogs
+            # below need. It does NOT serialise this pod's namespace against
+            # DatastoreSchemaManager, which creates the very same schema under
+            # `hashtext(schema_name)`. Two different keys exclude nobody: both
+            # paths could observe the namespace as absent and one would then
+            # lose on the pg_namespace.nspname unique index, which is what
+            # broke the datastore e2e shard. Take that key as well, always
+            # after the global one so every caller acquires the two in the same
+            # order and no pair of them can deadlock.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
+                {"schema_name": self.schema_name},
             )
             # Azure Database for PostgreSQL checks CREATE EXTENSION privileges
             # even when IF NOT EXISTS would otherwise be a no-op. The runtime
@@ -160,8 +175,14 @@ class PostgresSearchService:
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
             except Exception:
-                logger.debug(
-                    "datastore.postgres_search_service.could_not_drop_legacy_index.observed"
+                # A legacy index left behind is a waste of write throughput and
+                # disk in that pod, and nothing else will ever notice: this runs
+                # once per process per schema, so it is not a volume risk.
+                logger.warning(
+                    "datastore.postgres_search_service.legacy_index_drop.degraded",
+                    schema_name=self.schema_name,
+                    index_name=legacy,
+                    exc_info=True,
                 )
         try:
             async with self.engine.begin() as conn:
@@ -181,9 +202,16 @@ class PostgresSearchService:
                 "does not exist" in lower_msg or "not installed" in lower_msg
             )
             if not extension_missing:
-                logger.debug(
-                    "datastore.postgres_search_service.create_halfvec_vector_index_s.diagnostic",
-                    error_type=type(exc).__name__,
+                # Warning, and named: production runs at LOG_LEVEL=INFO, so at
+                # debug a pod whose vector index never built left no trace at
+                # all. Search keeps working by sequential scan and simply gets
+                # slower as the pod grows -- until `guard_query_plan`'s cost
+                # ceiling starts refusing unrelated queries in the same schema,
+                # which is the point somebody finally investigates.
+                logger.warning(
+                    "datastore.postgres_search_service.vector_index_build.degraded",
+                    schema_name=self.schema_name,
+                    exc_info=True,
                 )
 
     async def index_file_chunks(
@@ -198,7 +226,7 @@ class PostgresSearchService:
 
         if not chunks:
             logger.debug(
-                'datastore.postgres_search_service.no_chunks_s.diagnostic',
+                "datastore.postgres_search_service.no_chunks_s.diagnostic",
                 file_id=file_id,
             )
             return IndexingMetrics(
@@ -239,7 +267,10 @@ class PostgresSearchService:
             )
             return metrics
         except Exception:
-            logger.debug('datastore.postgres_search_service.add_file_search_s.propagated', exc_info=True)
+            logger.debug(
+                "datastore.postgres_search_service.add_file_search_s.propagated",
+                exc_info=True,
+            )
             raise
 
     async def remove_file(self, file_id: UUID):
@@ -257,10 +288,11 @@ class PostgresSearchService:
         method: SearchMethod = SearchMethod.HYBRID,
         scope_path: str | None = None,
         include_descendants: bool = True,
-        visible_file_ids: set[UUID] | None = None,
+        *,
+        visibility: FileVisibilityFilter,
     ) -> list[DatastoreFileSearchResult]:
         await self.ensure_schema()
-        if visible_file_ids is not None and not visible_file_ids:
+        if visibility.matches_nothing:
             return []
 
         rerank_active = settings.reranker_mode != "off"
@@ -276,7 +308,7 @@ class PostgresSearchService:
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visible_file_ids=visible_file_ids,
+                visibility=visibility,
             )
             ranked = list(rows)
             diversify = False
@@ -288,7 +320,7 @@ class PostgresSearchService:
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visible_file_ids=visible_file_ids,
+                visibility=visibility,
             )
             ranked = list(rows)
             diversify = False
@@ -301,7 +333,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visible_file_ids=visible_file_ids,
+                visibility=visibility,
             )
             text_results = await self.chunk_repo.text_search(
                 query=query,
@@ -309,7 +341,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visible_file_ids=visible_file_ids,
+                visibility=visibility,
             )
             ranked = self._merge_ranked_results(vector_results, text_results)
             diversify = True

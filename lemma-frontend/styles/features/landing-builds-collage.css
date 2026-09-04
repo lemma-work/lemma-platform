@@ -112,13 +112,30 @@
 
   /* ----- Tile palettes ---------------------------------------------------- */
 
+  /* The label, not a card. No paper, no tilt, no halftone, and nothing that
+     moves under the pointer — it is the only cell in the grid that does not
+     open, so it should not look like the ones that do. */
   .lp-tile-brand {
-    --tilt: -1.1deg;
+    --tilt: 0deg;
     --d: 0.06s;
     grid-area: brand;
-    background: #f1ecdd;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     color: #17181a;
     cursor: default;
+  }
+
+  .lp-build-tile.lp-tile-brand::before {
+    content: none;
+  }
+
+  .lp-build-tile.lp-tile-brand:hover,
+  .lp-build-tile.lp-tile-brand:focus-visible {
+    z-index: auto;
+    box-shadow: none;
+    transform: none;
   }
 
   .lp-tile-slack {
@@ -232,10 +249,12 @@
     pointer-events: none;
   }
 
-  .lp-arrow-brand {
-    right: 16px;
-    bottom: 52px;
+  .lp-tile-brand .lp-arrow-brand {
+    position: relative;
+    right: auto;
+    bottom: auto;
     width: 92px;
+    margin-left: clamp(30px, 5vw, 76px);
     color: #1e56dd;
     transform: rotate(6deg);
   }
@@ -257,8 +276,9 @@
   .lp-tile-brand {
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    gap: 18px;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: clamp(14px, 1.6vw, 22px);
   }
 
   .lp-brand-mark {
@@ -271,8 +291,8 @@
     z-index: 2;
     margin: 0;
     font-family: var(--font-bricolage-grotesque), var(--font-landing-sans), sans-serif;
-    font-size: clamp(2.5rem, 3.6vw, 3.4rem);
-    font-weight: 800;
+    font-size: clamp(1.7rem, 2.4vw, 2.3rem);
+    font-weight: 500;
     letter-spacing: -0.03em;
     line-height: 0.94;
     color: #17181a;
@@ -480,7 +500,12 @@
   }
 
   .lp-avatar-lemma {
+    overflow: hidden;
     background: #17181a;
+  }
+
+  .lp-avatar-lemma .lemma-mark {
+    transform: scale(0.55);
   }
 
   /* ----- Slack agents ------------------------------------------------------ */

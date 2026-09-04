@@ -18,7 +18,8 @@ from pydantic_ai import ToolReturn
 
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
 from app.modules.agent.tools import vision_delegation
-from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
+from app.modules.agent.tools.pod import pod_common
+from app.modules.agent.tools.pod import pod_file_tools as pod_files
 from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
 from app.modules.agent.tools.context import BaseAgentContext
 
@@ -60,9 +61,7 @@ class TestModeResolution:
 
     def test_unavailable_is_the_default_on_a_bare_context(self) -> None:
         """A tool that cannot determine the mode must assume the unsafe case."""
-        ctx = BaseAgentContext(
-            user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-        )
+        ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
         assert ctx.vision_mode is AgentVisionMode.UNAVAILABLE
 
 
@@ -89,12 +88,12 @@ def _pdf_services(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(pod_adapter, "pod_services", lambda deps: _Ctx())
+    monkeypatch.setattr(pod_common, "pod_services", lambda deps: _Ctx())
 
     async def fake_url(storage, key, expires_seconds=None):
         return f"https://signed/{key}", None
 
-    monkeypatch.setattr(pod_adapter, "build_object_url", fake_url)
+    monkeypatch.setattr(pod_files, "build_object_url", fake_url)
 
 
 def _ctx(mode: AgentVisionMode) -> SimpleNamespace:
@@ -113,7 +112,7 @@ class TestPdfPagesRespectTheMode:
     async def test_direct_still_receives_the_page_images(self, monkeypatch) -> None:
         _pdf_services(monkeypatch)
 
-        result = await pod_adapter.pod_view_document_pages(
+        result = await pod_files.pod_view_document_pages(
             _ctx(AgentVisionMode.DIRECT),
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
         )
@@ -135,11 +134,9 @@ class TestPdfPagesRespectTheMode:
             return "A flowchart: Ingest -> Validate -> Store."
 
         # Delegation now lives in one shared module, so patch it there.
-        monkeypatch.setattr(
-            vision_delegation, "describe_images", fake_describe
-        )
+        monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
-        result = await pod_adapter.pod_view_document_pages(
+        result = await pod_files.pod_view_document_pages(
             _ctx(AgentVisionMode.DELEGATED),
             ViewDocumentPagesRequest(
                 path="/pod/report.pdf",
@@ -176,7 +173,7 @@ class TestPdfPagesRespectTheMode:
         monkeypatch.delenv("VISION_MODEL", raising=False)
         monkeypatch.setattr(agent_settings, "vision_model", None)
 
-        result = await pod_adapter.pod_view_document_pages(
+        result = await pod_files.pod_view_document_pages(
             _ctx(AgentVisionMode.UNAVAILABLE),
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1),
         )
@@ -205,9 +202,7 @@ class TestViewImageRespectsTheMode:
         async def fake_describe(images, *, instructions, organization_id, user_id):
             return "A bar chart with four bars."
 
-        monkeypatch.setattr(
-            vision_delegation, "describe_images", fake_describe
-        )
+        monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
         result = await workspace_cli.view_image_internal(
             SimpleNamespace(

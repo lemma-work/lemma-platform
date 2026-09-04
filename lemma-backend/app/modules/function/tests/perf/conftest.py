@@ -37,7 +37,6 @@ from app.modules.test_support.e2e.worker_process import production_worker_proces
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.real_sandbox]
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -249,7 +248,9 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
             stderr=asyncio.subprocess.STDOUT,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("ngrok is required when FUNCTION_BENCH_TUNNEL=ngrok") from exc
+        raise RuntimeError(
+            "ngrok is required when FUNCTION_BENCH_TUNNEL=ngrok"
+        ) from exc
     assert process.stdout is not None
     recent: list[str] = []
 
@@ -264,8 +265,7 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
         if not published.done():
             published.set_exception(
                 RuntimeError(
-                    "ngrok exited before publishing a tunnel: "
-                    + "".join(recent[-20:])
+                    "ngrok exited before publishing a tunnel: " + "".join(recent[-20:])
                 )
             )
 
@@ -295,8 +295,7 @@ async def _ngrok_tunnel(backend_url: str) -> AsyncIterator[str]:
             else:
                 raise RuntimeError(
                     "ngrok tunnel never reached backend health; "
-                    f"last result: {last_health_error}; ngrok: "
-                    + "".join(recent[-20:])
+                    f"last result: {last_health_error}; ngrok: " + "".join(recent[-20:])
                 )
         yield public_url
     finally:
@@ -442,7 +441,9 @@ async def function_benchmark_runtime(
             "add_host_gateway": workspace_settings.add_host_gateway,
             "host_alias": workspace_settings.host_alias,
             "runtime_credential_key": workspace_settings.runtime_credential_key,
+            "e2b_metadata_namespace": workspace_settings.e2b_metadata_namespace,
         }
+        original_namespace_env = os.environ.get("E2B_METADATA_NAMESPACE")
         runtime: FunctionBenchmarkRuntime | None = None
         benchmark_error: BaseException | None = None
         try:
@@ -456,6 +457,30 @@ async def function_benchmark_runtime(
             # through the environment before the interpreter starts; a bare
             # pytest run, which is how CI invokes the suite, does not.
             workspace_settings.runtime_credential_key = _RUNTIME_CREDENTIAL_KEY
+            if provider == "e2b":
+                # Never the namespace anything real is using. This benchmark
+                # provisions in-process against a throwaway database, so every
+                # sandbox in the account that is not its own looks to the orphan
+                # sweep like something identifiable as ours with no row -- which
+                # is how one deployment came to delete another's workspaces.
+                # A per-run value makes this run's sandboxes invisible to
+                # everyone else's sweep, and everyone else's invisible to it.
+                #
+                # `E2E_SANDBOX_MODE`'s runtime fixture has generated one of
+                # these for a while; this suite reached the same provider
+                # without it, and so ran under the bare production namespace.
+                benchmark_namespace = (
+                    os.getenv("E2B_METADATA_NAMESPACE")
+                    or f"lemma-fn-bench-{uuid4().hex[:12]}"
+                )
+                workspace_settings.e2b_metadata_namespace = benchmark_namespace
+                # Into the environment as well, because the worker that runs
+                # JOB functions is a separate process. It builds its own
+                # provider from env, so a namespace set only on this process's
+                # settings leaves the worker looking for the sandbox under a
+                # different one -- which is every JOB case failing while every
+                # API case passes.
+                os.environ["E2B_METADATA_NAMESPACE"] = benchmark_namespace
             if provider == "docker":
                 # The benchmark images are content-addressed tags, not digests,
                 # and the sandboxes have to reach this process to fetch their
@@ -532,9 +557,7 @@ async def function_benchmark_runtime(
                             await client.destroy_sandbox(
                                 workload_kind,
                                 logical_id,
-                                deadline_at=(
-                                    datetime.now(UTC) + timedelta(seconds=60)
-                                ),
+                                deadline_at=(datetime.now(UTC) + timedelta(seconds=60)),
                             )
                         except SandboxNotFound:
                             continue
@@ -549,9 +572,8 @@ async def function_benchmark_runtime(
                                 f"{type(exc).__name__}: {exc}"
                             )
                 if cleanup_errors:
-                    message = (
-                        "benchmark sandbox cleanup failed:\n"
-                        + "\n".join(cleanup_errors)
+                    message = "benchmark sandbox cleanup failed:\n" + "\n".join(
+                        cleanup_errors
                     )
                     if benchmark_error is not None:
                         benchmark_error.add_note(message)
@@ -562,6 +584,10 @@ async def function_benchmark_runtime(
                 setattr(settings, name, value)
             for name, value in original_workspace.items():
                 setattr(workspace_settings, name, value)
+            if original_namespace_env is None:
+                os.environ.pop("E2B_METADATA_NAMESPACE", None)
+            else:
+                os.environ["E2B_METADATA_NAMESPACE"] = original_namespace_env
 
 
 @asynccontextmanager
@@ -583,7 +609,6 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
-    "test_network",
     "test_pod",
     "test_redis_url",
     "workspace_image",

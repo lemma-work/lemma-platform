@@ -22,6 +22,7 @@ from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from app.core.log.log import get_logger
+from app.modules.test_support.e2e.waiters import eventually
 
 logger = get_logger(__name__)
 
@@ -202,6 +203,17 @@ class FakeSlackServer:
         app.router.add_route(
             "*", "/api/assistant.threads.setStatus", self._assistant_threads_set_status
         )
+        app.router.add_route(
+            "*", "/api/assistant.threads.setTitle", self._assistant_threads_set_title
+        )
+        app.router.add_route(
+            "*",
+            "/api/assistant.threads.setSuggestedPrompts",
+            self._assistant_threads_set_suggested_prompts,
+        )
+        app.router.add_route("*", "/api/views.open", self._views_open)
+        app.router.add_route("*", "/api/views.publish", self._views_publish)
+        app.router.add_route("*", "/api/conversations.info", self._conversations_info)
         app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
         )
@@ -419,6 +431,81 @@ class FakeSlackServer:
         self._store.add("SLACK_STATUS", params)
         return web.json_response({"ok": True})
 
+    async def _assistant_threads_set_title(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_THREAD_TITLE", params)
+        return web.json_response({"ok": True})
+
+    async def _assistant_threads_set_suggested_prompts(
+        self, request: web.Request
+    ) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_SUGGESTED_PROMPTS", params)
+        return web.json_response({"ok": True})
+
+    async def _views_open(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_OPEN", params)
+        view_id = f"V{len(self._store.get_all('SLACK_VIEWS_OPEN')):09d}"
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    async def _views_publish(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_PUBLISH", params)
+        view_id = f"V{len(self._store.get_all('SLACK_VIEWS_PUBLISH')):09d}"
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    def _view_envelope(self, raw_view: Any, view_id: str) -> dict[str, Any]:
+        return {
+            **self._parse_view(raw_view),
+            "id": view_id,
+            "team_id": "T-SURFACE-E2E",
+            "hash": f"{view_id}.{int(time.time())}",
+        }
+
+    @staticmethod
+    def _parse_view(raw: Any) -> dict[str, Any]:
+        """Recover the ``view`` dict submitted to ``views.open``/``views.publish``.
+
+        slack_sdk posts ``view`` as JSON, but ``_collect_params`` stringifies
+        every field uniformly (as ``chat.appendStream``'s ``chunks`` already
+        does), so what arrives here is a dict's ``repr()``, not JSON — hence
+        ``ast.literal_eval`` rather than ``json.loads``.
+        """
+        if isinstance(raw, dict):
+            return raw
+        if not raw:
+            return {}
+        with suppress(ValueError, SyntaxError):
+            parsed = ast.literal_eval(str(raw))
+            if isinstance(parsed, dict):
+                return parsed
+        return {}
+
+    async def _conversations_info(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_CHANNEL_INFO", params)
+        channel_id = str(params.get("channel") or "C-SURFACE-E2E")
+        return web.json_response(
+            {
+                "ok": True,
+                "channel": {
+                    "id": channel_id,
+                    "name": "support",
+                    "is_channel": True,
+                    "is_group": False,
+                    "is_im": False,
+                    "is_private": False,
+                    "is_archived": False,
+                    "is_member": True,
+                },
+            }
+        )
+
     async def _files_get_upload_url_external(
         self, request: web.Request
     ) -> web.Response:
@@ -456,6 +543,28 @@ class FakeSlackServer:
         return web.json_response({"ok": True, "files": []})
 
 
+# Azure AD's real ``invalid_grant``/``unauthorized_client`` shapes for the two
+# client_credentials failures client.py's ``_get_token`` classifies by code
+# (see the ``AADSTS65001``/``AADSTS700016`` substring checks there). Keyed by
+# AADSTS code so ``queue_oauth_error`` can select either without the caller
+# needing to know the surrounding envelope.
+_AAD_ERROR_RESPONSES: dict[str, tuple[str, str]] = {
+    "AADSTS65001": (
+        "invalid_grant",
+        "AADSTS65001: The user or administrator has not consented to use the "
+        "application with ID 'fake-teams-app-id'. Send an interactive "
+        "authorization request for this user and resource.",
+    ),
+    "AADSTS700016": (
+        "unauthorized_client",
+        "AADSTS700016: Application with identifier 'fake-teams-app-id' was "
+        "not found in the directory 'fake-teams-tenant'. This can happen if "
+        "the application has not been installed by the administrator of the "
+        "tenant.",
+    ),
+}
+
+
 class FakeTeamsServer:
     """Lightweight aiohttp server mimicking the MS Teams Bot Framework."""
 
@@ -466,6 +575,7 @@ class FakeTeamsServer:
         self._site: web.TCPSite | None = None
         self._port: int | None = None
         self.graph_failure_status: int | None = None
+        self._oauth_error_code: str | None = None
         self._private_key = rsa.generate_private_key(
             public_exponent=65537, key_size=2048
         )
@@ -507,6 +617,32 @@ class FakeTeamsServer:
             "/graph/v1.0/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies",
             self._get_channel_messages,
         )
+        app.router.add_post(
+            "/oauth/{tenant}/oauth2/v2.0/token",
+            self._oauth_token,
+        )
+        app.router.add_get(
+            "/graph/v1.0/shares/{token}/driveItem",
+            self._graph_shares_drive_item,
+        )
+        app.router.add_get(
+            "/graph/v1.0/drives/{drive_id}/items/{item_id}/content",
+            self._graph_drive_item_content,
+        )
+        # Registered before the host:path wildcard below so the literal
+        # "/sites/root" special case (site_path == "/" in
+        # ``_resolve_sharepoint_site_id``) and the "drive/root:...:/content"
+        # shape (the content URL ``_resolve_sharepoint_file_content_url``
+        # constructs and later fetches) both win over the generic matcher.
+        app.router.add_get("/graph/v1.0/sites/root", self._graph_sites_root)
+        app.router.add_get(
+            "/graph/v1.0/sites/{site_id}/drive/root:{item_path:.*}:/content",
+            self._graph_sharepoint_root_content,
+        )
+        app.router.add_get(
+            "/graph/v1.0/sites/{spec:.+}",
+            self._graph_sites_by_spec,
+        )
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -533,6 +669,21 @@ class FakeTeamsServer:
     @property
     def openid_config_url(self) -> str:
         return f"http://127.0.0.1:{self._port}/botframework/.well-known/openidconfiguration"
+
+    @property
+    def oauth_base_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}/oauth"
+
+    def queue_oauth_error(self, code: str) -> None:
+        """Make the NEXT OAuth token request fail with the given AADSTS error.
+
+        Mirrors real Azure AD's 400 ``invalid_grant``/``unauthorized_client``
+        response shape so ``client.py``'s ``_get_token`` classification logic
+        (the ``AADSTS65001``/``AADSTS700016`` substring checks) actually
+        fires. Unrecognized codes still fail the next request, with a generic
+        description carrying the code.
+        """
+        self._oauth_error_code = code
 
     def issue_webhook_token(self, *, audience: str) -> str:
         now = int(time.time())
@@ -672,6 +823,106 @@ class FakeTeamsServer:
             )
         return web.json_response({"value": values})
 
+    async def _oauth_token(self, request: web.Request) -> web.Response:
+        tenant = request.match_info["tenant"]
+        form = await request.post()
+        self._store.add(
+            "TEAMS_OAUTH_TOKEN",
+            {
+                "tenant": tenant,
+                "grant_type": form.get("grant_type"),
+                "client_id": form.get("client_id"),
+                "scope": form.get("scope"),
+                **_request_contract(request),
+            },
+        )
+        if self._oauth_error_code is not None:
+            code = self._oauth_error_code
+            self._oauth_error_code = None
+            error, description = _AAD_ERROR_RESPONSES.get(
+                code, ("invalid_grant", f"{code}: Scripted OAuth failure")
+            )
+            return web.json_response(
+                {"error": error, "error_description": description},
+                status=400,
+            )
+        return web.json_response(
+            {
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "ext_expires_in": 3600,
+                "access_token": f"fake-teams-token-{tenant}",
+            }
+        )
+
+    async def _graph_shares_drive_item(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        self._store.add(
+            "TEAMS_GRAPH_SHARES",
+            {"token": token, **_request_contract(request)},
+        )
+        item_id = f"shared-item-{len(self._store.get_all('TEAMS_GRAPH_SHARES'))}"
+        return web.json_response(
+            {
+                "id": item_id,
+                "name": "shared-file.txt",
+                "parentReference": {"driveId": "drive-e2e-1"},
+            }
+        )
+
+    async def _graph_drive_item_content(self, request: web.Request) -> web.Response:
+        drive_id = request.match_info["drive_id"]
+        item_id = request.match_info["item_id"]
+        self._store.add(
+            "TEAMS_GRAPH_CONTENT",
+            {"drive_id": drive_id, "item_id": item_id, **_request_contract(request)},
+        )
+        return web.Response(
+            body=f"fake SharePoint content {drive_id}/{item_id}".encode(),
+            content_type="text/plain",
+        )
+
+    async def _graph_sites_root(self, request: web.Request) -> web.Response:
+        self._store.add(
+            "TEAMS_GRAPH_SITES", {"path": "root", **_request_contract(request)}
+        )
+        return web.json_response({"id": "site-root-e2e", "displayName": "Root Site"})
+
+    async def _graph_sites_by_spec(self, request: web.Request) -> web.Response:
+        # ``_resolve_sharepoint_site_id`` builds this as
+        # "{hostname}:{site_path}" (e.g. "contoso.sharepoint.com:/sites/eng").
+        spec = request.match_info["spec"]
+        hostname, _, site_path = spec.partition(":")
+        self._store.add(
+            "TEAMS_GRAPH_SITES",
+            {
+                "hostname": hostname,
+                "site_path": site_path,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response(
+            {"id": f"site-{hostname}", "displayName": site_path or hostname}
+        )
+
+    async def _graph_sharepoint_root_content(
+        self, request: web.Request
+    ) -> web.Response:
+        site_id = request.match_info["site_id"]
+        item_path = request.match_info["item_path"]
+        self._store.add(
+            "TEAMS_GRAPH_CONTENT",
+            {
+                "site_id": site_id,
+                "item_path": item_path,
+                **_request_contract(request),
+            },
+        )
+        return web.Response(
+            body=f"fake SharePoint content {site_id}:{item_path}".encode(),
+            content_type="text/plain",
+        )
+
 
 class FakeWhatsAppServer:
     """Lightweight aiohttp server mimicking the WhatsApp Business API."""
@@ -762,12 +1013,39 @@ class FakeWhatsAppServer:
         )
 
 
+#: A 1x1 red PNG. Real bytes on purpose: the point of the photo test is that
+#: something downstream can tell what these are without being told, and a
+#: placeholder string would only prove the plumbing moved it.
+A_RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg=="
+)
+
+#: What ``getFile`` answers for a given ``file_id``. Keyed the way Telegram keys
+#: it, because the *path* is where a photo's type comes from -- the update never
+#: says. A file id with no entry gets a generic document path, which is the
+#: untyped case and is meant to stay reachable.
+TELEGRAM_FILE_PATHS: dict[str, str] = {
+    "photo-large": "photos/file_42.jpg",
+    "voice-1": "voice/file_9.oga",
+}
+
+#: The bytes each path serves.
+TELEGRAM_FILE_BODIES: dict[str, bytes] = {
+    "photos/file_42.jpg": A_RED_PNG,
+    "voice/file_9.oga": b"OggS" + b"\x00" * 32,
+}
+
+
 class FakeTelegramServer:
     """Lightweight aiohttp server mimicking the Telegram Bot API.
 
     Captures outbound calls for assertion and remembers the registered webhook
     so getWebhookInfo confirms the URL (matching the real registration flow).
-    ``fail_next`` forces transient failures per method to exercise retries.
+    ``fail_next`` forces transient failures per method to exercise retries, and
+    ``unavailable`` makes a method answer 404 the way a bot API that does not
+    carry it would — which is the condition `send_chunk`'s fallback from
+    `sendRichMessage` to `sendMessage` exists for.
     """
 
     def __init__(self, store: MockPlatformMessageStore):
@@ -777,11 +1055,13 @@ class FakeTelegramServer:
         self._port: int | None = None
         self._registered_webhook: dict | None = None
         self.fail_next: dict[str, int] = {}
+        self.unavailable: set[str] = set()
         self._updates: list[dict[str, Any]] = []
 
     async def start(self) -> None:
         app = web.Application()
         app.router.add_post("/bot{token}/sendMessage", self._send_message)
+        app.router.add_post("/bot{token}/sendRichMessage", self._send_rich_message)
         app.router.add_post("/bot{token}/editMessageText", self._edit_message_text)
         app.router.add_post("/bot{token}/sendVoice", self._send_voice)
         app.router.add_post("/bot{token}/sendDocument", self._send_document)
@@ -793,6 +1073,19 @@ class FakeTelegramServer:
         app.router.add_post("/bot{token}/getUpdates", self._get_updates)
         app.router.add_post("/bot{token}/setMyCommands", self._set_my_commands)
         app.router.add_post("/bot{token}/setChatMenuButton", self._set_chat_menu_button)
+        app.router.add_post("/bot{token}/setMyDescription", self._set_my_description)
+        app.router.add_post(
+            "/bot{token}/setMyShortDescription", self._set_my_short_description
+        )
+        app.router.add_post("/bot{token}/setMyProfilePhoto", self._set_my_profile_photo)
+        app.router.add_post(
+            "/bot{token}/getManagedBotToken", self._get_managed_bot_token
+        )
+        # Inbound files. Their absence is why no test could drive a Telegram
+        # photo end to end, and why a photo reaching the agent as an untyped
+        # blob went unnoticed through every suite the repository has.
+        app.router.add_post("/bot{token}/getFile", self._get_file)
+        app.router.add_get("/file/bot{token}/{file_path:.+}", self._download_file)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -843,6 +1136,11 @@ class FakeTelegramServer:
         return [entry["method"] for entry in self._store.get_all("TELEGRAM_WEBHOOK")]
 
     def _maybe_fail(self, method: str) -> web.Response | None:
+        if method in self.unavailable:
+            return web.json_response(
+                {"ok": False, "error_code": 404, "description": "Not Found"},
+                status=404,
+            )
         remaining = self.fail_next.get(method, 0)
         if remaining > 0:
             self.fail_next[method] = remaining - 1
@@ -873,6 +1171,49 @@ class FakeTelegramServer:
                 status=400,
             )
         self._store.add("TELEGRAM", {**body, **_request_contract(request)})
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "message_id": len(self._store.get_all("TELEGRAM")),
+                    "chat": {"id": body.get("chat_id")},
+                    "text": text,
+                },
+            }
+        )
+
+    async def _send_rich_message(self, request: web.Request) -> web.Response:
+        """The method Telegram sends are *actually* made with.
+
+        `send_chunk` tries `sendRichMessage` first and falls back to
+        `sendMessage` only when the error looks like the method being
+        unavailable. This route was not registered, so every send 404'd, the
+        fallback swallowed it, and every assertion in every Telegram e2e landed
+        on the fallback — the production path had never once been exercised
+        here. An empty body posted as `rich_message: {"markdown": ""}` would
+        have passed the whole suite.
+
+        The text is recorded under `text` as well as `rich_message`, so
+        assertions written against the fallback keep reading the same key while
+        a test that cares about the rich shape can still see it.
+        """
+        failure = self._maybe_fail("sendRichMessage")
+        if failure is not None:
+            return failure
+        body = await request.json()
+        text = (body.get("rich_message") or {}).get("markdown") or ""
+        if len(text) > 4096:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: message is too long",
+                },
+                status=400,
+            )
+        self._store.add(
+            "TELEGRAM", {**body, "text": text, **_request_contract(request)}
+        )
         return web.json_response(
             {
                 "ok": True,
@@ -1040,39 +1381,105 @@ class FakeTelegramServer:
         )
         return web.json_response({"ok": True, "result": True})
 
-
-class FakeGmailServer:
-    """Lightweight aiohttp server mimicking the Gmail send API."""
-
-    def __init__(self, store: MockPlatformMessageStore):
-        self._store = store
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
-        self._port: int | None = None
-
-    async def start(self) -> None:
-        app = web.Application()
-        app.router.add_post("/gmail/v1/users/me/messages/send", self._send_message)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host="127.0.0.1", port=0)
-        await self._site.start()
-        sockets = self._site._server.sockets if self._site._server else []
-        self._port = sockets[0].getsockname()[1]
-
-    async def stop(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
-
-    @property
-    def api_base(self) -> str:
-        return f"http://127.0.0.1:{self._port}"
-
-    async def _send_message(self, request: web.Request) -> web.Response:
+    async def _set_my_description(self, request: web.Request) -> web.Response:
         body = await request.json()
-        self._store.add("GMAIL", {**body, **_request_contract(request)})
-        return web.json_response({"id": "gmail-message-1"})
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyDescription",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _set_my_short_description(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyShortDescription",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _set_my_profile_photo(self, request: web.Request) -> web.Response:
+        # setMyProfilePhoto is a multipart upload: an "attach://" reference
+        # field (JSON-encoded) plus the file part it points at — same shape as
+        # sendVoice/sendDocument above.
+        form = await request.post()
+        photo_field = form.get("profile_photo")
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyProfilePhoto",
+                "token": request.match_info["token"],
+                "photo": str(form.get("photo")) if form.get("photo") else None,
+                "has_file": photo_field is not None,
+                "filename": getattr(photo_field, "filename", None),
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _get_managed_bot_token(self, request: web.Request) -> web.Response:
+        # Telegram's "create a bot on behalf of a user" API, used by the
+        # managed-bot self-service flow (telegram_manager_updates.py's
+        # ``_provision``). Called with the *manager* bot's own token; the
+        # child bot's token is minted server-side and handed back as
+        # ``result``.
+        body = await request.json()
+        user_id = body.get("user_id")
+        self._store.add(
+            "TELEGRAM_MANAGED_BOT_TOKEN",
+            {
+                "token": request.match_info["token"],
+                "user_id": user_id,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response(
+            {"ok": True, "result": f"{user_id}:FAKE-MANAGED-BOT-TOKEN-e2e"}
+        )
+
+    async def _get_file(self, request: web.Request) -> web.Response:
+        """Where a file id becomes a path, and the only place its type appears.
+
+        This is the half of Telegram that matters for an inbound photo: the
+        update carries a bare ``file_id`` with no filename and no ``mime_type``,
+        and ``file_path`` is the first and only thing that says the bytes are a
+        JPEG. A fake that skipped it made the untyped case untestable, which is
+        exactly the case that broke.
+        """
+        body = await request.json()
+        file_id = str(body.get("file_id") or "")
+        self._store.add(
+            "TELEGRAM_GET_FILE", {"file_id": file_id, **_request_contract(request)}
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "file_id": file_id,
+                    "file_path": TELEGRAM_FILE_PATHS.get(
+                        file_id, f"documents/{file_id}"
+                    ),
+                },
+            }
+        )
+
+    async def _download_file(self, request: web.Request) -> web.Response:
+        file_path = request.match_info["file_path"]
+        self._store.add(
+            "TELEGRAM_FILE_DOWNLOAD",
+            {"file_path": file_path, **_request_contract(request)},
+        )
+        body = TELEGRAM_FILE_BODIES.get(file_path, b"fake telegram file")
+        return web.Response(body=body, content_type="application/octet-stream")
 
 
 class FakeResendServer:
@@ -1109,131 +1516,6 @@ class FakeResendServer:
         return web.json_response(
             {"id": f"resend-message-{len(self._store.get_all('RESEND'))}"}
         )
-
-
-class FakeOutlookServer:
-    """Lightweight aiohttp server mimicking Outlook Graph message APIs."""
-
-    def __init__(self, store: MockPlatformMessageStore):
-        self._store = store
-        self._messages_by_id: dict[str, dict[str, Any]] = {}
-        self._runner: web.AppRunner | None = None
-        self._site: web.TCPSite | None = None
-        self._port: int | None = None
-
-    async def start(self) -> None:
-        app = web.Application()
-        app.router.add_get("/v1.0/me/messages/{message_id}", self._get_message)
-        app.router.add_post("/v1.0/me/messages/{message_id}/reply", self._reply)
-        app.router.add_post(
-            "/v1.0/me/messages/{message_id}/createReply",
-            self._create_reply,
-        )
-        app.router.add_patch("/v1.0/me/messages/{message_id}", self._update_message)
-        app.router.add_post(
-            "/v1.0/me/messages/{message_id}/attachments",
-            self._add_attachment,
-        )
-        app.router.add_post("/v1.0/me/messages/{message_id}/send", self._send_draft)
-        app.router.add_post("/v1.0/me/sendMail", self._send_mail)
-
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host="127.0.0.1", port=0)
-        await self._site.start()
-        sockets = self._site._server.sockets if self._site._server else []
-        self._port = sockets[0].getsockname()[1]
-
-    async def stop(self) -> None:
-        if self._runner:
-            await self._runner.cleanup()
-
-    @property
-    def api_base(self) -> str:
-        return f"http://127.0.0.1:{self._port}"
-
-    def set_message(self, message_id: str, payload: dict[str, Any]) -> None:
-        self._messages_by_id[message_id] = payload
-
-    async def _get_message(self, request: web.Request) -> web.Response:
-        message_id = request.match_info["message_id"]
-        payload = self._messages_by_id.get(message_id)
-        if payload is None:
-            return web.json_response({"error": {"message": "Not found"}}, status=404)
-        self._store.add(
-            "OUTLOOK_FETCH",
-            {
-                "message_id": message_id,
-                "query": dict(request.query),
-                **_request_contract(request),
-            },
-        )
-        return web.json_response(payload)
-
-    async def _send_mail(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add("OUTLOOK", {**body, **_request_contract(request)})
-        return web.Response(status=202)
-
-    async def _reply(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_REPLY",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=202)
-
-    async def _create_reply(self, request: web.Request) -> web.Response:
-        draft_id = f"draft-{len(self._store.get_all('OUTLOOK_DRAFT_CREATE')) + 1}"
-        self._store.add(
-            "OUTLOOK_DRAFT_CREATE",
-            {
-                "source_message_id": request.match_info["message_id"],
-                "draft_id": draft_id,
-                **_request_contract(request),
-            },
-        )
-        return web.json_response({"id": draft_id})
-
-    async def _update_message(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_DRAFT_PATCH",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=200)
-
-    async def _add_attachment(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        self._store.add(
-            "OUTLOOK_DRAFT_ATTACHMENT",
-            {
-                "message_id": request.match_info["message_id"],
-                "body": body,
-                **_request_contract(request),
-            },
-        )
-        return web.json_response(
-            {"id": f"attachment-{len(self._store.get_all('OUTLOOK_DRAFT_ATTACHMENT'))}"}
-        )
-
-    async def _send_draft(self, request: web.Request) -> web.Response:
-        self._store.add(
-            "OUTLOOK_DRAFT_SEND",
-            {
-                "message_id": request.match_info["message_id"],
-                **_request_contract(request),
-            },
-        )
-        return web.Response(status=202)
 
 
 def build_slack_signature_headers(
@@ -1426,13 +1708,17 @@ async def wait_for_slack_replies(
     timeout_seconds: float = 30.0,
 ) -> list[dict]:
     """Wait until at least ``min_count`` replies reach Slack by any transport."""
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        calls = slack_delivered_calls(store)
-        if len(calls) >= min_count:
-            return calls
-        await asyncio.sleep(0.2)
-    return slack_delivered_calls(store)
+
+    async def probe() -> list[dict]:
+        return slack_delivered_calls(store)
+
+    return await eventually(
+        label=f"{min_count}+ Slack repl{'y' if min_count == 1 else 'ies'}",
+        probe=probe,
+        done=lambda calls: len(calls) >= min_count,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def wait_for_slack_text(
@@ -1447,13 +1733,17 @@ async def wait_for_slack_text(
     returns straight away and the assertion runs before the streamed answer
     has arrived.
     """
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        delivered = slack_delivered(store)
-        if any(needle in text for text in delivered):
-            return delivered
-        await asyncio.sleep(0.2)
-    return slack_delivered(store)
+
+    async def probe() -> list[str]:
+        return slack_delivered(store)
+
+    return await eventually(
+        label=f"Slack text containing {needle!r}",
+        probe=probe,
+        done=lambda delivered: any(needle in text for text in delivered),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
 async def wait_for_messages(
@@ -1463,11 +1753,24 @@ async def wait_for_messages(
     timeout_seconds: float = 30.0,
     predicate: Callable[[dict], bool] | None = None,
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        messages = store.get_all(platform)
+    # `probe` always returns the FULL, unfiltered bucket for `platform` --
+    # `done` applies `predicate` only to decide readiness, never to shrink
+    # the returned value. Several of the ~80 call sites re-filter the
+    # returned list by a *different* predicate than the one passed here
+    # (e.g. test_teams_surface_e2e.py does its own comprehension over the
+    # result), so returning `matching` instead of the raw list would
+    # silently break them.
+    async def probe() -> list[dict]:
+        return store.get_all(platform)
+
+    def done(messages: list[dict]) -> bool:
         matching = messages if predicate is None else list(filter(predicate, messages))
-        if len(matching) >= min_count:
-            return messages
-        await asyncio.sleep(0.2)
-    return store.get_all(platform)
+        return len(matching) >= min_count
+
+    return await eventually(
+        label=f"{min_count}+ {platform} message(s)",
+        probe=probe,
+        done=done,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )

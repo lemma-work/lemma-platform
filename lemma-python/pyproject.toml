@@ -1,17 +1,58 @@
 [project]
 name = "lemma-sdk"
-version = "0.7.0"
+version = "0.7.2"
 description = "Python SDK for Lemma"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Lemma" }]
 requires-python = ">=3.14,<3.15"
+keywords = ["lemma", "sdk", "agents", "pods", "ai", "api-client"]
+# Mirrors lemma-cli and the npm package: a PyPI page with no source link, no
+# issue tracker and no supported-Python row leaves a stranger nowhere to go.
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "requests>=2.31.0",
   "httpx>=0.28.0",
   "attrs>=23.2.0",
   "pydantic>=2.11.0",
   "python-dateutil>=2.9.0.post0",
+]
+
+[project.urls]
+Homepage = "https://github.com/lemma-work/lemma-platform"
+Repository = "https://github.com/lemma-work/lemma-platform"
+Documentation = "https://github.com/lemma-work/lemma-platform/tree/main/lemma-python"
+Issues = "https://github.com/lemma-work/lemma-platform/issues"
+
+# Dev-only; PEP 735 groups are not part of the published distribution, so this
+# cannot reach Requires-Dist on PyPI.
+#
+# The upper bound matters and is not cargo-culted from lemma-backend: ruff 0.16
+# widened its *default* rule selection, which is why an unpinned
+# `uv run --with ruff` reported 711 findings here (nearly all in the generated
+# openapi_client) while the same tree is clean under the 0.15 defaults every
+# other component in this repo is linted with. Pinning all three components to
+# the same bound is what keeps "lint passes" meaning the same thing in each.
+# Lift this bound for lemma-backend, lemma-cli and lemma-python together.
+[dependency-groups]
+dev = [
+  # A package that ships py.typed asserts that its annotations are true, and
+  # nothing here had ever checked one. Same floor as lemma-backend.
+  "basedpyright>=1.39.9",
+  "ruff>=0.14.8,<0.16",
+  "pytest>=8.3.0",
+  # tests/test_function_runtime_context.py is an async test, and the property it
+  # proves -- that per-invocation credentials do not leak between concurrent
+  # function invocations -- was never actually exercised while this was missing:
+  # pytest reported "async def functions are not natively supported" and failed.
+  "pytest-asyncio>=1.0.0",
 ]
 
 [build-system]
@@ -30,7 +71,58 @@ exclude = ["build*", "dist*", "*.egg-info*", "docs*"]
 lemma_sdk = ["openapi_spec.json", "py.typed"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "strict"
 markers = [
   "integration: real Lemma API scenarios; requires LEMMA_TOKEN and a running API",
   "connector: real Lemma connector scenarios; requires LEMMA_RUN_CONNECTOR=1 and a running API",
+]
+
+# Ruff config. `select` is explicit for the same reason as lemma-backend and
+# lemma-cli: ruff's default is four families, so "lint passes" said very little.
+# `lemma_sdk/openapi_client/` is generated from the OpenAPI spec and is excluded
+# from the formatter for the same reason it is excluded here — a change would be
+# reverted by the next generation run and read as codegen drift.
+#
+# TID is absent on purpose: the hand-written layer imports its siblings
+# relatively, which is a house style rather than a defect.
+[tool.ruff]
+extend-exclude = ["lemma_sdk/openapi_client"]
+
+[tool.ruff.lint]
+select = [
+    "F", "E4", "E7", "E9", "W",
+    "C4", "DTZ", "G", "ISC", "LOG", "PIE", "PLE", "RET", "T20",
+]
+ignore = ["G201"]
+
+[tool.ruff.lint.per-file-ignores]
+# Codegen helpers and integration scenarios are programs a person runs and reads.
+"scripts/**" = ["T20"]
+"tests/**" = ["T20"]
+
+# This package ships `py.typed`, which is a promise: it tells every consumer's
+# type checker to believe these annotations instead of falling back to `Any`.
+# Until now nothing checked that the promise was true -- no type checker ran
+# here at all, and `resources/base.py:_call` returns `Any`, so each typed
+# resource method is an annotation sitting over an unchecked transport. A
+# consumer's checker cannot tell the difference, which is the whole problem:
+# a wrong annotation here is a wrong answer in someone else's build.
+#
+# Settings copied from lemma-backend/pyproject.toml. `standard` rather than
+# basedpyright's `recommended` default for the reason given there -- it is the
+# bar the backend is held to, and the number is only useful if it is comparable.
+#
+# The gate that runs this (`make typecheck-clients-record`) is advisory: it
+# records the count, it does not defend it.
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+exclude = [
+    # Generated from the OpenAPI spec, and already excluded from ruff and the
+    # formatter for the same reason: a fix here is reverted by the next
+    # generation run and reads as codegen drift. The hand-written layer on top
+    # is the part this package is responsible for.
+    "lemma_sdk/openapi_client/**",
+    "build/**",
+    "tests/**",
 ]

@@ -14,10 +14,19 @@ import pytest_asyncio
 from fastapi import status
 from httpx import AsyncClient
 
+from app.modules.datastore.api.schemas.datastore_schemas import (
+    MAX_BULK_RECORDS,
+    MAX_RECORD_PAGE_SIZE,
+)
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
     invite_to_pod,
     signup_user,
+)
+from app.modules.test_support.query_counting import (
+    counted_queries,
+    format_statements,
+    statements_touching,
 )
 
 pytestmark = pytest.mark.e2e
@@ -266,6 +275,61 @@ class TestDatastoreRecords:
         assert [row["name"] for row in second_page["items"]] == ["Beacon Migration"]
 
     @pytest.mark.asyncio
+    async def test_in_operator_matches_any_of_a_list(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """The documented ``in`` operator filters on multiple values at once."""
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])
+
+        both = await pod_api.list_records(
+            "projects",
+            sort='{"field":"budget","direction":"desc"}',
+            filter='{"field":"status","op":"in","value":["active","planned"]}',
+        )
+        assert [row["name"] for row in both["items"]] == [
+            "Apollo Rollout",
+            "Beacon Migration",
+        ]
+
+        one = await pod_api.list_records(
+            "projects",
+            filter='{"field":"name","op":"in","value":["Beacon Migration"]}',
+        )
+        assert [row["name"] for row in one["items"]] == ["Beacon Migration"]
+
+        none = await pod_api.list_records(
+            "projects",
+            filter='{"field":"status","op":"in","value":[]}',
+        )
+        assert none["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_query_returns_numeric_aggregates_as_numbers(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """Postgres numerics (avg/sum) come back as JSON numbers, not strings."""
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])
+
+        result = await pod_api.query(
+            "SELECT avg(budget) AS avg_budget, sum(budget) AS total_budget, "
+            "count(*) AS n FROM projects"
+        )
+        row = result["items"][0]
+        assert isinstance(row["avg_budget"], (int, float))
+        assert not isinstance(row["avg_budget"], str)
+        assert isinstance(row["total_budget"], (int, float))
+        # (125000.5 + 42000.0) / 2 == 83500.25
+        assert row["avg_budget"] == pytest.approx(83500.25)
+        assert row["total_budget"] == pytest.approx(167000.5)
+        assert row["n"] == 2
+
+    @pytest.mark.asyncio
     async def test_record_can_be_fetched_and_updated_recomputing_columns(
         self,
         project_workspace: DatastoreApi,
@@ -335,6 +399,52 @@ class TestDatastoreRecords:
             expected_status=status.HTTP_400_BAD_REQUEST,
         )
         assert mutation["code"] == "DATASTORE_QUERY_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_multi_table_query_resolves_every_table_in_one_read(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """A join must not pay one table lookup per table it names.
+
+        Resolving each referenced table on its own meant a query's fixed cost
+        scaled with how many tables it joined -- a read, an authorization and a
+        commit apiece -- before a single row was fetched. The lookup is now one
+        statement; the per-table READ check still runs per table.
+
+        Counted rather than timed, and compared against the same query naming a
+        single table, so the assertion is about the *shape* of the work and not
+        about how fast the container is.
+        """
+        pod_api = project_workspace
+        rows = await _seed_projects(pod_api, fixed_test_user["id"])
+        await pod_api.bulk_create(
+            "milestones",
+            [{"project_id": rows["apollo"]["id"], "title": "Kickoff", "sort_order": 1}],
+        )
+
+        with counted_queries() as single_statements:
+            await pod_api.query("SELECT id FROM projects")
+        with counted_queries() as join_statements:
+            await pod_api.query(
+                "SELECT p.name AS project_name, m.title "
+                "FROM projects p JOIN milestones m ON m.project_id = p.id "
+                "ORDER BY m.sort_order ASC"
+            )
+
+        single_lookups = statements_touching(single_statements, "datastore_tables")
+        join_lookups = statements_touching(join_statements, "datastore_tables")
+        assert single_lookups, (
+            "the one-table query read no table metadata at all -- this test is "
+            "no longer measuring the lookup it was written for"
+        )
+        assert len(join_lookups) <= len(single_lookups), (
+            f"a two-table join issued {len(join_lookups)} table lookups where a "
+            f"one-table query issued {len(single_lookups)}; the lookup is still "
+            f"scaling with the number of tables:\n"
+            f"{format_statements(join_lookups)}"
+        )
 
     @pytest.mark.asyncio
     async def test_records_and_tables_can_be_deleted(
@@ -814,3 +924,221 @@ class TestDatastoreRecordErrorMessages:
         assert details is not None
         assert "eq" in details["allowed_operators"]
         assert "like" in details["allowed_operators"]
+        assert "in" in details["allowed_operators"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_column_query_returns_clean_message_not_driver_class(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        """An unknown column must not leak ``<class 'asyncpg…'>`` to the caller."""
+        await _seed_projects(project_workspace, fixed_test_user["id"])
+        body = await project_workspace.query(
+            "SELECT no_such_column FROM projects",
+            expected_status=status.HTTP_400_BAD_REQUEST,
+        )
+        message = body["message"]
+        assert "no_such_column" in message
+        assert "does not exist" in message
+        assert "asyncpg" not in message
+        assert "<class" not in message
+
+
+class TestRecordRequestsAreBounded:
+    """`PS-DATA-011` and `PS-DATA-013` promise ceilings; these are them.
+
+    Both are refusals with an exact shape, which is why they live here rather
+    than in a scenario: the point is the status code and that the message names
+    the limit, not the happy path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_page_larger_than_the_cap_is_refused(
+        self,
+        project_workspace: DatastoreApi,
+    ):
+        """`PS-DATA-011`: a table with many records cannot be pulled in one go.
+
+        `record.list` is also the one datastore read the EXPLAIN cost ceiling
+        does not cover, so an unbounded ``limit`` had nothing above it at all.
+        """
+        response = await project_workspace.request(
+            "GET",
+            f"/pods/{project_workspace.pod_id}/datastore/tables/projects/records",
+            params={"limit": MAX_RECORD_PAGE_SIZE + 1},
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, (
+            f"an unbounded page size was accepted: {response.text[:300]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_largest_allowed_page_is_still_allowed(
+        self,
+        project_workspace: DatastoreApi,
+    ):
+        listed = await project_workspace.list_records(
+            "projects", limit=MAX_RECORD_PAGE_SIZE
+        )
+
+        assert listed["limit"] == MAX_RECORD_PAGE_SIZE
+
+    @pytest.mark.asyncio
+    async def test_a_bulk_batch_larger_than_the_cap_is_refused_and_says_the_limit(
+        self,
+        project_workspace: DatastoreApi,
+    ):
+        """`PS-DATA-013`: say the limit rather than truncating silently."""
+        oversized = [
+            {"name": f"row {index}", "status": "planned"}
+            for index in range(MAX_BULK_RECORDS + 1)
+        ]
+
+        response = await project_workspace.request(
+            "POST",
+            f"/pods/{project_workspace.pod_id}"
+            "/datastore/tables/projects/records/bulk/create",
+            json={"records": oversized},
+        )
+
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, (
+            f"an unbounded batch was accepted: {response.text[:300]}"
+        )
+        assert str(MAX_BULK_RECORDS) in response.text, (
+            f"the refusal does not say what the limit is: {response.text[:400]}"
+        )
+
+
+class TestBulkDeleteIsAllOrNothing:
+    """`PS-DATA-013` for the one destructive member of the family.
+
+    ``bulk_create`` and ``bulk_update`` were both rewritten into a single
+    transaction; delete was still a loop of per-row commits, so a batch that
+    failed halfway left the first half destroyed with no way to learn which.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_id_deletes_nothing_and_is_named(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        pod_api = project_workspace
+        rows = await _seed_projects(pod_api, fixed_test_user["id"])
+        missing_id = str(uuid4())
+
+        response = await pod_api.request(
+            "POST",
+            f"/pods/{pod_api.pod_id}/datastore/tables/projects/records/bulk/delete",
+            json={"record_ids": [rows["apollo"]["id"], missing_id]},
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND, (
+            f"an id that matched nothing was dropped from the count instead of "
+            f"reported: {response.status_code} {response.text[:300]}"
+        )
+        assert missing_id in response.text, (
+            f"the refusal does not say which id failed: {response.text[:400]}"
+        )
+        survivors = await pod_api.list_records("projects")
+        assert rows["apollo"]["id"] in {row["id"] for row in survivors["items"]}, (
+            "the batch was refused, so the row that did match must still be there"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_batch_that_all_matches_still_deletes_every_row(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        pod_api = project_workspace
+        rows = await _seed_projects(pod_api, fixed_test_user["id"])
+
+        deleted = await pod_api.bulk_delete(
+            "projects", [rows["apollo"]["id"], rows["beacon"]["id"]]
+        )
+
+        assert deleted["count"] == 2
+        assert (await pod_api.list_records("projects"))["items"] == []
+
+
+class TestQueryResultsSayWhenTheyWereCut:
+    @pytest.mark.asyncio
+    async def test_a_capped_result_is_not_reported_as_a_complete_one(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+        monkeypatch,
+    ):
+        """A row-capped answer that says nothing reads as the whole table.
+
+        The repository computes the flag precisely so a caller cannot mistake
+        one for the other -- an agent otherwise tells someone with forty
+        thousand orders that they have a thousand. The HTTP API dropped it.
+        """
+        from app.modules.datastore.config import datastore_settings
+
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])  # seeds two projects
+        monkeypatch.setattr(datastore_settings, "datastore_query_max_rows", 1)
+
+        capped = await pod_api.query("SELECT id FROM projects")
+
+        assert len(capped["items"]) == 1
+        assert capped["truncated"] is True, (
+            f"a result cut by the row cap claims to be complete: {capped}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_complete_result_says_so(
+        self,
+        project_workspace: DatastoreApi,
+        fixed_test_user,
+    ):
+        pod_api = project_workspace
+        await _seed_projects(pod_api, fixed_test_user["id"])
+
+        result = await pod_api.query("SELECT id FROM projects")
+
+        assert result["total"] == 2
+        assert result["truncated"] is False
+
+
+class TestPagingOverANonUniqueSortIsStable:
+    """`PS-DATA-011`: paging an unchanging table returns every record once.
+
+    The default sort already appends the primary key for exactly this reason,
+    with the reason written next to it. An explicit ``sort`` did not get it, so
+    ordering by a status or a date left the order among equal rows to the
+    planner -- and offset paging over an unspecified order can serve one row
+    twice and never serve another.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_row_is_seen_exactly_once_when_the_sort_column_ties(
+        self,
+        project_workspace: DatastoreApi,
+    ):
+        pod_api = project_workspace
+        # Every row shares one status, so the sort column decides nothing.
+        await pod_api.bulk_create(
+            "projects",
+            [{"name": f"project {index}", "status": "active"} for index in range(30)],
+        )
+
+        seen: list[str] = []
+        for offset in range(0, 30, 5):
+            page = await pod_api.list_records(
+                "projects",
+                limit=5,
+                offset=offset,
+                sort='{"field":"status","direction":"asc"}',
+            )
+            seen.extend(row["id"] for row in page["items"])
+
+        assert len(seen) == 30
+        assert len(set(seen)) == 30, (
+            "paging over a sort column whose values all tie repeated a row and "
+            "dropped another; the page boundary has to be total"
+        )

@@ -35,7 +35,8 @@ Load the opt-in UI bundle *after* the client; pod context comes from the injecte
 
 - `<lemma-agent-task>`: attrs `agent`, `pod` (optional), `input` (string/JSON),
   `auto-run`, `parse-output` (default true); method `el.run(input?)`; emits a
-  `lemma-output` event on completion (`e.detail` is the parsed output).
+  `lemma-output` event on completion — `e.detail` is `{ output, text }`, so the parsed
+  output is `e.detail.output`.
 - `<lemma-agent-thread>`: attrs `agent`, `pod`, `conversation-id` (optional);
   method `el.send(text)`.
 - Both are Shadow-DOM and themeable from the host via CSS custom properties
@@ -52,14 +53,18 @@ Load the opt-in UI bundle *after* the client; pod context comes from the injecte
 ```tsx
 import { AgentTask, AgentThread } from "lemma-sdk/react";
 
-// one-shot: working → final output
-<AgentTask client={client} podId={client.podId} agentName="triage" input={{ ticket_id }}>
-  {(task) => task.isRunning ? <Spinner/> : <Result data={task.output} />}
+// one-shot: working → final output.
+// There is no `input` prop and nothing auto-runs — call task.run(input) yourself.
+<AgentTask client={client} podId={client.podId} agentName="triage">
+  {(task) => {
+    if (task.status === "idle") return <button onClick={() => task.run({ ticket_id })}>Run</button>;
+    return task.isRunning ? <Spinner/> : <Result data={task.output} />;
+  }}
 </AgentTask>
 
 // multi-turn chat: you own the list + composer
 <AgentThread client={client} podId={client.podId} agentName="support">
-  {(t) => <Messages items={t.messages} onSend={t.send} finalText={t.finalOutputText} />}
+  {(t) => <Messages items={t.messages} onSend={t.sendMessage} finalText={t.finalOutputText} />}
 </AgentThread>
 ```
 
@@ -68,8 +73,12 @@ import { AgentTask, AgentThread } from "lemma-sdk/react";
 ```tsx
 import { useConversations, useConversationMessages } from "lemma-sdk/react";
 
-const { conversations, create } = useConversations({ client, podId: client.podId, agentName: "support" });
-const { messages, send, finalOutputText, isStreaming } =
+// creators are createConversation / createAndSelectConversation / ensureConversation
+const { conversations, createAndSelectConversation, selectedConversationId } =
+  useConversations({ client, podId: client.podId, agentName: "support" });
+
+// the sender is sendMessage(content, options?) — there is no `send`
+const { messages, sendMessage, finalOutputText, isStreaming, isRunning, stop } =
   useConversationMessages({ client, podId: client.podId, agentName: "support", conversationId });
 ```
 

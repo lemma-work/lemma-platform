@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
+from lemma_sdk.errors import LemmaNotFoundError, LemmaPermissionError
 from lemma_sdk.openapi_client.api.connectors import connector_account_create
 from lemma_sdk.openapi_client.models.account_create_schema import AccountCreateSchema
 from lemma_sdk.resources.connectors import BoundConnectors
@@ -91,3 +93,46 @@ def test_account_create_rejects_missing_selector(
 
     with pytest.raises(ValueError, match="Either auth_config_name or auth_config_id"):
         resource.accounts.create("", _request())
+
+
+def _connectors_over(handler: Any) -> BoundConnectors:
+    """A connectors facade whose raw-httpx calls hit a mocked transport."""
+    transport = LemmaTransport(base_url="https://api.example.test", token="test")
+    transport.generated.set_httpx_client(
+        httpx.Client(
+            transport=httpx.MockTransport(handler),
+            base_url="https://api.example.test",
+        )
+    )
+    return BoundConnectors(transport, org_id=ORG_ID)
+
+
+def test_missing_skill_doc_raises_the_same_not_found_as_every_other_call() -> None:
+    # These two methods bypass the generated client, and used to raise a bare
+    # LemmaAPIError that `except LemmaNotFoundError` did not catch -- dropping
+    # the server's code, details and request id with it.
+    connectors = _connectors_over(
+        lambda _: httpx.Response(
+            404,
+            json={"message": "no skill doc", "code": "not_found"},
+            headers={"x-request-id": "req-9"},
+        )
+    )
+
+    with pytest.raises(LemmaNotFoundError) as excinfo:
+        connectors.apps.skill("github")
+
+    assert excinfo.value.code == "not_found"
+    assert excinfo.value.request_id == "req-9"
+    assert excinfo.value.message == "no skill doc"
+
+
+def test_connector_status_maps_a_permission_denial_to_its_typed_error() -> None:
+    connectors = _connectors_over(
+        lambda _: httpx.Response(403, json={"message": "not your org"})
+    )
+
+    with pytest.raises(LemmaPermissionError) as excinfo:
+        connectors.status()
+
+    assert excinfo.value.message == "not your org"

@@ -6,11 +6,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
+from sqlalchemy import select
 
-from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
-from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
-    build_delegation_claims,
-)
 from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
@@ -20,6 +17,13 @@ from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
+)
+from app.modules.identity.infrastructure.models.organization_models import (
+    OrganizationMember,
+)
+from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
+from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
+    build_delegation_claims,
 )
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
@@ -45,10 +49,18 @@ async def _create_test_pod(authenticated_client, fixed_test_org) -> str:
     return response.json()["id"]
 
 
-async def _default_pod_agent_headers(*, user_id: str, pod_id: str) -> dict[str, str]:
+async def _default_pod_agent_headers(
+    *, user_id: str, pod_id: str, legacy_sentinel_id: bool = False
+) -> dict[str, str]:
+    """Headers for the pod's own assistant, shaped like the mint site's.
+
+    ``workload_id`` is the assistant's ``agents`` row id, which *is* its pod's.
+    ``legacy_sentinel_id`` mints the retired shape that signed tokens still
+    carry across a deploy.
+    """
     claims = build_delegation_claims(
         workload_type="agent",
-        workload_id=DEFAULT_POD_AGENT_ID,
+        workload_id=DEFAULT_POD_AGENT_ID if legacy_sentinel_id else UUID(pod_id),
         workload_name=DEFAULT_POD_AGENT_NAME,
         pod_id=UUID(pod_id),
         session_id=f"default-pod-agent-e2e-{uuid4().hex}",
@@ -75,7 +87,6 @@ async def _agent_headers(
     )
     token = await get_user_token(UUID(user_id), delegation_claims=claims)
     return {"Authorization": f"Bearer {token}"}
-
 
 
 async def _seed_agent_owned_connector(
@@ -110,6 +121,26 @@ async def _seed_agent_owned_connector(
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )
+    # The account owner is a member of the organization, because in production
+    # they must have been: `create_account` requires membership, so an account
+    # can only exist for someone who was a member when it was made. Seeding the
+    # row straight into the database skipped that, and resolution now refuses
+    # an account whose owner has left -- which is what an account with no
+    # membership row looks like.
+    existing_membership = (
+        await db_session.execute(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == account_user_id,
+                OrganizationMember.organization_id == organization_id,
+            )
+        )
+    ).scalar_one_or_none()
+    membership = existing_membership or OrganizationMember(
+        id=uuid4(),
+        organization_id=organization_id,
+        user_id=account_user_id,
+        role="ORG_MEMBER",
+    )
     account = Account(
         id=uuid4(),
         connector_id=connector_id,
@@ -128,7 +159,7 @@ async def _seed_agent_owned_connector(
         input_schema={"type": "object", "properties": {"message": {"type": "string"}}},
         output_schema={"type": "object"},
     )
-    db_session.add_all([app, auth_config, account, operation])
+    db_session.add_all([app, auth_config, membership, account, operation])
     await db_session.commit()
     return account
 
@@ -583,8 +614,7 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
     assert app_execution.status_code == status.HTTP_200_OK, app_execution.text
     assert app_execution.json()["result"] == {"ok": True}
     assert (
-        create_execution_client.call_args.args[1]["api_key"]
-        == "dynamic-agent-secret"
+        create_execution_client.call_args.args[1]["api_key"] == "dynamic-agent-secret"
     )
     mock_execution_client.execute_operation.assert_awaited_once()
     assert str(account.user_id) == fixed_test_user["id"]

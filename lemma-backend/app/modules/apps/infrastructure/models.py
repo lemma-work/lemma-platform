@@ -37,13 +37,17 @@ class AppModel(UUIDAuditBase):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_archive_path: Mapped[str | None] = mapped_column(String, nullable=True)
     current_release_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    status: Mapped[AppStatus] = mapped_column(String, nullable=False, default=AppStatus.DRAFT)
+    status: Mapped[AppStatus] = mapped_column(
+        String, nullable=False, default=AppStatus.DRAFT
+    )
     # Apps default to PUBLIC, unlike every other resource. An app is a shell --
     # HTML and JS -- whose data calls are authorized on their own; the SDK's
     # AppGate turns a denial into a sign-in or request-access screen. Defaulting
     # to POD made that shell unreachable on its own public host, so a deployed
     # app 404'd until someone found the share dialog.
-    visibility: Mapped[str] = mapped_column(String(30), default="PUBLIC", nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(30), default="PUBLIC", nullable=False
+    )
 
     def to_entity(self) -> AppEntity:
         return AppEntity.model_validate(self)

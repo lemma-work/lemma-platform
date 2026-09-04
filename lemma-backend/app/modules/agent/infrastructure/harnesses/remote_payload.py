@@ -13,7 +13,10 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
-from app.composition.agent_workspace import WorkspaceSandboxService
+from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+    user_prompt_text,
+)
+from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -45,12 +48,14 @@ def run_start_payload(
     agent_run_id: UUID,
     runtime_instructions: str,
     carries_history: bool,
+    resumed_tool_call_id: str | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
     ``carries_history`` is set when the run is not even going to try to resume a
-    provider session, so the prompt has to bring the conversation with it. See
-    :func:`_turn_messages`.
+    provider session, so the prompt has to bring the conversation with it, and
+    ``resumed_tool_call_id`` names the pausing call this run exists to answer.
+    See :func:`_turn_messages`.
 
     Deliberately does not carry ``runtime_credentials``. They were assembled
     here and then dropped by the only caller, on the one code path whose
@@ -63,7 +68,11 @@ def run_start_payload(
         "prompt": _prompt_payload(
             agent=agent,
             conversation=conversation,
-            messages=_turn_messages(messages, carries_history=carries_history),
+            messages=_turn_messages(
+                messages,
+                carries_history=carries_history,
+                resumed_tool_call_id=resumed_tool_call_id,
+            ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
         ),
@@ -160,7 +169,7 @@ def _token_expiry_iso(token: str) -> str | None:
     try:
         decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
         claims = json.loads(decoded)
-    except (binascii.Error, ValueError, UnicodeDecodeError):
+    except binascii.Error, ValueError, UnicodeDecodeError:
         return None
     expiry = claims.get("exp") if isinstance(claims, dict) else None
     if not isinstance(expiry, (int, float)) or isinstance(expiry, bool):
@@ -245,6 +254,7 @@ def _turn_messages(
     messages: Sequence[Message],
     *,
     carries_history: bool,
+    resumed_tool_call_id: str | None = None,
 ) -> list[Message]:
     """The messages this prompt has to carry.
 
@@ -253,7 +263,15 @@ def _turn_messages(
     on every turn — so the rest is already on the other side and resending it
     would only duplicate the conversation in its context.
 
-    The exception is a run that is not going to try: a harness that never
+    A run that resumes a pause is the same rule with a different answer. Waking
+    from a ``snooze`` adds no user message, so "the latest user message" is the
+    request that started the task — and re-sending that to an agent whose
+    session already contains it does not read as "carry on", it reads as the
+    person asking again, so the agent does the work twice. What the session has
+    genuinely not seen is the return Lemma synthesized for the call it paused
+    on, which is exactly what resuming has to deliver.
+
+    The other exception is a run that is not going to try: a harness that never
     advertised ``loadSession`` has no session to resume, ever. Sending one lone
     message there leaves the agent answering a follow-up it has never seen the
     start of. This costs nothing in the usual case, because a resumable harness
@@ -263,13 +281,19 @@ def _turn_messages(
     ordered = sorted(messages, key=lambda item: item.sequence)
     if carries_history:
         return ordered
+    if resumed_tool_call_id is not None:
+        resumed = [
+            message
+            for message in ordered
+            if message.kind == MessageKind.TOOL_RETURN
+            and message.tool_call_id == resumed_tool_call_id
+        ]
+        if resumed:
+            return resumed
     for message in reversed(ordered):
         if message.role == MessageRole.USER:
             return [message]
     return ordered[-1:]
-
-
-
 
 
 def _runtime_profile_value(options: HarnessOptions, key: str) -> object | None:
@@ -326,6 +350,24 @@ def _render_history(messages: Sequence[Message]) -> str:
     return "\n\n".join(lines)
 
 
+def _user_turn_text(message: Message) -> str:
+    """Everything the surface knows about one user message.
+
+    A user turn carries more than its text: who sent it, what it quotes, which
+    channel it came from, the files attached, whether it was a voice note, and
+    whether a reply has to go back as email. The in-process harness assembles all
+    of that. This path sent the bare text, so the same Slack thread answered by a
+    Codex or Claude Code host arrived with no sender, no referent for a quoted
+    reply, and no sign of the files already in the datastore -- reading as though
+    the agent had ignored the attachment. One builder now serves both paths.
+    """
+    body = user_prompt_text(message)
+    attachments = (message.metadata or {}).get("attachments")
+    if isinstance(attachments, list) and attachments:
+        body += f"\n\nAttachments: {json.dumps(to_json_value(attachments))}"
+    return body
+
+
 def _message_text(message: Message) -> str:
     if message.kind == MessageKind.TOOL_CALL:
         body = (
@@ -338,6 +380,8 @@ def _message_text(message: Message) -> str:
             f"({message.tool_call_id}):\n"
             f"{json.dumps(to_json_value(message.tool_result), indent=2)}"
         )
+    elif message.role == MessageRole.USER:
+        return _user_turn_text(message)
     else:
         body = message.text or ""
     metadata = message.metadata or {}

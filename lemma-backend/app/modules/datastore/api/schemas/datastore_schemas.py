@@ -1,10 +1,31 @@
 from datetime import datetime
 from enum import Enum
+from collections.abc import Sequence
 from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.file_entities import SearchMethod
+from app.modules.datastore.infrastructure.sql_identifiers import (
+    MAX_IDENTIFIER_BYTES,
+)
+
+#: Largest page any record listing will serve (`PS-DATA-011`).
+#:
+#: One number for the whole module: `table.list` and `file.list` already bound
+#: themselves at 1000 and `record.list` bounded itself at nothing, so a table
+#: could be pulled whole by a caller who typed a big number — and it is the one
+#: datastore read the ad-hoc query cost ceiling does not cover.
+MAX_RECORD_PAGE_SIZE = 1000
+
+#: Largest number of records one bulk request may carry (`PS-DATA-013`).
+#:
+#: The same ceiling, for the same reason: a bulk write is validated row by row
+#: in Python and executed inside a single transaction holding row locks for its
+#: whole duration, so the batch size is the length of that transaction. The
+#: bind-parameter chunking below it splits a batch to fit Postgres' 65 535
+#: parameters; it is not a limit on how much work one request may ask for.
+MAX_BULK_RECORDS = 1000
 
 
 class CreateTableRequest(BaseModel):
@@ -14,11 +35,14 @@ class CreateTableRequest(BaseModel):
         ...,
         validation_alias=AliasChoices("name", "table_name"),
         description=(
-            "Table name. Use alphanumeric and underscore only. Names prefixed with "
-            "`reserved_` are system-managed and should not be user-created."
+            "Table name. Use alphanumeric and underscore only, at most "
+            f"{MAX_IDENTIFIER_BYTES} bytes — PostgreSQL truncates longer names "
+            "and two that share that prefix would become one table. Names "
+            "prefixed with `reserved_` are system-managed and should not be "
+            "user-created."
         ),
         min_length=1,
-        max_length=255,
+        max_length=MAX_IDENTIFIER_BYTES,
     )
     primary_key_column: str = Field(
         default="id",
@@ -102,6 +126,16 @@ class UpdateRecordRequest(BaseModel):
         ...,
         description="Partial record patch keyed by table column names.",
     )
+    expected_updated_at: Optional[datetime] = Field(
+        default=None,
+        description=(
+            "Optional optimistic-concurrency guard: the `updated_at` value the "
+            "caller last read. The patch applies only while the row still "
+            "carries it, and answers 409 when it does not — so two clients "
+            "editing the same field cannot silently keep the later one. Omit it "
+            "for last-writer-wins."
+        ),
+    )
 
 
 class BulkCreateRecordsRequest(BaseModel):
@@ -109,7 +143,11 @@ class BulkCreateRecordsRequest(BaseModel):
 
     records: List[Dict[str, Any]] = Field(
         ...,
-        description="List of record payload objects to insert.",
+        description=(
+            "List of record payload objects to insert. At most "
+            f"{MAX_BULK_RECORDS} per request."
+        ),
+        max_length=MAX_BULK_RECORDS,
     )
     upsert: bool = Field(
         default=False,
@@ -126,8 +164,10 @@ class BulkUpdateRecordsRequest(BaseModel):
     records: List[Dict[str, Any]] = Field(
         ...,
         description=(
-            "List of record updates. Each item must include the table primary key field."
+            "List of record updates. Each item must include the table primary "
+            f"key field. At most {MAX_BULK_RECORDS} per request."
         ),
+        max_length=MAX_BULK_RECORDS,
     )
 
 
@@ -136,7 +176,10 @@ class BulkDeleteRecordsRequest(BaseModel):
 
     record_ids: List[Union[str, int, UUID]] = Field(
         ...,
-        description="Primary key values to delete.",
+        description=(
+            f"Primary key values to delete. At most {MAX_BULK_RECORDS} per request."
+        ),
+        max_length=MAX_BULK_RECORDS,
     )
 
 
@@ -189,6 +232,7 @@ class RecordFilterOperator(str, Enum):
     LTE = "lte"
     LIKE = "like"
     ILIKE = "ilike"
+    IN = "in"
 
 
 class RecordFilter(BaseModel):
@@ -244,6 +288,13 @@ class DirectoryTreeNode(BaseModel):
     visibility: str | None = None
     has_more_files: bool = False
     children: List["DirectoryTreeNode"] = Field(default_factory=list)
+    # Additive and optional: folders carry none of these, and an older client
+    # ignores them. Present on files so a recursive listing can tell a readable
+    # document from one that failed to convert, which the flat listing has
+    # always reported and this shape silently dropped.
+    status: str | None = None
+    indexed: bool | None = None
+    has_markdown: bool | None = None
 
 
 class DirectoryTreeResponse(BaseModel):
@@ -321,7 +372,23 @@ class DatastoreQueryResponse(BaseModel):
     """Schema for read-only datastore query results."""
 
     items: List[Dict[str, Any]]
-    total: int
+    total: int = Field(
+        ...,
+        description=(
+            "Number of rows in `items`. This is what came back, not how many "
+            "rows the query matched: when `truncated` is true the result was "
+            "cut at the deployment's row cap and more rows exist."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the row cap cut the result short, so `items` is a "
+            "prefix of the query's real answer. Narrow the query (add a WHERE, "
+            "aggregate, or LIMIT) to see the rest. Reported because a capped "
+            "result is otherwise indistinguishable from a complete one."
+        ),
+    )
 
 
 class DatastoreCountResponse(BaseModel):
@@ -428,9 +495,50 @@ class FileSearchResultSchema(BaseModel):
 
 class FileSearchResponse(BaseModel):
     items: List[FileSearchResultSchema]
-    total: int
+    total: int = Field(
+        ...,
+        description=(
+            "Number of matches in `items`. This is what came back, not how many "
+            "matches the pod holds: when `truncated` is true the result was cut "
+            "at `limit` and more exist."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the result filled the requested `limit`, so there are "
+            "likely further matches this response does not show. Narrow the "
+            "query or raise `limit` to see more. Reported because a capped "
+            "result is otherwise indistinguishable from a complete one — an "
+            "agent reading `total` as the number of matching documents states "
+            "it to a person as fact."
+        ),
+    )
     query: str
     search_method: SearchMethod
+
+    @classmethod
+    def of(
+        cls,
+        results: Sequence[object],
+        *,
+        request: "FileSearchRequest",
+    ) -> "FileSearchResponse":
+        """Build the response, deciding `truncated` from the page it filled.
+
+        A full page is the only evidence available: the ranker merges, reranks
+        and diversifies before truncating, so "one more than asked for" is not
+        a question the search can be asked cheaply. Answered in the safe
+        direction -- there may be more -- rather than as a total.
+        """
+        items = [FileSearchResultSchema.model_validate(item) for item in results]
+        return cls(
+            items=items,
+            total=len(items),
+            truncated=len(items) >= request.limit,
+            query=request.query,
+            search_method=request.search_method,
+        )
 
 
 class FileUrlResponse(BaseModel):

@@ -129,9 +129,15 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
     (r"(^|\.)(complete|completion|chat_completion)$", "model call"),
     # Sandboxes and workspaces: container start, command exec, file transfer.
     (r"(^|\.)(exec_command|run_command|start_sandbox|ensure_sandbox)$", "sandbox"),
-    (r"(^|\.)(write_file|read_file|upload_to_sandbox|download_from_sandbox)$", "sandbox"),
+    (
+        r"(^|\.)(write_file|read_file|upload_to_sandbox|download_from_sandbox)$",
+        "sandbox",
+    ),
     # Outbound HTTP.
-    (r"(^|\.)(client|_client|http_client|_http_client)\.(get|post|put|patch|delete|head|request|send|stream)$", "outbound HTTP"),
+    (
+        r"(^|\.)(client|_client|http_client|_http_client)\.(get|post|put|patch|delete|head|request|send|stream)$",
+        "outbound HTTP",
+    ),
     (r"(^|\.)httpx\.", "outbound HTTP"),
     (r"(^|\.)_request$", "outbound HTTP"),
     # The surface egress family all bottoms out in `target.adapter.<send>()`.
@@ -140,7 +146,10 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
     (r"(^|\.)(fetch_spec|fetch_url|download_file|download)$", "outbound HTTP"),
     # Object storage.
     (r"(^|\.)storage\.", "object storage"),
-    (r"(^|\.)(upload_file|delete_file|get_file_bytes|put_object|get_object)$", "object storage"),
+    (
+        r"(^|\.)(upload_file|delete_file|get_file_bytes|put_object|get_object)$",
+        "object storage",
+    ),
     # Redis, event publishing, job dispatch. Individually fast, but they are the
     # ones that turn a tidy unit of work into a distributed one.
     (r"(^|\.)(redis|_redis)\.", "redis"),
@@ -151,7 +160,9 @@ NON_DB_AWAITS: tuple[tuple[str, str], ...] = (
     (r"(^|\.)(wrap_key|unwrap_key|encrypt_key|decrypt_key)$", "kms"),
 )
 
-NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_DB_AWAITS)
+NON_DB_PATTERNS = tuple(
+    (re.compile(pattern), label) for pattern, label in NON_DB_AWAITS
+)
 
 # --- Synchronous work that blocks the whole event loop ------------------------
 #
@@ -161,7 +172,7 @@ NON_DB_PATTERNS = tuple((re.compile(pattern), label) for pattern, label in NON_D
 # lets other tasks run while the connection is pinned, whereas a sync call
 # pins the connection *and* stops the loop.
 #
-# This is not hypothetical. `ComposioWebhookVerifier.verify` ran the synchronous
+# This is not hypothetical. Composio webhook verification ran the synchronous
 # Composio SDK on the event loop from an unauthenticated route, and no gate in
 # the repo could see it.
 #
@@ -176,7 +187,10 @@ SYNC_BLOCKING_CALLS: tuple[tuple[str, str], ...] = (
     (r"^os\.system$", "subprocess"),
     (r"^socket\.(create_connection|socket)$", "blocking socket"),
     # Reading a whole file synchronously on the loop, holding a connection.
-    (r"^(pathlib\.)?Path\.(read_bytes|read_text|write_bytes|write_text)$", "blocking file I/O"),
+    (
+        r"^(pathlib\.)?Path\.(read_bytes|read_text|write_bytes|write_text)$",
+        "blocking file I/O",
+    ),
 )
 
 SYNC_BLOCKING_PATTERNS = tuple(
@@ -189,6 +203,7 @@ def _sync_blocking_label(callee: str) -> str | None:
         if pattern.search(callee):
             return label
     return None
+
 
 # Receivers that make a call a query no matter what it is named. A repository
 # method called `enqueue_run` writes an admission row; `store.save_import`
@@ -413,9 +428,7 @@ class DependencyIndex:
         # mixed name could never reach here, so mixing `str` and `None` in this
         # set was a latent `TypeError` waiting for the first loosening of
         # `_name_is_slow` -- which is exactly the change above.
-        reasons = {
-            d["reason"] for d in self.definitions.get(name, []) if d["reason"]
-        }
+        reasons = {d["reason"] for d in self.definitions.get(name, []) if d["reason"]}
         return sorted(reasons)[0] if reasons else None
 
     def _ingest_alias(self, node: ast.Assign) -> None:
@@ -696,7 +709,9 @@ class Violation:
         return f"{self.path}::{self.scope}::{self.rule}::{self.detail}"
 
     def render(self) -> str:
-        return f"{self.path}:{self.line}  {self.rule}  in {self.scope}()  [{self.detail}]"
+        return (
+            f"{self.path}:{self.line}  {self.rule}  in {self.scope}()  [{self.detail}]"
+        )
 
 
 def _dotted(node: ast.AST) -> str:
@@ -790,8 +805,7 @@ class SessionScopeChecker(ast.NodeVisitor):
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
         if any(
-            SESSION_RELEASERS.search(_dotted(item.context_expr))
-            for item in node.items
+            SESSION_RELEASERS.search(_dotted(item.context_expr)) for item in node.items
         ):
             # The connection is given back for the body of this block, so work
             # inside it holds nothing. Restored afterwards: the caller may go on
@@ -806,7 +820,9 @@ class SessionScopeChecker(ast.NodeVisitor):
             self.generic_visit(node)
             return
         if self._session_depth:
-            self._record(node.lineno, "nested-session", _dotted(node.items[0].context_expr))
+            self._record(
+                node.lineno, "nested-session", _dotted(node.items[0].context_expr)
+            )
         self._session_depth += 1
         for child in node.body:
             self.visit(child)
@@ -906,7 +922,6 @@ def source_files() -> list[Path]:
     )
 
 
-
 def _load_baseline(path: Path) -> dict[str, int]:
     """Read the baseline, accepting the older list form.
 
@@ -976,8 +991,7 @@ def main() -> int:
         print(f"✓ {fixed} baselined violation(s) gone — run --update-baseline")
     if not new:
         print(
-            "✓ session scope: no new violations "
-            f"({sum(baseline.values())} baselined)"
+            f"✓ session scope: no new violations ({sum(baseline.values())} baselined)"
         )
         return 0
 

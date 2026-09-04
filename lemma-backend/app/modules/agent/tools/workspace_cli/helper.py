@@ -1,17 +1,13 @@
-from typing import Any, List, Dict
-import csv
-import io
+from typing import Any, List
 import re
 
 from app.modules.agent.tools.workspace_entities import (
     PythonExecutionResult,
-    ShellCommandResult,
 )
 
 CHARACTER_LIMIT_STDOUT = 30000
 CHARACTER_LIMIT_STDERR = 10000
 CHARACTER_LIMIT_OUTPUT = 10000
-CHARACTER_LIMIT_DATASTORE_RESULT = 50000  # Approximately 10k tokens (1 token ≈ 4 chars)
 
 # CSI (colours, cursor moves), OSC (window title), and single-character escapes.
 # A PTY emits these constantly; to a model they are noise that costs tokens and
@@ -63,17 +59,26 @@ def tail_truncate(text: str | None, limit: int) -> str | None:
     return "…[earlier output truncated]…\n" + text[-limit:]
 
 
-def replace_result_if_present(
-    result: PythonExecutionResult, new_result: str
-) -> PythonExecutionResult:
-    """Replace the result value in stdout/stderr if it is present"""
+def _redact_if_only_the_result(stream: str | None, result_value: str) -> str | None:
+    """Redact a stream *only* when it is nothing but the echoed result.
+
+    The `result` field already carries the last expression's value, so when a
+    stream contains that value and nothing else it is a pure duplicate worth
+    collapsing. A blind substring replace, by contrast, clobbered any `print(x)`
+    whose text merely coincided with (or contained) the result — silently
+    dropping a line the code genuinely emitted — so match the whole stream, not
+    a substring.
+    """
     replace_string = "[Result REDACTED as it is given in `result` field]"
-    stdout = result.stdout
-    stderr = result.stderr
-    if result.result and stdout and result.result in stdout:
-        stdout = stdout.replace(result.result, replace_string)
-    if result.result and stderr and result.result in stderr:
-        stderr = stderr.replace(result.result, replace_string)
+    if stream and result_value and stream.strip() == result_value.strip():
+        return replace_string
+    return stream
+
+
+def replace_result_if_present(result: PythonExecutionResult) -> PythonExecutionResult:
+    """Collapse stdout/stderr to a marker when it only echoes the result."""
+    stdout = _redact_if_only_the_result(result.stdout, result.result)
+    stderr = _redact_if_only_the_result(result.stderr, result.result)
     return PythonExecutionResult(
         success=result.success,
         stdout=stdout,
@@ -88,7 +93,7 @@ def replace_result_if_present(
 def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
     """Trim the Python execution result to remove unnecessary details and limit size"""
     # Create a new result with only the necessary fields
-    result = replace_result_if_present(result, result.result)
+    result = replace_result_if_present(result)
     return PythonExecutionResult(
         success=result.success,
         stdout=result.stdout[:CHARACTER_LIMIT_STDOUT] if result.stdout else None,
@@ -100,66 +105,30 @@ def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
     )
 
 
-def trim_shell_command_result(result: ShellCommandResult) -> ShellCommandResult:
-    """Trim the shell command result to remove unnecessary details and limit size"""
-    return ShellCommandResult(
-        success=result.success,
-        exit_code=result.exit_code,
-        stderr=result.stderr[:CHARACTER_LIMIT_STDERR]
-        if result.stderr
-        else None,  # Limit stderr to first 2000 characters
-        stdout=result.stdout[:CHARACTER_LIMIT_STDOUT]
-        if result.stdout
-        else None,  # Limit stdout to first 5000 characters
-        error=result.error[:CHARACTER_LIMIT_OUTPUT]
-        if result.error
-        else None,  # Limit error to first 2000 characters
-        current_working_directory=result.current_working_directory,  # Keep current working directory as is
+def render_terminal_result(
+    result: dict[str, Any], *, tty: bool
+) -> tuple[str | None, str | None]:
+    """Make command output readable, keeping the end rather than the start.
+
+    Both streams are capped on both paths. Only the PTY path was capped before,
+    and `tty` defaults to False -- so `exec_command`, the tool an agent reaches
+    for most, was the uncapped one. A single `npm ci` or `pytest -v` then landed
+    whole in the conversation and was replayed on every later turn of it.
+
+    The end is the half worth keeping: a build's errors are at the bottom, and
+    head-truncating hands the agent the banner and hides what it must act on.
+    """
+
+    stdout = result.get("stdout")
+    stderr = result.get("stderr")
+    if tty:
+        # Escape sequences are noise a PTY emits constantly; strip before
+        # measuring so the cap is spent on text rather than colour codes.
+        stdout = normalize_terminal_output(stdout or "")
+        stderr = normalize_terminal_output(stderr or "")
+    return (
+        tail_truncate(stdout, CHARACTER_LIMIT_STDOUT),
+        # stderr has always had its own, smaller limit; this path was passing
+        # the stdout one.
+        tail_truncate(stderr, CHARACTER_LIMIT_STDERR),
     )
-
-
-def convert_to_csv_string(data: List[Dict[str, Any]]) -> str:
-    """
-    Convert a list of dictionaries to a CSV string representation.
-    This is more token-efficient than JSON for tabular data.
-
-    Args:
-        data: List of dictionaries with consistent keys
-
-    Returns:
-        CSV string representation of the data
-    """
-    if not data:
-        return ""
-
-    # Get all unique keys from all dictionaries
-    all_keys = set()
-    for row in data:
-        all_keys.update(row.keys())
-
-    # Sort keys for consistent output
-    fieldnames = sorted(all_keys)
-
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
-
-    # Write header
-    writer.writeheader()
-
-    # Write rows, converting None and datetime to strings
-    for row in data:
-        # Convert all values to strings, handling None and datetime
-        clean_row = {}
-        for key in fieldnames:
-            value = row.get(key)
-            if value is None:
-                clean_row[key] = ""
-            else:
-                clean_row[key] = str(value)
-        writer.writerow(clean_row)
-
-    csv_string = output.getvalue()
-    output.close()
-
-    return csv_string

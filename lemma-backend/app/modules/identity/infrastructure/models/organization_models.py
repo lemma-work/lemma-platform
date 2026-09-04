@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class Organization(UUIDAuditBase):
     __tablename__ = "organizations"
 
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     email_domain: Mapped[str | None] = mapped_column(
         String(255), unique=True, index=True, nullable=True
@@ -112,7 +112,9 @@ class OrganizationInvitation(UUIDAuditBase):
     status: Mapped[OrganizationInvitationStatus] = mapped_column(
         String(50), default=OrganizationInvitationStatus.PENDING, index=True
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

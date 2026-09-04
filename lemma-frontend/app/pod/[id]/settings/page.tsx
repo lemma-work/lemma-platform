@@ -1,30 +1,26 @@
 'use client';
 
-import Link from 'next/link';
-import { use, useState } from 'react';
-import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Info, Settings2 } from '@/components/ui/icons';
+import { use, useState, type FormEvent } from 'react';
+import { Info } from '@/components/ui/icons';
 
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { findProfileByRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
-import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodMark } from '@/components/pod/pod-mark';
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { PodBundleSettingsPanel } from '@/components/bundle/pod-bundle-settings';
 import { EmojiPicker } from '@/components/shared/emoji-picker';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { SettingsChoiceList, SettingsHelpText, SettingsPanel, SettingsStack } from '@/components/settings/settings-kit';
-import {
-    useAgentRuntimes,
-    useUpdatePodDefaultAgentRuntime,
-} from '@/lib/hooks/use-agent-runtime';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
+import { podNameError, normalizePodName } from '@/lib/utils/pod-name';
 import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
+import { getSurfaceEmail } from '@/lib/utils/surfaces';
 import { PodSettingsPanelsFill } from '@/components/pod/route-skeletons';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -39,40 +35,8 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     const { id: podId } = use(params);
     const podAccess = usePodAccess(podId);
     const { data: pod, isLoading: isLoadingPod } = usePod(podId);
-    const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
-    const [runtimeDraft, setRuntimeDraft] = useState<AgentRuntimeConfig | null>(null);
 
     const canUpdatePod = podAccess.can('pod.update');
-    // Prefer the full stored runtime (profile + model); fall back to the legacy
-    // provider-only default, resolving its model from the profile for display.
-    const storedRuntime = pod?.config?.default_runtime
-        ?? (pod?.config?.default_profile_id
-            ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id)
-            : null);
-    // A stored default can name a profile that has since been archived. The
-    // picker sets allowAuto={false}, so there is no Auto row to fall back to and
-    // every agent in the pod would silently inherit a dead default. Resolve the
-    // modern path through the catalog too, and say so rather than degrade.
-    const storedRuntimeIsMissing = Boolean(
-        storedRuntime?.profile_id
-        && runtimeCatalog
-        && !findProfileByRuntime(runtimeCatalog, storedRuntime),
-    );
-    const selectedRuntime = runtimeDraft ?? (storedRuntimeIsMissing ? null : storedRuntime);
-    const manageModelsHref = pod?.organization_id
-        ? `/organizations/${pod.organization_id}/settings/agent-runtimes`
-        : undefined;
-
-    const handleRuntimeCommit = (runtime: AgentRuntimeConfig | null) => {
-        setRuntimeDraft(runtime);
-        updatePodDefaultRuntime.mutate({
-            podId,
-            runtime,
-        }, {
-            onSuccess: () => setRuntimeDraft(null),
-        });
-    };
 
     return (
         <PodSettingsShell
@@ -83,40 +47,13 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             {/* The header, the nav and the width are known before the pod is,
                 so waiting on it fills the body rather than replacing the page —
                 and it fills it with the shape that is about to arrive. */}
-            {isLoadingPod ? <PodSettingsPanelsFill panels={3} /> : (
+            {isLoadingPod ? <PodSettingsPanelsFill panels={4} /> : (
             <SettingsStack>
-            <SettingsPanel
-                title="Default model"
-                description="Agents without a pinned model and new conversations use this model."
-                action={manageModelsHref ? (
-                    <Link
-                        href={manageModelsHref}
-                        className="inline-flex items-center gap-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                    >
-                        <Settings2 className="size-4" />
-                        Manage models
-                    </Link>
-                ) : undefined}
-            >
-                <RuntimeModelPicker
-                    catalog={runtimeCatalog}
-                    defaultRuntime={runtimeCatalog?.default_runtime ?? null}
-                    value={selectedRuntime}
-                    onChange={handleRuntimeCommit}
-                    disabled={!canUpdatePod}
-                    title="Pod default model"
-                    description="Used by agents without a pinned model and by new conversations in this pod."
-                    allowAuto={false}
-                    scopeHint="Pod default"
-                    manageHref={manageModelsHref}
-                />
-                {storedRuntimeIsMissing ? (
-                    <p className="mt-2 text-sm text-[var(--state-warning)]">
-                        This pod&apos;s default model is no longer available — it was removed from
-                        the workspace. Pick another one, or restore it under Manage models.
-                    </p>
-                ) : null}
-            </SettingsPanel>
+            <PodNamePanel
+                podId={podId}
+                podName={pod?.name}
+                canUpdate={canUpdatePod}
+            />
 
             <PodIconPanel
                 podId={podId}
@@ -239,6 +176,135 @@ function PodJoinPolicyPanel({
             ) : (
                 <SettingsHelpText className="mt-3">Your role cannot change pod settings.</SettingsHelpText>
             )}
+        </SettingsPanel>
+    );
+}
+
+/**
+ * The pod's name.
+ *
+ * `PUT /pods/{id}` has accepted a name for as long as pods have existed, and the
+ * shared `['pods']` query prefix was already written for "created, imported,
+ * renamed or deleted" — the only missing piece was somewhere to type it. Until
+ * there was, a pod named in a hurry, or named by whoever exported the bundle it
+ * came from, kept that name unless somebody was willing to call the API by hand.
+ *
+ * Save on submit, not on change like the icon beside it: a name is typed rather
+ * than picked, and committing per keystroke would mean a request per character
+ * and a pod briefly called "Acm". The rule is mirrored locally so a rejected
+ * character is answered as it is typed, but the server is still the judge —
+ * a name is org-unique, and only it knows whether this one is taken.
+ */
+function PodNamePanel({
+    podId,
+    podName,
+    canUpdate,
+}: {
+    podId: string;
+    podName?: string | null;
+    canUpdate: boolean;
+}) {
+    const updatePod = useUpdatePod();
+    const [draft, setDraft] = useState<string | null>(null);
+    const [rejection, setRejection] = useState<string | null>(null);
+
+    // Only for the caveat below, and only for someone who can act on it — a
+    // reader who cannot rename the pod has no use for the request.
+    const { data: surfaces } = usePodSurfaces(canUpdate ? podId : undefined);
+    // The pod's own mailbox is the agentless one — `acme@` rather than an
+    // agent's `sales.acme@` — so it is the only address this panel can honestly
+    // call the pod's. When only agents hold one, the caveat still applies and
+    // is made without naming an address that belongs to something else.
+    const podAddress = (surfaces ?? [])
+        .filter((surface) => !surface.agent_id)
+        .map(getSurfaceEmail)
+        .find(Boolean) ?? null;
+    const anyAddress = (surfaces ?? []).some((surface) => getSurfaceEmail(surface));
+
+    const storedName = podName ?? '';
+    const value = draft ?? storedName;
+    // Silent until the field has been touched: a pod whose stored name predates
+    // this rule should not open its settings already showing an error.
+    const localError = draft === null ? null : podNameError(value);
+    const changed = normalizePodName(value) !== normalizePodName(storedName);
+    const problem = localError ?? rejection;
+
+    const handleSubmit = (event: FormEvent) => {
+        event.preventDefault();
+        if (!canUpdate || !changed || localError) return;
+
+        setRejection(null);
+        updatePod.mutate(
+            { id: podId, data: { name: normalizePodName(value) } },
+            {
+                onSuccess: () => {
+                    // Back to the server's copy: it just became the same string,
+                    // and holding the draft would keep this field out of step
+                    // with a rename made anywhere else.
+                    setDraft(null);
+                    toast.success('Pod renamed');
+                },
+                // The message is the server's own sentence -- "already exists in
+                // this organization" names the one thing the field could not
+                // have known, and a paraphrase would lose it.
+                onError: (error) => setRejection(error.message),
+            },
+        );
+    };
+
+    return (
+        <SettingsPanel
+            title="Name"
+            description="What this pod is called wherever it appears — the switcher, the sidebar, and every invitation."
+        >
+            <form onSubmit={handleSubmit} className="max-w-2xl">
+                <div className="flex items-start gap-2">
+                    <Input
+                        value={value}
+                        onChange={(event) => {
+                            setDraft(event.target.value);
+                            setRejection(null);
+                        }}
+                        disabled={!canUpdate || updatePod.isPending}
+                        aria-label="Pod name"
+                        aria-invalid={Boolean(problem)}
+                        aria-describedby={problem ? 'pod-name-problem' : undefined}
+                        className="flex-1"
+                    />
+                    <Button
+                        variant="primary"
+                        type="submit"
+                        disabled={!canUpdate || !changed || Boolean(localError) || updatePod.isPending}
+                        loading={updatePod.isPending}
+                        loadingLabel="Saving name"
+                        className="h-10 px-4"
+                    >
+                        Save
+                    </Button>
+                </div>
+                {problem ? (
+                    <p id="pod-name-problem" className="mt-2 text-xs text-[var(--state-error)]">
+                        {problem}
+                    </p>
+                ) : !canUpdate ? (
+                    <SettingsHelpText className="mt-2">Your role cannot change pod settings.</SettingsHelpText>
+                ) : podAddress ? (
+                    // A mailbox is minted from the pod's name once, at creation,
+                    // and correspondents already write to it — so a rename
+                    // leaves it alone rather than breaking an address people
+                    // hold. Said here because nothing else says it, and the
+                    // first person to notice would otherwise be whoever renamed
+                    // the pod and then went looking for a new address.
+                    <SettingsHelpText className="mt-2">
+                        Renaming does not move mail: this pod keeps receiving at{' '}
+                        <span className="text-[var(--text-secondary)]">{podAddress}</span>.
+                    </SettingsHelpText>
+                ) : anyAddress ? (
+                    <SettingsHelpText className="mt-2">
+                        Renaming does not move mail: the addresses minted from this name keep it.
+                    </SettingsHelpText>
+                ) : null}
+            </form>
         </SettingsPanel>
     );
 }

@@ -1,0 +1,40 @@
+{
+  "combined": {
+    "agent": 90.8,
+    "agent_surfaces": 87.9,
+    "app.py": 94.6,
+    "apps": 92.7,
+    "connectors": 88.7,
+    "core": 89.4,
+    "datastore": 88.1,
+    "function": 92.2,
+    "icon": 88.6,
+    "identity": 89.7,
+    "mcp_server.py": 90.4,
+    "pod": 89.7,
+    "pod_bundle": 85.2,
+    "schedule": 89.9,
+    "usage": 80.3,
+    "workflow": 84.4,
+    "workspace": 84.8
+  },
+  "e2e_union": {
+    "agent": 79.1,
+    "agent_surfaces": 79.0,
+    "app.py": 76.2,
+    "apps": 87.2,
+    "connectors": 71.9,
+    "core": 75.9,
+    "datastore": 80.9,
+    "function": 84.9,
+    "icon": 39.9,
+    "identity": 83.1,
+    "mcp_server.py": 85.3,
+    "pod": 86.3,
+    "pod_bundle": 65.2,
+    "schedule": 82.7,
+    "usage": 75.3,
+    "workflow": 73.8,
+    "workspace": 63.2
+  }
+}

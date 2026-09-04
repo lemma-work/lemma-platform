@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -16,6 +16,10 @@ from app.modules.usage.domain.entities import (
     UsageSummary,
 )
 from app.modules.usage.domain.ports import UsageRepositoryPort
+from app.modules.usage.infrastructure.usage_limit_reads import (
+    reserved_costs,
+    system_cost_by_window,
+)
 from app.modules.usage.infrastructure.models import (
     UsageLimitCounter,
     UsageRecord as UsageRecordModel,
@@ -159,18 +163,18 @@ class UsageRepository(UsageRepositoryPort):
         rows — one per profile, model and kind actually used — so the cost now
         tracks how many distinct things were used, not how often.
         """
-        filters = dict(
-            organization_id=organization_id,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            profile_id=profile_id,
-            profile_scope=profile_scope,
-            model_name=model_name,
-            usage_kind=usage_kind,
-            source_type=source_type,
-            status=status,
-        )
+        filters = {
+            "organization_id": organization_id,
+            "pod_id": pod_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "profile_id": profile_id,
+            "profile_scope": profile_scope,
+            "model_name": model_name,
+            "usage_kind": usage_kind,
+            "source_type": source_type,
+            "status": status,
+        }
         summary = UsageSummary(
             organization_id=organization_id,
             pod_id=pod_id,
@@ -263,6 +267,34 @@ class UsageRepository(UsageRepositoryPort):
         result = await self.session.execute(stmt)
         return float(result.scalar_one() or 0.0)
 
+    async def get_system_cost_by_window(
+        self,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID | None,
+        window_starts: Mapping[str, datetime],
+        end: datetime,
+        exclude_organization_ids: Sequence[UUID] = (),
+    ) -> dict[str, float]:
+        """``get_system_cost`` for several windows over the same rows."""
+        return await system_cost_by_window(
+            self.session,
+            organization_id=organization_id,
+            user_id=user_id,
+            window_starts=window_starts,
+            end=end,
+            exclude_organization_ids=exclude_organization_ids,
+            apply_filters=self._apply_filters,
+        )
+
+    async def get_reserved_costs(
+        self,
+        *,
+        scopes: Sequence[tuple[UUID | None, UUID | None, str, datetime]],
+    ) -> dict[str, float]:
+        """``get_reserved_cost`` for several scopes, keyed by window kind."""
+        return await reserved_costs(self.session, scopes=scopes)
+
     async def get_reserved_cost(
         self,
         *,
@@ -271,7 +303,9 @@ class UsageRepository(UsageRepositoryPort):
         window_kind: str,
         window_start: datetime,
     ) -> float:
-        stmt = select(func.coalesce(func.sum(UsageLimitCounter.reserved_usd), 0.0)).where(
+        stmt = select(
+            func.coalesce(func.sum(UsageLimitCounter.reserved_usd), 0.0)
+        ).where(
             UsageLimitCounter.window_kind == window_kind,
             UsageLimitCounter.window_start == window_start,
         )
@@ -388,9 +422,7 @@ class UsageRepository(UsageRepositoryPort):
             ]
             counter = (
                 await self.session.scalars(
-                    select(UsageLimitCounter)
-                    .where(and_(*conditions))
-                    .with_for_update()
+                    select(UsageLimitCounter).where(and_(*conditions)).with_for_update()
                 )
             ).one()
             # Synchronize pre-migration/history spend without ever lowering the
@@ -473,7 +505,9 @@ class UsageRepository(UsageRepositoryPort):
     ) -> Sequence[dict[str, object]]:
         if granularity not in {"hour", "day", "week"}:
             granularity = "day"
-        bucket = func.date_trunc(granularity, UsageRecordModel.occurred_at).label("bucket")
+        bucket = func.date_trunc(granularity, UsageRecordModel.occurred_at).label(
+            "bucket"
+        )
         group_column = None
         if group_by == "profile":
             group_column = UsageRecordModel.profile_id.label("group")
@@ -495,7 +529,9 @@ class UsageRepository(UsageRepositoryPort):
             func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
             func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
             func.sum(UsageRecordModel.units).label("units"),
-            func.coalesce(func.sum(UsageRecordModel.cost_usd), 0.0).label("system_cost_usd"),
+            func.coalesce(func.sum(UsageRecordModel.cost_usd), 0.0).label(
+                "system_cost_usd"
+            ),
         ]
         if group_column is not None:
             columns.insert(1, group_column)

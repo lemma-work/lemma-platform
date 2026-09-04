@@ -66,13 +66,17 @@ class FunctionRuntimeGateway:
             )
         if not authorized:
             raise RuntimeCredentialRejected
-        artifact_path = (
-            f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
-        )
-        content = await self._storage_factory(function_id).read_file(artifact_path)
-        data = content.encode("utf-8") if isinstance(content, str) else content
-        actual = f"sha256:{hashlib.sha256(data).hexdigest()}"
-        if actual != revision_hash:
+        artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
+        data = await self._storage_factory(function_id).read_bytes(artifact_path)
+        # Offloaded for the reason the builder already documents at its own
+        # sha256 (`function_artifact_builder.py`): the artifact is the whole
+        # bundle, user code plus resolved site-packages, so it grows with the
+        # dependency tree. Hashing it inline held the event loop for the length
+        # of a multi-megabyte digest on every fetch -- and every sandbox fetches
+        # its bundle on every cold start, so this stalled unrelated requests on
+        # the same worker at exactly the moment the platform was busiest.
+        digest = await run_blocking(lambda: hashlib.sha256(data).hexdigest())
+        if f"sha256:{digest}" != revision_hash:
             raise RuntimeArtifactCorrupt
         return data
 
@@ -83,9 +87,7 @@ class FunctionRuntimeGateway:
         request: RuntimeTerminalRequest,
     ) -> RuntimeEventResponse:
         async with self._uow_factory() as uow:
-            context = await FunctionExecutionRepository(
-                uow
-            ).authorized_runtime_context(
+            context = await FunctionExecutionRepository(uow).authorized_runtime_context(
                 run_id,
                 principal,
                 delegated_tokens_enabled=self._delegated_tokens_enabled,

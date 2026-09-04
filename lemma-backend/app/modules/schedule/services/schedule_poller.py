@@ -81,13 +81,18 @@ async def poll_due_schedules_once(
             # Same transaction: a row backfilled here is claimable on the next
             # tick, and one that is already due is claimed below without waiting
             # for one.
-            await backfill_missing_cursors(uow.session, now=moment, limit=limit)
-            claimed = await claim_due_schedules(uow.session, now=moment, limit=limit)
+            # `uow` as well as its session: retiring a schedule stages a
+            # `ScheduleDeactivated` so the owner is told why, in the same
+            # transaction that deactivates it.
+            await backfill_missing_cursors(
+                uow.session, now=moment, limit=limit, uow=uow
+            )
+            claimed = await claim_due_schedules(
+                uow.session, now=moment, limit=limit, uow=uow
+            )
             timers: list[ClaimedTimer] = []
             for claim_timers in timer_claimers:
-                timers.extend(
-                    await claim_timers(uow.session, now=moment, limit=limit)
-                )
+                timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
 
             # Timers ride the same event as schedules: `_dispatch_wake` branches
             # on the payload keys, so rebuilding the payload the old adapters
@@ -127,9 +132,7 @@ async def run_schedule_poller(
     )
     while True:
         try:
-            await poll_due_schedules_once(
-                uow_factory, timer_claimers=timer_claimers
-            )
+            await poll_due_schedules_once(uow_factory, timer_claimers=timer_claimers)
             await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
             logger.info("schedule.poller.stopped", service=service_name)

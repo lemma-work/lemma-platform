@@ -26,8 +26,7 @@ def _normalize_resource_permissions_payload(payload: dict[str, Any]) -> dict[str
     if not isinstance(grants, list):
         raise ValueError("Embedded permissions must be an object with a grants list.")
     if any(
-        not isinstance(grant, dict) or "resource_name" not in grant
-        for grant in grants
+        not isinstance(grant, dict) or "resource_name" not in grant for grant in grants
     ):
         raise ValueError("Permission grants must reference resources by resource_name.")
     return {"grants": grants}
@@ -181,7 +180,23 @@ def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(
+    """A schedule as a definition, with where-it-ran-last left behind.
+
+    The list below drifted from the API: it strips `last_run_at`/`next_run_at`
+    and not the fields that replaced them, so export wrote seven pieces of
+    runtime state that import rejects by name -- "Unrecognized field(s) on
+    schedule". A bundle this code produced could not be imported by it, and the
+    only way through was editing the JSON by hand.
+
+    The rule is what a schedule *is*, not how a particular installation's copy
+    of it has been getting on: when it last fired, what it returned, how many
+    times it has failed, and whether failures have paused it all belong to the
+    pod it ran in, never to the pod it is being copied into.
+
+    `provider_trigger_id` and `installation_id` belong to the same category and
+    hide one level deeper, inside `config`.
+    """
+    stripped = _strip_keys(
         schedule,
         {
             "id",
@@ -194,8 +209,35 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
             "agent_id",
             "workflow_id",
             "allowed_actions",
+            # Runtime state, added after this list was written.
+            "consecutive_failures",
+            "is_internal",
+            "last_error",
+            "last_fire_status",
+            "last_fired_at",
+            "last_run_id",
+            "paused_by_failures",
         },
     )
+    # Both of these name something the *source* organization owns, and an
+    # imported schedule that kept either would answer to that organization's
+    # events rather than the importer's.
+    #
+    # `provider_trigger_id` is a subscription the source org's account
+    # provisioned. `installation_id` is worse: for a GitHub App it *is* the
+    # tenant filter -- webhook matching is containment against
+    # `{source, installation_id, event}` -- so a bundle carrying it hands the
+    # importer schedules wired to the publisher's installation. Observed on a
+    # real round trip: the bundle asked for the account as a variable and then
+    # baked `installation_id` in beside it.
+    #
+    # Neither needs carrying. Both are re-derived when the importing pod's
+    # account provisions the trigger, from that account.
+    config = stripped.get("config")
+    portable = {"provider_trigger_id", "installation_id"}
+    if isinstance(config, dict) and portable & set(config):
+        stripped = {**stripped, "config": _strip_keys(config, portable)}
+    return stripped
 
 
 def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
@@ -207,9 +249,12 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     for channel in config.get("channels") or []:
         if not isinstance(channel, dict) or channel.get("enabled") is False:
             continue
+        # A channel is a place the surface's one agent may be spoken to, so
+        # only the place travels. It used to carry `agent_name` as well, back
+        # when one bot could serve several agents.
         entry = {
             key: channel[key]
-            for key in ("channel_id", "channel_name", "agent_name")
+            for key in ("channel_id", "channel_name")
             if channel.get(key)
         }
         if entry:
@@ -260,6 +305,19 @@ def _surface_platform_from_payload(payload: dict[str, Any], resource_name: str) 
     return str(payload.get("platform") or resource_name).upper()
 
 
+def _surface_name_from_payload(payload: dict[str, Any], resource_name: str) -> str:
+    """The surface's pod-unique name, resolved the way the server-side applier
+    resolves it: the payload's own name, else the lowercased platform.
+
+    Surfaces are keyed by this name, not by platform — a pod may run two Slack
+    surfaces. The bundle directory name is deliberately not a fallback, so that
+    importing a bundle through the CLI lands the same surfaces as importing the
+    same bundle through the API.
+    """
+    name = str(payload.get("name") or "").strip()
+    return (name or _surface_platform_from_payload(payload, resource_name)).lower()
+
+
 # Server-owned app fields, stripped on export and again on import (see
 # _FUNCTION_SERVER_FIELDS for why both). `url` is derived from the deployment and
 # is not a create/update field.
@@ -295,7 +353,11 @@ def _validate_function_payload(
     issues: list[BundleValidationIssue] = []
     code = payload.get("code")
     if not isinstance(code, str) or not code.strip():
-        issues.append(BundleValidationIssue(path=str(resource_dir), message="Function code is required."))
+        issues.append(
+            BundleValidationIssue(
+                path=str(resource_dir), message="Function code is required."
+            )
+        )
         return issues
 
     try:

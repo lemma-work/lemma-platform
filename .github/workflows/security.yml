@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   changes:
+    timeout-minutes: 10
     name: Detect security-relevant changes
     runs-on: ubuntu-latest
     outputs:
@@ -94,17 +95,19 @@ jobs:
           fi
 
   dependency-review:
+    timeout-minutes: 15
     name: Dependency review
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.dependencies == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
 
   codeql-python:
+    timeout-minutes: 30
     name: CodeQL (python)
     needs: changes
     if: needs.changes.outputs.python == 'true'
@@ -122,6 +125,7 @@ jobs:
       - uses: github/codeql-action/analyze@v4
 
   codeql-javascript:
+    timeout-minutes: 30
     name: CodeQL (javascript-typescript)
     needs: changes
     if: needs.changes.outputs.javascript == 'true'
@@ -139,6 +143,7 @@ jobs:
       - uses: github/codeql-action/analyze@v4
 
   secrets:
+    timeout-minutes: 15
     name: Gitleaks
     runs-on: ubuntu-latest
     steps:
@@ -164,6 +169,7 @@ jobs:
           detect --source=/repo --redact --no-banner --exit-code=1 --no-git
 
   python-audit:
+    timeout-minutes: 15
     name: Python dependency audit
     needs: changes
     if: needs.changes.outputs.python_dependencies == 'true'
@@ -173,7 +179,7 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync --extra local
@@ -189,14 +195,28 @@ jobs:
           --requirement /tmp/lemma-backend-audit.txt
 
   container:
+    timeout-minutes: 30
     name: Backend image vulnerability scan
     needs: changes
     if: needs.changes.outputs.backend_image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # A plain `docker build` here meant a full cold build of the backend
+      # image on every dependency-touching PR, while release-local-images.yml
+      # builds the very same Dockerfile against a warm `type=gha` cache. Same
+      # scope name, so this now restores the layers that workflow already
+      # produced. It does not write to the cache: releases own that scope, and
+      # a scan should not be able to poison what a release builds from.
+      - uses: docker/setup-buildx-action@v4
       - name: Build backend image
-        run: docker build -f lemma-backend/Dockerfile -t lemma-backend:security .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: lemma-backend/Dockerfile
+          tags: lemma-backend:security
+          load: true
+          cache-from: type=gha,scope=lemma-backend-amd64
       - name: Scan high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -210,3 +230,37 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
+
+  # The single check that can be required for this workflow.
+  #
+  # Every job above is path-filtered, so none of them can be named in a branch
+  # ruleset: a required check that skips on a docs-only change leaves the pull
+  # request waiting on a status that will never arrive. That is why nothing
+  # here gated a merge at all -- gitleaks, CodeQL, the dependency audit and the
+  # image scan could all go red and the merge button stayed green -- while
+  # ci.yml and e2e.yml each solved exactly this problem with an aggregator.
+  # This is the same shape, so the same solution is available.
+  #
+  # `!cancelled()` rather than `always()`, for the reason "Backend E2E passed"
+  # records: `cancel-in-progress` above cancels every superseded push, and
+  # `always()` then reports failure for a run that was simply replaced.
+  security-passed:
+    name: Security passed
+    timeout-minutes: 10
+    if: ${{ !cancelled() }}
+    needs:
+      - changes
+      - dependency-review
+      - codeql-python
+      - codeql-javascript
+      - secrets
+      - python-audit
+      - container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any security check failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::One or more security checks failed or were cancelled."
+          exit 1
+      - run: echo "Security checks passed (or were skipped as unaffected)."

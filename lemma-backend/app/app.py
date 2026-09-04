@@ -14,6 +14,7 @@ from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
 from app.version import API_VERSION
+from app.core.api.session_cookie_scope import RefreshCookieScopeMiddleware
 from app.core.api.exception_handlers import register_exception_handlers
 from app.core.api.streaming_multipart import install_streaming_multipart_openapi
 from app.core.domain.errors import PayloadTooLargeError
@@ -46,6 +47,12 @@ from app.core.observability.telemetry import (
     instrument_fastapi_app,
     shutdown_telemetry,
 )
+from app.core.infrastructure.db.migration_state import schema_migration_state
+from app.core.observability.dependency_incident import DependencyIncident
+from app.core.observability import readiness
+from app.core.observability.worker_liveness import worker_readiness_state
+from app.core.security import supertokens_core_reachable
+from app.sandbox_health import record_sandbox_probe, sandbox_capability
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
@@ -53,7 +60,7 @@ from app.core.registry.assembly import enter_api_lifespans, include_module_route
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
-from app.core.infrastructure.db.session import get_engine
+from app.core.infrastructure.db.session import database_reachable, get_engine
 from app.core.request_context import (
     bind_request_context,
     create_background_task,
@@ -147,6 +154,7 @@ async def lifespan(app: FastAPI):
         from app.core.concurrency.offload import configure_thread_pool, run_blocking
         from app.core.observability.connection_scope import (
             start_connection_scope_monitor_from_settings,
+            stop_connection_scope_monitor,
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
@@ -177,6 +185,9 @@ async def lifespan(app: FastAPI):
             )
         )
         initialize_supertokens()
+        # Prove the sandbox fabric is usable before a user's first tool call
+        # rather than after it. Off the loop because it stats a socket path.
+        await run_blocking(record_sandbox_probe, limiter="cpu_bound")
         # Build the OpenAPI document now rather than on whichever request first
         # asks for it. `custom_openapi` caches correctly, but the first call
         # costs ~3.35s of pydantic model-graph construction on the event loop —
@@ -194,9 +205,7 @@ async def lifespan(app: FastAPI):
         # would otherwise land on whichever request first enqueues a job.
         # The composed list, not OSS: lemma-cloud installs more modules, and a
         # cloud-only task missing here would be enqueued to the wrong lane.
-        ensure_task_lanes_registered(
-            getattr(app.state, "lemma_modules", OSS_MODULES)
-        )
+        ensure_task_lanes_registered(getattr(app.state, "lemma_modules", OSS_MODULES))
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
@@ -253,6 +262,7 @@ async def lifespan(app: FastAPI):
             # opened against customer databases. Closed explicitly so a reload
             # does not leak sockets into the next process.
             from app.core.net.http_client import close_shared_http_client
+            from app.core.net.impersonating_client import close_impersonating_client
             from app.modules.agent.services.runtime_model_factory import (
                 close_agent_provider_clients,
             )
@@ -261,11 +271,17 @@ async def lifespan(app: FastAPI):
             )
 
             await close_shared_http_client()
+            # The separate libcurl session `web_fetch` reads pages through.
+            await close_impersonating_client()
             # Per-endpoint LLM provider pools, kept alive across runs for
             # connection reuse.
             await close_agent_provider_clients()
             await dispose_shared_sql_engines()
             await close_redis_json_caches()
+            # Symmetric with the monitor started at startup: a module
+            # singleton that nothing stopped, which outlives an in-process
+            # lifespan and attaches to whatever engines come next.
+            stop_connection_scope_monitor()
             await close_redis_clients()
             await close_engine()
             await channel_service.disconnect()
@@ -275,6 +291,41 @@ async def lifespan(app: FastAPI):
 
             await close_datastore_engine()
             shutdown_telemetry()
+
+
+#: The route label for a request that reached no FastAPI route. It is a real
+#: outcome (a 404, a sub-app mount, an error before routing), not an error --
+#: but it is also not an identity, which is why the raw path rides along on the
+#: signals that matter.
+_UNMATCHED_ROUTE = "unmatched"
+
+
+class TrailingSlashMiddleware:
+    """Treat ``/things/`` as ``/things`` so a stray slash is not a 404.
+
+    Mutates the scope in place rather than copying it, for the same reason
+    documented in ``apps/api/host_routing.py``: the router records the matched
+    route by writing ``scope["route"]``, and :class:`RequestObserverMiddleware`
+    reads it from *outside* this middleware. With a copy the router wrote to an
+    object the observer never saw, so every request whose path ended in a slash
+    was logged as ``route: "unmatched"`` regardless of what it actually matched
+    or returned -- silently seeding the bucket that a fixed-cost class of slow
+    "unmatched" 404s was being investigated in.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path != "/" and path.endswith("/"):
+            scope["path"] = path.rstrip("/")
+
+        await self.app(scope, receive, send)
 
 
 class RequestObserverMiddleware:
@@ -289,6 +340,13 @@ class RequestObserverMiddleware:
     QUIET_PATHS = frozenset(
         {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
     )
+    # Routes that are supposed to take a long time. A long poll answers when it
+    # has news or when its hold expires, so a slow one is the design working:
+    # every completed idle poll logged a warning, and on one local stack 311 of
+    # 314 slow-request warnings were healthy 25-second polls. A warning that
+    # fires on the normal case is not a signal, and it buried the three that
+    # meant something.
+    HELD_ROUTES = frozenset({"/agent-host/poll"})
 
     def __init__(self, app):
         self.app = app
@@ -396,6 +454,17 @@ class RequestObserverMiddleware:
                         "status_code": status_code,
                         "duration_ms": duration_ms,
                     }
+                    # "unmatched" names no request, so a slow or failing one in
+                    # that bucket cannot be investigated at all: two separate
+                    # passes at a fixed-cost class of slow `unmatched` 404s
+                    # failed for exactly this reason. Populated only for that
+                    # bucket -- a real route template is already the identity,
+                    # and raw paths are unbounded.
+                    fields["path"] = (
+                        str(scope.get("path", ""))[:120]
+                        if route == _UNMATCHED_ROUTE
+                        else ""
+                    )
                     if status_code >= 500 or caught is not None:
                         fields["error_type"] = state.get(
                             "lemma_error_type",
@@ -418,6 +487,7 @@ class RequestObserverMiddleware:
                             error_type=fields["error_type"],
                             error_code=fields["error_code"],
                             exc_info=exc_info,
+                            path=fields["path"],
                         )
                     elif status_code == 429:
                         logger.warning(
@@ -434,7 +504,10 @@ class RequestObserverMiddleware:
                             if streaming and response_started_at is not None
                             else (finished_at - started_at)
                         )
-                        if elapsed >= self.SLOW_SECONDS:
+                        if (
+                            elapsed >= self.SLOW_SECONDS
+                            and fields["route"] not in self.HELD_ROUTES
+                        ):
                             fields["duration_ms"] = round(elapsed * 1000, 1)
                             fields["latency_kind"] = (
                                 "time_to_first_byte" if streaming else "total"
@@ -446,6 +519,7 @@ class RequestObserverMiddleware:
                                 status_code=fields["status_code"],
                                 duration_ms=fields["duration_ms"],
                                 latency_kind=fields["latency_kind"],
+                                path=fields["path"],
                             )
                         elif settings.local_http_access_logs_enabled:
                             logger.info(
@@ -468,7 +542,7 @@ class RequestObserverMiddleware:
     def _route_template(scope: dict) -> str:
         route = scope.get("route")
         value = getattr(route, "path_format", None) or getattr(route, "path", None)
-        return value if isinstance(value, str) else "unmatched"
+        return value if isinstance(value, str) else _UNMATCHED_ROUTE
 
 
 # Compatibility name retained for imports and generated SDK tests.
@@ -569,22 +643,6 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # their status_code/code, so controllers don't catch-and-remap them.
     register_exception_handlers(app)
 
-    class TrailingSlashMiddleware:
-        def __init__(self, app):
-            self.app = app
-
-        async def __call__(self, scope, receive, send):
-            if scope["type"] != "http":
-                await self.app(scope, receive, send)
-                return
-
-            path = scope.get("path", "")
-            if path != "/" and path.endswith("/"):
-                scope = dict(scope)
-                scope["path"] = path.rstrip("/")
-
-            await self.app(scope, receive, send)
-
     init_telemetry(service_name="lemma-api")
     instrument_database_engine(get_engine())
 
@@ -613,7 +671,22 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # /st requests are deliberately skipped here.
     app.add_middleware(AuthAbuseMiddleware, auth_paths_only=True)
 
-    # CORS
+    # Transport-level guard, and the ceiling on how much body the abuse
+    # middleware below it can be made to buffer -- so it is registered after
+    # that one, which puts it outside it.
+    #
+    # Registered *before* CORS, which puts it inside: `add_middleware` prepends,
+    # so the last registration is outermost. This middleware writes its own 413
+    # rather than raising, and a response that never passes through
+    # `CORSMiddleware` carries no `Access-Control-Allow-Origin` -- which the
+    # browser reports to the page as a CORS failure, withholding the status and
+    # the body, so an oversized upload was indistinguishable from a broken
+    # origin and the `max_bytes` in the envelope reached nobody.
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=settings.max_request_body_bytes,
+    )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=get_allowed_cors_origins(),
@@ -646,17 +719,14 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         ],
     )
 
+    # Sits outside the auth routes so it sees their Set-Cookie headers. No-op
+    # unless apps call the API on their own origin; see the module docstring.
+    app.add_middleware(RefreshCookieScopeMiddleware)
+
     # Host-based app serving: rewrite `<slug>.<app_base_domain>` requests onto
     # the public app asset endpoint. Outermost so the slug is resolved before
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
-
-    # Transport-level guard. Added before RequestIdMiddleware so the latter
-    # remains outermost and stamps 413 responses with the correlation id.
-    app.add_middleware(
-        RequestBodyLimitMiddleware,
-        max_bytes=settings.max_request_body_bytes,
-    )
 
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).
@@ -688,6 +758,14 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         }
         return JSONResponse(payload, status_code=200 if healthy else 503)
 
+    #: One degraded/recovered pair per dependency instead of a record per
+    #: probe. Threshold 1: readiness is asked constantly, so the first failure
+    #: is already the transition worth reporting.
+    _readiness_incidents = {
+        name: DependencyIncident(name, logger=logger, degradation_threshold=1)
+        for name in ("db", "redis", "supertokens")
+    }
+
     # Readiness: bounded, concurrent checks for dependencies required to serve
     # new work. Each check has ~1 s; the whole endpoint has a ~2 s deadline.
     # 503 when not ready; only generic component states are exposed, never
@@ -696,61 +774,75 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     async def health_ready():
         import asyncio as _asyncio
 
-        from sqlalchemy import text
+        async def _probe(name: str, check) -> bool:
+            """One bounded dependency check that says why it failed, once.
 
-        async def _db_ok() -> bool:
+            This used to be three silent `except Exception: return False`. The
+            endpoint then reported `"db": "down"` with no reason anywhere --
+            and a prober asks every few seconds, so the obvious repair, a
+            record per attempt, is a wall of identical lines during exactly the
+            outage someone is trying to read. `DependencyIncident` emits one
+            degraded record when it starts failing and one when it recovers.
+            """
+            incident = _readiness_incidents[name]
             try:
-                engine = get_engine()
-                async with engine.connect() as conn:
-                    await conn.execute(text("SELECT 1"))
-                return True
-            except Exception:
+                healthy = bool(await _asyncio.wait_for(check(), timeout=1.0))
+            except Exception as exc:
+                incident.record_failure(error_type=type(exc).__name__)
                 return False
+            if healthy:
+                incident.record_success()
+            else:
+                incident.record_failure(error_type="unavailable")
+            return healthy
 
-        async def _redis_ok() -> bool:
-            try:
-                return await channel_service.ping()
-            except Exception:
-                return False
-
-        async def _with_timeout(coro, seconds: float) -> bool:
-            try:
-                return await _asyncio.wait_for(coro, timeout=seconds)
-            except Exception:
-                return False
-
-        # Run dependency checks concurrently; each is individually bounded and
-        # the pair is bounded by the overall gather timeout.
-        db_task = redis_task = None
+        # Concurrent, each individually bounded and the set bounded by the
+        # gather. SuperTokens is in here because `initialize_supertokens` makes
+        # no network call while `verify_auth` calls the core on every
+        # authenticated request: its outage leaves readiness at 200 and the
+        # whole product unusable.
+        tasks: list[_asyncio.Task[object]] = []
         try:
-            db_task = create_inherited_task(_with_timeout(_db_ok(), 1.0))
-            redis_task = create_inherited_task(_with_timeout(_redis_ok(), 1.0))
-            db_ok, redis_ok = await _asyncio.wait_for(
-                _asyncio.gather(db_task, redis_task), timeout=2.0
+            embedded = getattr(app.state, "embedded_worker", False)
+            tasks = [
+                create_inherited_task(_probe("db", database_reachable)),
+                create_inherited_task(_probe("redis", channel_service.ping)),
+                create_inherited_task(
+                    _probe("supertokens", supertokens_core_reachable)
+                ),
+                create_inherited_task(worker_readiness_state(embedded=embedded)),
+                create_inherited_task(schema_migration_state()),
+            ]
+            db_ok, redis_ok, auth_ok, worker, schema = await _asyncio.wait_for(
+                _asyncio.gather(*tasks), timeout=2.0
             )
         except Exception:
-            db_ok, redis_ok = False, False
+            # Readiness itself failing to run is not "the database is down";
+            # it answers 503 either way, so the log is the only place the
+            # difference can be seen.
+            logger.error("app.health_ready.probe_failed.failed", exc_info=True)
+            db_ok, redis_ok, auth_ok, worker, schema = False, False, False, None, None
         finally:
-            for t in (db_task, redis_task):
-                if t is not None and not t.done():
-                    t.cancel()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
 
-        components = {
-            "db": "ok" if db_ok else "down",
-            "redis": "ok" if redis_ok else "down",
-        }
-        ready = bool(db_ok) and bool(redis_ok)
-        payload = {
-            "status": "ready" if ready else "not_ready",
-            "components": components,
-        }
-        if settings.lemma_runtime_instance_id:
-            payload["instance_id"] = settings.lemma_runtime_instance_id
-        return JSONResponse(payload, status_code=200 if ready else 503)
+        report = readiness.build_readiness_report(
+            components={
+                "db": readiness.dependency_state(db_ok),
+                "redis": readiness.dependency_state(redis_ok),
+                "supertokens": readiness.dependency_state(auth_ok),
+                "worker": readiness.worker_state(worker),
+                "migrations": readiness.migrations_state(schema) if schema else None,
+            },
+            instance_id=settings.lemma_runtime_instance_id,
+        )
+        return JSONResponse(report.payload, status_code=report.status_code)
 
     @app.get("/health/capabilities", include_in_schema=False)
     async def health_capabilities():
         from app.modules.datastore.module import embedding_capability
+        from app.modules.pod_bundle.config import pod_bundle_settings
 
         embeddings = embedding_capability()
         payload = {
@@ -764,6 +856,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                 }
             },
         }
+        payload["capabilities"]["sandbox"] = sandbox_capability()
         if settings.lemma_local_ai_ready is not None:
             payload["capabilities"]["ai_profile"] = {
                 "status": "ready" if settings.lemma_local_ai_ready else "needs_setup",
@@ -773,6 +866,56 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
                     else "Configure an AI provider in Lemma Control Center"
                 ),
             }
+        # What this deployment is configured to *do*, for a client that has to
+        # decide whether a behaviour it depends on is reachable here at all. The
+        # product scenario suite reads this rather than a local `.env` file:
+        # pointed at a deployment, a local file describes a different machine,
+        # so a suite trusting it skips and runs for the wrong reasons.
+        #
+        # `environment` and `llm_mode` are reported everywhere. A deployment
+        # serving the scripted test model is misconfigured, and that is worth
+        # being visible rather than hidden.
+        #
+        # The rest is this deployment's security posture — whether signup is
+        # rate limited, whether a connector may reach a private address — and
+        # the honest answer to a stranger asking "are your gates on?" is that it
+        # is none of their business. Written as "not production", that was one
+        # environment value narrower than the principle: a staging or preview
+        # deployment on the internet runs as `development` and advertised which
+        # of its abuse controls were off. The block is for the scenario suite,
+        # which runs locally.
+        configuration: dict[str, object] = {
+            "environment": settings.environment,
+            "llm_mode": settings.e2e_llm_mode,
+        }
+        if settings.is_local_mode():
+            configuration |= {
+                "abuse_protection": settings.auth_abuse_protection_enabled,
+                "altcha": settings.auth_altcha_enabled,
+                "email_verification_required": (
+                    settings.auth_email_verification_required
+                ),
+                "email_deliverability_checks": (
+                    settings.auth_email_deliverability_checks_enabled
+                ),
+                "disposable_email_domains": (
+                    settings.auth_disposable_email_domains_enabled
+                ),
+                "private_network_targets": (
+                    settings.connector_allow_private_network_targets
+                ),
+                "role_cache_ttl_seconds": (
+                    settings.authorization_role_cache_ttl_seconds
+                ),
+                "bundle_daily_export_limit": (
+                    pod_bundle_settings.pod_bundle_daily_export_limit
+                ),
+                "bundle_daily_import_limit": (
+                    pod_bundle_settings.pod_bundle_daily_import_limit
+                ),
+                "usage_limit_overrides": bool(settings.usage_org_limit_overrides_json),
+            }
+        payload["configuration"] = configuration
         if settings.lemma_runtime_instance_id:
             payload["instance_id"] = settings.lemma_runtime_instance_id
         return payload

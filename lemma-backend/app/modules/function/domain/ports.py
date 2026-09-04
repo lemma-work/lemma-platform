@@ -99,6 +99,10 @@ class FunctionStorageDeletionPort(Protocol):
 class FunctionStoragePort(Protocol):
     async def read_file(self, path: str) -> bytes | str: ...
 
+    #: For a caller that knows the content is binary, so it does not pay a
+    #: whole-buffer UTF-8 decode attempt only to re-encode the result.
+    async def read_bytes(self, path: str) -> bytes: ...
+
     async def write_file(self, path: str, content: bytes | str) -> None: ...
 
 

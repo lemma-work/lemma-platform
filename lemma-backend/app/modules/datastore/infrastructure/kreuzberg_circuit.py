@@ -58,6 +58,18 @@ class KreuzbergCircuitBreaker:
     def is_open(self) -> bool:
         return self._opened_at is not None
 
+    def seconds_until_trial(self) -> float:
+        """How long until a trial extraction would be allowed through.
+
+        ``0.0`` when the circuit is closed, or open but past its cooldown — in
+        both cases there is nothing to wait for. Callers use this to slow work
+        down rather than to decide whether to do it, so it never blocks: an
+        answer of zero means "go ahead and find out".
+        """
+        if self._opened_at is None:
+            return 0.0
+        return max(0.0, self._reset_seconds - (self._clock() - self._opened_at))
+
     def raise_if_open(self) -> None:
         """Fail fast if the circuit is open and still within its cooldown.
 

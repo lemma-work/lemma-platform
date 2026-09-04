@@ -72,7 +72,9 @@ class E2EScenario:
         self.pod = response.json()
         return self.pod
 
-    async def create_org_with_pod(self, *, name_prefix: str = "Scenario") -> "E2EScenario":
+    async def create_org_with_pod(
+        self, *, name_prefix: str = "Scenario"
+    ) -> "E2EScenario":
         await self.create_org(name_prefix=f"{name_prefix} Org")
         await self.create_pod(name_prefix=f"{name_prefix} Pod")
         return self
@@ -112,7 +114,9 @@ class E2EScenario:
         assert response.status_code == status.HTTP_201_CREATED, response.text
         return response.json()
 
-    async def delegated_agent_headers(self, *, user: dict[str, str], agent: dict) -> dict[str, str]:
+    async def delegated_agent_headers(
+        self, *, user: dict[str, str], agent: dict
+    ) -> dict[str, str]:
         claims = build_delegation_claims(
             workload_type="agent",
             workload_id=UUID(agent["id"]),
@@ -124,10 +128,21 @@ class E2EScenario:
         token = await get_user_token(UUID(user["id"]), delegation_claims=claims)
         return {"Authorization": f"Bearer {token}"}
 
-    async def default_pod_agent_headers(self, *, user: dict[str, str]) -> dict[str, str]:
+    async def default_pod_agent_headers(
+        self, *, user: dict[str, str], legacy_sentinel_id: bool = False
+    ) -> dict[str, str]:
+        """A token for the pod's own assistant, shaped like the mint site's.
+
+        ``workload_id`` is the assistant's ``agents`` row id, which *is* its
+        pod's -- what ``run_context_builder`` passes as ``agent.id``. Pass
+        ``legacy_sentinel_id=True`` to exercise the retired shape, which signed
+        tokens can still carry across a deploy.
+        """
         claims = build_delegation_claims(
             workload_type="agent",
-            workload_id=DEFAULT_POD_AGENT_ID,
+            workload_id=(
+                DEFAULT_POD_AGENT_ID if legacy_sentinel_id else UUID(self.pod_id)
+            ),
             workload_name=DEFAULT_POD_AGENT_NAME,
             pod_id=UUID(self.pod_id),
             session_id=f"default-pod-agent-{uuid4().hex}",

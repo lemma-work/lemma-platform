@@ -140,9 +140,7 @@ class FunctionRevisionService:
         number, hash_prefix = parse_revision_ref(ref)
         revision: FunctionRevisionEntity | None = None
         if number is not None:
-            revision = await self.repository.get_revision_by_number(
-                function.id, number
-            )
+            revision = await self.repository.get_revision_by_number(function.id, number)
             # A hash is hex, so a short prefix can be all decimal digits and read
             # as a revision number. Fall through rather than 404.
             if revision is None:

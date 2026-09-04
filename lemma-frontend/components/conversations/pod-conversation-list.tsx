@@ -3,14 +3,17 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowRight, Plus, Sparkles } from '@/components/ui/icons';
+import { Archive, ArrowRight, Plus, Sparkles } from '@/components/ui/icons';
+import { toast } from 'sonner';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
+import { useScopedConversations, useUpdateConversation } from '@/lib/hooks/use-assistants';
 import { ResourceList, ResourceMetric, ResourceMetricStrip, ResourceRow } from '@/components/pod/resource-layout';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getConversationStatusView, isConversationRunningStatus } from '@/lib/utils/conversations';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 /** Titles vary, so the placeholders do — equal bars read as a table, not a list.
  * Widths double as the row count: five lines, matching the settled row height. */
@@ -24,6 +27,13 @@ interface PodConversationListProps {
     scopeType?: 'pod' | 'assistant';
     scopeName?: string;
     showHeader?: boolean;
+    /**
+     * Show what has been put away instead of the history. A separate read
+     * rather than a filter over the same one: the assistant context holds the
+     * live conversations for this pod and archived ones are, by definition,
+     * not among them.
+     */
+    archived?: boolean;
 }
 
 export function PodConversationList({
@@ -34,6 +44,7 @@ export function PodConversationList({
     scopeType = 'pod',
     scopeName,
     showHeader = variant === 'page',
+    archived = false,
 }: PodConversationListProps) {
     const {
         conversations,
@@ -41,14 +52,31 @@ export function PodConversationList({
         isLoadingConversations,
     } = useAIAssistant();
     const router = useRouter();
+    const updateConversation = useUpdateConversation();
+
+    const archive = useScopedConversations(
+        { podId },
+        { archived: true, limit, enabled: archived },
+    );
+
+    const restore = (conversationId: string) => {
+        updateConversation.mutate(
+            { podId, conversationId, data: { is_archived: false } },
+            {
+                onSuccess: () => toast.success('Conversation restored'),
+                onError: (error) => toast.error(`Could not restore: ${error.message}`),
+            },
+        );
+    };
 
     const isCompact = variant === 'compact';
-    const items = conversations.slice(0, limit);
-    const conversationCount = conversations.length;
+    const source = archived ? archive.data?.items ?? [] : conversations;
+    const items = source.slice(0, limit);
+    const conversationCount = source.length;
     const entityName = scopeName || podName;
     const isAssistantScope = scopeType === 'assistant';
-    const runningCount = conversations.filter((conversation) => isConversationRunningStatus(conversation.status)).length;
-    const recentCount = conversations.filter((conversation) => {
+    const runningCount = source.filter((conversation) => isConversationRunningStatus(conversation.status)).length;
+    const recentCount = source.filter((conversation) => {
         const updatedAt = new Date(conversation.updated_at || conversation.created_at).getTime();
         return Number.isFinite(updatedAt) && Date.now() - updatedAt < 1000 * 60 * 60 * 24 * 7;
     }).length;
@@ -67,7 +95,7 @@ export function PodConversationList({
                 spinner-and-caption was a third box of a third size between the
                 empty state and the list, so this sidebar changed shape twice on
                 every load. */}
-            {isLoadingConversations && items.length === 0 && (
+            {(archived ? archive.isLoading : isLoadingConversations) && items.length === 0 && (
                 <div role="status" aria-label="Loading conversations">
                     {CONVERSATION_SKELETON_WIDTHS.map((width, index) => (
                         <div key={index} className="px-1 py-1">
@@ -80,13 +108,22 @@ export function PodConversationList({
                 </div>
             )}
 
-            {!isLoadingConversations && items.length === 0 && (
+            {archived && !archive.isLoading && items.length === 0 && (
+                <EmptyState variant="inline"
+                    icon={<Archive className="h-4 w-4" />}
+                    title="Nothing archived"
+                    description="Conversations you archive are kept here, and come back the moment one gets a new message."
+                    className="px-2 py-5"
+                />
+            )}
+
+            {!archived && !isLoadingConversations && items.length === 0 && (
                 <EmptyState variant="inline"
                     icon={<Sparkles className="h-4 w-4" />}
                     title="No conversations yet"
                     description={isAssistantScope
-                        ? 'Start a conversation with this assistant and continue it here later.'
-                        : 'Start a Lemma Assistant conversation and continue it here later.'}
+                        ? 'Start a conversation with this agent and continue it here later.'
+                        : `Start a conversation with ${DEFAULT_RESPONDER_NAME} and continue it here later.`}
                     action={(
                         <Button variant="secondary" size="sm" onClick={startNewConversation} className="shrink-0 gap-1.5">
                             <Plus className="h-3.5 w-3.5" />
@@ -138,6 +175,17 @@ export function PodConversationList({
                                 Open
                             </span>
                         </button>
+                        {archived ? (
+                            <Button
+                                variant="quiet"
+                                size="sm"
+                                className="mr-1 shrink-0"
+                                disabled={updateConversation.isPending}
+                                onClick={() => restore(conversation.id)}
+                            >
+                                Restore
+                            </Button>
+                        ) : null}
                     </ResourceRow>
                 );
             })}
@@ -154,8 +202,8 @@ export function PodConversationList({
                             {entityName
                                 ? `${entityName} chats.`
                                 : isAssistantScope
-                                    ? 'Assistant chat history.'
-                                    : 'Lemma Assistant chat history.'}
+                                    ? "This agent's chat history."
+                                    : "This pod's chat history."}
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -181,12 +229,12 @@ export function PodConversationList({
                 <div className="mb-5 flex items-center justify-between gap-3">
                     <div>
                         <h1 className="font-display text-3xl font-normal text-[var(--text-primary)]">
-                            {isAssistantScope ? 'Assistant Conversations' : 'Pod Conversations'}
+                            {isAssistantScope ? `${entityName} Conversations` : 'Pod Conversations'}
                         </h1>
                         <p className="mt-1 text-sm text-[var(--text-secondary)]">
                             {isAssistantScope
-                                ? 'Reopen and continue conversations for this assistant.'
-                                : 'Reopen and continue assistant threads for this pod.'}
+                                ? "Reopen and continue this agent's conversations."
+                                : "Reopen and continue this pod's conversations."}
                         </p>
                     </div>
                     <Button variant="primary" onClick={startNewConversation} className="gap-2">

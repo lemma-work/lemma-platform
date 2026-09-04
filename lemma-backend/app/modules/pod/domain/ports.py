@@ -6,6 +6,7 @@ from typing import Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
 from app.modules.identity.contracts import (
+    OrganizationEntity,
     OrganizationMemberEntity,
 )
 from app.modules.pod.domain.pod_entities import (
@@ -20,6 +21,11 @@ class PodRepositoryPort(Protocol):
     async def create(self, entity: PodEntity) -> PodEntity: ...
 
     async def get(self, id: UUID) -> Optional[PodEntity]: ...
+
+    #: The pod row whether or not it has been deleted. Only deletion itself
+    #: wants this: every other read means the live pod, which is why `get`
+    #: filters and this is the exception that has to say so in its name.
+    async def get_even_if_deleted(self, id: UUID) -> Optional[PodEntity]: ...
 
     async def update(self, entity: PodEntity) -> PodEntity: ...
 
@@ -73,6 +79,25 @@ class PodMemberRepositoryPort(Protocol):
         self, pod_id: UUID, org_member_id: UUID
     ) -> bool: ...
 
+    async def count_members_who_can(self, pod_id: UUID, permission_id: str) -> int: ...
+
+    async def roles_grant_permission(
+        self, pod_id: UUID, role_names: Sequence[str], permission_id: str
+    ) -> bool: ...
+
+
+class PodScheduleTeardownPort(Protocol):
+    """What pod deletion needs from the schedule module, stated locally.
+
+    Deleting a pod must stop its standing work in the same request -- an
+    event-driven cleanup is a retry away from a deleted pod firing agents
+    nobody can see. Stopping it is all the request does: the rows and the
+    provider triggers behind them are torn down on the pod-deleted event, which
+    needs those rows to know what to tear down. See PS-OPS-020 and DEV-OPS-003.
+    """
+
+    async def disarm_all_for_pod(self, pod_id: UUID) -> int: ...
+
 
 class PodJoinRequestRepositoryPort(Protocol):
     async def create(self, entity: PodJoinRequestEntity) -> PodJoinRequestEntity: ...
@@ -96,6 +121,11 @@ class PodJoinRequestRepositoryPort(Protocol):
 
 
 class OrganizationMembershipPort(Protocol):
+    #: The organization itself, for the one pod decision whose effect crosses
+    #: the organization boundary: a pod may not open itself wider than the
+    #: organization that holds it (see ``PodService.update_pod``).
+    async def get(self, organization_id: UUID) -> Optional[OrganizationEntity]: ...
+
     async def get_member(
         self, user_id: UUID, organization_id: UUID
     ) -> Optional[OrganizationMemberEntity]: ...

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentKind } from './AgentKind.js';
 import type { AgentResourcePermissionResponse } from './AgentResourcePermissionResponse.js';
 import type { AgentToolset } from './AgentToolset.js';
 /**
@@ -19,9 +20,11 @@ export type AgentSummaryResponse = {
     has_pinned_runtime?: boolean;
     icon_url?: (string | null);
     id: string;
+    kind?: AgentKind;
     metadata?: (Record<string, any> | null);
     name: string;
     pod_id: string;
+    takes_input?: boolean;
     toolsets?: Array<AgentToolset>;
     updated_at: string;
     user_id: string;

@@ -12,14 +12,14 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "delete",
-        "url": "/organizations/{org_id}/members/{member_id}".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/members/{member_id}".format(
+            organization_id=quote(str(organization_id), safe=""),
             member_id=quote(str(member_id), safe=""),
         ),
     }
@@ -57,7 +57,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -67,7 +67,7 @@ def sync_detailed(
      Remove a member from the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
 
     Raises:
@@ -79,7 +79,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
     )
 
@@ -91,7 +91,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -101,7 +101,7 @@ def sync(
      Remove a member from the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
 
     Raises:
@@ -113,14 +113,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -130,7 +130,7 @@ async def asyncio_detailed(
      Remove a member from the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
 
     Raises:
@@ -142,7 +142,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
     )
 
@@ -152,7 +152,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -162,7 +162,7 @@ async def asyncio(
      Remove a member from the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
 
     Raises:
@@ -175,7 +175,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             member_id=member_id,
             client=client,
         )

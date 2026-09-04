@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -9,7 +10,12 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
     SurfaceLifecycleKind,
 )
-from app.modules.agent_surfaces.platforms.common import render_attachment_prompt_block
+from app.modules.agent_surfaces.platforms.common import (
+    payload_first,
+    payload_section,
+    payload_text,
+    render_attachment_prompt_block,
+)
 from app.modules.agent_surfaces.platforms.slack.config_parser import (
     SlackConfigurationParserMixin,
 )
@@ -24,116 +30,239 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _SlackRouting:
+    """Where a Slack message landed: which channel, which thread, DM or not."""
+
+    channel_id: str
+    ts: str
+    thread_ts: str
+    channel_type: str
+    assistant_thread: dict[str, Any]
+    is_dm: bool
+    is_thread_reply: bool
+
+    @property
+    def external_thread_id(self) -> str:
+        """The thread this belongs to -- its own ts when it starts one."""
+        return (self.thread_ts or self.ts).strip()
+
+    @property
+    def conversation_type(self) -> ConversationType:
+        return (
+            ConversationType.EXTERNAL_DM
+            if self.is_dm
+            else ConversationType.EXTERNAL_GROUP
+        )
+
+    def should_start(self, *, mentioned: bool, event_type: str) -> bool:
+        """A DM, a reply in a thread already under way, or the agent addressed."""
+        return (
+            self.is_dm
+            or self.is_thread_reply
+            or event_type == "app_mention"
+            or mentioned
+        )
+
+
+def _slack_routing(event: dict[str, Any], channel_id: str) -> _SlackRouting:
+    """Read placement out of a Slack message event."""
+    assistant_thread = payload_section(event, "assistant_thread")
+    # An assistant-pane message keeps its thread on the pane rather than the
+    # event, so both spellings have to be tried before falling back to `ts`.
+    thread_ts = str(
+        event.get("thread_ts") or payload_text(assistant_thread, "thread_ts") or ""
+    )
+    ts = str(event.get("ts") or "")
+    channel_type = payload_text(event, "channel_type")
+    return _SlackRouting(
+        channel_id=channel_id,
+        ts=ts,
+        thread_ts=thread_ts,
+        channel_type=channel_type,
+        assistant_thread=assistant_thread,
+        is_dm=channel_type == "im" or channel_id.startswith("D"),
+        is_thread_reply=bool(thread_ts and thread_ts != ts),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SlackInteractionTarget:
+    """Where a block_actions submission came from, and where a reply goes."""
+
+    channel_id: str | None
+    message_ts: str
+    thread_ts: str | None
+
+
+def _interaction_target(payload: dict[str, Any]) -> _SlackInteractionTarget:
+    container = payload_section(payload, "container")
+    message = payload_section(payload, "message")
+    message_ts = str(container.get("message_ts") or message.get("ts") or "").strip()
+    return _SlackInteractionTarget(
+        channel_id=payload_text(payload_section(payload, "channel"), "id").strip()
+        or None,
+        message_ts=message_ts,
+        thread_ts=str(message.get("thread_ts") or message_ts or "").strip() or None,
+    )
+
+
+def _tapped_action(actions: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """The action the user tapped, and the approval decision it carries.
+
+    An approval button (Approve / Deny / Approve-for-session) keeps its decision
+    in the action_id and the callback id in the value; a form submit has only
+    the latter. Both come back through here so the caller need not know which
+    arrived, and approvals win when a payload somehow carries both.
+    """
+    candidates = [item for item in (actions or []) if isinstance(item, dict)]
+    for action in candidates:
+        action_id = payload_text(action, "action_id")
+        if action_id in _APPROVAL_DECISION_BY_ACTION_ID:
+            return action, _APPROVAL_DECISION_BY_ACTION_ID[action_id]
+    for action in candidates:
+        if action.get("action_id") == _FORM_SUBMIT_ACTION_ID:
+            return action, None
+    return None, None
+
+
 class SlackMessageParser(SlackConfigurationParserMixin):
     platform = "SLACK"
+
+    # Slack sends every event on one webhook, so most of what arrives is not a
+    # message from a person. These three rejections are about the envelope
+    # rather than the message, and answering them together is what lets `parse`
+    # get on with reading one.
+    _IGNORED_SUBTYPES = frozenset(
+        {
+            "bot_message",
+            "message_changed",
+            "message_deleted",
+            "channel_join",
+            "channel_leave",
+            "thread_broadcast",
+        }
+    )
+
+    def _is_ignored_event(
+        self,
+        payload: dict[str, Any],
+        event: dict[str, Any],
+        event_type: str,
+        subtype: str,
+    ) -> bool:
+        """Whether this is something other than a person writing to us."""
+        if payload.get("type") != "event_callback":
+            return True
+        if event_type not in {"message", "app_mention"}:
+            return True
+        return bool(event.get("bot_id")) or subtype in self._IGNORED_SUBTYPES
+
+    def _message_metadata(
+        self,
+        *,
+        event_type: str,
+        subtype: str,
+        is_thread_reply: bool,
+        channel_type: str,
+        mentioned_user_ids: list[str],
+        assistant_thread: dict[str, Any],
+        attachments: list[SlackFileAttachment],
+    ) -> dict[str, Any]:
+        """What the run needs to know about the message beyond its text."""
+        metadata: dict[str, Any] = {
+            "event_type": event_type,
+            "event_subtype": subtype or None,
+            "is_thread_reply": is_thread_reply,
+            "channel_type": channel_type,
+            "mentioned_user_ids": mentioned_user_ids,
+            "assistant_thread_present": bool(assistant_thread),
+            "assistant_thread_action_token": (
+                payload_text(assistant_thread, "action_token") or None
+            ),
+        }
+        if attachments:
+            metadata["attachments"] = [
+                attachment.model_dump(mode="json", exclude_none=True)
+                for attachment in attachments
+            ]
+        return metadata
 
     def parse(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         try:
             del headers
-            payload = self._unwrap_payload(payload)
-            event = payload.get("event") or {}
-            if payload.get("type") != "event_callback":
-                return None
-
-            event_type = str(event.get("type") or "")
-            if event_type not in {"message", "app_mention"}:
-                return None
-
-            subtype = str(event.get("subtype") or "")
-            if event.get("bot_id") or subtype in {
-                "bot_message",
-                "message_changed",
-                "message_deleted",
-                "channel_join",
-                "channel_leave",
-                "thread_broadcast",
-            }:
-                return None
-
-            channel_id = str(event.get("channel") or "").strip()
-            attachments = self.extract_file_attachments(event)
-            raw_text = str(
-                event.get("text") or self._extract_text_from_blocks(event) or ""
-            ).strip()
-            attachment_text = render_attachment_prompt_block(
-                attachments,
-                platform=self.platform,
-            )
-            text = self._message_text(raw_text, attachment_text)
-            if not channel_id or not text:
-                return None
-
-            channel_type = str(event.get("channel_type") or "")
-            is_dm = channel_type == "im" or channel_id.startswith("D")
-            assistant_thread = event.get("assistant_thread") or {}
-            assistant_thread_ts = str(assistant_thread.get("thread_ts") or "") or None
-            thread_ts = event.get("thread_ts") or assistant_thread_ts
-            ts = event.get("ts")
-            is_thread_reply = bool(thread_ts and thread_ts != ts)
-            mentioned_user_ids = self._extract_mentioned_user_ids(
-                event, raw_text or text
-            )
-            mentioned_agent = event_type == "app_mention" or bool(mentioned_user_ids)
-            external_thread_id = str(thread_ts or ts or "").strip()
-            if not external_thread_id:
-                return None
-
-            metadata: dict[str, Any] = {
-                "event_type": event_type,
-                "event_subtype": subtype or None,
-                "is_thread_reply": is_thread_reply,
-                "channel_type": channel_type,
-                "mentioned_user_ids": mentioned_user_ids,
-                "assistant_thread_present": bool(assistant_thread),
-                "assistant_thread_action_token": (
-                    str(assistant_thread.get("action_token") or "") or None
-                ),
-            }
-            if attachments:
-                metadata["attachments"] = [
-                    attachment.model_dump(mode="json", exclude_none=True)
-                    for attachment in attachments
-                ]
-
-            return ParsedInboundSurfaceEvent(
-                platform=self.platform,
-                conversation_type=(
-                    ConversationType.EXTERNAL_DM
-                    if is_dm
-                    else ConversationType.EXTERNAL_GROUP
-                ),
-                tenant_id=str(payload.get("team_id") or "").strip() or None,
-                external_channel_id=channel_id,
-                external_thread_id=external_thread_id,
-                external_message_id=str(ts or "").strip() or None,
-                sender_external_user_id=str(event.get("user") or "").strip() or None,
-                sender_display_name=None,
-                message_text=text,
-                is_dm=is_dm,
-                mentioned_agent=mentioned_agent,
-                should_start_conversation=(
-                    is_dm
-                    or is_thread_reply
-                    or event_type == "app_mention"
-                    or mentioned_agent
-                ),
-                reply_target={
-                    "channel": channel_id,
-                    "thread_ts": str(thread_ts or ts or "").strip(),
-                },
-                metadata={
-                    key: value for key, value in metadata.items() if value is not None
-                },
-                raw_payload=payload,
-            )
+            return self._message_event(self._unwrap_payload(payload))
         except Exception:
             logger.debug(
-                'agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated',
+                "agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated",
                 exc_info=True,
             )
             raise
+
+    def _message_event(
+        self, payload: dict[str, Any]
+    ) -> ParsedInboundSurfaceEvent | None:
+        """The event itself, once the envelope has been unwrapped."""
+        # Deliberately not `payload_section`: an event that is not an object is
+        # a payload we do not understand, and this parser is built to let that
+        # propagate rather than read no fields out of an empty dict and call
+        # the result "nothing to handle".
+        event = payload.get("event") or {}
+        event_type = payload_text(event, "type")
+        subtype = payload_text(event, "subtype")
+        if self._is_ignored_event(payload, event, event_type, subtype):
+            return None
+
+        channel_id = payload_text(event, "channel").strip()
+        attachments = self.extract_file_attachments(event)
+        raw_text = str(
+            event.get("text") or self._extract_text_from_blocks(event) or ""
+        ).strip()
+        text = self._message_text(
+            raw_text,
+            render_attachment_prompt_block(attachments, platform=self.platform),
+        )
+        routing = _slack_routing(event, channel_id)
+        if not channel_id or not text or not routing.external_thread_id:
+            return None
+
+        mentioned_user_ids = self._extract_mentioned_user_ids(event, raw_text or text)
+        mentioned_agent = event_type == "app_mention" or bool(mentioned_user_ids)
+        metadata = self._message_metadata(
+            event_type=event_type,
+            subtype=subtype,
+            is_thread_reply=routing.is_thread_reply,
+            channel_type=routing.channel_type,
+            mentioned_user_ids=mentioned_user_ids,
+            assistant_thread=routing.assistant_thread,
+            attachments=attachments,
+        )
+        return ParsedInboundSurfaceEvent(
+            platform=self.platform,
+            conversation_type=routing.conversation_type,
+            tenant_id=payload_text(payload, "team_id").strip() or None,
+            external_channel_id=channel_id,
+            external_thread_id=routing.external_thread_id,
+            external_message_id=routing.ts.strip() or None,
+            sender_external_user_id=payload_text(event, "user").strip() or None,
+            sender_display_name=None,
+            message_text=text,
+            is_dm=routing.is_dm,
+            mentioned_agent=mentioned_agent,
+            should_start_conversation=routing.should_start(
+                mentioned=mentioned_agent, event_type=event_type
+            ),
+            reply_target={
+                "channel": channel_id,
+                "thread_ts": routing.external_thread_id,
+            },
+            metadata={
+                key: value for key, value in metadata.items() if value is not None
+            },
+            raw_payload=payload,
+        )
 
     def parse_lifecycle(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
@@ -149,18 +278,18 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             if payload.get("type") != "event_callback":
                 return None
             event = payload.get("event") or {}
-            event_type = str(event.get("type") or "")
-            tenant_id = str(payload.get("team_id") or "").strip() or None
+            event_type = payload_text(event, "type")
+            tenant_id = payload_text(payload, "team_id").strip() or None
 
             if event_type == "member_joined_channel":
                 # ``authorizations`` names the bot user for this delivery; if the
                 # user who joined is not it, a colleague joined and it is not
                 # ours to react to.
                 bot_user_id = self._authorized_bot_user_id(payload)
-                joined_user = str(event.get("user") or "").strip()
+                joined_user = payload_text(event, "user").strip()
                 if not bot_user_id or joined_user != bot_user_id:
                     return None
-                channel_id = str(event.get("channel") or "").strip()
+                channel_id = payload_text(event, "channel").strip()
                 if not channel_id:
                     return None
                 return ParsedSurfaceLifecycleEvent(
@@ -171,7 +300,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                     # The inviter is the whole point: they just acted, so they
                     # are the right person to ask who should answer here.
                     actor_external_user_id=(
-                        str(event.get("inviter") or "").strip() or None
+                        payload_text(event, "inviter").strip() or None
                     ),
                     raw_payload=payload,
                 )
@@ -181,12 +310,12 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                     platform=self.platform,
                     kind=SurfaceLifecycleKind.HOME_OPENED,
                     tenant_id=tenant_id,
-                    external_channel_id=str(event.get("channel") or "").strip() or None,
-                    actor_external_user_id=str(event.get("user") or "").strip() or None,
+                    external_channel_id=payload_text(event, "channel").strip() or None,
+                    actor_external_user_id=payload_text(event, "user").strip() or None,
                     raw_payload=payload,
                 )
             return None
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except AttributeError, KeyError, TypeError, ValueError:
             logger.debug("surface.slack.parse_lifecycle_failed", exc_info=True)
             return None
 
@@ -194,7 +323,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
         for authorization in payload.get("authorizations") or []:
             if not isinstance(authorization, dict):
                 continue
-            user_id = str(authorization.get("user_id") or "").strip()
+            user_id = payload_text(authorization, "user_id").strip()
             if user_id:
                 return user_id
         return None
@@ -208,68 +337,41 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             payload = self._unwrap_payload(payload)
             if payload.get("type") != "block_actions":
                 return None
-            actions = payload.get("actions") or []
-            # An approval button tap (Approve/Deny/Approve-for-session) carries the
-            # decision in its action_id and the callback id in its value.
-            approval = next(
-                (
-                    a
-                    for a in actions
-                    if isinstance(a, dict)
-                    and str(a.get("action_id") or "") in _APPROVAL_DECISION_BY_ACTION_ID
-                ),
-                None,
-            )
-            submit = next(
-                (
-                    a
-                    for a in actions
-                    if isinstance(a, dict)
-                    and a.get("action_id") == _FORM_SUBMIT_ACTION_ID
-                ),
-                None,
-            )
-            action = approval or submit
+            action, approval_decision = _tapped_action(payload.get("actions"))
             if action is None:
                 return None
-            callback_id = str(action.get("value") or "").strip()
+            callback_id = payload_text(action, "value").strip()
             if not callback_id:
                 return None
 
-            approval_decision = (
-                _APPROVAL_DECISION_BY_ACTION_ID.get(str(action.get("action_id") or ""))
-                if approval is not None
-                else None
-            )
-            if approval_decision is not None:
-                values: dict[str, Any] = {}
-            else:
-                state_values = (payload.get("state") or {}).get("values") or {}
-                values = _flatten_block_state_values(state_values)
+            # An approval tap carries its answer in the button; only a form
+            # submit has input values to collect.
+            values: dict[str, Any] = {}
+            if approval_decision is None:
+                # Same reason: a malformed `state` means the submission is not
+                # one we can read, and it is rejected rather than accepted with
+                # no values.
+                values = _flatten_block_state_values(
+                    (payload.get("state") or {}).get("values") or {}
+                )
 
-            user = payload.get("user") or {}
-            channel = payload.get("channel") or {}
-            team = payload.get("team") or {}
-            container = payload.get("container") or {}
-            message = payload.get("message") or {}
-            channel_id = str(channel.get("id") or "").strip() or None
-            message_ts = str(
-                container.get("message_ts") or message.get("ts") or ""
-            ).strip()
-            thread_ts = (
-                str(message.get("thread_ts") or message_ts or "").strip() or None
-            )
+            target = _interaction_target(payload)
+            team = payload_section(payload, "team")
+            user = payload_section(payload, "user")
             return ParsedSurfaceInteraction(
                 platform="SLACK",
                 tenant_id=str(team.get("id") or payload.get("team_id") or "") or None,
-                external_channel_id=channel_id,
-                external_thread_id=thread_ts,
-                external_user_id=str(user.get("id") or "").strip() or None,
+                external_channel_id=target.channel_id,
+                external_thread_id=target.thread_ts,
+                external_user_id=payload_text(user, "id").strip() or None,
                 callback_id=callback_id,
                 values=values,
                 approval_decision=approval_decision,
-                reply_target={"channel": channel_id, "thread_ts": thread_ts},
-                dedup_id=f"{message_ts}:{action.get('action_ts') or ''}",
+                reply_target={
+                    "channel": target.channel_id,
+                    "thread_ts": target.thread_ts,
+                },
+                dedup_id=f"{target.message_ts}:{action.get('action_ts') or ''}",
                 raw_payload=payload,
             )
         except Exception:
@@ -288,7 +390,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                 return None
 
             attachments = self.extract_file_attachments(item)
-            raw_text = str(item.get("text") or "").strip()
+            raw_text = payload_text(item, "text").strip()
             attachment_text = render_attachment_prompt_block(
                 attachments,
                 platform=self.platform,
@@ -298,15 +400,15 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                 return None
 
             snapshot = SlackChannelMessageSnapshot(
-                message_id=str(item.get("ts") or "").strip() or None,
-                user=str(item.get("user") or "").strip() or None,
+                message_id=payload_text(item, "ts").strip() or None,
+                user=payload_text(item, "user").strip() or None,
                 display_name=(
                     ((item.get("user_profile") or {}).get("display_name"))
                     or ((item.get("user_profile") or {}).get("real_name"))
                     or item.get("username")
                 ),
                 text=text,
-                thread_ts=str(item.get("thread_ts") or "").strip() or None,
+                thread_ts=payload_text(item, "thread_ts").strip() or None,
                 attachments=attachments,
             )
             data = snapshot.model_dump(mode="json", exclude_none=True)
@@ -315,7 +417,7 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             return data
         except Exception:
             logger.debug(
-                'agent_surfaces.parser.slack_parser_normalize_context_message.propagated',
+                "agent_surfaces.parser.slack_parser_normalize_context_message.propagated",
                 exc_info=True,
             )
             raise
@@ -328,16 +430,14 @@ class SlackMessageParser(SlackConfigurationParserMixin):
         for raw in event.get("files") or []:
             if not isinstance(raw, dict):
                 continue
-            file_id = str(raw.get("id") or "").strip() or None
+            file_id = payload_text(raw, "id").strip() or None
             download_url = (
-                str(
-                    raw.get("url_private_download") or raw.get("url_private") or ""
-                ).strip()
+                payload_first(raw, "url_private_download", "url_private").strip()
                 or None
             )
-            permalink = str(raw.get("permalink") or "").strip() or None
+            permalink = payload_text(raw, "permalink").strip() or None
             name = (
-                str(raw.get("name") or raw.get("title") or "").strip()
+                payload_first(raw, "name", "title").strip()
                 or self._filename_from_url(download_url or permalink or "")
                 or None
             )
@@ -349,9 +449,9 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                     name=name,
                     download_url=download_url,
                     permalink=permalink,
-                    content_type=str(raw.get("mimetype") or "").strip(),
-                    file_type=str(raw.get("filetype") or "").strip(),
-                    mime_type=str(raw.get("mimetype") or "").strip() or None,
+                    content_type=payload_text(raw, "mimetype").strip(),
+                    file_type=payload_text(raw, "filetype").strip(),
+                    mime_type=payload_text(raw, "mimetype").strip() or None,
                     size=raw.get("size"),
                 )
             )

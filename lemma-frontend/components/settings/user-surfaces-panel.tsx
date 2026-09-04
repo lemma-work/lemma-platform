@@ -12,8 +12,6 @@ import { StepLoader } from '@/components/brand/loader';
 const PLATFORM_LABEL: Record<string, string> = {
     SLACK: 'Slack',
     TEAMS: 'Teams',
-    GMAIL: 'Gmail',
-    OUTLOOK: 'Outlook',
     TELEGRAM: 'Telegram',
     WHATSAPP: 'WhatsApp',
     RESEND: 'Resend',
@@ -22,10 +20,11 @@ const PLATFORM_LABEL: Record<string, string> = {
 const platformLabel = (platform: string) => PLATFORM_LABEL[platform] ?? platform;
 
 /**
- * User-scoped surface routing. When the same person is reachable through more
- * than one surface on a platform (e.g. a shared bot spanning orgs), only one
- * can answer — this panel surfaces those conflicts and lets the user pick which
- * surface wins.
+ * User-scoped surface routing. When two surfaces answer at the *same* address —
+ * Lemma's shared bot or number fronting pods in several orgs — only one of them
+ * can take a message, so this panel raises that choice. Surfaces on their own
+ * address (a pod's own bot, its own mailbox) are listed but never asked about:
+ * a message sent to one of those can only ever arrive there.
  */
 export function UserSurfacesPanel() {
     const { data, isLoading } = useUserSurfaces();
@@ -70,7 +69,9 @@ export function UserSurfacesPanel() {
         <div className="grid gap-4">
             {groups.map((group) => {
                 const surfaces = group.surfaces ?? [];
-                const hasConflict = Boolean(group.conflict) && surfaces.length > 1;
+                const sharing = surfaces.filter((surface) => surface.shares_address);
+                const own = surfaces.filter((surface) => !surface.shares_address);
+                const hasConflict = sharing.length > 1;
 
                 return (
                     <div
@@ -84,17 +85,13 @@ export function UserSurfacesPanel() {
                             ) : null}
                         </div>
 
-                        {surfaces.length <= 1 ? (
-                            <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                                Answers you from {podLabel(surfaces[0]?.pod_id ?? '')}.
-                            </p>
-                        ) : (
+                        {hasConflict ? (
                             <>
                                 <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                                    You’re reachable from several {platformLabel(group.platform)} surfaces — choose the one that should answer you.
+                                    These pods share one {platformLabel(group.platform)} address — choose the one that should answer you.
                                 </p>
                                 <div className="grid gap-1.5">
-                                    {surfaces.map((surface) => {
+                                    {sharing.map((surface) => {
                                         const isDefault =
                                             surface.is_default || group.default_surface_id === surface.id;
                                         const isSaving = isPending && variables?.surface_id === surface.id;
@@ -127,7 +124,17 @@ export function UserSurfacesPanel() {
                                     })}
                                 </div>
                             </>
-                        )}
+                        ) : null}
+
+                        {own.length ? (
+                            <p className="text-xs leading-5 text-[var(--text-secondary)]">
+                                {own.length === 1
+                                    ? `Answers you from ${podLabel(own[0].pod_id)}.`
+                                    : `${own.length} pods answer you, each at its own address: ${own
+                                          .map((surface) => podLabel(surface.pod_id))
+                                          .join(', ')}.`}
+                            </p>
+                        ) : null}
                     </div>
                 );
             })}

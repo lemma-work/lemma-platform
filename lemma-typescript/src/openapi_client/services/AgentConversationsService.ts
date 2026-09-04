@@ -20,12 +20,13 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead.
+     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive.
      * @param podId
      * @param agentName
      * @param status
      * @param type
      * @param parentId
+     * @param archived
      * @param pageToken
      * @param limit
      * @returns ConversationListResponse Successful Response
@@ -37,6 +38,7 @@ export class AgentConversationsService {
         status?: (ConversationStatus | null),
         type?: (ConversationType | null),
         parentId?: (string | null),
+        archived: boolean = false,
         pageToken?: (string | null),
         limit: number = 20,
     ): CancelablePromise<ConversationListResponse> {
@@ -51,6 +53,7 @@ export class AgentConversationsService {
                 'status': status,
                 'type': type,
                 'parent_id': parentId,
+                'archived': archived,
                 'page_token': pageToken,
                 'limit': limit,
             },
@@ -254,6 +257,36 @@ export class AgentConversationsService {
             mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Append Pod Conversation Message
+     * Append a user message without opening a Server-Sent Events stream. When a run is already active for the conversation, the message joins that run and the next harness step sees it in persisted history -- any stream already subscribed to the conversation surfaces the resulting events, so callers steering an in-flight run should attach to that stream rather than opening a second one here. When no run is active, this starts a new one exactly like the streaming send route, just without attaching a stream to it.
+     * @param podId
+     * @param conversationId
+     * @param requestBody
+     * @returns AgentRunStartResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationMessageAppend(
+        podId: string,
+        conversationId: string,
+        requestBody: SendMessageRequest,
+    ): CancelablePromise<AgentRunStartResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/append',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Conversation was not found or is not visible`,
+                422: `Validation Error`,
+                429: `The account usage limit was exceeded`,
             },
         });
     }

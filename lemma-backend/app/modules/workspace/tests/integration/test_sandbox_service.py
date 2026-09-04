@@ -18,6 +18,10 @@ from app.modules.workspace.domain.sandbox import (
     SandboxKind,
     SandboxOwnerKind,
 )
+from sqlalchemy import update
+
+from app.modules.workspace.domain.sandbox import SandboxInstanceState
+from app.modules.workspace.infrastructure.models import SandboxInstanceModel
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -157,6 +161,11 @@ async def test_a_sandbox_from_a_superseded_profile_is_replaced(
         "workspace_profile_digest",
         "sha256:" + "f" * 64,
     )
+    # `ensure` reuses a just-provisioned handle for a few seconds without
+    # re-reading anything, so the staleness check under test is only reached
+    # once that window is given up. A real digest move arrives on deploy,
+    # minutes away from any ensure; here the two are microseconds apart.
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
 
     assert second.provider_id != first.provider_id, "the stale one must not be reused"
@@ -191,6 +200,7 @@ async def test_the_recorded_profile_follows_the_configured_one(
         monkeypatch.setattr(
             profiles.workspace_settings, "workspace_profile_digest", digest
         )
+        service.forget(sandbox.id)  # see the superseded-profile test above
         await service.ensure(sandbox.id)
         assert provider.created[-1].profile_digest == digest
 
@@ -246,7 +256,10 @@ async def test_recreating_always_moves_the_epoch(
     first = await service.ensure(sandbox.id)
 
     # The container vanishes, exactly as it would if the host were restarted.
+    # Discovering that is what `forget` reports, and until something does, a
+    # handle provisioned moments ago is still served from memory.
     provider.containers.clear()
+    service.forget(sandbox.id)
     second = await service.ensure(sandbox.id)
 
     assert second.epoch == first.epoch + 1
@@ -272,6 +285,128 @@ async def test_a_stopped_container_is_restarted_rather_than_replaced(
 
     assert second.epoch == first.epoch
     assert len(provider.created) == 1
+
+
+class NonResumingProvider(FakeProvider):
+    """A provider whose stopped instances cannot be started where they are.
+
+    The desktop guest is this: its control protocol has no start, only a
+    create-or-replace `sandbox.ensure`.
+    """
+
+    resumes_stopped_instances = False
+
+
+async def test_a_stopped_container_is_rebuilt_when_the_provider_cannot_resume(
+    sandbox_uow_factory,
+) -> None:
+    """The bug this closes broke every desktop workspace three minutes after use.
+
+    Idle release stops the container by design. With nothing able to start it
+    again, `ensure` found the stopped container, waited for a runtime that was
+    never coming back, failed, and failed identically on every retry until its
+    deadline — so the workspace stayed broken until something deleted the
+    container by hand.
+    """
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    service.forget(sandbox.id)
+    second = await service.ensure(sandbox.id)
+
+    assert len(provider.created) == 2, "the stopped container was never rebuilt"
+    assert second.epoch > first.epoch
+
+
+async def test_rebuilding_a_stopped_container_keeps_the_files(
+    sandbox_uow_factory,
+) -> None:
+    """New compute, same disk. Rebuilding is only acceptable because of this."""
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    service.forget(sandbox.id)
+    await service.ensure(sandbox.id)
+
+    assert provider.created[1].volume_name == provider.created[0].volume_name
+
+
+async def test_a_claim_on_a_stopped_container_rebuilds_when_it_cannot_resume(
+    sandbox_uow_factory,
+) -> None:
+    """The same branch, one screen down, and it had the same bug.
+
+    A caller that arrives while another replica's row says CREATING waits for
+    that container. Finding it stopped, it used to call `_start` regardless —
+    which for a provider that cannot resume is the identical dead end the
+    ensure path above was fixed for. It should give the claim up and rebuild.
+    """
+    import asyncio
+
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    # The shape a claim leaves behind: a row pointing at a container that is
+    # there but not running.
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id,
+        name=first.provider_id,
+        volume_name=provider.created[0].volume_name,
+        running=False,
+    )
+    async with sandbox_uow_factory() as uow:
+        instance = await SandboxRepository(uow).current_instance(sandbox.id)
+        await uow.session.execute(
+            update(SandboxInstanceModel)
+            .where(SandboxInstanceModel.id == instance.id)
+            .values(state=SandboxInstanceState.CREATING.value)
+        )
+        await uow.commit()
+
+    service.forget(sandbox.id)
+    SandboxService._inflight.clear()
+    second = await asyncio.wait_for(service.ensure(sandbox.id), timeout=30)
+
+    assert len(provider.created) == 2, "the claim was adopted instead of rebuilt"
+    assert second.epoch > first.epoch
+
+
+async def test_a_running_container_is_still_reused_by_a_non_resuming_provider(
+    sandbox_uow_factory,
+) -> None:
+    """Rebuilding is for stopped instances only, not a second create per call."""
+    SandboxService._inflight.clear()
+    provider = NonResumingProvider()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+
+    service.forget(sandbox.id)
+    second = await service.ensure(sandbox.id)
+
+    assert len(provider.created) == 1
+    assert second.epoch == first.epoch
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +440,7 @@ async def test_losing_a_recorded_volume_moves_the_generation(
     # The disk is gone, and the row still says there was one.
     provider.volumes.clear()
     provider.containers.clear()
+    service.forget(sandbox.id)
     handle = await service.ensure(sandbox.id)
 
     assert handle.storage_generation == 2

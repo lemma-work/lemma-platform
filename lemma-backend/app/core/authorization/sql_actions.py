@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import String, and_, case, cast, exists, false, func, literal, or_
+from sqlalchemy import (
+    Boolean,
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    false,
+    func,
+    literal,
+    or_,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, array
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
@@ -19,7 +30,10 @@ from app.core.authorization.delegation import DESTRUCTIVE_ACTIONS
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import equivalent_permission_ids
-from app.core.authorization.resource_actions import RESOURCE_ACTIONS, owner_actions_for_resource
+from app.core.authorization.resource_actions import (
+    RESOURCE_ACTIONS,
+    owner_actions_for_resource,
+)
 from app.modules.datastore.infrastructure.models.datastore_models import DatastoreFile
 
 # Resource types whose grants cascade down a path hierarchy (a grant on a
@@ -64,9 +78,7 @@ def allowed_actions_expr(
     if ctx.is_superuser:
         return _text_array(all_actions)
 
-    role_actions = [
-        action for action in resource_actions if ctx.has_permission(action)
-    ]
+    role_actions = [action for action in resource_actions if ctx.has_permission(action)]
     owner_actions = list(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
@@ -91,7 +103,10 @@ def allowed_actions_expr(
             visibility_col=visibility_col,
         )
 
-    if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD and ctx.workload_principal_refs:
+    if (
+        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        and ctx.workload_principal_refs
+    ):
         return _delegated_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -156,14 +171,24 @@ def allowed_read_filter(
         visibility_col=visibility_col,
         resource_path_col=resource_path_col,
     )
-    return allowed_actions_contains(allowed_actions, read_action_for_resource(resource_type))
+    return allowed_actions_contains(
+        allowed_actions, read_action_for_resource(resource_type)
+    )
 
 
 def allowed_actions_contains(
     allowed_actions: ColumnElement,
     action: str,
 ) -> ColumnElement[bool]:
-    return allowed_actions.op("@>")(_text_array([action]))
+    """``allowed_actions @> ARRAY[action]`` — does this row permit *action*?
+
+    ``return_type`` is not cosmetic. Without it the expression inherits the
+    left operand's type, so SQLAlchemy labels a *boolean* as ``text[]`` and
+    hands the row's ``True`` to the array result processor. In a WHERE clause
+    that never shows, because nothing reads the value back; the first time this
+    was SELECTed it raised ``'bool' object is not iterable``.
+    """
+    return allowed_actions.op("@>", return_type=Boolean)(_text_array([action]))
 
 
 def _anonymous_allowed_actions_expr(
@@ -171,7 +196,9 @@ def _anonymous_allowed_actions_expr(
     resource_actions: Sequence[str],
     visibility_col,
 ) -> ColumnElement:
-    public_read_actions = [action for action in resource_actions if action.endswith(".read")]
+    public_read_actions = [
+        action for action in resource_actions if action.endswith(".read")
+    ]
     if visibility_col is None or not public_read_actions:
         return _text_array([])
     return case(
@@ -192,10 +219,22 @@ def _delegated_allowed_actions_expr(
     empty_actions: ColumnElement,
     resource_path_col=None,
 ) -> ColumnElement:
-    # Grant-first: the workload's own grants decide the projection for every
-    # visibility, mirroring _authorize_delegated_workload. The invoking user's
-    # role neither widens nor narrows it; only PERSONAL rows owned by someone
-    # else stay empty.
+    # The workload's own grants decide the projection for every visibility;
+    # only PERSONAL rows owned by someone else stay empty.
+    #
+    # That is HALF of what ``workload_authority`` decides. Since PS-ACCESS-020
+    # was implemented, a delegated action also has to clear the invoking
+    # person's own authority, and that half is not expressible here: their
+    # access comes from role permissions, ownership and visibility as well as
+    # grants. So this projection can be *wider* than what the workload may
+    # actually do, and every action it lists is re-decided by ``authorize``
+    # before it happens.
+    #
+    # Deliberate rather than overlooked: the projection is exactly as wide as
+    # it was when grants were standalone authority, so narrowing the decision
+    # took exposure away and left none behind. Narrowing the projection to
+    # match means intersecting two text[] expressions per row, which is worth
+    # doing on its own and not on the way past.
     workload_actions = _conditional_actions_array_expr(
         [
             (
@@ -336,9 +375,7 @@ def _grant_exists_for_action(
                     granted.pod_id == pod_id_col,
                     or_(
                         resource_path_col == granted.path,
-                        func.left(
-                            resource_path_col, func.length(granted.path) + 1
-                        )
+                        func.left(resource_path_col, func.length(granted.path) + 1)
                         == granted.path.concat("/"),
                     ),
                 ),

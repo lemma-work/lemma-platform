@@ -29,7 +29,9 @@ def _pf_handler() -> logging.Handler:
 
 @pytest.fixture
 def log_buf():
-    setup_logging("development", service_name="lemma-test", json_logs=True, log_level="DEBUG")
+    setup_logging(
+        "development", service_name="lemma-test", json_logs=True, log_level="DEBUG"
+    )
     # The module was imported under the default INFO filter; rebind its observer
     # so DEBUG-only normal completions are visible in this test.
     app_module.logger = get_logger("app.app")
@@ -138,9 +140,7 @@ def test_auth_denial_is_debug_only(log_buf):
     c = _client()
     c.get("/http401")
     c.get("/http403")
-    auth = [
-        e for e in _events(log_buf) if e.get("event") == "http.request.completed"
-    ]
+    auth = [e for e in _events(log_buf) if e.get("event") == "http.request.completed"]
     assert len(auth) == 2
     assert all(e["level"] == "debug" for e in auth)
     assert {e["status_code"] for e in auth} == {401, 403}
@@ -163,9 +163,7 @@ def test_repeated_auth_denial_has_no_operator_level_event(log_buf):
 def test_rate_limit_logs_throttled_warning(log_buf):
     c = _client()
     c.get("/http429")
-    rl = [
-        e for e in _events(log_buf) if e.get("event") == "http.request.rate_limited"
-    ]
+    rl = [e for e in _events(log_buf) if e.get("event") == "http.request.rate_limited"]
     assert len(rl) == 1
     assert rl[0]["level"] == "warning"
     assert rl[0]["status_code"] == 429

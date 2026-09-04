@@ -1,7 +1,6 @@
 """Progress-streaming tool-coverage matrix: tool-call activity renders as a
 live, edited message on Slack (chat.update), Telegram (editMessageText), and
-Teams (PUT activity) — the three platforms in
-``progress_observer._STREAM_PROGRESS_PLATFORMS``.
+Teams (PUT activity).
 
 Each scripted tool call carries a ``comment`` (nested under ``request``, since
 every platform tool takes a single ``request: Model`` parameter and no such
@@ -10,13 +9,16 @@ progress observer reads that comment straight off the persisted (pre-tool-
 execution) event to drive the live status text, independent of whatever the
 wrapped tool itself returns.
 
-N/A cells (see ``_STREAM_PROGRESS_PLATFORMS``/``_TEXT_PROGRESS_PLATFORMS`` in
-``progress_observer.py``):
-- **WhatsApp has no message-edit API** — it gets no per-step progress at all
-  (only the inbound reaction/typing indicator signals work is happening).
-- **Email gets one composed reply, never a stream** — Gmail/Outlook/Resend
-  recipients would find a live-editing inbox message bizarre; the observer
-  intentionally skips streaming there regardless of platform capability.
+Which platforms belong here is decided by ``ProgressStyle`` on the platform
+capability (see ``progress_display.py``), and the cells this file does not cover
+are the styles that are not an edited message:
+
+- **WhatsApp** (``POST``) has no message-edit API, so it cannot appear in a
+  matrix about edits. It is not silent — it posts the agent's plan as its own
+  message, rationed — but that path is driven by plan changes rather than by
+  per-tool comments, and is covered in ``tests/unit/test_progress_observer.py``.
+- **Email** (``NONE``) gets one composed reply, never a stream — Gmail/Outlook/
+  Resend recipients would find a live-editing inbox message bizarre.
 """
 
 from __future__ import annotations
@@ -29,7 +31,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -63,12 +67,12 @@ async def test_progress_streams_via_chat_update_on_slack(
 ):
     """Slack opens one native stream, appends the answer, and closes it."""
     from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
     # Disable the inter-update throttle so both progress comments stream.
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -104,9 +108,7 @@ async def test_progress_streams_via_chat_update_on_slack(
 
     starts = await wait_for_messages(message_store, "SLACK_STREAM_START", min_count=1)
     assert starts[-1]["channel"] == "D0123456"
-    chunks = await wait_for_messages(
-        message_store, "SLACK_STREAM_APPEND", min_count=1
-    )
+    chunks = await wait_for_messages(message_store, "SLACK_STREAM_APPEND", min_count=1)
     # Across appends, not within one: the token buffer flushes on a size *or*
     # time trigger, so the answer can be split at an arbitrary character.
     delivered = await wait_for_slack_text(message_store, "Here is the answer.")
@@ -126,9 +128,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
 ):
     """Tool activity streams as an edited Telegram message (editMessageText);
     the placeholder is cleared before the final answer is sent as a new one."""
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
     monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
     monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
@@ -138,7 +140,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
     )
     pod_id = test_pod["id"]
     sender_id = 555070809
-    await _create_agent_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
+    await _create_agent_surface(
+        authenticated_client, pod_id, config={"type": "TELEGRAM"}
+    )
     await _seed_external_user(
         db_session,
         platform="TELEGRAM",
@@ -146,7 +150,9 @@ async def test_progress_streams_via_edit_message_on_telegram(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
 
-    payload = _telegram_payload(text="do some work", message_id=941, sender_id=sender_id)
+    payload = _telegram_payload(
+        text="do some work", message_id=941, sender_id=sender_id
+    )
     await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
@@ -178,9 +184,9 @@ async def test_progress_streams_via_put_activity_on_teams(
     is a new activity POST."""
     from app.core.config import settings as app_settings
     from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-    from app.modules.agent_surfaces.services import progress_observer as _po
+    from app.modules.agent_surfaces.services import progress_display as _pd
 
-    monkeypatch.setattr(_po, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(_pd, "_MIN_TEXT_PROGRESS_INTERVAL_SECONDS", 0.0)
 
     async def _fake_bot_token(self, tenant_id: str) -> str | None:
         del self, tenant_id
@@ -233,5 +239,7 @@ async def test_progress_streams_via_put_activity_on_teams(
     updates = await wait_for_messages(message_store, "TEAMS_UPDATE", min_count=1)
     assert any("Reading the results" in json.dumps(u) for u in updates)
     final = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    final_bodies = [m["body"] for m in final if m.get("body", {}).get("type") == "message"]
+    final_bodies = [
+        m["body"] for m in final if m.get("body", {}).get("type") == "message"
+    ]
     assert "Here is the answer." in final_bodies[-1].get("text", "")

@@ -65,14 +65,14 @@ def test_kreuzberg_legacy_flag_cannot_add_a_local_service(config, paths, manifes
     assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
     assert backend.env["KREUZBERG_URL"] == ""
-    assert backend.env["DOCUMENT_PROCESSOR"] == "markitdown"
+    assert backend.env["DOCUMENT_PROCESSOR"] == "xberg"
 
 
-def test_document_processor_is_in_process_markitdown(config, paths, manifest):
+def test_document_processor_is_in_process_xberg(config, paths, manifest):
     specs = build(config, paths, manifest)
     assert "kreuzberg" not in [s.name for s in specs]
     backend = by_name(specs, "backend")
-    assert backend.env["DOCUMENT_PROCESSOR"] == "markitdown"
+    assert backend.env["DOCUMENT_PROCESSOR"] == "xberg"
     assert backend.env["KREUZBERG_URL"] == ""
 
 
@@ -89,7 +89,10 @@ def test_run_args_snapshot_db(config, paths, manifest):
     assert f"{paths.postgres_init_dir}:/docker-entrypoint-initdb.d:ro" in joined
     assert "--health-cmd pg_isready -U postgres -h localhost" in joined
     assert "-p" not in args  # no host ports for infra
-    assert args[-1] == "docker.io/pgvector/pgvector:0.8.3-pg16"
+    # Read from the manifest defaults rather than restated here: a literal
+    # meant this test had to be edited by hand every time the image moved, and
+    # it silently pinned an old major when nobody remembered.
+    assert args[-1] == m.DEFAULT_INFRA_IMAGES["postgres"]
 
 
 def test_run_args_loopback_only_ports(config, paths, manifest):
@@ -211,7 +214,6 @@ def test_backend_env_golden(config, paths, manifest):
     assert env["SUPERTOKENS_CORE_URL"] == "http://supertokens:3567"
     assert env["WORKSPACE_CALLBACK_API_URL"] == "http://backend:8000"
     assert env["FUNCTION_RUNTIME_GATEWAY_URL"] == "http://backend:8000"
-    assert env["SCHEDULER_API_URL"] == "http://backend:8000"
     assert env["API_URL"] == "http://app.lemma.localhost:8711"
     assert env["FRONTEND_URL"] == "http://app.lemma.localhost:3711"
     assert env["AUTH_FRONTEND_URL"] == "http://app.lemma.localhost:3711/auth"

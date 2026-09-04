@@ -31,8 +31,7 @@ def _endpoint(
         allocation_id=uuid4(),
         allocation_epoch=1,
         profile_digest=f"sha256:{'a' * 64}",
-        expires_at=expires_at
-        or datetime.now(timezone.utc) + timedelta(hours=1),
+        expires_at=expires_at or datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
 
@@ -275,3 +274,58 @@ async def test_runtime_endpoint_cache_joiner_does_not_wait_past_own_deadline() -
 
     release.set()
     assert await leader == endpoint
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_load_is_not_inherited_by_the_next_caller() -> None:
+    """One slow start must not become a run of identical slow failures.
+
+    A caller that gives up leaves its loader running -- deliberately, because
+    the loader carries its own longer deadline. The bug was that it also stayed
+    in the join table, so the *next* request attached to the same task and
+    inherited whatever was left of its wait. Observed as four consecutive
+    ~121-second failures where only the first had any reason to be slow.
+    """
+    now = datetime.now(timezone.utc)
+    cache = FunctionRuntimeEndpointCache(wall_clock=lambda: now)
+    key = _key()
+    required_until = now + timedelta(minutes=1)
+    endpoint = _endpoint("https://runtime.example/eventually/")
+
+    starts = 0
+    release = asyncio.Event()
+
+    async def slow_loader() -> FunctionRuntimeEndpoint:
+        nonlocal starts
+        starts += 1
+        await release.wait()
+        return endpoint
+
+    # First caller gives up immediately.
+    with pytest.raises(TimeoutError, match="caller deadline"):
+        await cache.get(
+            key,
+            required_valid_until=required_until,
+            wait_until=now,
+            loader=slow_loader,
+        )
+
+    # The second must start its own work rather than joining the abandoned one.
+    fast = _endpoint("https://runtime.example/fresh/")
+
+    async def fast_loader() -> FunctionRuntimeEndpoint:
+        nonlocal starts
+        starts += 1
+        return fast
+
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=fast_loader,
+        )
+        == fast
+    ), "the second caller inherited the abandoned load instead of starting its own"
+    assert starts == 2
+
+    release.set()

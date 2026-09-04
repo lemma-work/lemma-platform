@@ -55,7 +55,7 @@ async def test_model_http_error_emits_sanitized_ui_message(monkeypatch) -> None:
     assert "deepseek-v4-flash" not in events[0].data
     assert "sk-secret-should-not-appear" not in events[0].data
     assert "Model not found" not in events[0].data
-    assert "Please check the agent runtime configuration." in events[0].data
+    assert "not available on this provider" in events[0].data
 
 
 @pytest.mark.asyncio
@@ -214,15 +214,126 @@ def test_quota_exhaustion_reads_as_a_limit_not_a_misconfiguration() -> None:
     a bug in a system that was working exactly as designed."""
     import httpx
 
-    from app.modules.agent.services.agent_runner_service import _run_failure_message
+    from app.modules.agent.services.run_finalizer import run_failure_message
     from app.modules.usage.domain.errors import UsageLimitExceededError
 
-    quota = _run_failure_message(UsageLimitExceededError("over limit"))
+    quota = run_failure_message(UsageLimitExceededError("over limit"))
     assert "usage allowance" in quota
     assert "runtime configuration" not in quota
 
-    dropped = _run_failure_message(httpx.ReadError("connection reset"))
+    dropped = run_failure_message(httpx.ReadError("connection reset"))
     assert "Nothing you sent was lost" in dropped
 
-    generic = _run_failure_message(ValueError("something else"))
+    generic = run_failure_message(ValueError("something else"))
     assert "Agent run failed" in generic
+
+
+class TestAProviderRefusalSaysWhichRefusalItWas:
+    """401, 404 and a context overflow all read as one sentence telling the
+    reader to check the runtime configuration, which is the right action for
+    none of them. The identifiers that separate them are already pulled out of
+    the body for the log line and were then discarded.
+    """
+
+    def _message(self, status_code: int, body: object) -> str:
+        from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+            user_facing_error_message,
+        )
+
+        return user_facing_error_message(
+            ModelHTTPError(status_code=status_code, model_name="m", body=body)
+        )
+
+    def test_a_rejected_credential_says_so(self) -> None:
+        message = self._message(401, {"error": {"type": "authentication_error"}})
+
+        assert "credential" in message
+        assert "API key" in message
+
+    def test_a_forbidden_credential_reads_the_same_way(self) -> None:
+        assert "credential" in self._message(403, {})
+
+    def test_an_unknown_model_names_the_choice_to_change(self) -> None:
+        message = self._message(404, {"error": {"type": "not_found_error"}})
+
+        assert "not available on this provider" in message
+        assert "Pick another model" in message
+
+    def test_a_context_overflow_says_the_conversation_is_too_long(self) -> None:
+        message = self._message(
+            400,
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "context_length_exceeded",
+                }
+            },
+        )
+
+        assert "too long for the model's context window" in message
+        assert "Start a new conversation" in message
+
+    def test_an_unrecognised_400_still_falls_back(self) -> None:
+        """The generic sentence is right when nothing identifies the failure."""
+        message = self._message(400, {"error": {"type": "invalid_request_error"}})
+
+        assert "HTTP 400" in message
+        assert "Please check the agent runtime configuration." in message
+
+    def test_no_provider_prose_reaches_the_reader(self) -> None:
+        message = self._message(
+            401,
+            {
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Incorrect API key provided: sk-secret",
+                }
+            },
+        )
+
+        assert "sk-secret" not in message
+
+
+class TestAFailureMessageNamesOnlyControlsThatWork:
+    """Retry accepts a failed run only while it holds nothing but user
+    messages, and `last_run_retryable` answers the same question -- so on the
+    two failures that used to advertise it, the button is both refused and not
+    offered. Naming it sent people to a control that answers 409.
+    """
+
+    def _message(self, exc: Exception) -> str:
+        from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+            user_facing_error_message,
+        )
+
+        return user_facing_error_message(exc)
+
+    def test_a_dropped_stream_does_not_advertise_retry(self) -> None:
+        import httpx
+
+        message = self._message(httpx.ReadError("connection reset"))
+
+        assert "Retry" not in message
+        assert "send another message" in message
+
+    def test_a_part_way_cancellation_does_not_advertise_retry(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+            HarnessDriverCancelled,
+        )
+
+        message = self._message(HarnessDriverCancelled("driver went away"))
+
+        assert "Retry" not in message
+        assert "send another message" in message
+
+    def test_the_finalizer_says_the_same_thing(self) -> None:
+        """Two modules write this sentence for the same failure; only one of
+        them having been softened is how they drift back apart."""
+        import httpx
+
+        from app.modules.agent.services.run_finalizer import run_failure_message
+
+        message = run_failure_message(httpx.ReadError("connection reset"))
+
+        assert "Retry" not in message
+        assert "send another message" in message

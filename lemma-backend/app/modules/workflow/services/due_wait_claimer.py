@@ -62,5 +62,3 @@ async def claim_due_workflow_waits(
             )
         )
     return claimed
-
-

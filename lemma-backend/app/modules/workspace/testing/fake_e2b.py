@@ -90,22 +90,77 @@ class FakeE2B:
     paused: list[str] = field(default_factory=list)
     files: dict[str, bytes] = field(default_factory=dict)
     commands: list[str] = field(default_factory=list)
+    # The directory each command was started in, in the order they started.
+    # Recorded because E2B answers a `cwd=None` by starting the process in the
+    # image's own default -- a real directory, so the command succeeds and a
+    # fake that dropped the argument could not tell "the provider said where"
+    # from "the provider said nothing". It said nothing for `execute_python`,
+    # and that is precisely how the interpreter ended up in `/workspace` while
+    # the shell was in the conversation's directory.
+    command_cwds: list[str | None] = field(default_factory=list)
+    pause_kept_memory: list[bool] = field(default_factory=list)
+    #: What the runtime port answers. 404 is a healthy runtime -- route absent,
+    #: port listening -- and 502 is the sandbox whose runtime process has died
+    #: while the VM keeps running, which is the state readiness must now catch.
+    runtime_status: int = 404
+    #: Whether the sandbox agent answers a command. Workspace readiness is a
+    #: smoke command through the agent -- there is no runtime port to probe --
+    #: so a workspace whose agent is down is modelled here, not with
+    #: `runtime_status`.
+    agent_answers: bool = True
     # The lifetime each started process was given, in the order they started.
     # Recorded because E2B kills a command at this value and defaults it to 60s,
     # so "the provider passed no timeout" is indistinguishable from "the
     # provider asked for a minute" unless a test can see the argument.
     process_timeouts: list[float | None] = field(default_factory=list)
+    # The lifecycle each sandbox was created with, and the timeout each connect
+    # asked for. Both are recorded for the same reason as `process_timeouts`:
+    # E2B defaults them to values that destroy things -- `on_timeout: "kill"`
+    # and a five-minute lease -- so a fake that quietly accepted whatever it was
+    # given could not tell "the provider asked for this" from "the provider
+    # passed nothing". It did accept them, into `**_kwargs`, for the whole time
+    # the provider was passing neither.
+    created_lifecycles: list[Any] = field(default_factory=list)
+    connect_timeouts: list[float | None] = field(default_factory=list)
+    # Small, so every listing test crosses a page boundary.
+    list_page_size: int = 2
     _next: int = 0
 
     def sandbox_class(self):
         world = self
 
         class _Paginator:
-            def __init__(self, items):
-                self._items = items
+            """Pages, like the real one.
+
+            It used to hand back everything in a single `next_items()` and had
+            no `has_next` at all, so a provider that read one page looked
+            complete against it and truncated against the real service. Two
+            listings did exactly that, and for adoption the consequence is a
+            second sandbox created for an identity that already has one --
+            stranding the user's files in the first. The page size is small on
+            purpose: pagination should be exercised by ordinary tests, not only
+            by ones written to think about it.
+            """
+
+            def __init__(self, items, page_size: int):
+                self._items = list(items)
+                self._page_size = max(1, page_size)
+                self._offset = 0
+                self._served_any = False
+
+            @property
+            def has_next(self) -> bool:
+                if self._offset < len(self._items):
+                    return True
+                # One empty page for an empty listing, so a caller that drains
+                # gets the same "nothing here" a first read would have given.
+                return not self._served_any
 
             async def next_items(self):
-                return self._items
+                page = self._items[self._offset : self._offset + self._page_size]
+                self._offset += self._page_size
+                self._served_any = True
+                return page
 
         class _Commands:
             def __init__(self, sandbox_id: str):
@@ -123,7 +178,10 @@ class FakeE2B:
                 timeout=None,
                 **_kwargs,
             ):
+                if not world.agent_answers:
+                    raise FakeE2BError("the sandbox agent is not answering")
                 world.commands.append(cmd)
+                world.command_cwds.append(cwd)
                 world.process_timeouts.append(timeout)
                 if on_stdout is not None:
                     await on_stdout(f"ran: {cmd}")
@@ -193,6 +251,7 @@ class FakeE2B:
                 **_kwargs,
             ):
                 world._next += 1
+                world.command_cwds.append(cwd)
                 world.process_timeouts.append(timeout)
                 if on_data is not None:
                     await on_data(b"$ ")
@@ -200,7 +259,7 @@ class FakeE2B:
 
             async def send_stdin(self, pid, data, **_kwargs):
                 world.commands.append(data.decode().strip())
-                return None
+                return
 
             async def resize(self, pid, size, **_kwargs):
                 return None
@@ -222,6 +281,7 @@ class FakeE2B:
                 metadata=None,
                 envs=None,
                 volume_mounts=None,
+                lifecycle=None,
                 **_kwargs,
             ):
                 world._next += 1
@@ -235,12 +295,16 @@ class FakeE2B:
                         "metadata": dict(metadata or {}),
                         "volume_mounts": volume_mounts,
                         "envs": envs,
+                        "lifecycle": lifecycle,
+                        "timeout": timeout,
                     }
                 )
+                world.created_lifecycles.append(lifecycle)
                 return FakeAsyncSandbox(sandbox_id)
 
             @staticmethod
-            async def connect(sandbox_id, **_kwargs):
+            async def connect(sandbox_id, timeout=None, **_kwargs):
+                world.connect_timeouts.append(timeout)
                 if sandbox_id not in world.sandboxes:
                     raise NotFoundException(f"sandbox {sandbox_id} not found")
                 # Reconnecting resumes a paused sandbox, as the real SDK does.
@@ -251,13 +315,12 @@ class FakeE2B:
             def list(query=None, **_kwargs):
                 wanted = dict(getattr(query, "metadata", None) or {})
                 return _Paginator(
-                    [
+                    page_size=world.list_page_size,
+                    items=[
                         info
                         for info in world.sandboxes.values()
-                        if all(
-                            info.metadata.get(k) == v for k, v in wanted.items()
-                        )
-                    ]
+                        if all(info.metadata.get(k) == v for k, v in wanted.items())
+                    ],
                 )
 
             async def is_running(self, **_kwargs):
@@ -268,13 +331,38 @@ class FakeE2B:
                 world.sandboxes.pop(self.sandbox_id, None)
                 return True
 
-            async def beta_pause(self, keep_memory=True, **_kwargs):
+            async def pause(self, keep_memory=True, **_kwargs):
+                # Recorded because the default is the bug: a workspace pause
+                # that keeps memory restores whatever was running into the
+                # next conversation.
+                world.pause_kept_memory.append(keep_memory)
                 world.paused.append(self.sandbox_id)
                 world.sandboxes[self.sandbox_id].state = "paused"
                 return True
 
+            async def beta_pause(self, keep_memory=True, **_kwargs):
+                # Kept because the real SDK still carries it, deprecated, and a
+                # double that drops a method the provider might call would
+                # certify a call that no longer exists. It delegates rather
+                # than duplicating, so the two can never disagree about what a
+                # pause records.
+                return await self.pause(keep_memory=keep_memory, **_kwargs)
+
             def get_host(self, port):
                 return f"{port}-{self.sandbox_id}.e2b.test"
+
+            def runtime_status(self, port):
+                """What the runtime port would answer, without serving HTTP.
+
+                Readiness now probes the runtime rather than trusting
+                `is_running()`, because a VM outlives the process it was started
+                for. A fake sandbox has no port to probe, so it declares the
+                answer: 404 is what a healthy runtime gives (route absent, port
+                listening) and what `world.runtime_status` can be set away from
+                to model the sandbox whose runtime has died.
+                """
+                del port
+                return world.runtime_status
 
         return FakeAsyncSandbox
 

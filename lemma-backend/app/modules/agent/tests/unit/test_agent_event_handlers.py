@@ -6,11 +6,21 @@ from uuid import uuid4
 import pytest
 from streaq.task import TaskStatus
 
-from app.modules.agent.domain.events import AgentRunCompletedEvent, AgentRunStopRequestedEvent
+from app.modules.agent.domain.events import (
+    AgentRunCompletedEvent,
+    AgentRunStartedEvent,
+    AgentRunStopRequestedEvent,
+)
 from app.modules.agent.events.handlers import conversation_title_job_id
-from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    ConversationStatus,
+)
 from app.modules.agent.events import handlers
-from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
+from app.modules.agent.domain.run_projections import (
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 from app.modules.test_support.fakes import PassthroughEventInbox
 
 
@@ -35,7 +45,9 @@ class _JobQueue:
         self.abort_called = True
         return True
 
-    async def enqueue(self, task_name: str, *, context: dict, _job_id: str | None = None):
+    async def enqueue(
+        self, task_name: str, *, context: dict, _job_id: str | None = None
+    ):
         self.enqueued.append((task_name, context, _job_id))
         return object()
 
@@ -163,6 +175,47 @@ async def test_completed_event_enqueues_dedup_title_job() -> None:
 
 
 @pytest.mark.asyncio
+async def test_started_event_also_enqueues_dedup_title_job() -> None:
+    """The title only needs the user's first message, already saved by the
+    time this event fires, so it starts on run-start rather than waiting for
+    the run to finish -- a long-running turn should not leave the
+    conversation title-less for its whole duration."""
+    job_queue = _JobQueue(TaskStatus.SCHEDULED)
+    started_event = AgentRunStartedEvent(
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        agent_name="hello",
+    )
+
+    await handlers.handle_agent_control_event(
+        started_event.model_dump(mode="json"),
+        fs_logger=_Logger(),
+        job_queue=job_queue,
+        uow_factory=_UowFactory(),
+        inbox=PassthroughEventInbox(),
+    )
+
+    assert (
+        "process_agent_run",
+        {
+            "agent_run_id": str(started_event.agent_run_id),
+            "conversation_id": str(started_event.conversation_id),
+            "user_id": str(started_event.user_id),
+            "pod_id": str(started_event.pod_id),
+            "agent_name": started_event.agent_name,
+        },
+        handlers.agent_run_job_id(started_event.agent_run_id),
+    ) in job_queue.enqueued
+    assert (
+        "generate_conversation_title",
+        {"conversation_id": str(started_event.conversation_id)},
+        conversation_title_job_id(started_event.conversation_id),
+    ) in job_queue.enqueued
+
+
+@pytest.mark.asyncio
 async def test_stop_requested_for_running_run_is_left_for_cooperative_stop() -> None:
     job_queue = _JobQueue(TaskStatus.RUNNING)
     stop_event = AgentRunStopRequestedEvent(
@@ -207,8 +260,21 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
         def __init__(self, uow) -> None:
             self.uow = uow
 
+        async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
+            return []
+
+        async def list_active_runs_pending_liveness(
+            self, *, cutoff_seconds, decided_after_seconds, limit=200
+        ):
+            return []
+
         async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
             return stale
+
+        async def list_conversations_stranded_by_a_finished_run(
+            self, *, cutoff_seconds, limit=200
+        ):
+            return []
 
         async def finish_agent_run(self, *, agent_run_id, status, error=None):
             finished.append(agent_run_id)
@@ -241,6 +307,74 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
     assert event.agent_run_id == run1
     assert event.status == AgentRunStatus.FAILED
     assert [cid for cid, _ in realtime] == [conv1]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_settles_a_conversation_its_run_already_left_behind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The blind spot: a finished run whose conversation stayed active.
+
+    `list_stale_active_runs` asks only about runs, so it cannot see this one —
+    the run is terminal, therefore not stale — and nothing else ever will,
+    because a terminal run is never finalized again. Dev reported exactly this
+    pairing (`status: RUNNING` beside `last_run_status: COMPLETED`), and it
+    wedges whatever waits on the conversation.
+
+    The conversation is settled as what the *run* actually did, so a failed run
+    is never recorded as a completed conversation.
+    """
+    completed, failed = uuid4(), uuid4()
+    settled: list[tuple[object, object]] = []
+
+    class _Repo:
+        def __init__(self, uow) -> None:
+            self.uow = uow
+
+        async def list_runs_stuck_stopping(self, *, cutoff_seconds, limit=200):
+            return []
+
+        async def list_active_runs_pending_liveness(
+            self, *, cutoff_seconds, decided_after_seconds, limit=200
+        ):
+            return []
+
+        async def list_stale_active_runs(self, *, cutoff_seconds, limit=200):
+            return []
+
+        async def list_conversations_stranded_by_a_finished_run(
+            self, *, cutoff_seconds, limit=200
+        ):
+            return [
+                StrandedConversationRef(id=completed, run_status="COMPLETED"),
+                StrandedConversationRef(id=failed, run_status="FAILED"),
+            ]
+
+        async def set_conversation_status(self, *, conversation_id, status):
+            settled.append((conversation_id, status))
+
+        def collect_events(self, events: list[object]) -> None:
+            self.uow.collect_events(events)
+
+    monkeypatch.setattr(handlers, "ConversationRepository", _Repo)
+    monkeypatch.setattr(handlers, "publish_conversation_event", _no_realtime)
+    uow_factory = _UowFactory()
+    monkeypatch.setattr(
+        handlers,
+        "streaq_worker",
+        SimpleNamespace(context=SimpleNamespace(uow=lambda: uow_factory)),
+    )
+
+    await handlers.reconcile_orphaned_agent_runs()
+
+    assert settled == [
+        (completed, ConversationStatus.COMPLETED),
+        (failed, ConversationStatus.FAILED),
+    ]
+
+
+async def _no_realtime(conversation_id, payload) -> None:
+    _ = conversation_id, payload
 
 
 class _ApprovalUowFactory:
@@ -288,7 +422,9 @@ class TestApprovalReconciliationJob:
             ),
         )
         monkeypatch.setattr(handlers, "AgentRepository", lambda uow: None)
-        monkeypatch.setattr(handlers, "create_authorization_service", lambda uow: None)
+        monkeypatch.setattr(
+            handlers, "create_authorization_data_service", lambda uow: None
+        )
         monkeypatch.setattr(handlers, "build_usage_service", lambda uow: None)
 
         class _Service:

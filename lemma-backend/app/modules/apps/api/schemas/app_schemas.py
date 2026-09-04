@@ -51,9 +51,10 @@ class AppResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @computed_field(return_type=str)
+    @computed_field(return_type=str | None)
     @property
-    def url(self) -> str:
+    def url(self) -> str | None:
+        """None where no app host is served -- see `public_app_url`."""
         return public_app_url(self.public_slug)
 
 
@@ -77,9 +78,7 @@ class AppReleaseResponse(BaseModel):
     label: Optional[str] = None
     created_by: Optional[UUID] = None
     created_at: Any
-    is_live: bool = Field(
-        description="True for the release this app currently serves."
-    )
+    is_live: bool = Field(description="True for the release this app currently serves.")
     has_source: bool = Field(
         description="Whether this release's own source archive is still stored."
     )

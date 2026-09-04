@@ -106,6 +106,6 @@ def retry_after_seconds(exc: BaseException) -> float | None:
         return None
     try:
         seconds = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return seconds if seconds >= 0 else None

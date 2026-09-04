@@ -43,7 +43,7 @@ from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_service import suppress_agent_run_enqueue
+from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
@@ -51,7 +51,6 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.services.progress_observer import (
@@ -66,7 +65,6 @@ from app.modules.test_support.e2e.scripted_model import (
     ScriptTurn as ScriptTurn,
     script_ask_user as script_ask_user,
     script_display_resource as script_display_resource,
-    script_email_reply as script_email_reply,
     script_progress as script_progress,
     script_request_approval as script_request_approval,
     script_say as script_say,
@@ -172,9 +170,7 @@ async def run_scripted_agent_run(
 
 async def process_ingress_and_run_scripted(
     db_session: AsyncSession,
-    request: SurfacePlatformWebhookIngress
-    | SurfaceDirectWebhookIngress
-    | SurfaceScheduleIngress,
+    request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
     *,
     script: list[ScriptTurn] | None = None,
 ) -> SurfaceContext:

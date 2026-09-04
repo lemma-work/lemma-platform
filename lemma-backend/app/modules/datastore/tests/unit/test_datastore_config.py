@@ -22,6 +22,13 @@ EXPECTED = [
         "DATASTORE_MARKDOWN_BATCH_MAX_BYTES",
         50 * 1024 * 1024,
     ),
+    ("datastore_cell_max_bytes", "DATASTORE_CELL_MAX_BYTES", 256 * 1024),
+    ("datastore_row_max_bytes", "DATASTORE_ROW_MAX_BYTES", 1024 * 1024),
+    (
+        "datastore_event_payload_max_bytes",
+        "DATASTORE_EVENT_PAYLOAD_MAX_BYTES",
+        32 * 1024,
+    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
     (
         "datastore_query_statement_timeout_ms",
@@ -31,6 +38,11 @@ EXPECTED = [
     ("datastore_query_max_rows", "DATASTORE_QUERY_MAX_ROWS", 1000),
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
+    (
+        "datastore_search_visibility_id_soft_limit",
+        "DATASTORE_SEARCH_VISIBILITY_ID_SOFT_LIMIT",
+        20_000,
+    ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
     (
         "document_processing_debounce_seconds",
@@ -38,7 +50,11 @@ EXPECTED = [
         300,
     ),
     ("recovery_enqueue_batch_size", "RECOVERY_ENQUEUE_BATCH_SIZE", 10),
-    ("document_processing_extractor_max_threads", "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS", 4),
+    (
+        "document_processing_extractor_max_threads",
+        "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS",
+        4,
+    ),
     ("datastore_per_pod_max_inflight", "DATASTORE_PER_POD_MAX_INFLIGHT", 4),
     ("datastore_dispatch_global_batch", "DATASTORE_DISPATCH_GLOBAL_BATCH", 50),
     ("datastore_recovery_max_attempts", "DATASTORE_RECOVERY_MAX_ATTEMPTS", 3),
@@ -102,7 +118,11 @@ EXTRA_FIELDS = [
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
     ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),
-    ("document_processing_layout_strategy", "DOCUMENT_PROCESSING_LAYOUT_STRATEGY", "auto"),
+    (
+        "document_processing_layout_strategy",
+        "DOCUMENT_PROCESSING_LAYOUT_STRATEGY",
+        "auto",
+    ),
     ("document_processing_table_model", "DOCUMENT_PROCESSING_TABLE_MODEL", "tatr"),
 ]
 
@@ -136,13 +156,13 @@ def test_effective_document_processor_auto_follows_kreuzberg_url(monkeypatch):
     with_url = DatastoreSettings(kreuzberg_url="http://kreuzberg:8000")
     assert with_url.effective_document_processor() == "kreuzberg"
     without_url = DatastoreSettings(kreuzberg_url="")
-    assert without_url.effective_document_processor() == "markitdown"
+    assert without_url.effective_document_processor() == "xberg"
 
 
 def test_effective_document_processor_explicit_wins(monkeypatch):
-    monkeypatch.setenv("DOCUMENT_PROCESSOR", "markitdown")
+    monkeypatch.setenv("DOCUMENT_PROCESSOR", "xberg")
     # Explicit choice is honoured even though a Kreuzberg URL is present.
-    assert DatastoreSettings().effective_document_processor() == "markitdown"
+    assert DatastoreSettings().effective_document_processor() == "xberg"
     monkeypatch.setenv("DOCUMENT_PROCESSOR", "kreuzberg")
     assert (
         DatastoreSettings(kreuzberg_url="").effective_document_processor()
@@ -156,7 +176,7 @@ def test_effective_document_processor_auto_never_selects_docling(monkeypatch):
     settings = DatastoreSettings(
         kreuzberg_url="", docling_serve_url="http://docling:5001"
     )
-    assert settings.effective_document_processor() == "markitdown"
+    assert settings.effective_document_processor() == "xberg"
     # ...but an explicit choice activates it.
     assert (
         DatastoreSettings(document_processor="docling").effective_document_processor()

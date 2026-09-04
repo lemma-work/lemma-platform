@@ -11,9 +11,11 @@ it there is nothing to fetch with, and the agent sees an empty message.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
-from app.modules.agent_surfaces.platforms.email_common import parse_email_identity
+from app.modules.agent_surfaces.platforms.common import payload_any
+from app.modules.agent_surfaces.platforms.email_identity import parse_email_identity
 
 
 def email_address(value: Any) -> str | None:
@@ -21,7 +23,7 @@ def email_address(value: Any) -> str | None:
     if isinstance(value, list):
         return email_address(value[0]) if value else None
     if isinstance(value, dict):
-        return email_address(value.get("address") or value.get("email"))
+        return email_address(payload_any(value, "address", "email"))
     if isinstance(value, str):
         text = value.strip()
         if "<" in text and ">" in text:
@@ -63,7 +65,9 @@ def _header_value(value: Any) -> str:
         except ValueError:
             return text
         if isinstance(decoded, list):
-            return " ".join(_header_value(item) for item in decoded if _header_value(item))
+            return " ".join(
+                _header_value(item) for item in decoded if _header_value(item)
+            )
     return text
 
 
@@ -110,14 +114,14 @@ def normalize_attachments(raw: Any) -> list[dict[str, Any]]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        name = item.get("filename") or item.get("name")
+        name = payload_any(item, "filename", "name")
         normalized.append(
             {
                 "id": str(item.get("id") or "").strip() or None,
                 "name": str(name).strip() if name else None,
-                "content_type": item.get("content_type") or item.get("contentType"),
+                "content_type": payload_any(item, "content_type", "contentType"),
                 "size": item.get("size"),
-                "content_id": item.get("content_id") or item.get("contentId"),
+                "content_id": payload_any(item, "content_id", "contentId"),
                 "is_inline": str(item.get("content_disposition") or "").lower()
                 == "inline",
             }
@@ -147,6 +151,16 @@ def normalize_resend_inbound(payload: dict) -> dict:
     recipients = all_addresses(data.get("to")) + all_addresses(data.get("received_for"))
 
     return {
+        # Passed through, not merely read for the threading fields above. The
+        # parser authenticates the `From:` from these when they are present,
+        # and dropping them here made that branch dead on this path: a payload
+        # that *did* carry `Authentication-Results` still reached identity
+        # resolution with no verdict, which reads as "nobody vouched for this
+        # sender" and turns them into a stranger. `email.received` normally
+        # carries none — the verdict then comes from `merge_received_email`
+        # after the body fetch, as before — but a replayed or already-enriched
+        # payload does, and that is the case this silently discarded.
+        "headers": data.get("headers"),
         "email_id": str(data.get("email_id") or "").strip() or None,
         "from": sender.email,
         "from_name": sender.display_name,
@@ -163,6 +177,36 @@ def normalize_resend_inbound(payload: dict) -> dict:
     }
 
 
+def resend_source_event_id(
+    normalized: Mapping[str, object], *, receiver: str
+) -> str | None:
+    """The durable identity of one inbound Resend delivery, or None.
+
+    Resend arrives by two routes, and a deployment can be running both: the
+    inbound webhook, and the poller a desktop worker uses when it has no public
+    URL. One Resend project serving several environments makes that the ordinary
+    state rather than a corner. The durable inbox only collapses the two into
+    one delivery if they mint the same id -- and they did not: the webhook took
+    ``message_id`` (the sender's own ``Message-ID``) through the generic
+    candidate list while the poller wrote ``resend:native:<email_id>``. What
+    stopped the second agent run was ``claim_message``, a Redis key with a
+    15-minute TTL, so PS-SURF-011's "across a restart" held for fifteen minutes
+    and only because a second mechanism happened to agree.
+
+    ``email_id`` is Resend's own handle for the message, which both routes
+    already carry and which the body fetch needs anyway. ``message_id`` is the
+    fallback rather than the first choice because the sender writes it.
+
+    ``receiver`` is the surface the mail was delivered for, as on every other
+    platform: the same mail reaching two surfaces is two deliveries.
+    """
+    for candidate in (normalized.get("email_id"), normalized.get("message_id")):
+        identifier = str(candidate or "").strip()
+        if identifier:
+            return f"resend:{receiver}:{identifier}"
+    return None
+
+
 __all__ = [
     "all_addresses",
     "normalize_attachments",
@@ -170,4 +214,5 @@ __all__ = [
     "header_map",
     "normalize_resend_inbound",
     "references_of",
+    "resend_source_event_id",
 ]

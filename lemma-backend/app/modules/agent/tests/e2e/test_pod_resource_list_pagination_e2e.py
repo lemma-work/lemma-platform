@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.function.domain.entities import FunctionRunStatus
 from app.modules.function.infrastructure.models import FunctionRunModel
 from app.modules.workflow.domain.run import WorkflowRunStatus
@@ -66,7 +67,9 @@ async def _create_conversation(authenticated_client, pod_id: str, title: str) ->
     return response.json()
 
 
-async def _create_workflow_with_graph(authenticated_client, pod_id: str, name: str) -> dict:
+async def _create_workflow_with_graph(
+    authenticated_client, pod_id: str, name: str
+) -> dict:
     response = await authenticated_client.post(
         f"/pods/{pod_id}/workflows",
         json={
@@ -158,7 +161,12 @@ async def test_pod_resource_lists_are_latest_first_and_page_to_older_items(
         f"/pods/{pod_id}/agents",
         params={"limit": 2, "page_token": agent_page.json()["next_page_token"]},
     )
-    assert _item_names(agent_next.json()) == [agent_names[0]]
+    # The pod's own assistant is listed alongside the agents somebody made, and
+    # sorts last: ids are time-ordered and its row is created with the pod.
+    assert _item_names(agent_next.json()) == [
+        agent_names[0],
+        DEFAULT_POD_AGENT_NAME,
+    ]
 
     conversation_page = await authenticated_client.get(
         f"/pods/{pod_id}/conversations",
@@ -244,7 +252,9 @@ async def test_run_lists_are_latest_first_page_to_older_and_return_summaries(
     )
     assert function_page.status_code == status.HTTP_200_OK, function_page.text
     function_items = function_page.json()["items"]
-    assert [item["id"] for item in function_items] == list(reversed(function_run_ids[1:]))
+    assert [item["id"] for item in function_items] == list(
+        reversed(function_run_ids[1:])
+    )
     assert set(function_items[0]) == {
         "id",
         "function_id",
@@ -277,7 +287,9 @@ async def test_run_lists_are_latest_first_page_to_older_and_return_summaries(
     )
     assert workflow_page.status_code == status.HTTP_200_OK, workflow_page.text
     workflow_items = workflow_page.json()["items"]
-    assert [item["id"] for item in workflow_items] == list(reversed(workflow_run_ids[1:]))
+    assert [item["id"] for item in workflow_items] == list(
+        reversed(workflow_run_ids[1:])
+    )
     assert "execution_context" not in workflow_items[0]
     assert "step_history" not in workflow_items[0]
     workflow_next = await authenticated_client.get(
@@ -307,9 +319,7 @@ async def test_resource_lists_omit_heavy_fields_but_get_returns_them(
     suffix = uuid4().hex[:8]
 
     # --- workflows: graph replaced by node_count/node_types in lists --------- #
-    wf = await _create_workflow_with_graph(
-        authenticated_client, pod_id, f"wf-{suffix}"
-    )
+    wf = await _create_workflow_with_graph(authenticated_client, pod_id, f"wf-{suffix}")
     wf_list = await authenticated_client.get(f"/pods/{pod_id}/workflows")
     assert wf_list.status_code == status.HTTP_200_OK, wf_list.text
     wf_item = next(i for i in wf_list.json()["items"] if i["name"] == wf["name"])
@@ -318,9 +328,7 @@ async def test_resource_lists_omit_heavy_fields_but_get_returns_them(
     assert set(wf_item["node_types"]) == {"FORM", "END"}
     assert "allowed_actions" in wf_item
 
-    wf_get = await authenticated_client.get(
-        f"/pods/{pod_id}/workflows/{wf['name']}"
-    )
+    wf_get = await authenticated_client.get(f"/pods/{pod_id}/workflows/{wf['name']}")
     assert wf_get.status_code == status.HTTP_200_OK, wf_get.text
     assert len(wf_get.json()["nodes"]) == 2 and "edges" in wf_get.json()
 
@@ -352,9 +360,7 @@ async def test_resource_lists_omit_heavy_fields_but_get_returns_them(
         follow_redirects=True,
     )
     assert create_table.status_code == status.HTTP_201_CREATED, create_table.text
-    table_list = await authenticated_client.get(
-        f"/pods/{pod_id}/datastore/tables"
-    )
+    table_list = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables")
     assert table_list.status_code == status.HTTP_200_OK, table_list.text
     table_item = table_list.json()["items"][0]
     assert "columns" not in table_item and "config" not in table_item

@@ -38,8 +38,8 @@ from app.modules.function.domain.events import (
     FunctionRunFailedEvent,
 )
 from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
-from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRunWaitRepository,
 )
@@ -158,7 +158,7 @@ async def resume_workflow_run_for_function(
     )
 
     async with worker_ctx.uow() as uow:
-        service = RunResumeService(WorkflowEngine(uow))
+        service = RunResumeService(build_workflow_engine(uow))
         await service.resume_for_function_run(
             function_run_id=function_run_id,
             run_status=run_status,
@@ -181,18 +181,18 @@ async def resume_workflow_run_for_agent(
     )
 
     async with worker_ctx.uow() as uow:
-        service = RunResumeService(WorkflowEngine(uow))
+        service = RunResumeService(build_workflow_engine(uow))
         await service.resume_for_agent_conversation(
             conversation_id=agent_conversation_id,
         )
 
 
-@streaq_cron("*/5 * * * *", name="reconcile_workflow_waits")
+@streaq_cron("1-59/5 * * * *", name="reconcile_workflow_waits")
 async def reconcile_workflow_waits():
     """Self-heal runs whose agent/function completion events were lost."""
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
-        service = RunResumeService(WorkflowEngine(uow))
+        service = RunResumeService(build_workflow_engine(uow))
         await service.reconcile_stale_waits()
 
 
@@ -231,7 +231,7 @@ async def prune_workflow_run_waits() -> None:
         )
 
 
-@streaq_cron("*/5 * * * *", name="reconcile_agent_snoozes")
+@streaq_cron("2-59/5 * * * *", name="reconcile_agent_snoozes")
 async def reconcile_agent_snoozes():
     """Wake snoozed conversations whose scheduler event was lost.
 
@@ -249,7 +249,7 @@ async def reconcile_agent_snoozes():
     await SnoozeReconcileService().reconcile_due_waits()
 
 
-@streaq_cron("*/5 * * * *", name="expire_past_due_notifications")
+@streaq_cron("3-59/5 * * * *", name="expire_past_due_notifications")
 async def expire_past_due_notifications():
     """Close out notifications nobody answered before their deadline.
 
@@ -262,7 +262,9 @@ async def expire_past_due_notifications():
     discipline, same "the timer may have been lost, the row is the truth" shape.
     A third invention here would drift from the other two.
     """
-    from app.composition.workflow_notifications import expire_past_due_notifications
+    from app.modules.agent_surfaces.contracts.workflow_notifications import (
+        expire_past_due_notifications,
+    )
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
@@ -363,7 +365,7 @@ async def check_and_start_flows_for_schedule(
     worker_ctx: AppWorkerContext = streaq_worker.context
 
     async with worker_ctx.uow() as uow:
-        service = ScheduleStartService(WorkflowEngine(uow))
+        service = ScheduleStartService(build_workflow_engine(uow))
         await service.handle_schedule_fired(
             schedule_id=schedule_id,
             user_id=user_id,
@@ -379,13 +381,13 @@ async def check_and_start_flows_for_schedule(
         )
 
 
-@streaq_cron("*/5 * * * *", name="recover_schedule_runs")
+@streaq_cron("4-59/5 * * * *", name="recover_schedule_runs")
 async def recover_schedule_runs() -> None:
-    from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
+    from app.modules.schedule.contracts.run_recovery import recover_schedule_runs
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:
-        result = await ScheduleRunRecoveryService(uow).recover()
+        result = await recover_schedule_runs(uow)
     # Still a warning, and deliberately so. This used to fire twelve times an
     # hour and was read as routine maintenance, but that was the counting: rows
     # the sweep inspected and correctly left alone were reported as

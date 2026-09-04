@@ -19,11 +19,26 @@ jobs:
         working-directory: lemma-backend
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Sync protected dependencies
-        run: uv sync --extra markitdown
+        # `local`, which carries the in-process document processor (xberg).
+        # This said `--extra markitdown` until now, and that extra stopped
+        # existing when the document pipeline moved off markitdown in #396 --
+        # so `uv sync` exited 2 and this workflow had not installed anything,
+        # let alone run a test, since 2026-08-15. It fails at the first step,
+        # which is why it read as an infrastructure problem rather than a
+        # suite anyone needed to look at.
+        #
+        # This is the run that release-desktop and release-local-images gate
+        # on ("a successful protected run for this exact commit within seven
+        # days"), so for those eleven days no Desktop release or nightly DMG
+        # could be built at all.
+        #
+        # Matches what actually ships: lemma-backend/Dockerfile and every
+        # other backend workflow sync `--extra local`.
+        run: uv sync --extra local
       - name: Run protected suite
         run: >-
           uv run pytest
@@ -38,11 +53,9 @@ jobs:
           E2E_LLM_MODE: "mock"
           LEMMA_RUN_SURFACE_LIVE_E2E: "1"
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
-          LEMMA_E2E_MODEL_MAX_COST_USD: "1.00"
-          LEMMA_E2E_MODEL_TIMEOUT_SECONDS: "120"
       - name: Publish commit-linked evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-protected-e2e-${{ github.sha }}
           path: lemma-backend/protected-e2e.xml

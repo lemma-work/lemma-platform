@@ -2,19 +2,18 @@
 
 from contextlib import asynccontextmanager
 
-from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.core.registry import LemmaModule
-
-logger = get_logger(__name__)
 
 
 def _routers():
     from app.modules.agent_surfaces.api.controllers.surface_controller import (
         available_surfaces_router as surface_catalog,
         router as surface,
-        platform_router as surface_platform_setup,
         setup_guide_router as surface_setup_guide,
+    )
+    from app.modules.agent_surfaces.api.controllers.slack_setup_controller import (
+        platform_router as surface_platform_setup,
     )
     from app.modules.agent_surfaces.api.controllers.notification_controller import (
         router as notifications,
@@ -57,7 +56,15 @@ async def _close_dedup_store() -> None:
 
 @asynccontextmanager
 async def _dedup_store_lifespan(app):
-    """API process: close the surface webhook dedupe store on shutdown."""
+    """API process: close the surface webhook dedupe store on shutdown.
+
+    Also the first thing the ingress side says about itself: whether inbound
+    webhooks are having their authenticity checked. This process is the one
+    that receives them, so this is where the answer is worth stating.
+    """
+    from app.modules.agent_surfaces.config import log_surface_webhook_security
+
+    log_surface_webhook_security()
     try:
         yield
     finally:
@@ -97,9 +104,7 @@ async def _surface_event_receiver(context):
     )
 
     receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
-    manager_receiver = TelegramManagerPollingReceiver(
-        uow_factory=context.uow_factory
-    )
+    manager_receiver = TelegramManagerPollingReceiver(uow_factory=context.uow_factory)
     task = (
         create_background_task(receiver.run(), name="surface-event-receiver")
         if receiver.should_start()
@@ -135,7 +140,6 @@ module = LemmaModule(
     worker_lifespans=(_surface_event_receiver,),
     stream_groups=(
         ("surface_events", "surface-webhook-events"),
-        ("schedule_events", "surface-schedule-events"),
         ("pod_events", "surface-pod-deletion-events"),
         ("identity_events", "surface-identity-events"),
     ),

@@ -23,6 +23,10 @@ logger = get_logger(__name__)
 # carry an ``api_base_url`` override (ending at ``.../bot``) for tests.
 _TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 
+#: A provider's own JSON as it came back -- shaped by them, not by us, and only
+#: knowable one named field at a time. That is what the readers below do.
+ProviderPayload = dict[str, object]
+
 
 @dataclass(frozen=True)
 class AccountIdentity:
@@ -114,7 +118,7 @@ async def _telegram_identity(creds: dict) -> AccountIdentity:
             result = (response.json() or {}).get("result") or {}
     except Exception:
         logger.debug(
-            'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic'
+            "connectors.account_identity.telegram_getme_while_resolving_account.diagnostic"
         )
         return AccountIdentity()
     bot_id = result.get("id")
@@ -250,4 +254,132 @@ def _generic_identity(
         provider_account_id=provider_account_id,
         email=email,
         display_name=email or labeled_fallback,
+    )
+
+
+# --- Reading identity fields straight off a credential/profile pair -----------
+#
+# `resolve_account_identity` above answers "who is this account", per connector.
+# The three below answer the narrower questions the OAuth callback asks while it
+# still has the raw provider payloads in hand, and they are deliberately
+# connector-agnostic: a path list rather than a handler per app. They lived on
+# `ConnectorService` as `_extract_*` methods, which made them look like service
+# behaviour when they are pure functions over provider JSON.
+
+_EMAIL_PATHS = (
+    "email",
+    "emailAddress",
+    "email_address",
+    "emailaddress",
+    "authed_user.email",
+    "user.email",
+    "user.profile.email",
+    "profile.email",
+    "user_info.user.profile.email",
+    "user_info.user.email",
+    # Microsoft Graph (Outlook/Teams): `mail` can be null for some accounts, in
+    # which case userPrincipalName carries the address.
+    "mail",
+    "userPrincipalName",
+)
+
+# Where each connector states the id that identifies the connected account, in
+# the profile its own "who am I" operation returns.
+_PROFILE_ACCOUNT_ID_PATHS: dict[str, tuple[str, ...]] = {
+    "gmail": ("email_address", "emailAddress", "email"),
+    "slack": (
+        "user_id",
+        "auth_test.user_id",
+        "user_info.user.id",
+        "user",
+        "bot_id",
+    ),
+    "google_drive": ("user.permission_id", "user.email_address"),
+    "github": ("login",),
+}
+
+
+def _dotted(data: object, path: str) -> str | None:
+    """The string at a dotted path, or None if anything on the way is not one."""
+    if not isinstance(data, dict):
+        return None
+    current: Any = data
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current if isinstance(current, str) else None
+
+
+def _payloads(credentials: object) -> tuple[ProviderPayload, ProviderPayload]:
+    """The two free-form provider blobs a credential carries.
+
+    Read off the model rather than through `model_dump`: these are the only
+    fields wanted, and a `user_data` the serializer chokes on would otherwise
+    turn into an account with no identity at all.
+    """
+    if isinstance(credentials, dict):
+        raw, user = credentials.get("raw_response"), credentials.get("user_data")
+    else:
+        raw = getattr(credentials, "raw_response", None)
+        user = getattr(credentials, "user_data", None)
+    return (
+        raw if isinstance(raw, dict) else {},
+        user if isinstance(user, dict) else {},
+    )
+
+
+def account_email_from(
+    connector_id: str, credentials: object, profile: ProviderPayload | None
+) -> str | None:
+    """The account holder's own address, from wherever the provider put it."""
+    raw_response, user_data = _payloads(credentials)
+    for source in (profile or {}, user_data, raw_response):
+        for path in _EMAIL_PATHS:
+            value = _dotted(source, path)
+            if value and "@" in value:
+                return value
+    if connector_id == "gmail":
+        value = _dotted(profile or {}, "email_address")
+        if value and "@" in value:
+            return value
+    return None
+
+
+def provider_account_id_from_profile(
+    connector_id: str, profile: ProviderPayload | None
+) -> str | None:
+    """The connected account's id, as its own profile response states it."""
+    for path in _PROFILE_ACCOUNT_ID_PATHS.get(connector_id, ()):
+        value = _dotted(profile, path)
+        if value:
+            return value
+    return None
+
+
+def provider_account_id_from_credentials(
+    connector_id: str, credentials: object
+) -> str | None:
+    """The connected account's id, as the token response states it."""
+    raw_response, user_data = _payloads(credentials)
+    if (connector_id or "").lower() == "slack":
+        # Slack user events use authed_user.id as external user identity.
+        return (
+            _nested(raw_response, "authed_user", "id")
+            or _nested(raw_response, "user", "id")
+            or _nested(raw_response, "user_id")
+        )
+
+    # Generic fallbacks across providers.
+    return (
+        _nested(raw_response, "provider_account_id")
+        or _nested(raw_response, "user", "id")
+        or _nested(raw_response, "user_id")
+        or _nested(raw_response, "id")
+        or _nested(user_data, "provider_account_id")
+        or _nested(user_data, "user", "id")
+        or _nested(user_data, "user_id")
+        or _nested(user_data, "id")
+        or _nested(user_data, "sub")
+        or _nested(user_data, "oid")
     )

@@ -12,13 +12,41 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.composition.icons import create_icon_service
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.contracts.workflow_notifications import (
+    build_workflow_notification_adapter,
+)
+from app.modules.icon.contracts.provisioning import create_icon_service
+from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
+from app.modules.function.contracts.workflow_control import (
+    build_function_control_adapter,
+)
+from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.timers import WaitRowTimer
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 
 def get_workflow_service(uow: UoWDep) -> WorkflowService:
     """Provide workflow service."""
     return WorkflowService(uow, icon_service=create_icon_service())
+
+
+def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
+    """An engine with its four collaborators bound, for this transaction.
+
+    The one place that chooses them. `WorkflowEngine.__init__` used to default
+    each to `None` and resolve it, so twelve call sites wrote `WorkflowEngine(uow)`
+    and the binding lived at the bottom of the module rather than at its edge --
+    which is how the engine came to import three other modules' adapters to run
+    a workflow.
+    """
+    return WorkflowEngine(
+        uow,
+        agent_adapter=build_agent_control_adapter(uow),
+        function_adapter=build_function_control_adapter(uow),
+        schedule_adapter=WaitRowTimer(),
+        notification_adapter=build_workflow_notification_adapter(uow),
+    )
 
 
 WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]

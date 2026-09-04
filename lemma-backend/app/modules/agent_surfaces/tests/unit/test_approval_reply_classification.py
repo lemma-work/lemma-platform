@@ -1,0 +1,363 @@
+"""Classifying a typed approval reply, and the third case that matters.
+
+A reply to a pending ``request_approval`` is a decision, or it is not. The
+"not" case is the one these tests exist for: it used to be folded into DENY,
+which cancelled the action *and* discarded what the person wrote.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+from app.modules.agent_surfaces.domain.models import (
+    APPROVAL_DECISION_APPROVE,
+    APPROVAL_DECISION_DENY,
+    APPROVAL_DECISION_SESSION,
+    SurfaceApprovalButton,
+    SurfaceApprovalRenderPlan,
+)
+from app.modules.agent_surfaces.services.pending_interaction_resume import (
+    ResumeOutcome,
+    _APPROVE_ONCE_REPLIES,
+    _APPROVE_SESSION_REPLIES,
+    _DENY_REPLIES,
+    _classify_approval_reply,
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "approve",
+        "Approve",
+        "yes",
+        "Yes!",
+        "y",
+        "ok",
+        "sure",
+        "go ahead",
+        "yeah go ahead",
+        "do it",
+        "go for it",
+        "lgtm",
+        "sounds good",
+        "1",
+        "👍",
+    ],
+)
+def test_approval_words_approve_once(text: str) -> None:
+    assert _classify_approval_reply(text) is AgentRunApprovalDecision.APPROVE_ONCE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "approve session",
+        "approve for session",
+        "always allow",
+        "yes to all",
+        "dont ask again",
+        "don't ask again",
+        "don’t ask again",
+    ],
+)
+def test_session_words_approve_for_session(text: str) -> None:
+    """The decision the text fallback used to drop entirely."""
+    assert (
+        _classify_approval_reply(text) is AgentRunApprovalDecision.APPROVE_FOR_SESSION
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["deny", "no", "n", "nope", "cancel", "stop", "don't", "never mind", "2", "👎"],
+)
+def test_denial_words_deny(text: str) -> None:
+    assert _classify_approval_reply(text) is AgentRunApprovalDecision.DENY
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "wait, why do you need that?",
+        "yes, but only if it's the staging table",
+        "actually delete the other one instead",
+        "what does that command do?",
+        "maybe later",
+        "hold on",
+        "",
+        "   ",
+    ],
+)
+def test_everything_else_is_not_a_decision(text: str) -> None:
+    """None, so the caller delivers the message instead of inventing a decision.
+
+    Each of these used to be DENY: the action was cancelled and the words were
+    thrown away, including the two that are questions about the action itself.
+    """
+    assert _classify_approval_reply(text) is None
+
+
+def test_a_qualified_yes_is_not_consent() -> None:
+    """The reason the sets are exact matches rather than prefixes."""
+    assert _classify_approval_reply("yes, but only if X") is None
+
+
+def _plan(*decisions: str) -> SurfaceApprovalRenderPlan:
+    return SurfaceApprovalRenderPlan(
+        title="Delete orders",
+        callback_id="conversation|tool-call",
+        buttons=[
+            SurfaceApprovalButton(label=decision, decision=decision)
+            for decision in decisions
+        ],
+    )
+
+
+def test_text_fallback_names_only_the_choices_the_card_has() -> None:
+    text = _plan(APPROVAL_DECISION_APPROVE, APPROVAL_DECISION_DENY).to_plain_text()
+    assert '"approve"' in text
+    assert '"deny"' in text
+    assert "session" not in text
+
+
+def test_text_fallback_offers_session_when_the_card_does() -> None:
+    """Present natively since day one; missing from the text prompt until now."""
+    text = _plan(
+        APPROVAL_DECISION_APPROVE,
+        APPROVAL_DECISION_DENY,
+        APPROVAL_DECISION_SESSION,
+    ).to_plain_text()
+    assert '"approve session"' in text
+
+
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        (APPROVAL_DECISION_APPROVE, APPROVAL_DECISION_DENY),
+        (
+            APPROVAL_DECISION_APPROVE,
+            APPROVAL_DECISION_DENY,
+            APPROVAL_DECISION_SESSION,
+        ),
+    ],
+)
+def test_every_phrase_the_prompt_quotes_is_one_the_parser_accepts(
+    decisions: tuple[str, ...],
+) -> None:
+    """The prompt and the parser have to agree, or the fallback is a dead end."""
+    instruction = _plan(*decisions).reply_instruction()
+    quoted = [part.split('"')[0] for part in instruction.split('"')[1::2]]
+    assert quoted
+    for phrase in quoted:
+        assert _classify_approval_reply(phrase) is not None, phrase
+
+
+# One question with two offered options. `_is_an_answer` (#575) only lets a
+# typed message through when it plainly answers -- an offered label, its index,
+# or a decision word -- so a test about *recording* an answer has to supply one
+# that qualifies, or it never reaches the write it is about.
+_ONE_QUESTION = {
+    "questions": [
+        {
+            "header": "colour",
+            "question": "Which colour?",
+            "options": [{"label": "Red"}, {"label": "Blue"}],
+            "multiSelect": False,
+        }
+    ]
+}
+
+
+#: Where `agent` publishes the operations this path calls.
+_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+
+
+async def _resume(
+    text: str,
+    *,
+    kind: str = "request_approval",
+    tool_args: dict | None = None,
+    resolve_raises: Exception | None = None,
+    lookup_raises: Exception | None = None,
+):
+    """Run the resume path with `agent`'s conversation operations doubled.
+
+    Returns ``(outcome, resolve_mock)`` so a test can assert both halves: what
+    the caller is told to do, and whether a decision was recorded.
+
+    The doubles go on the operations where they are published rather than on
+    the module under test: they are a collaborator in another module, and the
+    real ones reach a database.
+    """
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from uuid import uuid4
+
+    from app.modules.agent_surfaces.services.pending_interaction_resume import (
+        maybe_resume_pending_interaction,
+    )
+
+    resolve = AsyncMock(side_effect=resolve_raises, return_value=True)
+    operations = {
+        "pending_interaction": AsyncMock(
+            return_value=SimpleNamespace(
+                tool_call_id="tool-1",
+                kind=kind,
+                tool_args=tool_args if tool_args is not None else {},
+                agent_run_id=None,
+                is_approval=kind == "request_approval",
+            ),
+            side_effect=lookup_raises,
+        ),
+        # `_is_an_answer` asks this when the words do not plainly answer.
+        "conversation_metadata_value": AsyncMock(return_value=None),
+        "set_conversation_metadata_value": AsyncMock(),
+        "resolve_pending_interaction": resolve,
+    }
+    context = SimpleNamespace(conversation_id=uuid4(), user_id=uuid4(), pod_id=uuid4())
+    with ExitStack() as doubled:
+        for name, double in operations.items():
+            doubled.enter_context(patch(f"{_OPERATIONS}.{name}", double))
+        outcome = await maybe_resume_pending_interaction(context, text, uow=object())
+    return outcome, resolve
+
+
+async def test_a_decision_is_consumed_and_recorded() -> None:
+    outcome, resolve = await _resume("approve")
+    assert outcome is ResumeOutcome.CONSUMED
+    assert (
+        resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
+    )
+
+
+async def test_a_non_decision_is_not_consumed_and_records_nothing() -> None:
+    """The message falls through to become a real message, as the person meant.
+
+    Both halves matter. Recording nothing leaves the pause for the new turn to
+    supersede with an explicit denial; NOT_A_DECISION is what lets the words
+    reach the agent at all.
+    """
+    outcome, resolve = await _resume("wait, why do you need that?")
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    resolve.assert_not_awaited()
+
+
+async def test_an_offered_option_typed_out_answers_the_question() -> None:
+    """A person with buttons in front of them may still type the option's words.
+
+    Free text no longer answers on its own -- #575 made a message typed past a
+    card a message rather than the answer to it -- so what this pins is the
+    other half: something that plainly answers still resolves the pause.
+    """
+    outcome, resolve = await _resume("Red", kind="ask_user", tool_args=_ONE_QUESTION)
+    assert outcome is ResumeOutcome.CONSUMED
+    assert (
+        resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
+    )
+
+
+# --- when writing the decision down fails ----------------------------------
+
+
+async def test_a_decision_we_could_not_record_is_never_a_denial() -> None:
+    """The whole reason this returns three things instead of two.
+
+    ``FAILED`` and ``NOT_A_DECISION`` both used to be ``False``, and the caller
+    reads ``False`` as "deliver it as a message" — which starts a turn, and
+    starting a turn supersedes the pause with an auto-DENY. So a database hiccup
+    while recording an "approve" cancelled the action the person had just
+    approved, and said so only at debug level.
+    """
+    outcome, _ = await _resume("approve", resolve_raises=RuntimeError("db is down"))
+    assert outcome is ResumeOutcome.FAILED
+    assert outcome is not ResumeOutcome.NOT_A_DECISION
+
+
+async def test_an_ask_user_answer_we_could_not_record_fails_the_same_way() -> None:
+    """Not approval-specific: a lost answer leaves the same run WAITING."""
+    outcome, _ = await _resume(
+        "Red",
+        kind="ask_user",
+        tool_args=_ONE_QUESTION,
+        resolve_raises=RuntimeError("db is down"),
+    )
+    assert outcome is ResumeOutcome.FAILED
+
+
+async def test_failing_to_find_the_pause_is_not_a_failed_decision() -> None:
+    """We never learned there was one, so there is no decision to lose.
+
+    Treating this as FAILED would answer every ordinary message with an
+    apology. The turn the caller starts will fail on the same broken session
+    anyway, so falling through is both safe and honest.
+    """
+    outcome, resolve = await _resume(
+        "hello there", lookup_raises=RuntimeError("db is down")
+    )
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    resolve.assert_not_awaited()
+
+
+def test_the_failure_is_logged_where_production_can_see_it() -> None:
+    """``LOG_LEVEL=INFO`` drops debug, which is where this used to be logged."""
+    from app.core.log.event_catalog import EVENT_CATALOG
+
+    assert (
+        EVENT_CATALOG[
+            "agent_surfaces.ingress_service.typed_reply_decision_not_recorded.failed"
+        ].level
+        == "error"
+    )
+    assert (
+        EVENT_CATALOG[
+            "agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded"
+        ].level
+        == "warning"
+    )
+
+
+# --- one vocabulary, not two -----------------------------------------------
+
+
+async def test_every_reply_the_classifier_reads_reaches_the_classifier() -> None:
+    """The gate and the classifier have to agree on what an answer is.
+
+    ``_is_an_answer`` runs first and used to keep a shorter word list of its
+    own, so the phrases in the gap -- "go ahead", "sure", "proceed", "lgtm",
+    thumbs-up -- were reported as ``NOT_A_DECISION``. The caller then starts a
+    turn, and starting a turn supersedes the pause with an auto-DENY: the
+    person typed "go ahead" and the action was cancelled.
+    """
+    for phrase in sorted(
+        _APPROVE_ONCE_REPLIES | _APPROVE_SESSION_REPLIES | _DENY_REPLIES
+    ):
+        outcome, resolve = await _resume(phrase)
+        assert outcome is ResumeOutcome.CONSUMED, phrase
+        assert resolve.await_args.kwargs["decision"] is _classify_approval_reply(
+            phrase
+        ), phrase
+
+
+async def test_go_ahead_approves_rather_than_cancelling() -> None:
+    """The named symptom, on its own, because it is the one people type."""
+    outcome, resolve = await _resume("go ahead")
+
+    assert outcome is ResumeOutcome.CONSUMED
+    assert (
+        resolve.await_args.kwargs["decision"] is AgentRunApprovalDecision.APPROVE_ONCE
+    )
+
+
+async def test_a_message_that_is_no_decision_still_falls_through() -> None:
+    """Widening the gate must not widen it to everything.
+
+    An approval has no free-form answer, so anything the classifier does not
+    recognise still has to reach the agent as the person's own words.
+    """
+    outcome, resolve = await _resume("actually, use the staging table instead")
+
+    assert outcome is ResumeOutcome.NOT_A_DECISION
+    resolve.assert_not_awaited()

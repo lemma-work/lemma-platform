@@ -20,9 +20,30 @@ from __future__ import annotations
 
 import mimetypes
 
-from app.core.file_types import sniff_image_mime
+from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.pod_data_access import pod_services
+
+
+def _best_mime(stored: str | None, path: str, content: bytes) -> str | None:
+    """The type of a file, preferring what is known over what was assumed.
+
+    ``application/octet-stream`` had been treated as an answer, and it is the
+    opposite: the datastore types a file by its name alone, so anything saved
+    without an extension comes back claiming to be a blob. That claim is truthy,
+    so it won every ``or`` chain and the byte sniffer sitting at the end of them
+    never ran. A Telegram photo -- saved as bare ``photo``, because the platform
+    sends neither a filename nor a type -- reached `view_image` as
+    ``application/octet-stream`` and was refused for not being an image.
+
+    Checked in order of how much each source actually knows: a stored type that
+    names something, then the extension, then the bytes. The bytes are last
+    because they are the most expensive to be wrong about and the least likely to
+    be needed.
+    """
+    if not is_untyped_mime(stored):
+        return stored
+    return mimetypes.guess_type(path)[0] or sniff_media_mime(content) or stored or None
 
 
 def is_datastore_path(path: str) -> bool:
@@ -50,8 +71,7 @@ async def read_pod_file_bytes(
         entity, content = await services.file.download_file_content_by_path(
             deps.pod_id, path, services.ctx
         )
-    mime = entity.mime_type or mimetypes.guess_type(path)[0] or sniff_image_mime(content)
-    return content, mime
+    return content, _best_mime(entity.mime_type, path, content)
 
 
 async def read_workspace_file_bytes(
@@ -64,7 +84,7 @@ async def read_workspace_file_bytes(
     """
     raw = await deps.file_manager.read_file(path)
     content = raw.encode("utf-8") if isinstance(raw, str) else raw
-    mime = mimetypes.guess_type(path)[0] or sniff_image_mime(content)
+    mime = mimetypes.guess_type(path)[0] or sniff_media_mime(content)
     return content, mime
 
 

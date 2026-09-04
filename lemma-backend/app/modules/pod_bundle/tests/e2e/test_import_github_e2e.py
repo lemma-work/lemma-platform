@@ -9,7 +9,6 @@ network.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +24,7 @@ from app.modules.pod_bundle.infrastructure.github_publisher import (
 )
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.state import PublishMode
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import pack_bundle
 
 from .conftest import GITHUB_FIXTURE_PORT
@@ -180,14 +180,21 @@ def github_fixture_server():
 
 
 async def _wait(client, pod_id, import_id, *, until, timeout=60) -> dict:
-    for _ in range(timeout):
+    async def probe() -> dict:
         res = await client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in until:
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Import stuck at {body['status']}")
+        return res.json()
+
+    # failed=set(): several call sites in this file await until={..., "FAILED"}
+    # as their own success condition -- only stop on a status in `until`.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle import {import_id} to reach {until}",
+        probe=probe,
+        expected=set(until),
+        failed=set(),
+        timeout_seconds=timeout,
+        interval_seconds=0.15,
+    )
 
 
 async def test_github_import_plans_from_repo(
@@ -197,7 +204,10 @@ async def test_github_import_plans_from_repo(
     pod_id = test_pod["id"]
     res = await authenticated_client.post(
         f"/pods/{pod_id}/bundle/imports",
-        json={"kind": "GITHUB", "url": f"https://github.com/acme/crm-{uuid4().hex[:6]}"},
+        json={
+            "kind": "GITHUB",
+            "url": f"https://github.com/acme/crm-{uuid4().hex[:6]}",
+        },
     )
     assert res.status_code == status.HTTP_202_ACCEPTED, res.text
     body = res.json()
@@ -205,7 +215,10 @@ async def test_github_import_plans_from_repo(
     import_id = body["import_id"]
 
     final = await _wait(
-        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION", "FAILED"}
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"AWAITING_CONFIRMATION", "FAILED"},
     )
     assert final["status"] == "AWAITING_CONFIRMATION", final
     steps = {(s["kind"], s["name"]) for s in final["plan"]["steps"]}

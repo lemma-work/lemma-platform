@@ -449,7 +449,9 @@ class Endpoint:
 
 
 ENDPOINTS = [
-    Endpoint("workflows", "/pods/{scope}/workflows", _seed_workflows, _stmt_workflows, "pod"),
+    Endpoint(
+        "workflows", "/pods/{scope}/workflows", _seed_workflows, _stmt_workflows, "pod"
+    ),
     Endpoint("agents", "/pods/{scope}/agents", _seed_agents, _stmt_agents, "pod"),
     Endpoint(
         "datastore_tables",
@@ -467,7 +469,7 @@ ENDPOINTS = [
         "pod",
         max_limit=1000,
     ),
-    Endpoint("org_pods", "/pods/organization/{scope}", _seed_pods, _stmt_pods, "org"),
+    Endpoint("org_pods", "/organizations/{scope}/pods", _seed_pods, _stmt_pods, "org"),
 ]
 
 
@@ -592,7 +594,9 @@ async def test_list_api_latency_benchmark(
     # Markdown report
     # ----------------------------------------------------------------- #
     lines: list[str] = []
-    lines.append("\n\n================ LATENCY BENCHMARK (ASGI, no network) ================\n")
+    lines.append(
+        "\n\n================ LATENCY BENCHMARK (ASGI, no network) ================\n"
+    )
     for ep in ENDPOINTS:
         lines.append(f"\n### {ep.key}  (`GET {ep.http}`)\n")
         lines.append(

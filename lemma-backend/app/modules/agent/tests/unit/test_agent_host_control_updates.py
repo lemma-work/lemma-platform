@@ -28,10 +28,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_control_updates import (
+from app.modules.agent.infrastructure.agent_host.control_updates import (
     apply_rejection,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 
@@ -66,9 +66,7 @@ class _Command:
     lease_epoch: int | None
     state: str = AgentHostCommandState.QUEUED.value
     created_at: datetime = field(default_factory=_now)
-    expires_at: datetime = field(
-        default_factory=lambda: _now() + timedelta(minutes=5)
-    )
+    expires_at: datetime = field(default_factory=lambda: _now() + timedelta(minutes=5))
     delivered_at: datetime | None = None
     acknowledged_at: datetime | None = None
     rejection: dict | None = None
@@ -343,9 +341,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
             config_revision=harness_revision,
             config_options=config_options or [],
         )
-        session = _Session(
-            leases=[lease], commands=[command], harnesses=[harness]
-        )
+        session = _Session(leases=[lease], commands=[command], harnesses=[harness])
         rejection = AgentHostCommandRejection(
             command_id=command.id,
             run_id=run_id,
@@ -361,9 +357,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
     ) -> None:
         session, command, lease, rejection, host_id = self._stale()
 
-        changed = await apply_rejection(
-            session, host_id=host_id, rejection=rejection
-        )
+        changed = await apply_rejection(session, host_id=host_id, rejection=rejection)
 
         assert changed
         assert command.payload["profile_revision"] == "rev-2"
@@ -379,9 +373,7 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
         has no attempt column. Without this the requeue is a 1s spin until the
         command's five-minute TTL.
         """
-        session, command, lease, rejection, host_id = self._stale(
-            remint_attempts=2
-        )
+        session, command, lease, rejection, host_id = self._stale(remint_attempts=2)
 
         await apply_rejection(session, host_id=host_id, rejection=rejection)
 
@@ -491,6 +483,24 @@ class TestAStaleRevisionIsAnsweredRatherThanRecorded:
 
         assert command.state == AgentHostCommandState.ACKNOWLEDGED.value
         assert lease.state == AgentHostRunState.FAILED.value
+
+    async def test_the_run_dies_naming_the_agent_it_died_over(self) -> None:
+        """The lease's reason is the whole of what the user is shown.
+
+        A run refused before it starts journals no events, so nothing else
+        reaches the transcript: this sentence is not a detail beside the
+        failure, it *is* the failure. The host's own wording -- "harness
+        configuration revision changed" -- names neither the agent nor
+        anything to do about it.
+        """
+        session, _command, lease, rejection, host_id = self._stale(
+            harness_revision="rev-1"
+        )
+
+        await apply_rejection(session, host_id=host_id, rejection=rejection)
+
+        assert "Claude Code" in (lease.error_detail or "")
+        assert "revision" not in (lease.error_detail or "")
 
     async def test_other_rejection_codes_are_untouched(self) -> None:
         """Only the stale revision is answered; everything else is recorded."""

@@ -13,6 +13,7 @@ Run:
     WORKSPACE_E2E_IMAGE=lemma-runtime:perf-test \
     uv run pytest -s app/modules/workspace/tests/e2e/test_workspace_cli_concurrency_bench.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -129,11 +130,15 @@ async def test_workspace_cli_parallel_tool_calls_bench(
         dt, r = await _run(ctx, "echo hi")
         assert r.success, r.error
         echo_seq.append(dt)
-    print(f"sequential echo  x5:          per-call {_fmt(echo_seq)}  mean={sum(echo_seq)/len(echo_seq):.2f}s")
+    print(
+        f"sequential echo  x5:          per-call {_fmt(echo_seq)}  mean={sum(echo_seq) / len(echo_seq):.2f}s"
+    )
 
     dt_sleep1, r = await _run(ctx, "sleep 1")
     assert r.success
-    print(f"single 'sleep 1':             {dt_sleep1:6.2f}s  (backend overhead = {dt_sleep1 - 1:.2f}s)")
+    print(
+        f"single 'sleep 1':             {dt_sleep1:6.2f}s  (backend overhead = {dt_sleep1 - 1:.2f}s)"
+    )
 
     # --- SERIALIZATION PROBE: N parallel `sleep 1` ---
     for n in (3, 4):
@@ -159,12 +164,16 @@ async def test_workspace_cli_parallel_tool_calls_bench(
         wall = time.perf_counter() - t0
         lat = [d for d, _ in results]
         oks = sum(1 for _, r in results if r.success)
-        print(f"parallel x{n} echo:             wall={wall:6.2f}s  per-call {_fmt(lat)}  ok={oks}/{n}")
+        print(
+            f"parallel x{n} echo:             wall={wall:6.2f}s  per-call {_fmt(lat)}  ok={oks}/{n}"
+        )
 
     # --- AGENT DEFAULT PATH: yield mode (no explicit timeout -> yield 30s). A
     #     fast command must still return instantly, not wait the yield window. ---
     dt, r = await _run(ctx, "echo hi", timeout=None)
-    print(f"YIELD-mode single echo:       {dt:6.2f}s  completed={r.completed}  (must be ~0s, not ~30s)")
+    print(
+        f"YIELD-mode single echo:       {dt:6.2f}s  completed={r.completed}  (must be ~0s, not ~30s)"
+    )
     assert r.success, r.error
     assert r.completed, "fast command unexpectedly returned a background process"
     assert dt < FAST_YIELD_COMPLETION_LIMIT_SECONDS, (
@@ -174,11 +183,15 @@ async def test_workspace_cli_parallel_tool_calls_bench(
 
     for n in (3, 4):
         t0 = time.perf_counter()
-        results = await asyncio.gather(*[_run(ctx, "echo hi", timeout=None) for _ in range(n)])
+        results = await asyncio.gather(
+            *[_run(ctx, "echo hi", timeout=None) for _ in range(n)]
+        )
         wall = time.perf_counter() - t0
         lat = [d for d, _ in results]
         oks = sum(1 for _, r in results if r.success)
-        print(f"YIELD-mode parallel x{n} echo:  wall={wall:6.2f}s  per-call {_fmt(lat)}  ok={oks}/{n}")
+        print(
+            f"YIELD-mode parallel x{n} echo:  wall={wall:6.2f}s  per-call {_fmt(lat)}  ok={oks}/{n}"
+        )
         failures = [r.error for _, r in results if not r.success]
         assert oks == n, f"yield-mode parallel commands failed: {failures}"
         assert all(r.completed for _, r in results), (

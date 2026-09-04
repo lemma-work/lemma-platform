@@ -13,14 +13,14 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore".format(
+            organization_id=quote(str(organization_id), safe=""),
             profile_id=quote(str(profile_id), safe=""),
         ),
     }
@@ -59,7 +59,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     *,
     client: AuthenticatedClient | Client,
@@ -67,7 +67,7 @@ def sync_detailed(
     """Restore Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         profile_id (str):
 
     Raises:
@@ -79,7 +79,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         profile_id=profile_id,
     )
 
@@ -91,7 +91,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     *,
     client: AuthenticatedClient | Client,
@@ -99,7 +99,7 @@ def sync(
     """Restore Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         profile_id (str):
 
     Raises:
@@ -111,14 +111,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         profile_id=profile_id,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     *,
     client: AuthenticatedClient | Client,
@@ -126,7 +126,7 @@ async def asyncio_detailed(
     """Restore Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         profile_id (str):
 
     Raises:
@@ -138,7 +138,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         profile_id=profile_id,
     )
 
@@ -148,7 +148,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     *,
     client: AuthenticatedClient | Client,
@@ -156,7 +156,7 @@ async def asyncio(
     """Restore Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         profile_id (str):
 
     Raises:
@@ -169,7 +169,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             profile_id=profile_id,
             client=client,
         )

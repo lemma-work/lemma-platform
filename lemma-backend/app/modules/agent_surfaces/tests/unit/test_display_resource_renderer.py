@@ -99,7 +99,9 @@ def test_display_resource_renderer_links_external_widget_directly():
 
     assert plan.primary_action is not None
     assert plan.primary_action.url == "https://widgets.example.test/board"
-    assert "External widget" in plan.to_plain_text()
+    # A widget is HTML; the card can only say where it opens, and a hosted one
+    # opens in the browser rather than inside Lemma.
+    assert plan.summary == "Opens in your browser."
 
 
 def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
@@ -111,7 +113,9 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
         pod_id=pod_id,
         conversation_id=conversation_id,
         tool_call_id="tool-widget-inline",
-        request=DisplayResourceRequest.model_validate({"type": "WIDGET", "content": "<div>Ready</div>"}),
+        request=DisplayResourceRequest.model_validate(
+            {"type": "WIDGET", "content": "<div>Ready</div>"}
+        ),
     )
 
     assert plan.primary_action is not None
@@ -123,7 +127,7 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
         "assistantConversationId": [str(conversation_id)],
         "toolCallId": ["tool-widget-inline"],
     }
-    assert "External widget" not in plan.to_plain_text()
+    assert plan.summary == "Opens in Lemma."
 
 
 @pytest.mark.parametrize(
@@ -191,3 +195,122 @@ def test_display_resource_internal_urls_match_frontend_route_contract(
     assert parsed.netloc == "app.example.test"
     assert parsed.path == f"/pod/{pod_id}{path_suffix}"
     assert parse_qs(parsed.query) == expected_query
+
+
+def test_a_file_card_is_headed_by_the_file_name_not_the_path(monkeypatch):
+    """The headline is what the file is called; the path is a detail line.
+
+    The full pod path used to be the title, and the title is also the caption
+    stamped onto the native attachment — so a line of directory noise led every
+    file the agent sent, whether or not delivery worked.
+    """
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        tool_call_id="tool-file-2",
+        request=DisplayResourceRequest.model_validate(
+            {"type": "FILE", "path": "/me/reports/lemma-aug-2026-shiplog.pdf"}
+        ),
+    )
+
+    assert plan.title == "lemma-aug-2026-shiplog.pdf"
+    assert plan.detail_lines == ["In /me/reports"]
+    # The canned sentence is gone: the surface fills the summary with the file's
+    # real kind and size, and says nothing when it cannot.
+    assert plan.summary is None
+
+
+def test_a_file_at_the_pod_root_has_no_folder_to_name(monkeypatch):
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        request=DisplayResourceRequest.model_validate(
+            {"type": "FILE", "path": "/readme.md"}
+        ),
+    )
+
+    assert plan.title == "readme.md"
+    assert plan.detail_lines == []
+
+
+def test_every_card_says_something_specific_about_its_kind(monkeypatch):
+    """No resource falls back to "A Lemma resource is ready.".
+
+    A sentence with the shape of an answer and none of the content is the thing
+    this card was doing wrong on every surface it reached.
+    """
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+    pod_id = uuid4()
+
+    summaries = {
+        kind: build_display_resource_render_plan(
+            pod_id=pod_id,
+            conversation_id=uuid4(),
+            request=DisplayResourceRequest.model_validate(
+                {"type": kind, "name": "thing"}
+            ),
+        ).summary
+        for kind in ("AGENT", "FUNCTION", "WORKFLOW", "APP", "SCHEDULE")
+    }
+
+    assert "A Lemma resource is ready." not in set(summaries.values())
+    assert summaries["AGENT"] == "An agent in this pod."
+    assert summaries["WORKFLOW"] == "A workflow in this pod."
+
+
+def test_a_query_result_is_titled_as_one(monkeypatch):
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        tool_call_id="tool-query-1",
+        request=DisplayResourceRequest.model_validate(
+            {"type": "TABLE", "query": "SELECT id FROM deals"}
+        ),
+    )
+
+    assert plan.title == "Query results"
+    assert plan.detail_lines == ["Query: SELECT id FROM deals"]
+
+
+def test_a_preview_block_reaches_the_plain_text_render():
+    """Platforms without a card render the plan as text; the rows come along."""
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        request=DisplayResourceRequest.model_validate(
+            {"type": "TABLE", "name": "deals"}
+        ),
+    ).model_copy(update={"preview_block": "id  stage\n--  -----\n1   won"})
+
+    assert "1   won" in plan.to_plain_text()
+
+
+def test_every_button_names_what_it_opens(monkeypatch):
+    """No card is left with the generic label.
+
+    "Open resource" names a category that exists only inside Lemma, so on a
+    chat surface it is a button whose text tells the reader nothing.
+    """
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+    pod_id = uuid4()
+
+    labels = {
+        kind: build_display_resource_render_plan(
+            pod_id=pod_id,
+            conversation_id=uuid4(),
+            request=DisplayResourceRequest.model_validate(
+                {"type": kind, "name": "thing"}
+            ),
+        ).primary_action
+        for kind in ("AGENT", "FUNCTION", "WORKFLOW", "APP", "SCHEDULE")
+    }
+
+    assert all(action is not None for action in labels.values())
+    named = {kind: action.label for kind, action in labels.items() if action}
+    assert "Open resource" not in set(named.values())
+    assert named["AGENT"] == "Open agent"
+    assert named["APP"] == "Open app"

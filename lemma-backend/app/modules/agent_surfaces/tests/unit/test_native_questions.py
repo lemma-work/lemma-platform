@@ -14,9 +14,9 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.platforms.slack.service import _question_blocks
+from app.modules.agent_surfaces.platforms.slack.message_blocks import _question_blocks
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
-from app.modules.agent_surfaces.platforms.teams.adapter import _teams_question_card
+from app.modules.agent_surfaces.platforms.teams.cards import _teams_question_card
 from app.modules.agent_surfaces.platforms.teams.parser import (
     TEAMS_FORM_CALLBACK_KEY,
     TeamsMessageParser,
@@ -73,9 +73,10 @@ def test_slack_question_blocks_keys_by_header_and_carries_callback():
     assert {o["value"] for o in country_opts} == {"US", "CA"}
     assert any("recommended" in o["text"]["text"] for o in country_opts)
     # an optional "Other" free-text input is added per question
-    other_ids = {
-        b["block_id"] for b in blocks if b.get("type") == "input"
-    } & {"country__other", "tags__other"}
+    other_ids = {b["block_id"] for b in blocks if b.get("type") == "input"} & {
+        "country__other",
+        "tags__other",
+    }
     assert other_ids == {"country__other", "tags__other"}
     submit = [b for b in blocks if b.get("type") == "actions"][0]["elements"][0]
     assert submit["action_id"] == "lemma_form_submit"
@@ -203,6 +204,7 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
 
 # ── Telegram native inline keyboards ─────────────────────────────────────────
 
+
 def _single_question_plan() -> SurfaceQuestionRenderPlan:
     return SurfaceQuestionRenderPlan(
         title="Which country?",
@@ -235,15 +237,18 @@ def _telegram_event() -> ParsedInboundSurfaceEvent:
 async def test_telegram_send_questions_builds_inline_keyboard():
     adapter = TelegramSurfaceAdapter()
     tokens = iter(["tok0", "tok1", "tokother"])
-    with patch(
-        "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
-        new=AsyncMock(side_effect=lambda payload: next(tokens)),
-    ), patch(
-        "app.modules.agent_surfaces.platforms.telegram.service."
-        "TelegramPlatformService.send_message",
-        new=AsyncMock(),
-    ) as send_message:
-        ok = await adapter.send_questions(
+    with (
+        patch(
+            "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+            new=AsyncMock(side_effect=lambda payload: next(tokens)),
+        ),
+        patch(
+            "app.modules.agent_surfaces.platforms.telegram.service."
+            "TelegramPlatformService.send_message",
+            new=AsyncMock(),
+        ) as send_message,
+    ):
+        ok = await adapter._render_choices(
             credentials={"bot_token": "x"},
             event=_telegram_event(),
             question_plan=_single_question_plan(),
@@ -272,11 +277,14 @@ async def test_telegram_send_questions_falls_back_on_multi_select():
                 header="tags",
                 question="Which tags?",
                 multi_select=True,
-                options=[SurfaceQuestionOption(label="a"), SurfaceQuestionOption(label="b")],
+                options=[
+                    SurfaceQuestionOption(label="a"),
+                    SurfaceQuestionOption(label="b"),
+                ],
             )
         ],
     )
-    ok = await adapter.send_questions(
+    ok = await adapter._render_choices(
         credentials={"bot_token": "x"},
         event=_telegram_event(),
         question_plan=plan,
@@ -336,8 +344,19 @@ async def test_telegram_parse_retry_resolves_current_chat_without_conversation_i
 @pytest.mark.asyncio
 async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowledgeable():
     adapter = TelegramSurfaceAdapter()
-    payload = {"callback_query": {"id": "c", "data": "tok", "from": {"id": 1}, "message": {"chat": {"id": 1}}}}
-    other = {"callback_id": "conv-1|tool-1", "header": "country", "value": _OTHER_CALLBACK_VALUE}
+    payload = {
+        "callback_query": {
+            "id": "c",
+            "data": "tok",
+            "from": {"id": 1},
+            "message": {"chat": {"id": 1}},
+        }
+    }
+    other = {
+        "callback_id": "conv-1|tool-1",
+        "header": "country",
+        "value": _OTHER_CALLBACK_VALUE,
+    }
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
         new=AsyncMock(return_value=other),
@@ -355,6 +374,7 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowle
 
 
 # ── WhatsApp native interactive replies ──────────────────────────────────────
+
 
 def _whatsapp_event() -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
@@ -388,7 +408,7 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         return _Resp()
 
     with patch("httpx.AsyncClient.post", new=_fake_post):
-        ok = await adapter.send_questions(
+        ok = await adapter._render_choices(
             credentials={"access_token": "t", "phone_number_id": "pn1"},
             event=_whatsapp_event(),
             question_plan=_single_question_plan(),
@@ -415,11 +435,14 @@ async def test_whatsapp_send_questions_falls_back_on_multi_select():
                 header="tags",
                 question="Which tags?",
                 multi_select=True,
-                options=[SurfaceQuestionOption(label="a"), SurfaceQuestionOption(label="b")],
+                options=[
+                    SurfaceQuestionOption(label="a"),
+                    SurfaceQuestionOption(label="b"),
+                ],
             )
         ],
     )
-    ok = await adapter.send_questions(
+    ok = await adapter._render_choices(
         credentials={"access_token": "t", "phone_number_id": "pn1"},
         event=_whatsapp_event(),
         question_plan=plan,
@@ -480,7 +503,10 @@ async def test_whatsapp_parse_inbound_interaction_ignores_non_lemma_id():
                                     "type": "interactive",
                                     "interactive": {
                                         "type": "button_reply",
-                                        "button_reply": {"id": "some-other-id", "title": "x"},
+                                        "button_reply": {
+                                            "id": "some-other-id",
+                                            "title": "x",
+                                        },
                                     },
                                 }
                             ]
@@ -496,8 +522,8 @@ async def test_whatsapp_parse_inbound_interaction_ignores_non_lemma_id():
 def test_whatsapp_interactive_rejects_header_with_separator():
     """A header containing '~' would corrupt the packed reply id → fall back to
     text (return None) rather than mis-key the answer."""
-    from app.modules.agent_surfaces.platforms.whatsapp.service import (
-        _build_whatsapp_interactive,
+    from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+        build_whatsapp_interactive,
     )
 
     question = SurfaceQuestion(
@@ -505,7 +531,7 @@ def test_whatsapp_interactive_rejects_header_with_separator():
         header="time~zone",  # contains the reserved separator
         options=[SurfaceQuestionOption(label="US"), SurfaceQuestionOption(label="CA")],
     )
-    assert _build_whatsapp_interactive("conv|tool", question) is None
+    assert build_whatsapp_interactive("conv|tool", question) is None
 
 
 def test_whatsapp_parse_interaction_preserves_value_with_separator():

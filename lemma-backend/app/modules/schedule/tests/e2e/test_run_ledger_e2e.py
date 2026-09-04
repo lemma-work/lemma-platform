@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
+from app.modules.schedule.services.run_recovery_service import (
+    ScheduleRunRecoveryService,
+)
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
@@ -603,13 +605,13 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
     wrote back the four values the row already held, SQLAlchemy computed no net
     change, no UPDATE fired, and ``updated_at`` -- which the query ordered by --
     never moved. The next tick selected the same rows. In production the cursor
-    sat on rows last touched 2026-08-12 11:50:01 for three days while reporting
-    ``reconciled=100`` on four hundred consecutive samples: not a full batch,
-    the same batch, with 1,386 eligible rows behind it never examined.
+    sat on the same rows for days while reporting a full batch reconciled on
+    every consecutive sample: not a full batch, the same batch, with the eligible
+    rows behind it never examined.
 
-    All 1,634 of those rows had live targets -- 1,375 workflows parked on human
-    form waits, the rest agents still running -- so the sweep's *decision* was
-    right every time. Only the bookkeeping was wrong.
+    All of those rows had live targets -- mostly workflows parked on human form
+    waits, the rest agents still running -- so the sweep's *decision* was right
+    every time. Only the bookkeeping was wrong.
     """
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
@@ -630,8 +632,15 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
 
     waiting_target_id = uuid4()
-    parked_id = uuid4()
-    behind_it_id = uuid4()
+    # uuid7, not uuid4: both rows tie on `last_inspected_at` (both NULL), so the
+    # query's tie-break -- `ScheduleRun.id` ascending -- is what decides which
+    # one a `limit=1` sweep reaches first. uuid4 is random and carries no
+    # relationship to insertion order, which made "parked sorts first" true
+    # only about half the time. uuid7 is time-ordered, so calling it here
+    # before `behind_it_id` reproduces the same ordering the model's own
+    # `default=uuid7` on `ScheduleRun.id` gives rows created in production.
+    parked_id = uuid7()
+    behind_it_id = uuid7()
     finished_target_id = uuid4()
 
     async with db_manager.session_factory() as session, session.begin():

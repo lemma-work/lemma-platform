@@ -39,7 +39,8 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.log.log import get_logger
-from app.modules.schedule.domain.cron import CronSchedule
+from app.modules.schedule.domain.cron import CronSchedule, resolve_zone
+from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 
@@ -99,31 +100,81 @@ def _coalesced_cursor(
     return cursor
 
 
+#: Why the poller retired a schedule, in the vocabulary the paused-schedule
+#: email already speaks. Both reasons predate the poller: they were emitted by
+#: the reconcile pass it replaced, and moving the decision here left the event
+#: behind -- the copy for them is still in
+#: ``render_schedule_paused_email`` with nothing sending it.
+_NO_FUTURE_FIRE = "SCHEDULE_VALIDATION_ERROR"
+_ONE_TIME_MISSED = "SCHEDULE_ONE_TIME_MISSED"
+
+
+def _stage_deactivation(uow, row: Schedule, *, reason: str) -> None:
+    """Say why a schedule was taken out of service.
+
+    PS-SCHED-023 is flat about it: the system never deactivates a schedule
+    silently, and when it does it tells the people responsible for the pod and
+    says why. Two sites here set ``is_active = False`` directly and recorded it
+    only in a log line nobody reads, so an automation could be retired and its
+    owner would find an inactive row and no explanation anywhere.
+
+    Staged on the poller's unit of work rather than published, so the
+    deactivation and the notice commit together or not at all.
+
+    ``uow`` is optional because a test can drive one claim against a bare
+    session; the poller always has one.
+    """
+    if uow is None:
+        return
+    uow.collect_events(
+        [
+            ScheduleDeactivated(
+                schedule_id=row.id,
+                user_id=row.user_id,
+                pod_id=row.pod_id,
+                schedule_type=row.schedule_type,
+                consecutive_failures=row.consecutive_failures,
+                reason=reason,
+            )
+        ]
+    )
+
+
 def next_cursor_for(config: dict, *, after: datetime) -> datetime | None:
     """When a schedule should next fire, or ``None`` if never again.
+
+    Every path that arms a TIME schedule runs through here -- the poller, the
+    backlog coalescer, the backfill, and both repository write points -- so the
+    config's ``timezone`` is read here and nowhere else. Absent means UTC, which
+    is what schedules written before zones existed already meant.
 
     Cron rows recompute from the expression. One-shot rows have exactly one
     occurrence, so once it is claimed there is no next -- returning ``None`` is
     what retires them.
     """
-    cron = (config or {}).get("cron")
+    settings = config or {}
+    zone_value = settings.get("timezone")
+    zone_name = None if zone_value is None else str(zone_value)
+    cron = settings.get("cron")
     if cron:
         try:
-            return CronSchedule.parse(cron).next_fire_time(after)
+            return CronSchedule.parse(cron, zone=zone_name).next_fire_time(after)
         except ValueError:
-            # An unparseable expression cannot be scheduled. Reconciliation
-            # deactivates these; refusing to guess a cursor keeps the row out of
-            # the due index until it does.
+            # An unparseable expression -- or a zone name this host cannot
+            # resolve -- cannot be scheduled. Reconciliation deactivates these;
+            # refusing to guess a cursor keeps the row out of the due index
+            # until it does.
             return None
-    scheduled_at = (config or {}).get("scheduled_at")
+    scheduled_at = settings.get("scheduled_at")
     if not scheduled_at:
         return None
     try:
         moment = datetime.fromisoformat(str(scheduled_at))
+        zone = resolve_zone(zone_name)
     except ValueError:
         return None
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=zone)
     return moment.astimezone(timezone.utc)
 
 
@@ -132,6 +183,7 @@ async def claim_due_schedules(
     *,
     now: datetime,
     limit: int = DEFAULT_CLAIM_LIMIT,
+    uow=None,
 ) -> list[ClaimedFire]:
     """Take ownership of every schedule due at ``now``, up to ``limit``.
 
@@ -170,6 +222,12 @@ async def claim_due_schedules(
         if is_one_shot or upcoming is None:
             row.next_fire_at = None
             row.is_active = False
+            # A one-shot going inactive is retirement, not a fault -- it just
+            # ran, and telling its owner it was "paused" would be wrong. A cron
+            # the library can no longer produce a fire for is the other thing
+            # entirely: that automation has stopped and nobody asked for it.
+            if not is_one_shot:
+                _stage_deactivation(uow, row, reason=_NO_FUTURE_FIRE)
         else:
             row.next_fire_at = upcoming
         claimed.append(
@@ -195,6 +253,7 @@ async def backfill_missing_cursors(
     *,
     now: datetime,
     limit: int = DEFAULT_CLAIM_LIMIT,
+    uow=None,
 ) -> int:
     """Give active TIME schedules a ``next_fire_at`` if they have none.
 
@@ -240,6 +299,11 @@ async def backfill_missing_cursors(
         if upcoming is None or missed_one_shot:
             row.is_active = False
             retired += 1
+            _stage_deactivation(
+                uow,
+                row,
+                reason=_ONE_TIME_MISSED if missed_one_shot else _NO_FUTURE_FIRE,
+            )
             continue
         row.next_fire_at = upcoming
         scheduled += 1

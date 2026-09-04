@@ -6,6 +6,11 @@ from uuid import UUID
 
 from app.core.helpers.slug import slugify
 from app.modules.identity.domain.email_domains import work_domain_from_email
+from app.modules.identity.services.membership_rules import (
+    refuse_if_last_owner,
+    refuse_unconferrable_org_role,
+    resolve_pod_grant,
+)
 from app.modules.identity.domain.errors import (
     IdentityAccessDeniedError,
     IdentityValidationError,
@@ -15,7 +20,10 @@ from app.modules.identity.domain.errors import (
     OrganizationNotFoundError,
     UserNotFoundError,
 )
-from app.modules.identity.domain.organization_slugs import normalize_organization_slug
+from app.modules.identity.domain.organization_identity import (
+    assign_organization_identity,
+    resolve_email_domain_for_policy,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -59,7 +67,9 @@ class OrganizationService:
     async def _enrich_invitation_display_fields(
         self, invitation: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        organization = await self.organization_repository.get(invitation.organization_id)
+        organization = await self.organization_repository.get(
+            invitation.organization_id
+        )
         if organization:
             invitation.organization_name = organization.name
 
@@ -90,79 +100,40 @@ class OrganizationService:
         denied_message: str,
     ) -> OrganizationMemberEntity:
         member = await self.organization_repository.get_member(user_id, organization_id)
-        if not member:
+        # One refusal for both halves: "you are not in this organization" and
+        # "you are in it but not as one of these roles" must not read apart.
+        if member is None or (allowed_roles and member.role not in allowed_roles):
             raise IdentityAccessDeniedError(denied_message)
-
-        if allowed_roles and member.role not in allowed_roles:
-            raise IdentityAccessDeniedError(denied_message)
-
         return member
 
-    async def _resolve_email_domain_for_policy(
-        self,
-        *,
-        owner: UserEntity,
-        join_policy: OrganizationJoinPolicy,
-        provided_domain: str | None,
-        exclude_org_id: UUID | None = None,
-    ) -> str | None:
-        """Resolve the domain an org claims, enforcing per-domain uniqueness.
-
-        Only ``EMAIL_DOMAIN`` orgs claim a domain (everyone else stores NULL, so
-        same-domain users can still create their own orgs). Attempting to claim a
-        domain already held by another ``EMAIL_DOMAIN`` org raises a conflict.
-        """
-        if join_policy != OrganizationJoinPolicy.EMAIL_DOMAIN:
-            return None
-
-        owner_domain = work_domain_from_email(str(owner.email))
-        if owner_domain is None:
-            raise IdentityValidationError(
-                "The EMAIL_DOMAIN join policy requires a work email domain"
-            )
-        if provided_domain:
-            normalized = provided_domain.strip().lower()
-            if normalized != owner_domain:
-                raise IdentityValidationError(
-                    "Organization email domain must match the owner's email domain"
-                )
-
-        existing_domain = await self.organization_repository.get_email_domain_org(
-            owner_domain
-        )
-        if existing_domain and existing_domain.id != exclude_org_id:
-            raise OrganizationConflictError(
-                "This email domain is already taken by another organization"
-            )
-        return owner_domain
-
     async def create_organization(
-        self, entity: OrganizationEntity, owner_user_id: UUID
+        self,
+        entity: OrganizationEntity,
+        owner_user_id: UUID,
+        *,
+        resolve_name_conflicts: bool = False,
     ) -> OrganizationEntity:
+        """Create an organization owned by ``owner_user_id``.
+
+        See :func:`assign_organization_identity` for what
+        ``resolve_name_conflicts`` settles.
+        """
         owner = await self.user_repository.get(owner_user_id)
         if not owner:
             raise UserNotFoundError()
 
-        existing_name = await self.organization_repository.get_by_name(entity.name)
-        if existing_name:
-            raise OrganizationConflictError(
-                "Organization with this name already exists",
-                code=OrganizationConflictError.NAME_TAKEN,
-            )
+        await assign_organization_identity(
+            entity,
+            get_by_slug=self.organization_repository.get_by_slug,
+            resolve_conflicts=resolve_name_conflicts,
+        )
 
-        entity.slug = normalize_organization_slug(entity.slug, entity.name)
-
-        existing_slug = await self.organization_repository.get_by_slug(entity.slug)
-        if existing_slug:
-            raise OrganizationConflictError(
-                "Organization slug already exists",
-                code=OrganizationConflictError.SLUG_TAKEN,
-            )
-
-        entity.email_domain = await self._resolve_email_domain_for_policy(
-            owner=owner,
+        entity.email_domain = await resolve_email_domain_for_policy(
+            owner_email=str(owner.email),
             join_policy=entity.join_policy,
             provided_domain=entity.email_domain,
+            exclude_org_id=None,
+            get_email_domain_org=self.organization_repository.get_email_domain_org,
         )
 
         organization = await self.organization_repository.create(entity)
@@ -201,22 +172,20 @@ class OrganizationService:
             raise UserNotFoundError()
 
         if name is not None and name != organization.name:
-            existing_name = await self.organization_repository.get_by_name(name)
-            if existing_name and existing_name.id != org_id:
-                raise OrganizationConflictError(
-                    "Organization with this name already exists"
-                )
             organization.name = name  # slug is a stable handle; not renamed
 
-        new_policy = join_policy if join_policy is not None else organization.join_policy
+        new_policy = (
+            join_policy if join_policy is not None else organization.join_policy
+        )
         provided_domain = (
             email_domain if email_domain is not None else organization.email_domain
         )
-        organization.email_domain = await self._resolve_email_domain_for_policy(
-            owner=requester,
+        organization.email_domain = await resolve_email_domain_for_policy(
+            owner_email=str(requester.email),
             join_policy=new_policy,
             provided_domain=provided_domain,
             exclude_org_id=org_id,
+            get_email_domain_org=self.organization_repository.get_email_domain_org,
         )
         organization.join_policy = new_policy
 
@@ -231,15 +200,15 @@ class OrganizationService:
     async def is_name_available(self, name: str) -> bool:
         """Whether ``create_organization`` would accept this name.
 
-        Organization names are globally unique, so a caller that can only probe
-        the slug still gets a surprise 409 on the name. Probing both is what
-        lets onboarding pick its next candidate before the user waits on a
-        failed create.
+        Display names are not unique — two organizations may both be called
+        "Acme", and the slug is what resolves. So a well-formed name is always
+        available; the answer exists so the availability endpoint can keep one
+        shape for callers that probe both fields.
         """
         normalized_name = name.strip()
         if not normalized_name:
             raise IdentityValidationError("Name is required")
-        return await self.organization_repository.get_by_name(normalized_name) is None
+        return True
 
     async def get_organization(
         self,
@@ -370,6 +339,7 @@ class OrganizationService:
             allowed_roles=[OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR],
             denied_message="Only owners and editors can invite members",
         )
+        refuse_unconferrable_org_role(inviter, entity.role)
 
         existing_member = await self.organization_repository.get_member_by_email(
             entity.organization_id,
@@ -380,8 +350,10 @@ class OrganizationService:
                 "User is already a member of this organization"
             )
 
-        existing_invitation = await self.organization_repository.get_invitation_by_email(
-            entity.organization_id, entity.email
+        existing_invitation = (
+            await self.organization_repository.get_invitation_by_email(
+                entity.organization_id, entity.email
+            )
         )
         if existing_invitation:
             existing_invitation = await self._mark_invitation_expired_if_needed(
@@ -442,13 +414,14 @@ class OrganizationService:
             denied_message="Only owners and editors can view invitations",
         )
 
-        invitations, next_cursor = (
-            await self.organization_repository.list_organization_invitations(
-                organization_id,
-                status,
-                limit,
-                cursor,
-            )
+        (
+            invitations,
+            next_cursor,
+        ) = await self.organization_repository.list_organization_invitations(
+            organization_id,
+            status,
+            limit,
+            cursor,
         )
         return (
             await self._enrich_invitation_list_display_fields(invitations),
@@ -467,7 +440,10 @@ class OrganizationService:
         if not user:
             raise UserNotFoundError()
 
-        invitations, next_cursor = await self.organization_repository.list_user_invitations(
+        (
+            invitations,
+            next_cursor,
+        ) = await self.organization_repository.list_user_invitations(
             user_email=str(user.email), status=status, limit=limit, cursor=cursor
         )
         return (
@@ -542,6 +518,16 @@ class OrganizationService:
         if existing_member:
             raise OrganizationConflictError("User is already a member")
 
+        # Resolved before anything is written, so an acceptance that cannot be
+        # honoured whole refuses with the invitation still pending -- not a
+        # member row plus a pod quietly dropped. See PS-ONB-021.
+        pod_grant = await resolve_pod_grant(
+            pod_membership_port=self.pod_membership_port,
+            pod_id=invitation.pod_id,
+            pod_role=invitation.pod_role,
+            organization_id=invitation.organization_id,
+        )
+
         member = OrganizationMemberEntity(
             user_id=user_id,
             organization_id=invitation.organization_id,
@@ -557,24 +543,19 @@ class OrganizationService:
         persisted_member = await self.organization_repository.add_member(member)
         await self.organization_repository.update_invitation(invitation)
 
-        if invitation.pod_id is not None and self.pod_membership_port is not None:
-            pod_org_id = await self.pod_membership_port.get_pod_organization_id(
-                invitation.pod_id
+        if pod_grant is not None:
+            user_name_parts = [
+                part for part in [user.first_name, user.last_name] if part
+            ]
+            user_name = " ".join(user_name_parts) or None
+            await self.pod_membership_port.add_member_to_pod(
+                pod_id=pod_grant.pod_id,
+                organization_member_id=persisted_member.id,
+                user_id=user_id,
+                user_email=str(user.email),
+                user_name=user_name,
+                pod_role=pod_grant.pod_role,
             )
-            if pod_org_id is not None:
-                user_name_parts = [
-                    part for part in [user.first_name, user.last_name] if part
-                ]
-                user_name = " ".join(user_name_parts) or None
-                pod_role = invitation.pod_role or "POD_USER"
-                await self.pod_membership_port.add_member_to_pod(
-                    pod_id=invitation.pod_id,
-                    organization_member_id=persisted_member.id,
-                    user_id=user_id,
-                    user_email=str(user.email),
-                    user_name=user_name,
-                    pod_role=pod_role,
-                )
 
         return persisted_member
 
@@ -630,6 +611,11 @@ class OrganizationService:
             denied_message="Only owners can change roles",
         )
 
+        if new_role != OrganizationRole.ORG_OWNER:
+            await refuse_if_last_owner(
+                self.organization_repository, member, verb="demote"
+            )
+
         member.update_role(new_role)
         return await self.organization_repository.update_member(member)
 
@@ -664,6 +650,11 @@ class OrganizationService:
                 raise IdentityAccessDeniedError(
                     "Editors cannot remove organization owners"
                 )
+
+        # The self-removal path runs through here too: "leave organization"
+        # reads as harmless, which is exactly why it is the easier way to
+        # strand an organization with no owner. See PS-ONB-041.
+        await refuse_if_last_owner(self.organization_repository, member, verb="remove")
 
         deleted = await self.organization_repository.delete_member(member_id)
         if not deleted:

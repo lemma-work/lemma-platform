@@ -20,7 +20,12 @@ from app.core.openapi_extensions import (
     validate_metadata_coverage,
 )
 
-SPEC_PATH = Path(__file__).resolve().parents[4] / "lemma-python" / "lemma_sdk" / "openapi_spec.json"
+SPEC_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "lemma-python"
+    / "lemma_sdk"
+    / "openapi_spec.json"
+)
 
 
 @pytest.fixture(scope="module")
@@ -34,7 +39,9 @@ def _operations(spec: dict):
         if not isinstance(item, dict):
             continue
         for method, operation in item.items():
-            if method in {"get", "put", "post", "delete", "patch"} and isinstance(operation, dict):
+            if method in {"get", "put", "post", "delete", "patch"} and isinstance(
+                operation, dict
+            ):
                 yield method, operation
 
 
@@ -42,7 +49,10 @@ def test_split_operation_id():
     assert split_operation_id("record.list") == ("record", "list")
     assert split_operation_id("agent.permissions.get") == ("agent.permissions", "get")
     assert split_operation_id("record.bulk_create") == ("record", "bulk_create")
-    assert split_operation_id("health_check_health_get") == (None, "health_check_health_get")
+    assert split_operation_id("health_check_health_get") == (
+        None,
+        "health_check_health_get",
+    )
 
 
 def test_every_resource_operation_is_annotated(annotated_spec: dict):

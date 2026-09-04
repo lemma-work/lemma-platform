@@ -13,4 +13,5 @@ export type UserSurfaceItem = {
     name: string;
     platform: SurfacePlatform;
     pod_id: string;
+    shares_address?: boolean;
 };

@@ -72,7 +72,7 @@ class KindRegistry:
     def __contains__(self, kind: object) -> bool:
         try:
             return ConnectorKind(kind) in self._plugins  # type: ignore[arg-type]
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return False
 
 

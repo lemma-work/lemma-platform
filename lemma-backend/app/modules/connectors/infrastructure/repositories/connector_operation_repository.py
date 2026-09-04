@@ -37,10 +37,20 @@ class ConnectorOperationRepository(
         connector_id: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
+        kind: Optional[str] = None,
     ) -> Sequence[ConnectorOperationEntity]:
+        """The connector's operations, narrowed in SQL rather than in Python.
+
+        `kind` used to be filtered after the fact by `list_by_connector_kind`,
+        which called this with `limit=None` and sliced the result -- so a
+        `?query=x&limit=20` discovery against a connector the size of Jira read
+        every row, with every JSONB schema, to return twenty summaries.
+        """
         stmt = select(ConnectorOperation).where(
             ConnectorOperation.connector_id == connector_id
         )
+        if kind is not None:
+            stmt = stmt.where(ConnectorOperation.kind == kind)
 
         normalized_query = _normalize_search_query(search_query) if search_query else ""
 
@@ -66,9 +76,7 @@ class ConnectorOperationRepository(
                 (ConnectorOperation.display_name.ilike(f"%{normalized_query}%"), 1),
                 else_=0,
             ).label("exact_match_rank")
-            tokens = [
-                token for token in normalized_query.split(" ") if len(token) >= 2
-            ]
+            tokens = [token for token in normalized_query.split(" ") if len(token) >= 2]
             token_match_conditions = [
                 or_(
                     ConnectorOperation.name.ilike(f"%{token}%"),
@@ -99,6 +107,10 @@ class ConnectorOperationRepository(
                     ConnectorOperation.name.asc(),
                 )
             )
+            # The ranked query is built from scratch rather than narrowed, so
+            # the kind predicate has to be reapplied to it.
+            if kind is not None:
+                stmt = stmt.where(ConnectorOperation.kind == kind)
         else:
             stmt = stmt.order_by(ConnectorOperation.name.asc())
         if limit is not None:
@@ -116,19 +128,29 @@ class ConnectorOperationRepository(
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]:
-        operations = await self.list_by_connector(
+        return await self.list_by_connector(
             connector_id,
             search_query=search_query,
-            limit=None,
+            limit=limit,
+            kind=kind,
         )
-        kind_operations = [
-            operation
-            for operation in operations
-            if getattr(operation.kind, "value", operation.kind) == kind
-        ]
-        if limit is not None:
-            return kind_operations[:limit]
-        return kind_operations
+
+    async def count_by_connector(
+        self, connector_id: str, kind: Optional[str] = None
+    ) -> int:
+        """How many operations the connector has, without reading any of them.
+
+        The discovery endpoint reports "showing 10 of 340", and used to learn
+        the 340 by listing every row and taking `len()` -- a second full read,
+        JSONB schemas included, purely to produce a number. On the agent's
+        search path that is fanned out across every install in the org.
+        """
+        stmt = select(func.count()).select_from(ConnectorOperation)
+        stmt = stmt.where(ConnectorOperation.connector_id == connector_id)
+        if kind is not None:
+            stmt = stmt.where(ConnectorOperation.kind == kind)
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one())
 
     async def get_by_connector_and_name(
         self,
@@ -141,22 +163,30 @@ class ConnectorOperationRepository(
             (func.lower(ConnectorOperation.name) == normalized_name, 3),
             (ConnectorOperation.provider_operation_name == operation_name, 2),
             (
-                func.lower(func.coalesce(ConnectorOperation.provider_operation_name, ""))
+                func.lower(
+                    func.coalesce(ConnectorOperation.provider_operation_name, "")
+                )
                 == normalized_name,
                 1,
             ),
             else_=0,
         ).label("match_rank")
-        stmt = select(ConnectorOperation).where(
-            ConnectorOperation.connector_id == connector_id,
-            or_(
-                func.lower(ConnectorOperation.name) == normalized_name,
-                func.lower(func.coalesce(ConnectorOperation.provider_operation_name, ""))
-                == normalized_name,
-            ),
-        ).order_by(
-            desc(match_rank),
-            ConnectorOperation.name.asc(),
+        stmt = (
+            select(ConnectorOperation)
+            .where(
+                ConnectorOperation.connector_id == connector_id,
+                or_(
+                    func.lower(ConnectorOperation.name) == normalized_name,
+                    func.lower(
+                        func.coalesce(ConnectorOperation.provider_operation_name, "")
+                    )
+                    == normalized_name,
+                ),
+            )
+            .order_by(
+                desc(match_rank),
+                ConnectorOperation.name.asc(),
+            )
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()

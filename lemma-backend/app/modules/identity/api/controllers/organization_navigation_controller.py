@@ -27,7 +27,7 @@ from app.modules.identity.infrastructure.organization_home_cache import (
     get_cached_organization_home,
     set_cached_organization_home,
 )
-from app.composition.organization_navigation import (
+from app.modules.identity.services.organization_navigation import (
     load_navigation,
     load_organization_home,
 )
@@ -80,7 +80,7 @@ async def get_navigation(request: Request, uow: UoWDep) -> NavigationResponse:
 
 
 @router.get(
-    "/{org_id}/home",
+    "/{organization_id}/home",
     status_code=status.HTTP_200_OK,
     operation_id="org.home",
     summary="Get Organization Home",
@@ -92,7 +92,7 @@ async def get_navigation(request: Request, uow: UoWDep) -> NavigationResponse:
     response_model=OrganizationHomeResponse,
 )
 async def get_organization_home(
-    request: Request, org_id: UUID, uow: UoWDep
+    request: Request, organization_id: UUID, uow: UoWDep
 ) -> OrganizationHomeResponse:
     """One organization in detail, cached per (organization, user).
 
@@ -109,13 +109,13 @@ async def get_organization_home(
     """
     user: UserEntity = request.state.user
     cached = await get_cached_organization_home(
-        organization_id=org_id, user_id=user.id
+        organization_id=organization_id, user_id=user.id
     )
     if cached is not None:
         return OrganizationHomeResponse.model_validate(cached)
 
     home = await load_organization_home(
-        session=uow.session, user_id=user.id, organization_id=org_id
+        session=uow.session, user_id=user.id, organization_id=organization_id
     )
     if home is None:
         raise HTTPException(
@@ -158,7 +158,7 @@ async def get_organization_home(
         ],
     )
     await set_cached_organization_home(
-        organization_id=org_id,
+        organization_id=organization_id,
         user_id=user.id,
         payload=response.model_dump(mode="json"),
     )

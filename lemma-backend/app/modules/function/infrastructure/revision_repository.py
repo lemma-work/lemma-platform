@@ -125,9 +125,7 @@ class FunctionRevisionRepositoryMixin:
         result = await self.session.execute(statement)
         return [model.to_entity() for model in result.scalars().all()]
 
-    async def revision_hashes_with_runs_in_flight(
-        self, function_id: UUID
-    ) -> set[str]:
+    async def revision_hashes_with_runs_in_flight(self, function_id: UUID) -> set[str]:
         """Revision hashes a PENDING or RUNNING run is pinned to.
 
         A run resolves its artifact from its OWN hash at execution time, so
@@ -181,4 +179,3 @@ class FunctionRevisionRepositoryMixin:
         )
         model = (await self.session.execute(statement)).scalar_one_or_none()
         return model.to_entity() if model else None
-

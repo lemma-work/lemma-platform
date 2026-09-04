@@ -1,29 +1,43 @@
 """Interfaces for schedule module."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.modules.schedule.contracts.targets import ScheduleTarget
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.domain.value_objects import DatastoreOperation
 
-
-@dataclass(frozen=True, slots=True)
-class ScheduleTarget:
-    id: UUID
-    pod_id: UUID
-    name: str
-    is_global_workflow: bool = False
-    event_trigger_id: str | None = None
-    event_trigger_config: dict[str, object] | None = None
+# `ScheduleTarget` is declared in `contracts/targets.py` rather than here,
+# because `agent` and `workflow` are the two modules that can answer the lookups
+# below and neither of them may import this one. Imported back so every existing
+# reader of `schedule.domain.interfaces.ScheduleTarget` keeps working.
 
 
 class ScheduleTargetResolver(Protocol):
+    """The four lookups a schedule's target may need, by id or by name.
+
+    All four, because `ScheduleService` calls all four. `get_agent` and
+    `get_agent_by_name` were declared on `ScheduleEventFilter` below instead --
+    a Protocol about evaluating an LLM filter, which no filter implements and
+    which nothing reaches those two through. So the annotation said the
+    resolver had two methods while `_get_agent_by_name` and `_validate_target`
+    used the other two, and a stand-in that satisfied the type failed on the
+    third call. The same shape `AgentPort.run_agent_by_id` was added to fix,
+    on the other side of the same seam.
+    """
+
     async def get_workflow(self, workflow_id: UUID) -> ScheduleTarget | None: ...
 
     async def get_workflow_by_name(
+        self, pod_id: UUID, name: str
+    ) -> ScheduleTarget | None: ...
+
+    async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None: ...
+
+    async def get_agent_by_name(
         self, pod_id: UUID, name: str
     ) -> ScheduleTarget | None: ...
 
@@ -50,12 +64,6 @@ class ScheduleEventFilter(Protocol):
         schedule: ScheduleEntity,
     ) -> tuple[bool, dict[str, Any] | None]: ...
 
-    async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None: ...
-
-    async def get_agent_by_name(
-        self, pod_id: UUID, name: str
-    ) -> ScheduleTarget | None: ...
-
 
 class ScheduleRepository(ABC):
     """Interface for schedule repository."""
@@ -63,7 +71,6 @@ class ScheduleRepository(ABC):
     @abstractmethod
     async def create(self, entity: ScheduleEntity) -> ScheduleEntity:
         """Create a new schedule."""
-        pass
 
     @abstractmethod
     async def get(
@@ -72,7 +79,6 @@ class ScheduleRepository(ABC):
         ctx: Context | None = None,
     ) -> Optional[ScheduleEntity]:
         """Get a schedule by ID."""
-        pass
 
     @abstractmethod
     async def get_by_name(
@@ -83,17 +89,14 @@ class ScheduleRepository(ABC):
         ctx: Context | None = None,
     ) -> Optional[ScheduleEntity]:
         """Get a schedule by pod-scoped name."""
-        pass
 
     @abstractmethod
     async def update(self, schedule_id: UUID, **kwargs) -> Optional[ScheduleEntity]:
         """Update a schedule."""
-        pass
 
     @abstractmethod
     async def delete(self, schedule_id: UUID) -> bool:
         """Delete a schedule."""
-        pass
 
     @abstractmethod
     async def list(
@@ -110,7 +113,6 @@ class ScheduleRepository(ABC):
         cursor: UUID | None = None,
     ) -> tuple[List[ScheduleEntity], UUID | None]:
         """List schedules with filters."""
-        pass
 
     @abstractmethod
     async def find_by_config(
@@ -122,7 +124,6 @@ class ScheduleRepository(ABC):
            schedule_type: The type of schedule (WEBHOOK, etc.)
            criteria: Dictionary of key-value pairs to match in the config
         """
-        pass
 
     @abstractmethod
     async def find_active_by_workflow(
@@ -133,7 +134,6 @@ class ScheduleRepository(ABC):
         user_id: UUID | None = None,
     ) -> List[ScheduleEntity]:
         """Find active schedules for a pod workflow, optionally scoped to an owner."""
-        pass
 
     @abstractmethod
     async def find_by_pod_table_event(
@@ -149,7 +149,6 @@ class ScheduleRepository(ABC):
         - schedule.config.table_name == event.table_name OR schedule.config.table_name is None
         - schedule.config.operations contains event.operation OR schedule.config.operations is None
         """
-        pass
 
     @abstractmethod
     async def list_all_by_pod(self, pod_id: UUID) -> List[ScheduleEntity]:
@@ -158,21 +157,65 @@ class ScheduleRepository(ABC):
         System-level query used for pod-deletion cleanup; includes internal
         schedules (unlike ``list``, which excludes ``is_internal`` rows).
         """
-        pass
+
+
+#: A schedule's `config`: a free-form JSON object whose keys are the routing
+#: key its source matches on, so its shape belongs to the source rather than to
+#: this module.
+ScheduleConfig = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionedTrigger:
+    """What provisioning a schedule's external subscription produced.
+
+    Both fields empty means *nothing needed provisioning*, and saying so is the
+    point of this type. A GitHub App has one webhook URL and its installation
+    decides which repositories it covers, so there is no remote subscription to
+    create -- which used to be indistinguishable from finding no manager at all.
+    In that case the row was written, nothing was provisioned, no error was
+    raised, and the schedule could never fire. Slack's three triggers have been
+    inert for exactly that reason since they were added.
+
+    `bound_config` is merged into the schedule's config. It is where a source
+    puts the routing key it can derive but the author cannot type -- GitHub's
+    installation id comes from the account, not from the person filling in a
+    form.
+    """
+
+    provider_trigger_id: str | None = None
+    bound_config: ScheduleConfig = field(default_factory=dict)
+
+    def apply_to(self, config: ScheduleConfig) -> bool:
+        """Write what provisioning learned into the schedule's config.
+
+        Returns whether anything changed, so the caller knows whether the row
+        needs writing back. Here rather than at the call site because this type
+        is the only thing that knows what its two fields mean.
+        """
+        if self.provider_trigger_id:
+            config["provider_trigger_id"] = self.provider_trigger_id
+        config.update(self.bound_config)
+        return bool(self.provider_trigger_id or self.bound_config)
 
 
 class ExternalScheduleWriter(ABC):
     """Port for provisioning/deprovisioning external webhook providers."""
 
     @abstractmethod
-    async def create_provider_trigger(self, schedule: ScheduleEntity) -> str | None:
-        """Create an external provider subscription and return its provider ID."""
-        pass
+    async def create_provider_trigger(
+        self, schedule: ScheduleEntity
+    ) -> ProvisionedTrigger:
+        """Provision this schedule's external subscription, if it needs one.
+
+        Raises rather than returning quietly when the schedule names a connector
+        trigger nothing knows how to provision *or* bind: a schedule that can
+        never fire should not be created successfully.
+        """
 
     @abstractmethod
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         """Delete the external provider subscription associated with the schedule."""
-        pass
 
 
 class ScheduleEventPublisher(ABC):
@@ -189,7 +232,6 @@ class ScheduleEventPublisher(ABC):
         llm_output: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Publish a ScheduleFired event."""
-        pass
 
 
 class ScheduleFilterTaskQueue(ABC):
@@ -204,19 +246,3 @@ class ScheduleFilterTaskQueue(ABC):
         source_event_id: str,
     ) -> None:
         """Enqueue background LLM filter work for a schedule."""
-        pass
-
-
-class WebhookVerifier(ABC):
-    """Port for verifying provider webhook signatures and parsing payloads.
-
-    Async because verification generally runs a provider SDK, and this sits on
-    an unauthenticated path whose rate an external sender chooses. A sync
-    implementation here blocks the event loop once per delivery, so the port
-    makes offloading the implementer's obligation rather than an option.
-    """
-
-    @abstractmethod
-    async def verify(self, payload: str, headers: Dict[str, Any]) -> Dict[str, Any]:
-        """Verify a webhook and return the provider verification result."""
-        pass

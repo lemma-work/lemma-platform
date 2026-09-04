@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import json
-import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -20,9 +17,18 @@ from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.webhooks.signatures import (
+    hex_digest_signature_matches,
+    shared_secret_matches,
+    slack_signature_matches,
+    svix_signature_matches,
+    svix_signing_key,
+    timestamp_within_skew,
+)
 from app.modules.agent_surfaces.config import (
     resolve_resend_inbound_secret,
     surface_settings,
+    surface_webhook_verification_enabled,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -35,13 +41,11 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
-_SLACK_SIGNATURE_VERSION = "v0"
-_SLACK_MAX_TIMESTAMP_SKEW_SECONDS = 60 * 5
-# Resend delivers inbound webhooks via Svix; the signature is a base64 HMAC-SHA256
-# over ``{svix-id}.{svix-timestamp}.{body}`` keyed by the base64 secret (minus its
-# ``whsec_`` prefix). The signature header carries space-separated ``v1,<sig>``
-# entries so the secret can be rotated.
-_SVIX_MAX_TIMESTAMP_SKEW_SECONDS = 60 * 5
+# The signature schemes themselves live in `app.core.webhooks.signatures` --
+# Slack's versioned basestring, Meta/WhatsApp's `sha256=` digest, Telegram's
+# shared secret and Svix's base64 HMAC. What stays here is which credential each
+# platform is checked against, and what a failure means: this module has its own
+# error type and distinguishes a misconfiguration (503) from a bad delivery.
 _BOT_FRAMEWORK_OPENID_CONFIG_URL = (
     "https://login.botframework.com/v1/.well-known/openidconfiguration"
 )
@@ -133,7 +137,7 @@ class SurfaceWebhookSecurityService:
             yield self._resolver_factory(uow)
 
     def verification_enabled(self) -> bool:
-        return bool(surface_settings.surface_webhook_security_enabled)
+        return surface_webhook_verification_enabled()
 
     def assert_platform_request_allowed(self, platform: str) -> None:
         if str(platform).upper() not in {"SLACK", "TEAMS", "WHATSAPP", "TELEGRAM"}:
@@ -335,42 +339,21 @@ class SurfaceWebhookSecurityService:
         svix_signature = headers.get("svix-signature") or headers.get("Svix-Signature")
         if not svix_id or not svix_timestamp or not svix_signature:
             raise SurfaceWebhookAuthenticationError("Missing Svix signature headers")
-        try:
-            timestamp_int = int(svix_timestamp)
-        except (TypeError, ValueError) as exc:
-            raise SurfaceWebhookAuthenticationError(
-                "Invalid Svix request timestamp"
-            ) from exc
-        if abs(int(time.time()) - timestamp_int) > _SVIX_MAX_TIMESTAMP_SKEW_SECONDS:
+        if not timestamp_within_skew(svix_timestamp):
             raise SurfaceWebhookAuthenticationError("Svix request timestamp is too old")
-
-        secret = signing_secret
-        if secret.startswith("whsec_"):
-            secret = secret[len("whsec_") :]
-        try:
-            secret_bytes = base64.b64decode(secret)
-        except Exception as exc:
+        # A secret that is not base64 is our configuration being wrong, not the
+        # delivery being wrong, and 503 is what says so. The shared scheme drops
+        # such a candidate instead of raising -- correct when there are several,
+        # and it would turn this into an indistinguishable 401 if left to it.
+        if not svix_signing_key(signing_secret):
             raise SurfaceWebhookAuthenticationError(
                 "Resend inbound signing secret is malformed",
                 status_code=503,
-            ) from exc
-
-        signed_content = b"%b.%b.%b" % (
-            svix_id.encode("utf-8"),
-            str(timestamp_int).encode("utf-8"),
-            raw_body,
-        )
-        expected = base64.b64encode(
-            hmac.new(secret_bytes, signed_content, hashlib.sha256).digest()
-        ).decode("utf-8")
-
-        # The header is a space-separated list of ``version,signature`` pairs
-        # (e.g. ``v1,<sig> v1,<sig2>``) so a rotated secret still verifies.
-        for part in svix_signature.split(" "):
-            _, _, candidate = part.partition(",")
-            if candidate and hmac.compare_digest(expected, candidate):
-                return
-        raise SurfaceWebhookAuthenticationError("Invalid Svix request signature")
+            )
+        if not svix_signature_matches(
+            svix_signature, svix_id, svix_timestamp, raw_body, [signing_secret]
+        ):
+            raise SurfaceWebhookAuthenticationError("Invalid Svix request signature")
 
     async def _resolve_whatsapp_secrets(
         self, surface: AgentSurfaceEntity | None
@@ -428,25 +411,15 @@ class SurfaceWebhookSecurityService:
         )
         if not signature or not timestamp:
             raise SurfaceWebhookAuthenticationError("Missing Slack signature headers")
-        try:
-            timestamp_int = int(timestamp)
-        except (TypeError, ValueError) as exc:
-            raise SurfaceWebhookAuthenticationError(
-                "Invalid Slack request timestamp"
-            ) from exc
-        if abs(int(time.time()) - timestamp_int) > _SLACK_MAX_TIMESTAMP_SKEW_SECONDS:
+        # Stale-but-authentic and forged are different problems, and the messages
+        # say so; the shared scheme keeps them apart for exactly that reason.
+        if not timestamp_within_skew(timestamp):
             raise SurfaceWebhookAuthenticationError(
                 "Slack request timestamp is too old"
             )
-
-        basestring = (
-            f"{_SLACK_SIGNATURE_VERSION}:{timestamp_int}:".encode("utf-8") + raw_body
-        )
-        expected = (
-            f"{_SLACK_SIGNATURE_VERSION}="
-            f"{hmac.new(signing_secret.encode('utf-8'), basestring, hashlib.sha256).hexdigest()}"
-        )
-        if not hmac.compare_digest(expected, signature):
+        if not slack_signature_matches(
+            signature, timestamp, raw_body, [signing_secret]
+        ):
             raise SurfaceWebhookAuthenticationError("Invalid Slack request signature")
 
     def _verify_whatsapp_signature(
@@ -464,17 +437,9 @@ class SurfaceWebhookSecurityService:
         signature = headers.get("x-hub-signature-256") or headers.get(
             "X-Hub-Signature-256"
         )
-        if not signature or not signature.startswith("sha256="):
+        if not signature:
             raise SurfaceWebhookAuthenticationError("Missing WhatsApp signature header")
-        expected = (
-            "sha256="
-            + hmac.new(
-                app_secret.encode("utf-8"),
-                raw_body,
-                hashlib.sha256,
-            ).hexdigest()
-        )
-        if not hmac.compare_digest(expected, signature):
+        if not hex_digest_signature_matches(signature, raw_body, [app_secret]):
             raise SurfaceWebhookAuthenticationError("Invalid WhatsApp signature")
 
     def _verify_telegram_secret(
@@ -495,7 +460,7 @@ class SurfaceWebhookSecurityService:
             raise SurfaceWebhookAuthenticationError(
                 "Missing Telegram webhook secret header"
             )
-        if not hmac.compare_digest(webhook_secret, header_secret):
+        if not shared_secret_matches(header_secret, [webhook_secret]):
             raise SurfaceWebhookAuthenticationError("Invalid Telegram webhook secret")
 
     async def _verify_teams_jwt(

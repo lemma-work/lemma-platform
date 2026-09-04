@@ -253,6 +253,16 @@ class FileTransactionWriter:
                 "Markdown can only be attached to an indexable, non-markdown "
                 "document (e.g. a PDF, Word/ODT, HTML, RTF, or EPUB file)."
             )
+        if not entity.search_enabled:
+            # Indexing off means nothing attached here would ever be kept:
+            # answering 200 and storing nothing is the one outcome a person
+            # cannot act on. Refuse, and say what to do instead. See
+            # PS-DATA-040 and DEV-DATA-001.
+            raise DatastoreValidationError(
+                "This file was uploaded with indexing off, so supplied "
+                "markdown would not be kept. Re-upload it with indexing "
+                "enabled to supply your own markdown."
+            )
         return MarkdownAttachPlan(entity=entity, requester_user_id=requester_user_id)
 
     async def write_user_markdown(
@@ -333,7 +343,7 @@ class FileTransactionWriter:
             pass
         except Exception:
             logger.debug(
-                'datastore.transaction_writer.delete_user_markdown_s_s.diagnostic',
+                "datastore.transaction_writer.delete_user_markdown_s_s.diagnostic",
                 exc_info=True,
             )
         metadata = dict(entity.metadata or {})

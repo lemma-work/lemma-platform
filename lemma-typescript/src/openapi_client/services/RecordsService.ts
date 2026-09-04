@@ -19,9 +19,9 @@ export class RecordsService {
      * List table records with token pagination only. Use the datastore query endpoint for joins, aggregates, or custom read-only SQL.
      * @param podId
      * @param tableName
-     * @param limit Max number of rows to return.
+     * @param limit Max number of rows to return, up to 1000. Page beyond that with `page_token`.
      * @param offset Row offset for direct pagination.
-     * @param filter Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={"field":"amount","op":"gt","value":100}` and `filter={"field":"status","op":"eq","value":"OPEN"}`.
+     * @param filter Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={"field":"amount","op":"gt","value":100}`, `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
      * @param sort Optional repeated JSON sort clauses. Each `sort` value must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`. Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column sorting in priority order. Example: `sort={"field":"created_at","direction":"desc"}`.
      * @param pageToken Opaque token from a previous response page.
      * @param mode Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.
@@ -246,7 +246,7 @@ export class RecordsService {
     }
     /**
      * Update Record
-     * Patch a record by primary key. Returns the updated record object (no envelope).
+     * Patch a record by primary key. Returns the updated record object (no envelope). Pass `expected_updated_at` to make the patch conditional on the row not having changed since it was read; the request then answers 409 rather than overwriting another client's edit.
      * @param podId
      * @param tableName
      * @param recordId

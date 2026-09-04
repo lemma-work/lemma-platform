@@ -19,12 +19,12 @@ from app.modules.pod_bundle.domain.state import (
 
 
 def _import_state(**overrides) -> ImportState:
-    defaults = dict(
-        import_id=uuid4(),
-        pod_id=uuid4(),
-        user_id=uuid4(),
-        source=BundleSource(kind="URL", bundle_filename="crm.zip"),
-    )
+    defaults = {
+        "import_id": uuid4(),
+        "pod_id": uuid4(),
+        "user_id": uuid4(),
+        "source": BundleSource(kind="URL", bundle_filename="crm.zip"),
+    }
     defaults.update(overrides)
     return ImportState(**defaults)
 
@@ -52,7 +52,9 @@ def test_touch_bumps_seq_and_updated_at():
 
 def test_json_round_trip_preserves_document():
     state = _import_state()
-    state.plan = ImportPlan(format_version=2, steps=[_step(0), _step(1, destructive=True)])
+    state.plan = ImportPlan(
+        format_version=2, steps=[_step(0), _step(1, destructive=True)]
+    )
     state.status = ImportStatus.AWAITING_CONFIRMATION
     state.touch()
 

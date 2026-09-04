@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   publish:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -36,7 +37,7 @@ jobs:
           sha: ${{ github.sha }}
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 

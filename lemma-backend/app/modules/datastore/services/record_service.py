@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.datastore.domain.errors import (
-    DatastoreAccessDeniedError,
-    DatastoreRecordNotFoundError,
-    DatastoreValidationError,
-)
+from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
 from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
 from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.infrastructure.record_bulk_delete import (
+    bulk_delete_records as write_bulk_deletes,
+)
+from app.modules.datastore.infrastructure.record_bulk_update import (
+    bulk_update_records as write_bulk_updates,
+)
 from app.modules.datastore.services.record_validator import (
     RecordValidator,
     convert_record,
 )
 from app.modules.datastore.services.sql_introspection import analyze_query
 from app.modules.datastore.services.table_context import TableContext
+from app.modules.datastore.services.record_query_scope import resolve_query_row_scope
 
 if TYPE_CHECKING:
     from app.modules.datastore.services.table_service import TableService
@@ -86,69 +90,26 @@ class RecordService:
             admin_mode=admin_mode,
         )
 
-    def _validate_update_payload(
-        self,
-        ctx: TableContext,
-        data: dict[str, Any],
-    ) -> None:
-        errors: list[str] = []
-        error_details: list[dict[str, Any]] = []
-
-        for key, value in data.items():
-            column = ctx.get_column(key)
-            if column is None:
-                continue
-            if key == ctx.primary_key_column:
-                errors.append(f"Cannot modify primary key column '{key}'")
-                error_details.append({"field": key, "reason": "primary_key"})
-            elif column.computed:
-                errors.append(f"Cannot provide value for computed column '{key}'")
-                error_details.append({"field": key, "reason": "computed"})
-            elif column.system and not RecordValidator.allows_creation_override(column):
-                errors.append(f"Cannot provide value for system-managed column '{key}'")
-                error_details.append({"field": key, "reason": "system_managed"})
-            elif (
-                column.type == DatastoreDataType.ENUM
-                and column.options
-                and value is not None
-                and value not in column.options
-            ):
-                allowed = ", ".join(column.options)
-                errors.append(
-                    f"Value '{value}' is not allowed for column '{key}'. "
-                    f"Allowed values: {allowed}"
-                )
-                error_details.append({
-                    "field": key,
-                    "reason": "enum",
-                    "value": value,
-                    "allowed_values": column.options,
-                })
-
-        if errors:
-            raise DatastoreValidationError(
-                f"Invalid record data: {'; '.join(errors)}",
-                details={"errors": error_details},
-            )
-
     async def _validate_user_reference_columns(
         self,
         ctx: TableContext,
         data: dict[str, Any],
+        checked_user_ids: set[UUID] | None = None,
     ) -> None:
+        """Confirm every USER-typed value names a real user.
+
+        ``checked_user_ids`` lets a bulk caller share the dedup set across rows.
+        """
         if self.user_repository is None:
             return
 
         converted = convert_record(ctx.columns, data, skip_auto=False)
-        checked_user_ids: set[UUID] = set()
+        if checked_user_ids is None:
+            checked_user_ids = set()
 
         for key, value in converted.items():
             column = ctx.get_column(key)
-            if (
-                column is None
-                or column.type != DatastoreDataType.USER
-                or value is None
-            ):
+            if column is None or column.type != DatastoreDataType.USER or value is None:
                 continue
 
             user_id = value if isinstance(value, UUID) else UUID(str(value))
@@ -173,7 +134,9 @@ class RecordService:
         validator = RecordValidator(ctx)
         sanitized_data = validator.strip_system_write_overrides(data)
 
-        is_valid, errors, error_details = validator.validate(sanitized_data, is_creation=True)
+        is_valid, errors, error_details = validator.validate(
+            sanitized_data, is_creation=True
+        )
         if not is_valid:
             raise DatastoreValidationError(
                 f"Invalid record data: {'; '.join(errors)}",
@@ -220,6 +183,14 @@ class RecordService:
             ),
         )
 
+    async def _ensure_listing_index(self, table) -> None:
+        await self.record_repository.ensure_listing_index(
+            TableContext.from_table_entity(
+                table,
+                self.record_repository.schema_manager.get_schema_name(table.pod_id),
+            )
+        )
+
     async def execute_readonly_query(
         self,
         *,
@@ -229,12 +200,16 @@ class RecordService:
         table_service: "TableService",
         ctx: Context,
         admin_mode: bool = False,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int, bool]:
         """Validate, authorize, and run an ad-hoc read-only SQL query.
+
+        Returns the rows, how many came back, and whether the row cap cut the
+        result short. The third value matters: without it a capped result is
+        indistinguishable from a complete one.
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via
-        ``table_service.get_table``. RLS-enabled tables are row-filtered at the
+        ``resolve_query_row_scope``. RLS-enabled tables are row-filtered at the
         database layer.
 
         Rows of RLS tables are scoped to ``user_id`` by default — for every
@@ -248,38 +223,21 @@ class RecordService:
         """
         analysis = analyze_query(query)
 
-        saw_rls = False
-        admin_on_all_rls = True
-        for table_name in sorted(analysis.tables):
-            # Always enforce per-table READ; only consult the admin signal when
-            # admin mode is requested, so the default path does no extra work.
-            table = await table_service.get_table(pod_id, table_name, ctx=ctx)
-            if table.enable_rls:
-                saw_rls = True
-                if admin_mode and (
-                    self.authz is None
-                    or not await self.authz.can_admin_table(
-                        pod_id=pod_id, table_id=table.id, ctx=ctx
-                    )
-                ):
-                    admin_on_all_rls = False
-
         if not analysis.tables:
             # No registered table referenced (e.g. SELECT from a set-returning
             # function); fall back to a pod-level read check since there is no
             # per-table grant to authorize against.
-            await self._require_datastore_read(
-                user_id=user_id, pod_id=pod_id, ctx=ctx
-            )
+            await self._require_datastore_read(user_id=user_id, pod_id=pod_id, ctx=ctx)
 
-        is_pod_admin = False
-        if admin_mode and saw_rls:
-            if not admin_on_all_rls:
-                raise DatastoreAccessDeniedError(
-                    "Admin mode requires permission to administer every "
-                    "RLS-enabled table referenced by the query."
-                )
-            is_pod_admin = True
+        is_pod_admin = await resolve_query_row_scope(
+            pod_id=pod_id,
+            table_names=analysis.tables,
+            table_service=table_service,
+            authz=self.authz,
+            ctx=ctx,
+            admin_mode=admin_mode,
+            ensure_index=self._ensure_listing_index,
+        )
 
         return await self.record_repository.execute_readonly_query(
             pod_id=pod_id,
@@ -323,38 +281,68 @@ class RecordService:
         user_id: UUID,
         *,
         admin_mode: bool = False,
+        expected_updated_at: datetime | None = None,
     ):
         await self._require_record_write(user_id=user_id, ctx=ctx)
-
-        sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
-        self._validate_update_payload(ctx, sanitized_data)
-        await self._validate_user_reference_columns(ctx, sanitized_data)
-
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,
             admin_mode=admin_mode,
         )
+        record = await self._write_update(
+            ctx,
+            record_id,
+            data,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            expected_updated_at=expected_updated_at,
+        )
         if ctx.events_enabled:
-            event_factory = partial(
+            await self.events.dispatch()
+        return record
+
+    async def _write_update(
+        self,
+        ctx: TableContext,
+        record_id: Any,
+        data: dict[str, Any],
+        user_id: UUID,
+        *,
+        enforce_user_scope: bool,
+        checked_user_ids: set[UUID] | None = None,
+        expected_updated_at: datetime | None = None,
+    ):
+        """Validate and write one row, without the per-caller preamble.
+
+        Split so a bulk update pays the preamble once. Permission and row-scope
+        are decided by the caller and the table, neither of which changes inside
+        a loop, and re-asking cost a database round trip and a connection
+        release per record.
+        """
+        sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
+        RecordValidator(ctx).validate_update(sanitized_data)
+        await self._validate_user_reference_columns(
+            ctx, sanitized_data, checked_user_ids
+        )
+        event_factory = (
+            partial(
                 self.events.required_for_record,
                 ctx=ctx,
                 operation=DatastoreRecordOperation.UPDATE,
                 user_id=user_id,
             )
-        else:
-            event_factory = None
-        record = await self.record_repository.update_record(
+            if ctx.events_enabled
+            else None
+        )
+        return await self.record_repository.update_record(
             ctx,
             record_id,
             sanitized_data,
             user_id,
             enforce_user_scope=enforce_user_scope,
             event_factory=event_factory,
+            expected_updated_at=expected_updated_at,
         )
-        if event_factory is not None:
-            await self.events.dispatch()
-        return record
 
     async def delete_record(
         self,
@@ -370,23 +358,14 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        event_factory = None
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.DELETE,
-                user_id=user_id,
-            )
-
         await self.record_repository.delete_record(
             ctx,
             record_id,
             user_id,
             enforce_user_scope=enforce_user_scope,
-            event_factory=event_factory,
+            event_factory=self._delete_event_factory(ctx, user_id),
         )
-        if event_factory is not None:
+        if ctx.events_enabled:
             await self.events.dispatch()
         return True
 
@@ -408,7 +387,9 @@ class RecordService:
         ]
 
         for record in sanitized_records:
-            is_valid, errors, error_details = validator.validate(record, is_creation=True)
+            is_valid, errors, error_details = validator.validate(
+                record, is_creation=True
+            )
             if not is_valid:
                 raise DatastoreValidationError(
                     f"Invalid record data: {'; '.join(errors)}",
@@ -459,8 +440,22 @@ class RecordService:
         if not updates:
             return 0
 
+        # Decided once, like `bulk_create_records` does with its permission
+        # check. Looping over `update_record` re-ran the whole single-record
+        # preamble per row -- a permission check against the database, a
+        # connection release, and a row-scope decision -- none of which can
+        # change inside the loop, because the caller, the table and the mode are
+        # all fixed. That per-row cost is what dominated records/bulk/update.
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
+        )
         pk = ctx.primary_key_column
-        count = 0
+        # Shared across the batch: the dedup set was per row, so 200 rows
+        # naming one owner asked the user repository for it 200 times.
+        checked_user_ids: set[UUID] = set()
+        prepared: list[tuple[Any, dict[str, Any]]] = []
 
         for update in updates:
             pk_val = update.get(pk) or update.get("id")
@@ -473,10 +468,49 @@ class RecordService:
             payload.pop(pk, None)
             payload.pop("id", None)
 
-            await self.update_record(ctx, pk_val, payload, user_id, admin_mode=admin_mode)
-            count += 1
+            sanitized = RecordValidator(ctx).strip_system_write_overrides(payload)
+            RecordValidator(ctx).validate_update(sanitized)
+            await self._validate_user_reference_columns(
+                ctx, sanitized, checked_user_ids
+            )
+            prepared.append((pk_val, sanitized))
 
+        event_factory = (
+            partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.UPDATE,
+                user_id=user_id,
+            )
+            if ctx.events_enabled
+            else None
+        )
+        count = await write_bulk_updates(
+            self.record_repository,
+            ctx,
+            prepared,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
+        )
+
+        # One dispatch for the batch, not one per row. Each row still stages its
+        # own UPDATE event through the repository, so the event contract is
+        # unchanged -- only the number of flushes is.
+        if ctx.events_enabled:
+            await self.events.dispatch()
         return count
+
+    def _delete_event_factory(self, ctx: TableContext, user_id: UUID):
+        """The DELETE event builder both delete paths stage their rows through."""
+        if not ctx.events_enabled:
+            return None
+        return partial(
+            self.events.required_for_record,
+            ctx=ctx,
+            operation=DatastoreRecordOperation.DELETE,
+            user_id=user_id,
+        )
 
     async def bulk_delete_records(
         self,
@@ -486,12 +520,31 @@ class RecordService:
         *,
         admin_mode: bool = False,
     ) -> int:
+        """Delete every named row, or none of them (`PS-DATA-013`).
+
+        See `infrastructure/record_bulk_delete` for why this is one
+        transaction and why an id that matched nothing is a refusal rather
+        than a smaller count.
+        """
         await self._require_record_write(user_id=user_id, ctx=ctx)
-        count = 0
-        for record_id in record_ids:
-            try:
-                await self.delete_record(ctx, record_id, user_id, admin_mode=admin_mode)
-                count += 1
-            except DatastoreRecordNotFoundError:
-                continue
+        if not record_ids:
+            return 0
+        # Decided once; see `bulk_update_records` for why.
+        enforce_user_scope = await self._should_enforce_user_scope(
+            user_id=user_id,
+            ctx=ctx,
+            admin_mode=admin_mode,
+        )
+        count = await write_bulk_deletes(
+            self.record_repository,
+            ctx,
+            record_ids,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=self._delete_event_factory(ctx, user_id),
+        )
+        # One dispatch for the batch, as with bulk update: the repository
+        # stages a DELETE event per row and flushes none of them.
+        if ctx.events_enabled:
+            await self.events.dispatch()
         return count

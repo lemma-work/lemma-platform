@@ -1,6 +1,7 @@
 import type { Conversation } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
 import { buildConversationStandaloneResourceHref } from '@/lib/assistant/conversation-presentation';
+import { appPageSlugFromRouteParam } from '@/lib/utils/app-page-slugs';
 
 const WORKSPACE_TABS_VERSION = 3;
 const MAX_PERSISTED_TABS = 50;
@@ -102,9 +103,38 @@ export function conversationWorkspaceTab(
     };
 }
 
+/**
+ * Where a conversation the pod's list cannot account for is cached.
+ *
+ * Shared, so a caller that has already listed a conversation's children can
+ * prime it and spare the tab the "Untitled conversation" flash between the
+ * navigation and the fetch that names it.
+ */
+export function workspaceTabConversationQueryKey(podId: string, conversationId: string) {
+    return ['workspace-tab-conversation', podId, conversationId] as const;
+}
+
 function safeWorkspaceHref(value: string) {
     if (!value.startsWith('/pod/')) return '/';
     return buildConversationStandaloneResourceHref(value) ?? '/';
+}
+
+const WIDGET_VIEW_SUFFIX = '/widgets/view';
+
+/**
+ * Route tabs are keyed by section, so a section opens one tab and navigating
+ * within it moves that tab along — one Data tab, one Files tab. A presented
+ * widget is not a section: each one is its own artifact, and two of them are
+ * two things to hold open. Key those by the tool call that produced them so
+ * opening a second widget adds a tab instead of overwriting the first.
+ */
+export function widgetWorkspaceRouteKey(toolCallId: string) {
+    const cleaned = toolCallId.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '');
+    return cleaned ? `widget-${cleaned}` : 'widgets';
+}
+
+export function isWidgetWorkspaceRouteKey(routeKey: string) {
+    return routeKey.startsWith('widget-');
 }
 
 export function routeWorkspaceTab(
@@ -144,42 +174,31 @@ export function upsertWorkspaceTab(tabs: PodWorkspaceTab[], tab: PodWorkspaceTab
 }
 
 export function closeWorkspaceTab(tabs: PodWorkspaceTab[], tabId: string) {
-    // Home is the only tab that cannot be closed. App tabs used to be
-    // uncloseable too, which only made sense while they were pinned for you
-    // rather than opened by you.
+    // Home is the only tab that cannot be closed.
     if (tabId === HOME_WORKSPACE_TAB.id) return tabs;
     const next = tabs.filter((tab) => tab.id !== tabId);
     return next.length === tabs.length ? tabs : next;
 }
 
 /**
- * Keep the open app tabs honest. Do not open any.
+ * Apps are not tabs — they live in the sidebar rail, one click from anywhere.
  *
- * Every app in the pod used to be pinned here the moment its pages loaded, and
- * `closeWorkspaceTab` refused to close them — so the strip was a second,
- * permanent copy of the apps index that grew with the pod and could not be
- * dismissed. Four apps cost four tabs before you had opened anything.
- *
- * Tabs hold what someone opened. Opening an app still adds its tab, from the
- * active-tab effect in `use-pod-workspace-tabs`; all this does is drop tabs
- * whose app has since been deleted and refresh the titles of the rest.
+ * The strip used to pin every installed app the moment its pages loaded, and
+ * `closeWorkspaceTab` refused to close them: a second, permanent copy of the
+ * apps index that grew with the pod. Then it held only apps someone had
+ * opened. Now the rail answers "what apps does this pod have" and marks the
+ * one you are on, so the strip drops app tabs outright — the legacy pinned
+ * ones, and the leftover route tabs aimed at the viewer that duplicated
+ * them. It never opens anything.
  */
-export function syncAppWorkspaceTabs(tabs: PodWorkspaceTab[], pages: AppPageRef[]) {
-    const bySlug = new Map(pages.map((page) => [page.slug, page]));
-    const kept: PodWorkspaceTab[] = [];
-
-    for (const tab of tabs) {
-        if (tab.kind === 'home') continue;
-        // A leftover route tab aimed at the app viewer duplicates the app tab.
-        if (tab.kind === 'route' && tab.resourceId === 'apps' && tab.href.includes('/app/view')) continue;
-        if (tab.kind === 'app') {
-            const page = bySlug.get(tab.resourceId);
-            if (!page) continue;
-            kept.push(appWorkspaceTab(page));
-            continue;
-        }
-        kept.push(tab);
-    }
+export function syncAppWorkspaceTabs(tabs: PodWorkspaceTab[]) {
+    const kept = tabs.filter((tab) => {
+        if (tab.kind === 'home') return false;
+        if (tab.kind === 'app') return false;
+        // A leftover route tab aimed at the app viewer duplicated the app tab.
+        if (tab.kind === 'route' && tab.resourceId === 'apps' && tab.href.includes('/app/view')) return false;
+        return true;
+    });
 
     const next: PodWorkspaceTab[] = [HOME_WORKSPACE_TAB, ...kept];
     if (next.length !== tabs.length) return next;
@@ -279,23 +298,13 @@ export function parseWorkspaceTabs(value: string | null): PodWorkspaceTab[] {
                 }
                 continue;
             }
-            if (!resourceId || (kind !== 'app' && kind !== 'route' && kind !== 'conversation')) continue;
+            // App tabs from before the rail existed are dropped at the door:
+            // they are not restored, and `syncAppWorkspaceTabs` clears any
+            // that arrive by another path.
+            if (!resourceId || (kind !== 'route' && kind !== 'conversation')) continue;
 
             const id = `${kind}:${resourceId}`;
             if (seen.has(id)) continue;
-
-            if (kind === 'app') {
-                seen.add(id);
-                tabs.push({
-                    id: `app:${resourceId}`,
-                    kind: 'app',
-                    resourceId,
-                    title: cleanLabel(candidate.title, formatWorkspaceAppTitle(resourceId)),
-                    icon: typeof candidate.icon === 'string' ? candidate.icon : null,
-                    url: typeof candidate.url === 'string' ? candidate.url : null,
-                });
-                continue;
-            }
 
             if (kind === 'route') {
                 const href = typeof candidate.href === 'string'
@@ -357,9 +366,6 @@ function getWorkspaceRouteKey(section: string) {
         case 'flows':
         case 'workflows':
             return 'workflows';
-        case 'kits':
-        case 'recipes':
-            return 'recipes';
         default:
             return section;
     }
@@ -369,11 +375,20 @@ export function getActiveWorkspaceTabId(
     podId: string,
     pathname: string,
     appSlug?: string | null,
+    searchParams?: URLSearchParams | null,
 ): string | null {
     if (pathname === `/pod/${podId}` || pathname === `/pod/${podId}/`) return HOME_WORKSPACE_TAB.id;
 
+    // The open app's tab is ephemeral: the strip renders it while the viewer
+    // is focused, so it still marks where you are — but it is derived for
+    // display in `use-pod-workspace-tabs` and never written into the store,
+    // so navigating away takes it with you. Apps live in the sidebar rail,
+    // not in the persisted working set.
     if (pathname.startsWith(`/pod/${podId}/app/view`) && appSlug) {
         return `app:${appSlug}`;
+    }
+    if (pathname.startsWith(`/pod/${podId}/app/view`)) {
+        return null;
     }
 
     const conversationPrefix = `/pod/${podId}/conversations/`;
@@ -389,16 +404,24 @@ export function getActiveWorkspaceTabId(
     }
 
     const base = `/pod/${podId}`;
+    if (pathname === `${base}${WIDGET_VIEW_SUFFIX}`) {
+        const toolCallId = searchParams?.get('toolCallId')?.trim();
+        if (toolCallId) return `route:${widgetWorkspaceRouteKey(toolCallId)}`;
+    }
+
     const section = pathname.slice(base.length).split('/').filter(Boolean)[0];
     if (!section) return HOME_WORKSPACE_TAB.id;
     return `route:${getWorkspaceRouteKey(section)}`;
 }
 
 export function getAppSlugFromWorkspaceTab(tab: PodWorkspaceTab): string | null {
-    if (tab.kind === 'app') return tab.resourceId;
+    // Canonical, because a tab outlives the link that opened it: one stored
+    // before app links were slugged still carries the app's name, and a name is
+    // not a slug the app index answers to.
+    if (tab.kind === 'app') return appPageSlugFromRouteParam(tab.resourceId);
     if (tab.kind !== 'route' || tab.resourceId !== 'apps') return null;
     try {
-        return new URL(tab.href, 'https://lemma.local').searchParams.get('page');
+        return appPageSlugFromRouteParam(new URL(tab.href, 'https://lemma.local').searchParams.get('page'));
     } catch {
         return null;
     }

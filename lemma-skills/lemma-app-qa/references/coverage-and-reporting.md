@@ -29,6 +29,7 @@ Track the dimensions that a happy-path journey can otherwise hide.
 | Delegated workload | Invoker, workload grants, run id, output/effect | |
 | Persistence | Reload/deep-link plus exact durable object | |
 | Loading/empty/error/permission | Visual and interaction checkpoint for each applicable state | |
+| Paging and totals | Fixture larger than one page; every displayed count compared with an independent count | |
 | Responsive | Wide, 375px, and any layout breakpoint exercised | |
 | Accessibility | Keyboard path and inspected semantics; list AT not exercised | |
 | Console/network | Errors, failed requests, duplicate calls, CORS/auth findings | |
@@ -61,6 +62,7 @@ skill and current CLI help.
 | --- | --- |
 | Record created/updated | `lemma records get <table> <record-id>`; compare ownership and exact fields |
 | Record absent/isolated | scoped `lemma records list <table>` and exact get as the tested principal |
+| Displayed count is a real total | `lemma query run "select count(*) from <table> …"` as the tested principal; a UI figure that tracks the page size instead is the defect |
 | File uploaded/processed | `lemma files stat <path>`; inspect indexing status if search is claimed |
 | Workflow advanced | `lemma workflows runs get <run-id>`; inspect status, active wait, history, error/output |
 | Function completed | inspect the exact function run id, status, error/logs, and output data |

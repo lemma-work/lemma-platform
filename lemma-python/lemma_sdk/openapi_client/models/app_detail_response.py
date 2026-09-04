@@ -24,7 +24,7 @@ class AppDetailResponse:
         public_slug (str):
         status (AppStatus):
         updated_at (Any):
-        url (str):
+        url (None | str): None where no app host is served -- see `public_app_url`.
         user_id (UUID):
         allowed_actions (list[str] | Unset):
         current_release_id (None | Unset | UUID):
@@ -40,7 +40,7 @@ class AppDetailResponse:
     public_slug: str
     status: AppStatus
     updated_at: Any
-    url: str
+    url: None | str
     user_id: UUID
     allowed_actions: list[str] | Unset = UNSET
     current_release_id: None | Unset | UUID = UNSET
@@ -64,6 +64,7 @@ class AppDetailResponse:
 
         updated_at = self.updated_at
 
+        url: None | str
         url = self.url
 
         user_id = str(self.user_id)
@@ -139,7 +140,12 @@ class AppDetailResponse:
 
         updated_at = d.pop("updated_at")
 
-        url = d.pop("url")
+        def _parse_url(data: object) -> None | str:
+            if data is None:
+                return data
+            return cast(None | str, data)
+
+        url = _parse_url(d.pop("url"))
 
         user_id = UUID(d.pop("user_id"))
 

@@ -29,55 +29,145 @@ SAMPLE_SPEC = {
             "get": {
                 "operationId": "users/get-authenticated",
                 "summary": "Get the authenticated user",
-                "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Node"}}}}},
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/Node"}
+                            }
+                        }
+                    }
+                },
             }
         },
         "/repos/{owner}/{repo}/issues": {
             "parameters": [
-                {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
-                {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
+                {
+                    "name": "owner",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "repo",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                },
             ],
             "get": {
                 "operationId": "issues/list-for-repo",
                 "parameters": [
-                    {"name": "labels", "in": "query", "required": False, "style": "form", "explode": False, "schema": {"type": "array", "items": {"type": "string"}}},
+                    {
+                        "name": "labels",
+                        "in": "query",
+                        "required": False,
+                        "style": "form",
+                        "explode": False,
+                        "schema": {"type": "array", "items": {"type": "string"}},
+                    },
                 ],
-                "responses": {"200": {"content": {"application/json": {"schema": {"type": "array"}}}}},
+                "responses": {
+                    "200": {
+                        "content": {"application/json": {"schema": {"type": "array"}}}
+                    }
+                },
             },
             "post": {
                 "operationId": "issues/create",
                 "requestBody": {
                     "required": True,
-                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Issue"}}},
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/Issue"}
+                        }
+                    },
                 },
-                "responses": {"201": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Issue"}}}}},
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/Issue"}
+                            }
+                        }
+                    }
+                },
             },
         },
         "/repos/{owner}/{repo}/releases/{release_id}/assets": {
             "post": {
                 "operationId": "repos/upload-release-asset",
                 "parameters": [
-                    {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
-                    {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
-                    {"name": "release_id", "in": "path", "required": True, "schema": {"type": "integer"}},
-                    {"name": "name", "in": "query", "required": True, "schema": {"type": "string"}},
+                    {
+                        "name": "owner",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "repo",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "release_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "integer"},
+                    },
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
                 ],
                 "requestBody": {
                     "required": True,
-                    "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+                    "content": {
+                        "application/octet-stream": {
+                            "schema": {"type": "string", "format": "binary"}
+                        }
+                    },
                 },
-                "responses": {"201": {"content": {"application/json": {"schema": {"type": "object"}}}}},
+                "responses": {
+                    "201": {
+                        "content": {"application/json": {"schema": {"type": "object"}}}
+                    }
+                },
             }
         },
         "/repos/{owner}/{repo}/tarball/{ref}": {
             "get": {
                 "operationId": "repos/download-tarball-archive",
                 "parameters": [
-                    {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
-                    {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
-                    {"name": "ref", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {
+                        "name": "owner",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "repo",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "ref",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
                 ],
-                "responses": {"200": {"content": {"application/octet-stream": {"schema": {"type": "string"}}}}},
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/octet-stream": {"schema": {"type": "string"}}
+                        }
+                    }
+                },
             }
         },
         "/not/allowlisted": {
@@ -116,7 +206,9 @@ def test_only_allowlisted_operations_selected():
 
 def test_get_operation_splits_path_and_query():
     ops = _by_name(
-        build_operation_descriptors(SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST)
+        build_operation_descriptors(
+            SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST
+        )
     )
     op = ops["issues_list_for_repo"]
     hr = op.execution
@@ -133,7 +225,9 @@ def test_get_operation_splits_path_and_query():
 
 def test_json_body_passthrough():
     ops = _by_name(
-        build_operation_descriptors(SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST)
+        build_operation_descriptors(
+            SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST
+        )
     )
     op = ops["issues_create"]
     rb = op.execution["request_body"]
@@ -146,7 +240,9 @@ def test_json_body_passthrough():
 
 def test_octet_stream_upload_marks_body_as_file():
     ops = _by_name(
-        build_operation_descriptors(SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST)
+        build_operation_descriptors(
+            SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST
+        )
     )
     op = ops["repos_upload_release_asset"]
     rb = op.execution["request_body"]
@@ -158,7 +254,9 @@ def test_octet_stream_upload_marks_body_as_file():
 
 def test_binary_download_adds_output_path_and_flags_response():
     ops = _by_name(
-        build_operation_descriptors(SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST)
+        build_operation_descriptors(
+            SAMPLE_SPEC, server_url="https://api.example.com", allowlist=ALLOWLIST
+        )
     )
     op = ops["repos_download_tarball_archive"]
     assert op.execution["response"]["binary"] is True
@@ -171,7 +269,9 @@ def test_override_binary_response_and_name():
             SAMPLE_SPEC,
             server_url="https://api.example.com",
             allowlist=[{"operation_id": "users/get-authenticated"}],
-            overrides={"users/get-authenticated": {"name": "whoami", "binary_response": True}},
+            overrides={
+                "users/get-authenticated": {"name": "whoami", "binary_response": True}
+            },
         )
     )
     assert "whoami" in ops
@@ -209,4 +309,6 @@ def test_default_headers_propagate():
             default_headers={"User-Agent": "lemma"},
         )
     )
-    assert ops["users_get_authenticated"].execution["default_headers"] == {"User-Agent": "lemma"}
+    assert ops["users_get_authenticated"].execution["default_headers"] == {
+        "User-Agent": "lemma"
+    }

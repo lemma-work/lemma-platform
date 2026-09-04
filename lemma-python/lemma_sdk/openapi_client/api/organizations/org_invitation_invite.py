@@ -14,7 +14,7 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     body: OrganizationInvitationRequest,
 ) -> dict[str, Any]:
@@ -22,8 +22,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/organizations/{org_id}/invitations".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/invitations".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
     }
 
@@ -66,7 +66,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationInvitationRequest,
@@ -76,7 +76,7 @@ def sync_detailed(
      Invite a user to join the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationInvitationRequest): Organization invitation request schema.
 
     Raises:
@@ -88,7 +88,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -100,7 +100,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationInvitationRequest,
@@ -110,7 +110,7 @@ def sync(
      Invite a user to join the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationInvitationRequest): Organization invitation request schema.
 
     Raises:
@@ -122,14 +122,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         body=body,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationInvitationRequest,
@@ -139,7 +139,7 @@ async def asyncio_detailed(
      Invite a user to join the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationInvitationRequest): Organization invitation request schema.
 
     Raises:
@@ -151,7 +151,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -161,7 +161,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationInvitationRequest,
@@ -171,7 +171,7 @@ async def asyncio(
      Invite a user to join the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationInvitationRequest): Organization invitation request schema.
 
     Raises:
@@ -184,7 +184,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             body=body,
         )

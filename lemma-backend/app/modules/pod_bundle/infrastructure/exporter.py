@@ -36,17 +36,19 @@ from lemma_pod_bundle.layout import (
 )
 from lemma_pod_bundle.normalize import (
     _attach_permissions_payload,
-    _normalize_agent_payload,
     _normalize_app_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
     _normalize_schedule_payload,
-    _normalize_surface_payload,
     _normalize_table_payload,
     _normalize_workflow_payload,
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
+from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
+    export_surfaces,
+)
 from app.core.authorization.context import Context
 from app.core.concurrency.offload import run_blocking
 from app.core.helpers.slug import slugify
@@ -146,38 +148,14 @@ def _dump_response(response: Any) -> dict[str, Any]:
     return response.model_dump(mode="json")
 
 
-async def _resolve_account_connector_info(
-    uow: SqlAlchemyUnitOfWork, account_id: UUID
-) -> tuple[str, str] | None:
-    """Ground-truth ``(connector_id, kind)`` for an account, resolved via the
-    connectors module — never inferred from a resource's own name (e.g. a
-    surface's platform or a schedule's directory name), since that guess is
-    wrong for any resource type with no platform concept of its own. Returns
-    ``None`` if the account (or its auth config) no longer exists."""
-    from app.composition.pod_bundle_resources import get_connector_service
-
-    service = get_connector_service(uow)
-    account = await service.account_repository.get(account_id)
-    if account is None:
-        return None
-    auth_config = await service.auth_config_repository.get(account.auth_config_id)
-    if auth_config is None:
-        return None
-    return account.connector_id, auth_config.kind.value
-
-
 class BundleExporter:
     """Builds a pod bundle archive from a pod's resources.
 
-    Constructed with the per-UoW service builders it needs; :meth:`export` does
-    all DB reads inside the caller-supplied ``uow``/``ctx`` and returns the
-    assembled zip bytes.
+    :meth:`export` does all DB reads inside the caller-supplied ``uow``/``ctx``
+    and returns the assembled zip bytes. Every provider module's operations are
+    imported lazily inside it, so importing this module stays cheap and free of
+    the cycle `module.py -> handlers -> exporter` would otherwise close.
     """
-
-    def __init__(self) -> None:
-        # Service builders are imported lazily inside export() to avoid import
-        # cycles at module import time (module.py imports handlers -> exporter).
-        pass
 
     async def export(
         self,
@@ -228,21 +206,27 @@ class BundleExporter:
         )
 
         # Lazy imports (avoid import cycles + keep the module import cheap).
-        from app.composition.pod_bundle_resources import (
-            build_app_service,
-            build_record_service,
-            build_table_service,
-            build_function_service,
-            get_agent_service,
-            get_schedule_service,
-            get_workflow_service,
+        from app.modules.apps.contracts.provisioning import (
+            list_app_names,
+            require_app,
         )
-        from app.modules.datastore.contracts import TableContext
-        from app.composition.pod_bundle_pod import PodRepository
-
-        from app.core.infrastructure.events.message_bus import get_message_bus
-
-        message_bus = get_message_bus()
+        from app.modules.connectors.contracts.provisioning import (
+            resolve_account_connector,
+        )
+        from app.modules.datastore.contracts.provisioning import (
+            get_table,
+            list_table_names,
+        )
+        from app.modules.function.contracts.provisioning import (
+            list_function_names,
+            require_function,
+        )
+        from app.modules.pod.contracts.provisioning import get_pod
+        from app.modules.schedule.contracts.provisioning import list_schedules
+        from app.modules.workflow.contracts.provisioning import (
+            get_workflow,
+            list_workflow_names,
+        )
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-export-") as tmp:
             root = Path(tmp)
@@ -250,7 +234,7 @@ class BundleExporter:
                 (root / resource_dir).mkdir(parents=True, exist_ok=True)
 
             # --- pod.json ------------------------------------------------------
-            pod = await PodRepository(uow, message_bus=message_bus).get(pod_id)
+            pod = await get_pod(uow, pod_id=pod_id)
             if pod is None:
                 # ctx already authorized POD_READ, so this only happens on a race
                 # with a pod delete — treat as an invalid export.
@@ -269,15 +253,16 @@ class BundleExporter:
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:
-                table_service = build_table_service(uow)
-                record_service = build_record_service(uow) if wants_data else None
-                schema_name = table_service.schema_manager.get_schema_name(pod_id)
-                tables, _ = await table_service.list_tables(pod_id, ctx, limit=1000)
                 exported_table_names: set[str] = set()
-                for summary in sorted(tables, key=lambda t: str(t.name or "")):
-                    table_name = str(summary.name or "")
+                for table_name in sorted(
+                    await list_table_names(uow, pod_id=pod_id, ctx=ctx)
+                ):
                     exported_table_names.add(table_name)
-                    table = await table_service.get_table(pod_id, table_name, ctx)
+                    table = await get_table(
+                        uow, pod_id=pod_id, name=table_name, ctx=ctx
+                    )
+                    if table is None:
+                        continue
                     dir_ = root / "tables" / table_name
                     dir_.mkdir(parents=True, exist_ok=True)
                     _write_json(
@@ -286,16 +271,15 @@ class BundleExporter:
                     )
                     # Seed this table only when the caller asked for all data or
                     # named it explicitly.
-                    if table_name in data_tables_set and record_service is not None:
+                    if table_name in data_tables_set:
                         cap = record_budget.table_cap()
                         if cap <= 0:
                             record_budget.note_skipped(table=table_name)
                         else:
                             written, available = await self._export_table_data(
-                                record_service=record_service,
-                                table_context=TableContext.from_table_entity(
-                                    table, schema_name, events_enabled=False
-                                ),
+                                uow=uow,
+                                pod_id=pod_id,
+                                table=table,
                                 user_id=user_id,
                                 dest=dir_ / TABLE_DATA_FILE,
                                 cap=cap,
@@ -316,14 +300,13 @@ class BundleExporter:
 
             # --- functions ----------------------------------------------------
             if "functions" in selected:
-                function_service = build_function_service(uow)
-                functions, _ = await function_service.list_functions(
-                    pod_id, user_id, limit=1000, ctx=ctx
-                )
-                for summary in sorted(functions, key=lambda f: str(f.name or "")):
-                    function_name = str(summary.name or "")
-                    function = await function_service.get_function_by_name(
-                        pod_id, function_name, user_id, raise_not_found=True, ctx=ctx
+                for function_name in sorted(
+                    await list_function_names(
+                        uow, pod_id=pod_id, user_id=user_id, ctx=ctx
+                    )
+                ):
+                    function = await require_function(
+                        uow, pod_id=pod_id, name=function_name, user_id=user_id, ctx=ctx
                     )
                     dir_ = root / "functions" / function_name
                     dir_.mkdir(parents=True, exist_ok=True)
@@ -337,40 +320,8 @@ class BundleExporter:
                             pod_id=pod_id,
                             grantee_type="FUNCTION",
                             grantee_id=grantee_id,
-                        )
-                        # Attach even an EMPTY grant list — see
-                        # _resource_grants_payload for why None differs from [].
-                        if grants is not None:
-                            payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(payload, field_name="code", file_name="code.py", resource_dir=dir_)
-                    _write_json(dir_ / f"{function_name}.json", payload)
-                done += 1
-                await on_progress(done, total)
-
-            # --- agents -------------------------------------------------------
-            if "agents" in selected:
-                agent_service = get_agent_service(uow)
-                agents, _ = await agent_service.list_agents(
-                    pod_id=pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
-                )
-                for summary in sorted(agents, key=lambda a: str(a.name or "")):
-                    agent_name = str(summary.name or "")
-                    agent = await agent_service.get_agent_by_name(
-                        pod_id=pod_id,
-                        name=agent_name,
-                        requester_user_id=user_id,
-                        ctx=ctx,
-                    )
-                    dir_ = root / "agents" / agent_name
-                    dir_.mkdir(parents=True, exist_ok=True)
-                    payload = _normalize_agent_payload(_agent_response_dict(agent))
-                    grantee_id = getattr(agent, "id", None)
-                    if grantee_id is not None:
-                        grants = await _resource_grants_payload(
-                            uow,
-                            pod_id=pod_id,
-                            grantee_type="AGENT",
-                            grantee_id=grantee_id,
+                            warnings=warnings,
+                            grantee_name=function_name,
                         )
                         # Attach even an EMPTY grant list — see
                         # _resource_grants_payload for why None differs from [].
@@ -378,24 +329,37 @@ class BundleExporter:
                             payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(
                         payload,
-                        field_name="instruction",
-                        file_name="instruction.md",
+                        field_name="code",
+                        file_name="code.py",
                         resource_dir=dir_,
                     )
-                    _write_json(dir_ / f"{agent_name}.json", payload)
+                    _write_json(dir_ / f"{function_name}.json", payload)
+                done += 1
+                await on_progress(done, total)
+
+            # --- agents -------------------------------------------------------
+            if "agents" in selected:
+                await export_agents(
+                    uow,
+                    root=root,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                    ctx=ctx,
+                    grants_payload=_resource_grants_payload,
+                    warnings=warnings,
+                )
                 done += 1
                 await on_progress(done, total)
 
             # --- workflows ----------------------------------------------------
             if "workflows" in selected:
-                flow_service = get_workflow_service(uow)
-                flows, _ = await flow_service.list_workflows(
-                    pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
-                )
-                for summary in sorted(flows, key=lambda f: str(f.name or "")):
-                    workflow_name = str(summary.name or "")
-                    flow = await flow_service.get_workflow_by_name(
-                        pod_id, workflow_name, requester_user_id=user_id, ctx=ctx
+                for workflow_name in sorted(
+                    await list_workflow_names(
+                        uow, pod_id=pod_id, user_id=user_id, ctx=ctx
+                    )
+                ):
+                    flow = await get_workflow(
+                        uow, pod_id=pod_id, name=workflow_name, user_id=user_id, ctx=ctx
                     )
                     dir_ = root / "workflows" / workflow_name
                     dir_.mkdir(parents=True, exist_ok=True)
@@ -408,10 +372,7 @@ class BundleExporter:
 
             # --- schedules ----------------------------------------------------
             if "schedules" in selected:
-                schedule_service = get_schedule_service(uow)
-                schedules, _ = await schedule_service.list_schedules(
-                    pod_id=pod_id, limit=1000, ctx=ctx
-                )
+                schedules = await list_schedules(uow, pod_id=pod_id, ctx=ctx)
                 for schedule in sorted(
                     schedules, key=lambda s: str(s.name or s.id or "")
                 ):
@@ -421,7 +382,7 @@ class BundleExporter:
                     raw_schedule = _schedule_response_dict(schedule)
                     account_id = raw_schedule.get("account_id")
                     if account_id:
-                        info = await _resolve_account_connector_info(
+                        info = await resolve_account_connector(
                             uow, UUID(str(account_id))
                         )
                         if info is None:
@@ -433,7 +394,9 @@ class BundleExporter:
                                 f"Schedule '{schedule_name}' references account "
                                 f"{account_id}, which no longer exists."
                             )
-                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = info
+                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = (
+                            info
+                        )
                     payload = _normalize_schedule_payload(raw_schedule)
                     payload.setdefault("name", schedule_name)
                     _write_json(dir_ / f"{schedule_name}.json", payload)
@@ -442,18 +405,17 @@ class BundleExporter:
 
             # --- surfaces (best-effort) ---------------------------------------
             if "surfaces" in selected:
-                await self._export_surfaces(root, uow, pod_id)
+                await export_surfaces(root, uow, pod_id, warnings)
                 done += 1
                 await on_progress(done, total)
 
             # --- apps ---------------------------------------------------------
             if "apps" in selected:
-                app_service = build_app_service(uow)
-                apps, _ = await app_service.list_apps(pod_id, user_id, 1000, None, ctx=ctx)
-                for summary in sorted(apps, key=lambda a: str(a.name or "")):
-                    app_name = str(summary.name or "")
-                    app = await app_service.get_app_by_name(
-                        pod_id, app_name, user_id, raise_not_found=True, ctx=ctx
+                for app_name in sorted(
+                    await list_app_names(uow, pod_id=pod_id, user_id=user_id, ctx=ctx)
+                ):
+                    app = await require_app(
+                        uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
                     )
                     dir_ = root / "apps" / app_name
                     dir_.mkdir(parents=True, exist_ok=True)
@@ -466,7 +428,7 @@ class BundleExporter:
                     # for widget/no-source apps, the built dist — mirrors the CLI's
                     # _download_app_assets so an API export carries app code too.
                     await self._export_app_assets(
-                        app_service=app_service,
+                        uow=uow,
                         pod_id=pod_id,
                         app_name=app_name,
                         user_id=user_id,
@@ -511,8 +473,9 @@ class BundleExporter:
     async def _export_table_data(
         self,
         *,
-        record_service: Any,
-        table_context: Any,
+        uow: SqlAlchemyUnitOfWork,
+        pod_id: UUID,
+        table,
         user_id: UUID,
         dest: Path,
         cap: int,
@@ -525,16 +488,21 @@ class BundleExporter:
         warn on row- or byte-driven truncation."""
         from lemma_pod_bundle.normalize import _SEED_STRIP_COLUMNS
 
+        from app.modules.datastore.contracts.provisioning import read_table_rows
+
         rows: list[dict[str, Any]] = []
         offset = 0
         available = 0
         while len(rows) < cap:
             want = min(_RECORD_EXPORT_PAGE, cap - len(rows))
-            items, total = await record_service.list_records(
-                table_context, user_id, limit=want, offset=offset
+            batch, available = await read_table_rows(
+                uow,
+                pod_id=pod_id,
+                table=table,
+                user_id=user_id,
+                limit=want,
+                offset=offset,
             )
-            available = int(total or 0)
-            batch = [dict(item.data) for item in items]
             rows.extend(batch)
             offset += len(batch)
             if not batch or len(batch) < want:
@@ -556,56 +524,10 @@ class BundleExporter:
         data_budget.consume(len(csv_text.encode("utf-8")))
         return kept, max(available, len(cleaned))
 
-    async def _export_surfaces(
-        self, root: Path, uow: SqlAlchemyUnitOfWork, pod_id: UUID
-    ) -> None:
-        """Export configured surfaces best-effort: a surface that can't be
-        serialized is skipped with a warning, never failing the whole export."""
-        from app.composition.pod_bundle_resources import (
-            _surface_response,
-        )
-        from app.composition.pod_bundle_resources import get_surface_service
-
-        try:
-            service = get_surface_service(uow)
-            surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
-        except Exception:  # noqa: BLE001 - surfaces are best-effort
-            logger.debug('pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic', pod_id=pod_id)
-            return
-
-        seen_names: set[str] = set()
-        for surface in surfaces:
-            try:
-                raw_surface = _dump_response(_surface_response(surface))
-                account_id = raw_surface.get("account_id")
-                if account_id:
-                    info = await _resolve_account_connector_info(
-                        uow, UUID(str(account_id))
-                    )
-                    if info is None:
-                        raise ValueError(
-                            f"Surface references account {account_id}, which no "
-                            "longer exists."
-                        )
-                    raw_surface["connector_id"], raw_surface["connector_kind"] = info
-                payload = _normalize_surface_payload(raw_surface)
-                platform = str(payload.get("platform") or "")
-                # De-dup by the surface's pod-unique name (not platform), so a pod
-                # with several surfaces of one platform exports all of them.
-                surface_name = str(payload.get("name") or "")
-                if not platform or not surface_name or surface_name in seen_names:
-                    continue
-                seen_names.add(surface_name)
-                dir_ = root / "surfaces" / surface_name
-                dir_.mkdir(parents=True, exist_ok=True)
-                _write_json(dir_ / f"{surface_name}.json", payload)
-            except Exception:  # noqa: BLE001 - one bad surface is not fatal
-                logger.debug('pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic', pod_id=pod_id)
-
     async def _export_app_assets(
         self,
         *,
-        app_service: Any,
+        uow: SqlAlchemyUnitOfWork,
         pod_id: UUID,
         app_name: str,
         user_id: UUID,
@@ -626,13 +548,20 @@ class BundleExporter:
         is tight, since it is the reconstructible half. Mirrors the CLI's
         ``_download_app_assets`` for format parity."""
         from app.modules.apps.contracts import AppNotFoundError
+        from app.modules.apps.contracts.provisioning import (
+            read_app_archive,
+            resolve_app_dist_archive,
+            resolve_app_source_archive,
+        )
 
         source_bytes: bytes | None = None
         try:
-            app_id, source_path = await app_service.resolve_source_archive(
-                pod_id, app_name, user_id, ctx=ctx
+            app_id, source_path = await resolve_app_source_archive(
+                uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
             )
-            source_bytes = await app_service.read_archive(app_id, source_path)
+            source_bytes = await read_app_archive(
+                uow, app_id=app_id, archive_path=source_path
+            )
         except AppNotFoundError:
             source_bytes = None
 
@@ -648,10 +577,12 @@ class BundleExporter:
 
         dist_bytes: bytes | None = None
         try:
-            app_id, dist_path = await app_service.resolve_dist_archive(
-                pod_id, app_name, user_id, ctx=ctx
+            app_id, dist_path = await resolve_app_dist_archive(
+                uow, pod_id=pod_id, name=app_name, user_id=user_id, ctx=ctx
             )
-            dist_bytes = await app_service.read_archive(app_id, dist_path)
+            dist_bytes = await read_app_archive(
+                uow, app_id=app_id, archive_path=dist_path
+            )
         except AppNotFoundError:
             dist_bytes = None
 
@@ -669,7 +600,9 @@ class BundleExporter:
                 dist_is_portable, dist_bytes, pod_id=str(pod_id), limiter="cpu_bound"
             )
             await run_blocking(
-                _write_json, dest / "dist.json", {"portable": portable},
+                _write_json,
+                dest / "dist.json",
+                {"portable": portable},
                 limiter="cpu_bound",
             )
 
@@ -689,17 +622,14 @@ class BundleExporter:
         )
 
         return await export_pod_files(
-            root=root, uow=uow, pod_id=pod_id, ctx=ctx,
-            data_budget=data_budget, warnings=warnings,
+            root=root,
+            uow=uow,
+            pod_id=pod_id,
+            ctx=ctx,
+            data_budget=data_budget,
+            warnings=warnings,
             folder_paths=folder_paths,
         )
-
-    async def _walk_pod_files(
-        self, service: Any, pod_id: UUID, ctx: Context, dir_path: str = "/"
-    ) -> list[Any]:
-        from app.modules.pod_bundle.infrastructure.exporter_files import walk_pod_files
-
-        return await walk_pod_files(service, pod_id, ctx, dir_path)
 
 
 # --- response-dict adapters (per-module GET serialization) -------------------
@@ -711,6 +641,8 @@ async def _resource_grants_payload(
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
+    warnings: list[str],
+    grantee_name: str,
 ) -> dict[str, Any] | None:
     """Serialize an agent's/function's resource grants into the bundle's portable
     ``{"grants": [...]}`` shape (keyed by ``resource_name``, never a source-org id).
@@ -721,11 +653,13 @@ async def _resource_grants_payload(
     but can't call the tables/functions it was granted. ``list_grantee_resource_grants``
     already drops grants whose resource no longer resolves to a name, and the applier
     skips any that don't resolve in the target pod, so this stays best-effort/portable.
-    Best-effort: a failure to read grants logs and returns ``None`` — "grants
-    unknown, leave the target's alone" — rather than sinking the whole export. A
-    grantee that simply holds none returns ``{"grants": []}``, which imports as
-    "holds nothing". Collapsing those two is what let an export silently change an
-    imported workload's access."""
+    Best-effort: a failure to read grants logs, warns the exporter, and returns
+    ``None`` — "grants unknown, leave the target's alone" — rather than sinking
+    the whole export. A grantee that simply holds none returns ``{"grants": []}``,
+    which imports as "holds nothing". Collapsing those two is what let an export
+    silently change an imported workload's access — and returning ``None``
+    *without* a warning is the same silence by another route, because the
+    imported workload then runs on whatever the target pod happens to grant."""
     from app.core.authorization.grants import list_grantee_resource_grants
 
     try:
@@ -735,8 +669,17 @@ async def _resource_grants_payload(
             grantee_type=grantee_type,
             grantee_id=grantee_id,
         )
-    except Exception:  # noqa: BLE001 - grant export is best-effort
-        logger.debug('pod_bundle.exporter.skipping_grant_export_s_s.diagnostic', grantee_type=grantee_type, grantee_id=grantee_id)
+    except Exception as exc:  # noqa: BLE001 - grant export is best-effort
+        logger.debug(
+            "pod_bundle.exporter.skipping_grant_export_s_s.diagnostic",
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
+        warnings.append(
+            f"{grantee_type.lower()} '{grantee_name}' exported without its "
+            f"permissions: they could not be read ({type(exc).__name__}). On "
+            f"import it will keep whatever grants the target pod already gives it."
+        )
         return None
     return {
         "grants": [

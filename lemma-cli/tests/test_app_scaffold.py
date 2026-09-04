@@ -20,25 +20,25 @@ from lemma_cli.cli_core.app_scaffold import (
 
 
 def _options(target: Path, **overrides) -> AppScaffoldOptions:
-    base = dict(
-        target_dir=target,
-        name="my-app",
-        pod_id="pod_123",
-        api_url="http://127.0.0.1:8710",
-        auth_url="http://127.0.0.1:3710/auth",
-        title="My App",
-        navigation="sidebar",
-        agent_name=None,
-        chat_mode="right-sidebar",
-        members=False,
-        search_config=None,
-        theme_toggle=True,
-        install=False,
-        registry=False,
-        style_preset="soft",
-        template_source=BUNDLED_TEMPLATE_SOURCE,
-        sdk_path=None,
-    )
+    base = {
+        "target_dir": target,
+        "name": "my-app",
+        "pod_id": "pod_123",
+        "api_url": "http://127.0.0.1:8710",
+        "auth_url": "http://127.0.0.1:3710/auth",
+        "title": "My App",
+        "navigation": "sidebar",
+        "agent_name": None,
+        "chat_mode": "right-sidebar",
+        "members": False,
+        "search_config": None,
+        "theme_toggle": True,
+        "install": False,
+        "registry": False,
+        "style_preset": "soft",
+        "template_source": BUNDLED_TEMPLATE_SOURCE,
+        "sdk_path": None,
+    }
     base.update(overrides)
     return AppScaffoldOptions(**base)
 
@@ -233,25 +233,34 @@ def test_scaffold_app_gitignore_renamed(tmp_path):
 
 def test_resolve_sdk_spec_pins_latest_published_version(monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: "1.2.3")
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: "1.2.3"
+    )
     assert app_scaffold._resolve_lemma_sdk_spec(None) == "^1.2.3"
 
 
 def test_resolve_sdk_spec_falls_back_to_template_latest_when_offline(monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: None)
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: None
+    )
     # None => leave the template's "latest" untouched (npm install still gets newest).
     assert app_scaffold._resolve_lemma_sdk_spec(None) is None
 
 
 def test_resolve_sdk_spec_uses_sdk_path_file_link(tmp_path: Path):
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
-    assert app_scaffold._resolve_lemma_sdk_spec(str(tmp_path)) == f"file:{tmp_path.resolve()}"
+    assert (
+        app_scaffold._resolve_lemma_sdk_spec(str(tmp_path))
+        == f"file:{tmp_path.resolve()}"
+    )
 
 
 def test_update_package_json_writes_resolved_latest(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(app_scaffold, "resolve_local_sdk_path", lambda: None)
-    monkeypatch.setattr(app_scaffold, "_latest_published_lemma_sdk_version", lambda: "9.9.9")
+    monkeypatch.setattr(
+        app_scaffold, "_latest_published_lemma_sdk_version", lambda: "9.9.9"
+    )
     pkg = tmp_path / "package.json"
     pkg.write_text(
         json.dumps({"name": "tmpl", "dependencies": {"lemma-sdk": "latest"}}),

@@ -4,11 +4,9 @@ from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
@@ -23,9 +21,7 @@ async def handle_telegram_command(
     adapter,
     credentials: dict[str, Any],
     uow_factory,
-    conversation_service_factory,
     uow,
-    conversation_service,
 ) -> bool:
     if context.platform is not SurfacePlatform.TELEGRAM:
         return False
@@ -62,10 +58,7 @@ async def handle_telegram_command(
         )
         return True
     retried = await _retry_failed_conversation(
-        context,
-        uow_factory=uow_factory,
-        conversation_service_factory=conversation_service_factory,
-        conversation_service=conversation_service,
+        context, uow_factory=uow_factory, uow=uow
     )
     await adapter.send_message(
         credentials=credentials,
@@ -106,35 +99,23 @@ async def _telegram_mini_app_for_context(
     )
 
 
-async def _retry_failed_conversation(
-    context,
-    *,
-    uow_factory,
-    conversation_service_factory,
-    conversation_service,
-) -> bool:
+async def _retry_failed_conversation(context, *, uow_factory, uow) -> bool:
+    """``/retry``, reported as a sentence rather than raised.
+
+    The narrow handler is the whole of what this adds over the published
+    operation: a person typing ``/retry`` in a chat wants to be told there is
+    nothing safe to retry, and a conversation with no failed run says so by
+    raising. The tapped Retry button wants the opposite, so the operation
+    raises and each caller decides.
+    """
     if context.pod_id is None:
         return False
     pod_id = context.pod_id
 
-    async def run(service) -> bool:
-        retry_service = ConversationRetryService(
-            uow=service.uow,
-            conversation_repository=service.conversation_repository,
-            agent_repository=service.agent_repository,
-            authorization_service=service.authorization_service,
-            fallback_model_name=service.fallback_model_name,
-            usage_service=service.usage_service,
-        )
-        auth_ctx = await create_authorization_data_service(
-            service.uow
-        ).build_user_context(
-            user_id=context.user_id,
-            pod_id=pod_id,
-        )
-        token = set_current_context(auth_ctx)
+    async def run(scoped_uow) -> bool:
         try:
-            await retry_service.retry_failed_run(
+            await agent_conversations.retry_failed_run(
+                scoped_uow,
                 conversation_id=context.conversation_id,
                 user_id=context.user_id,
                 pod_id=pod_id,
@@ -143,14 +124,10 @@ async def _retry_failed_conversation(
             return True
         except DomainError, RuntimeError, SQLAlchemyError, TypeError, ValueError:
             return False
-        finally:
-            reset_current_context(token)
 
     if uow_factory is not None:
-        if conversation_service_factory is None:
-            return False
         async with uow_factory() as scoped_uow:
-            return await run(conversation_service_factory(scoped_uow))
-    if conversation_service is None:
+            return await run(scoped_uow)
+    if uow is None:
         return False
-    return await run(conversation_service)
+    return await run(uow)

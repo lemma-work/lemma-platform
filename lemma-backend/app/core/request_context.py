@@ -198,7 +198,8 @@ def bind_job_context(
     set_value(
         _request_id,
         inherited_request_id
-        if inherited_request_id and _BOUNDED_IDENTIFIER_RE.fullmatch(inherited_request_id)
+        if inherited_request_id
+        and _BOUNDED_IDENTIFIER_RE.fullmatch(inherited_request_id)
         else None,
     )
     set_value(_correlation_id, parse_uuid("correlation_id"))

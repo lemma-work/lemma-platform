@@ -18,8 +18,11 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
+from app.core.observability.dependency_incident import DependencyIncident
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 
 logger = get_logger(__name__)
+_token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
@@ -28,6 +31,12 @@ _BOT_SCOPE = "https://api.botframework.com/.default"
 # Bot Framework Connector fallback endpoint (when no serviceUrl stored).
 # Prefer the serviceUrl from incoming activities — it is region-specific.
 BF_FALLBACK_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
+
+# Azure AD OAuth token endpoint base. Overridable via
+# ``surface_settings.microsoft_bot_oauth_base_url`` for local/e2e testing,
+# the same way ``microsoft_bot_openid_config_url`` overrides the OpenID
+# metadata endpoint used for webhook JWT validation.
+_OAUTH_BASE_URL = "https://login.microsoftonline.com"
 
 _GUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
@@ -81,7 +90,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     app_password = surface_settings.microsoft_bot_app_password
     if not app_id or not app_password:
         logger.debug(
-            'agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic'
+            "agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic"
         )
         return None
 
@@ -89,12 +98,22 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     cache = _get_token_cache()
     try:
         cached_token = await cache.get_raw(cache_key)
-    except Exception:
+    except Exception as exc:
+        # A cache miss is survivable — the OAuth fetch below is the real source
+        # — so this stays non-fatal. Recorded rather than logged per call: this
+        # runs on every outbound Teams call, and one record per call during a
+        # Redis outage would be thousands a minute for one condition.
+        _token_cache_incident.record_failure(error_type=type(exc).__name__)
         cached_token = None
+    else:
+        _token_cache_incident.record_success()
     if cached_token:
         return cached_token
 
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    oauth_base = (
+        surface_settings.microsoft_bot_oauth_base_url or _OAUTH_BASE_URL
+    ).rstrip("/")
+    url = f"{oauth_base}/{tenant_id}/oauth2/v2.0/token"
     data = {
         "grant_type": "client_credentials",
         "client_id": app_id,
@@ -124,7 +143,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
                     )
                 else:
                     logger.debug(
-                        'agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic',
+                        "agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic",
                         tenant_id=tenant_id,
                         status=response.status,
                         error_code=error_code,
@@ -135,7 +154,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     token = result.get("access_token")
     if not token:
         logger.debug(
-            'agent_surfaces.client.teams_token_acquisition_no_access.diagnostic',
+            "agent_surfaces.client.teams_token_acquisition_no_access.diagnostic",
             tenant_id=tenant_id,
         )
         return None
@@ -144,8 +163,10 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     # Subtract 60 s so we refresh before the token actually expires.
     try:
         await cache.set_raw(cache_key, str(token), ttl_seconds=max(60, expires_in - 60))
-    except Exception:
-        pass
+    except Exception as exc:
+        _token_cache_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _token_cache_incident.record_success()
     return str(token)
 
 
@@ -176,7 +197,7 @@ async def resolve_graph_team_id(
     bot_token = await get_bot_token()
     if not bot_token:
         logger.debug(
-            'agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic',
+            "agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None
@@ -190,7 +211,7 @@ async def resolve_graph_team_id(
             if response.status >= 400:
                 await response.text()
                 logger.debug(
-                    'agent_surfaces.client.teams_could_not_resolve_team.diagnostic',
+                    "agent_surfaces.client.teams_could_not_resolve_team.diagnostic",
                     raw_team_id=raw_team_id,
                     status=response.status,
                 )
@@ -198,7 +219,7 @@ async def resolve_graph_team_id(
             details = await response.json()
     except Exception:
         logger.debug(
-            'agent_surfaces.client.teams_team_id_resolution_s.diagnostic',
+            "agent_surfaces.client.teams_team_id_resolution_s.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None
@@ -209,8 +230,36 @@ async def resolve_graph_team_id(
     aad_group_id = str(details.get("aadGroupId") or "") or None
     if not aad_group_id:
         logger.debug(
-            'agent_surfaces.client.teams_team_details_raw_team.diagnostic',
+            "agent_surfaces.client.teams_team_details_raw_team.diagnostic",
             raw_team_id=raw_team_id,
         )
         return None
     return aad_group_id
+
+
+def classify_teams_error(exc: Exception) -> DeliveryClassification:
+    """Transient for 429 / 5xx / network errors; permanent for other 4xx.
+
+    The Bot Framework Connector is posted to with raw ``aiohttp``, so a
+    throttled reply arrives as ``ClientResponseError`` from
+    ``raise_for_status()``. Same classification as the other three platforms.
+    """
+    if isinstance(exc, aiohttp.ClientResponseError):
+        if exc.status == 429 or exc.status >= 500:
+            return DeliveryClassification.TRANSIENT
+        return DeliveryClassification.PERMANENT
+    if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
+        return DeliveryClassification.TRANSIENT
+    return DeliveryClassification.PERMANENT
+
+
+def teams_retry_after(exc: Exception) -> float | None:
+    """Seconds the Bot Framework asked us to wait, from ``Retry-After``."""
+    if not isinstance(exc, aiohttp.ClientResponseError):
+        return None
+    raw = (exc.headers or {}).get("Retry-After")
+    try:
+        seconds = float(raw)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        return None
+    return seconds if seconds > 0 else None

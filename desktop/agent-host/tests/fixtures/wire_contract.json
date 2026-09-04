@@ -13,7 +13,16 @@
     "event_text`. These must agree exactly: the host accumulates streamed text",
     "with one and the backend re-accumulates it with the other, and the two",
     "buffers are reconciled at every segment boundary. A disagreement does not",
-    "raise anything -- it silently truncates a persisted message."
+    "raise anything -- it silently truncates a persisted message.",
+    "",
+    "`tool_calls` is the sequence an adapter really sends for one tool use.",
+    "The host copies each ACP update's fields through verbatim; the backend",
+    "reads the arguments and the result back out of them. Nothing checked that",
+    "the two agreed, and they did not: a streaming adapter opens a call with",
+    "`rawInput: {}` and sends the real arguments moments later on a",
+    "status-less `tool_call_update`, which the backend dropped. Every streamed",
+    "tool call rendered with empty arguments, and views built from them had",
+    "nothing to build from."
   ],
   "event_types": [
     "run_state",
@@ -33,49 +42,79 @@
   "text_extraction": [
     {
       "name": "a plain text field",
-      "payload": { "text": "hello" },
+      "payload": {
+        "text": "hello"
+      },
       "text": "hello"
     },
     {
       "name": "a delta field when there is no text",
-      "payload": { "delta": "hello" },
+      "payload": {
+        "delta": "hello"
+      },
       "text": "hello"
     },
     {
       "name": "text wins over delta",
-      "payload": { "text": "kept", "delta": "ignored" },
+      "payload": {
+        "text": "kept",
+        "delta": "ignored"
+      },
       "text": "kept"
     },
     {
       "name": "content as a bare string",
-      "payload": { "content": "hello" },
+      "payload": {
+        "content": "hello"
+      },
       "text": "hello"
     },
     {
       "name": "content as a text block",
-      "payload": { "content": { "type": "text", "text": "hello" } },
+      "payload": {
+        "content": {
+          "type": "text",
+          "text": "hello"
+        }
+      },
       "text": "hello"
     },
     {
       "name": "an image block carries no text",
       "payload": {
-        "content": { "type": "image", "data": "aGk=", "mimeType": "image/png" }
+        "content": {
+          "type": "image",
+          "data": "aGk=",
+          "mimeType": "image/png"
+        }
       },
       "text": ""
     },
     {
       "name": "a content list is not walked",
-      "payload": { "content": [{ "type": "text", "text": "hello" }] },
+      "payload": {
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      },
       "text": ""
     },
     {
       "name": "a non-string text field is not text",
-      "payload": { "text": 5 },
+      "payload": {
+        "text": 5
+      },
       "text": ""
     },
     {
       "name": "a non-string text field still falls through to delta",
-      "payload": { "text": 5, "delta": "hello" },
+      "payload": {
+        "text": 5,
+        "delta": "hello"
+      },
       "text": "hello"
     },
     {
@@ -85,8 +124,89 @@
     },
     {
       "name": "an unrelated payload",
-      "payload": { "status": "COMPLETED", "toolCallId": "c1" },
+      "payload": {
+        "status": "COMPLETED",
+        "toolCallId": "c1"
+      },
       "text": ""
+    }
+  ],
+  "tool_calls": [
+    {
+      "name": "a streamed MCP call, as claude-agent-acp sends it",
+      "$comment": "Captured from claude-agent-acp 0.62.0 calling a Lemma MCP tool. The opening rawInput is empty because the model has not written the input yet; the third update carries nothing but the call's id.",
+      "updates": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call-1",
+          "status": "pending",
+          "rawInput": {},
+          "title": "lemma_display_resource"
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call-1",
+          "rawInput": {
+            "request": {
+              "type": "WIDGET",
+              "content": "<div>hello</div>"
+            }
+          },
+          "title": "lemma_display_resource"
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call-1"
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call-1",
+          "status": "completed",
+          "rawOutput": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"success\": true, \"url\": \"https://x/y\"}"
+              }
+            ]
+          }
+        }
+      ],
+      "tool_args": {
+        "request": {
+          "type": "WIDGET",
+          "content": "<div>hello</div>"
+        }
+      },
+      "tool_result": {
+        "success": true,
+        "url": "https://x/y"
+      }
+    },
+    {
+      "name": "a call whose arguments are complete when it opens",
+      "$comment": "An adapter that does not stream its input announces the call once, with everything. Nothing is held and nothing is refined.",
+      "updates": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call-2",
+          "status": "pending",
+          "rawInput": {
+            "path": "README.md"
+          },
+          "title": "read_file"
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call-2",
+          "status": "completed",
+          "rawOutput": "# Lemma"
+        }
+      ],
+      "tool_args": {
+        "path": "README.md"
+      },
+      "tool_result": "# Lemma"
     }
   ]
 }

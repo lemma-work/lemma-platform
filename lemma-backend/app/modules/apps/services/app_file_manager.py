@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -35,7 +35,9 @@ class AppFileManager:
 
         self.app_id = app_id
         self.prefix = f"apps/{app_id}/"
-        self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
+        self._local_base: Path | None = (
+            Path(root_path) / self.prefix if root_path else None
+        )
 
         if root_path is not None:
             self.store = LocalStore(prefix=Path(root_path), mkdir=True)
@@ -73,14 +75,13 @@ class AppFileManager:
             self._key(path),
             content,
             use_multipart=isinstance(content, Path),
-            chunk_size=1024 * 1024,
         )
         size = content.stat().st_size if isinstance(content, Path) else len(content)
         return {
             "name": path.split("/")[-1],
             "path": path,
             "size": size,
-            "last_modified": datetime.now().isoformat(),
+            "last_modified": datetime.now(UTC).isoformat(),
         }
 
     async def delete_file(self, path: str) -> None:
@@ -104,7 +105,11 @@ class AppFileManager:
 
         # Scoped to this app. Without the app's own prefix a bare `list()` on a
         # now-shared store would walk — and delete — every app in the bucket.
-        list_prefix = self._key(normalized_prefix) if normalized_prefix else self.prefix.rstrip("/")
+        list_prefix = (
+            self._key(normalized_prefix)
+            if normalized_prefix
+            else self.prefix.rstrip("/")
+        )
         # `async for`, not `for`. The stream supports both, and driving the
         # synchronous side from a coroutine means every page of the listing is a
         # blocking round trip to object storage on the event loop — once per
@@ -124,7 +129,11 @@ class AppFileManager:
             except ObstoreNotFoundError:
                 continue
         if self._local_base:
-            target_dir = self._local_base if not normalized_prefix else self._local_path(normalized_prefix)
+            target_dir = (
+                self._local_base
+                if not normalized_prefix
+                else self._local_path(normalized_prefix)
+            )
             # Recursive unlink over a whole release tree: filesystem work
             # proportional to the app, so it goes off the loop like the rest.
             await run_blocking(

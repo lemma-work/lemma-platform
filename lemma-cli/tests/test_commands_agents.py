@@ -17,25 +17,34 @@ runner = CliRunner()
 # Shared fake client helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_client_and_captured():
     captured = {}
 
     class FakeAgents:
         def list(self, *, limit=100):
             captured["limit"] = limit
-            return {"items": [{"id": "agent-1", "name": "my-agent", "instruction": "Be helpful."}]}
+            return {
+                "items": [
+                    {"id": "agent-1", "name": "my-agent", "instruction": "Be helpful."}
+                ]
+            }
 
         def get(self, name):
             captured["name"] = name
             return {"id": "agent-1", "name": name}
 
         def create(self, request):
-            captured["request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "agent-1", "name": "my-agent"}
 
         def update(self, name, request):
             captured["name"] = name
-            captured["request"] = request.to_dict() if hasattr(request, "to_dict") else request
+            captured["request"] = (
+                request.to_dict() if hasattr(request, "to_dict") else request
+            )
             return {"id": "agent-1", "name": name}
 
         def delete(self, name):
@@ -69,6 +78,7 @@ def _patch(monkeypatch, client):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_agents_list_dispatches_api(monkeypatch):
     client, captured = _make_client_and_captured()
@@ -167,7 +177,7 @@ def test_agents_delete_without_yes_refuses_noninteractive(monkeypatch):
     result = runner.invoke(app, ["agents", "delete", "my-agent", "--pod", "pod-1"])
 
     assert result.exit_code != 0
-    assert "--yes" in result.stdout or "non-interactive" in result.stdout
+    assert "--yes" in result.stderr or "non-interactive" in result.stderr
 
 
 def test_agents_permissions_get_dispatches_api(monkeypatch):
@@ -210,7 +220,9 @@ def test_agents_create_applies_inline_permissions(monkeypatch):
         output="pretty",
         full=False,
     )
-    monkeypatch.setattr(agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state))
+    monkeypatch.setattr(
+        agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state)
+    )
 
     grants = [
         {
@@ -220,9 +232,15 @@ def test_agents_create_applies_inline_permissions(monkeypatch):
         }
     ]
     payload = json.dumps(
-        {"name": "mailer", "instruction": "Send mail.", "permissions": {"grants": grants}}
+        {
+            "name": "mailer",
+            "instruction": "Send mail.",
+            "permissions": {"grants": grants},
+        }
     )
-    result = runner.invoke(app, ["agents", "create", "--data", payload, "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["agents", "create", "--data", payload, "--pod", "pod-1"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert "permissions" not in captured["create"]
@@ -257,12 +275,16 @@ def test_agents_create_with_empty_grants_says_so(monkeypatch):
         output="pretty",
         full=False,
     )
-    monkeypatch.setattr(agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state))
+    monkeypatch.setattr(
+        agents, "run_with_client", lambda ctx, fn: fn(FakeClient(), state)
+    )
 
     payload = json.dumps(
         {"name": "mailer", "instruction": "Send mail.", "permissions": {"grants": []}}
     )
-    result = runner.invoke(app, ["agents", "create", "--data", payload, "--pod", "pod-1"])
+    result = runner.invoke(
+        app, ["agents", "create", "--data", payload, "--pod", "pod-1"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert captured["permissions"] == ("mailer", {"grants": []})

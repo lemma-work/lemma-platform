@@ -9110,23 +9110,50 @@ var LemmaClient = (() => {
   });
 
   // src/config.ts
+  var DEFAULT_API_URL = "https://api.lemma.work";
+  var DEFAULT_AUTH_URL = "https://lemma.work/auth";
   function fromEnv(key) {
     var _a, _b, _c;
     try {
       const meta = void 0;
       if (meta) {
-        return (_b = (_a = meta[`VITE_LEMMA_${key}`]) != null ? _a : meta[`REACT_APP_LEMMA_${key}`]) != null ? _b : meta[`LEMMA_${key}`];
+        const value = (_b = (_a = meta[`VITE_LEMMA_${key}`]) != null ? _a : meta[`REACT_APP_LEMMA_${key}`]) != null ? _b : meta[`LEMMA_${key}`];
+        if (value) {
+          return value;
+        }
       }
     } catch {
     }
     try {
       const env = (_c = globalThis.process) == null ? void 0 : _c.env;
       if (env) {
-        return env[`LEMMA_${key}`];
+        return env[`LEMMA_${key}`] || void 0;
       }
     } catch {
     }
     return void 0;
+  }
+  var warned = /* @__PURE__ */ new Set();
+  function warnOnce(key, message) {
+    if (warned.has(key)) {
+      return;
+    }
+    warned.add(key);
+    console.warn(`lemma-sdk: ${message}`);
+  }
+  function apiUrlFromEnv() {
+    const baseUrl = fromEnv("BASE_URL");
+    if (baseUrl) {
+      return baseUrl;
+    }
+    const legacy = fromEnv("API_URL");
+    if (legacy) {
+      warnOnce(
+        "API_URL",
+        "LEMMA_API_URL is deprecated; rename it to LEMMA_BASE_URL, the name the CLI and the Python SDK use."
+      );
+    }
+    return legacy;
   }
   function windowConfig() {
     if (typeof window !== "undefined" && window.__LEMMA_CONFIG__) {
@@ -9137,13 +9164,22 @@ var LemmaClient = (() => {
   function resolveConfig(overrides = {}) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const win = windowConfig();
-    const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
-    const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
-    const podId = (_h = (_g = overrides.podId) != null ? _g : win.podId) != null ? _h : fromEnv("POD_ID");
+    const configuredApiUrl = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : apiUrlFromEnv();
+    if (!configuredApiUrl && typeof window === "undefined") {
+      warnOnce(
+        "BASE_URL",
+        `no API URL configured, using ${DEFAULT_API_URL}. Set LEMMA_BASE_URL or pass apiUrl to point elsewhere.`
+      );
+    }
+    const apiUrl = configuredApiUrl != null ? configuredApiUrl : DEFAULT_API_URL;
+    const authUrl = (_e = (_d = (_c = overrides.authUrl) != null ? _c : win.authUrl) != null ? _d : fromEnv("AUTH_URL")) != null ? _e : DEFAULT_AUTH_URL;
+    const podId = (_g = (_f = overrides.podId) != null ? _f : win.podId) != null ? _g : fromEnv("POD_ID");
+    const token = (_h = overrides.token) != null ? _h : fromEnv("TOKEN");
     return {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
+      token,
       app: (_i = overrides.app) != null ? _i : win.app,
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
@@ -9215,6 +9251,33 @@ var LemmaClient = (() => {
       recipeList: [
         import_session.default.init({
           tokenTransferMethod: "cookie",
+          /**
+           * How many times one request may be refreshed-and-retried before the
+           * session is called unusable. The library default is 10.
+           *
+           * This is the init the workspace and every pod app actually run --
+           * `LemmaAuth` constructs it -- while the ceiling that was set to 2 sits
+           * on the auth portal's own `SuperTokens.init`, which only the `/auth`
+           * routes reach. So the pages that make the most requests were the ones
+           * still retrying ten times each.
+           *
+           * That is the amplifier, not the cause: a refresh can answer 500
+           * forever when a browser holds two session cookies from a
+           * cookie-domain change, and at ten attempts per request across the
+           * queries a workspace screen makes, one install logged 30 refusals and
+           * 17 500s before anyone looked.
+           *
+           * Three rather than two, and the extra one is not slack. An install
+           * migrating off duplicate cookies spends both: the first refresh comes
+           * back carrying only the clearing cookies and no new tokens, and the
+           * second does the real refresh. At two, anything that consumes a third
+           * -- a second tab racing the refresh lock, an access token expiring in
+           * flight -- hits the ceiling, which the frontend reads as an
+           * unrepairable session and signs the user out. The ceiling exists to
+           * stop a session that cannot be repaired being hammered, not to fail
+           * the one case it was raised for.
+           */
+          maxRetryAttemptsForSessionRefresh: 3,
           onHandleEvent: (event) => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
@@ -9237,8 +9300,9 @@ var LemmaClient = (() => {
     "st-refresh-token"
   ];
   var LOCALSTORAGE_TOKEN_KEY = "lemma_token";
+  var memoryToken = null;
   function readStorageToken() {
-    if (typeof window === "undefined") return null;
+    if (typeof window === "undefined") return memoryToken;
     try {
       return localStorage.getItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9246,14 +9310,20 @@ var LemmaClient = (() => {
     }
   }
   function writeStorageToken(token) {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = token;
+      return;
+    }
     try {
       localStorage.setItem(LOCALSTORAGE_TOKEN_KEY, token);
     } catch {
     }
   }
   function removeStorageToken() {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      memoryToken = null;
+      return;
+    }
     try {
       localStorage.removeItem(LOCALSTORAGE_TOKEN_KEY);
     } catch {
@@ -9269,10 +9339,7 @@ var LemmaClient = (() => {
     removeStorageToken();
   }
   function detectInjectedToken() {
-    if (typeof window === "undefined") return null;
-    const localToken = readStorageToken();
-    if (localToken) return localToken;
-    return null;
+    return readStorageToken();
   }
   function normalizePath2(path) {
     const trimmed = path.trim();
@@ -9439,7 +9506,14 @@ var LemmaClient = (() => {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
   var AuthManager = class {
-    constructor(apiUrl, authUrl) {
+    /**
+     * @param token A credential to present as `Authorization: Bearer`. Supplying
+     *   it is the supported way to authenticate outside a browser, where there
+     *   is no session cookie and no `localStorage`. It wins over a token set
+     *   through `setTestingToken`, because it was passed for this client rather
+     *   than left lying in shared state.
+     */
+    constructor(apiUrl, authUrl, token) {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
@@ -9448,7 +9522,7 @@ var LemmaClient = (() => {
       __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
-      this.injectedToken = detectInjectedToken();
+      this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
       if (!this.injectedToken) {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
       }
@@ -9804,6 +9878,21 @@ var LemmaClient = (() => {
     return Math.min(Math.max(baseMs, delay), maxMs);
   }
   var RETRYABLE_STATUS = /* @__PURE__ */ new Set([429, 502, 503, 504]);
+  var ALWAYS_RETRYABLE_STATUS = /* @__PURE__ */ new Set([429]);
+  var REPLAYABLE_METHODS = /* @__PURE__ */ new Set([
+    "GET",
+    "HEAD",
+    "OPTIONS"
+  ]);
+  function isRetryableRequest(status, method) {
+    if (!RETRYABLE_STATUS.has(status)) {
+      return false;
+    }
+    if (ALWAYS_RETRYABLE_STATUS.has(status)) {
+      return true;
+    }
+    return method !== void 0 && REPLAYABLE_METHODS.has(method.toUpperCase());
+  }
   function serverRetryAfterMs(retryAfter) {
     if (!retryAfter) {
       return null;
@@ -9825,8 +9914,8 @@ var LemmaClient = (() => {
     const half = delayMs / 2;
     return Math.round(half + random() * half);
   }
-  function retryDelayForStatus(status, attempt, maxRetries, retryAfterHeader, random = Math.random) {
-    if (!RETRYABLE_STATUS.has(status) || attempt >= maxRetries) {
+  function retryDelayForStatus(status, method, attempt, maxRetries, retryAfterHeader, random = Math.random) {
+    if (!isRetryableRequest(status, method) || attempt >= maxRetries) {
       return null;
     }
     const serverMs = serverRetryAfterMs(retryAfterHeader);
@@ -9837,7 +9926,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.0";
+  var SDK_VERSION = "0.7.2";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
@@ -10074,6 +10163,7 @@ var LemmaClient = (() => {
         }
         const retryDelay = retryDelayForStatus(
           response.status,
+          method,
           attempt,
           this.maxRetries,
           response.headers.get("retry-after")
@@ -10264,7 +10354,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.0",
+    VERSION: "0.7.2",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10321,6 +10411,7 @@ var LemmaClient = (() => {
       };
     }
     async request(operation) {
+      var _a;
       this.configure();
       for (let attempt = 0; ; attempt++) {
         try {
@@ -10330,7 +10421,13 @@ var LemmaClient = (() => {
             if (error.status === 401) {
               this.auth.markUnauthenticated();
             }
-            const retryDelay = retryDelayForStatus(error.status, attempt, this.maxRetries, null);
+            const retryDelay = retryDelayForStatus(
+              error.status,
+              (_a = error.request) == null ? void 0 : _a.method,
+              attempt,
+              this.maxRetries,
+              null
+            );
             if (retryDelay !== null) {
               await sleep(retryDelay);
               continue;
@@ -10637,7 +10734,7 @@ var LemmaClient = (() => {
     static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/events:append",
+        url: "/agent-host/events/append",
         headers: {
           "authorization": authorization
         },
@@ -10680,7 +10777,7 @@ var LemmaClient = (() => {
     static agentHostPairingComplete(requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/pairings:complete",
+        url: "/agent-host/pairings/complete",
         body: requestBody,
         mediaType: "application/json",
         errors: {
@@ -10828,17 +10925,17 @@ var LemmaClient = (() => {
   var AgentRuntimeService = class {
     /**
      * List Available Agent Runtime Profiles
-     * @param orgId
+     * @param organizationId
      * @param includeDisabled
      * @returns AgentRuntimeProfileListResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesList(orgId, includeDisabled = false) {
+    static agentRuntimeProfilesList(organizationId, includeDisabled = false) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{organization_id}/agent-runtime/profiles",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "include_disabled": includeDisabled
@@ -10850,17 +10947,17 @@ var LemmaClient = (() => {
     }
     /**
      * Create Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesCreate(orgId, requestBody) {
+    static agentRuntimeProfilesCreate(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{organization_id}/agent-runtime/profiles",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -10871,17 +10968,17 @@ var LemmaClient = (() => {
     }
     /**
      * Archive Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns void
      * @throws ApiError
      */
-    static agentRuntimeProfilesArchive(orgId, profileId) {
+    static agentRuntimeProfilesArchive(organizationId, profileId) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -10891,17 +10988,17 @@ var LemmaClient = (() => {
     }
     /**
      * Get Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileDetailResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesGet(orgId, profileId) {
+    static agentRuntimeProfilesGet(organizationId, profileId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -10911,18 +11008,18 @@ var LemmaClient = (() => {
     }
     /**
      * Update Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesUpdate(orgId, profileId, requestBody) {
+    static agentRuntimeProfilesUpdate(organizationId, profileId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         body: requestBody,
@@ -10934,17 +11031,17 @@ var LemmaClient = (() => {
     }
     /**
      * Restore Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesRestore(orgId, profileId) {
+    static agentRuntimeProfilesRestore(organizationId, profileId) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -11404,6 +11501,7 @@ var LemmaClient = (() => {
           agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
+          archived: options.archived,
           limit: (_a = options.limit) != null ? _a : 20,
           page_token: options.page_token
         }
@@ -11486,6 +11584,17 @@ var LemmaClient = (() => {
           Accept: "text/event-stream"
         }
       });
+    }
+    appendMessage(conversationId, payload, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/messages/append`,
+        {
+          body: payload,
+          signal: options.signal
+        }
+      );
     }
     retryFailedRun(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
@@ -13060,6 +13169,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Update Account
+     * Replace a credential-managed account's credential, keeping the account and its id. Rotating by deleting and reconnecting issues a new id and strands every schedule, surface and grant that referenced the old one.
+     * @param organizationId
+     * @param accountId
+     * @param requestBody
+     * @returns AccountResponseSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorAccountUpdate(organizationId, accountId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/organizations/{organization_id}/connectors/accounts/{account_id}",
+        path: {
+          "organization_id": organizationId,
+          "account_id": accountId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Auth Configs
      * @param organizationId
      * @param limit
@@ -13170,10 +13303,10 @@ var LemmaClient = (() => {
     }
     /**
      * Refresh Auth Config Operations
-     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created. Answers 200 whether or not the server responded -- the install is deliberately kept either way -- so read `status`: `failed` means the server refused and the retry is still outstanding.
      * @param organizationId
      * @param authConfigName
-     * @returns any Successful Response
+     * @returns AuthConfigOperationsRefreshResponseSchema Successful Response
      * @throws ApiError
      */
     static connectorAuthConfigRefreshOperations(organizationId, authConfigName) {
@@ -13533,18 +13666,58 @@ var LemmaClient = (() => {
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
     }
+    /**
+     * Enable a connector for an organization, reusing an existing install only
+     * when the caller has described nothing that would distinguish a new one.
+     *
+     * This used to return ANY active install with a matching connector id,
+     * ignoring the submitted kind, config and name. The backend deliberately
+     * permits many installs of one connector -- see the comment on the
+     * `auth_configs` model, which says there is deliberately no
+     * `(organization_id, connector_id)` uniqueness -- so this was the SDK
+     * enforcing a constraint the schema had dropped, client-side and silently.
+     *
+     * Two things it broke. Every MCP server shares the catalog id `mcp`, every
+     * database shares `sql`, every REST API shares `openapi`: a second one
+     * returned the first, and the caller was told it worked. And choosing "use
+     * my own credentials" for a connector the org already had returned the
+     * Lemma-managed install, dropping the submitted client id and secret, so
+     * OAuth then ran against Lemma's app rather than theirs.
+     */
     async enableApp(organizationId, connectorId, options = {}) {
-      var _a;
-      const configs = await this.authConfigs.list(organizationId, { limit: 100 });
-      const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
-      if (existing) return existing;
+      var _a, _b;
+      const describesAParticularInstall = Boolean(
+        options.name || options.config || options.config_source === "ORG_CUSTOM"
+      );
+      if (!describesAParticularInstall) {
+        const configs = await this.authConfigs.list(organizationId, { limit: 100 });
+        const candidates = configs.items.filter(
+          (config) => config.connector_id === connectorId && config.status === "ACTIVE" && (!options.kind || config.kind === options.kind)
+        );
+        const existing = (_a = candidates.find((config) => config.is_default)) != null ? _a : candidates[0];
+        if (existing) return existing;
+      }
       return this.authConfigs.create(organizationId, {
         connector_id: connectorId,
         kind: options.kind,
-        config_source: (_a = options.config_source) != null ? _a : "SYSTEM_DEFAULT",
+        config_source: (_b = options.config_source) != null ? _b : "SYSTEM_DEFAULT",
         config: options.config,
         name: options.name
       });
+    }
+    /**
+     * Replace a credential-managed account's credential, keeping its id.
+     *
+     * Deleting and reconnecting also rotates a credential, and issues a new
+     * account id doing it — stranding every schedule, surface and grant pinned
+     * to the old one, and leaving nothing behind at all if the reconnect fails.
+     */
+    rotateAccountCredentials(organizationId, accountId, credentials) {
+      return this.client.request(() => ConnectorsService.connectorAccountUpdate(
+        organizationId,
+        accountId,
+        { credentials }
+      ));
     }
     createConnectRequest(organizationId, input) {
       const payload = typeof input === "string" ? { connector_id: input } : input;
@@ -13687,7 +13860,7 @@ var LemmaClient = (() => {
     }
     /**
      * Check Organization Slug Availability
-     * Check whether an organization slug is available, and optionally whether a candidate name is still free
+     * Check whether an organization slug — the handle, and the only unique one of the two — is available. `name_available` is deprecated and always true: display names are labels, and two organizations may share one.
      * @param slug
      * @param name
      * @returns OrganizationSlugAvailabilityResponse Successful Response
@@ -13730,16 +13903,16 @@ var LemmaClient = (() => {
     /**
      * Get Organization
      * Get organization details
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgGet(orgId) {
+    static orgGet(organizationId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}",
+        url: "/organizations/{organization_id}",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13749,17 +13922,17 @@ var LemmaClient = (() => {
     /**
      * Update Organization
      * Update an organization's name or join policy (owner only)
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgUpdate(orgId, requestBody) {
+    static orgUpdate(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}",
+        url: "/organizations/{organization_id}",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -13771,16 +13944,16 @@ var LemmaClient = (() => {
     /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationHomeResponse Successful Response
      * @throws ApiError
      */
-    static orgHome(orgId) {
+    static orgHome(organizationId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/home",
+        url: "/organizations/{organization_id}/home",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13790,19 +13963,19 @@ var LemmaClient = (() => {
     /**
      * List Organization Invitations
      * Get all pending invitations for an organization
-     * @param orgId
+     * @param organizationId
      * @param status
      * @param limit
      * @param pageToken
      * @returns OrganizationInvitationListResponse Successful Response
      * @throws ApiError
      */
-    static orgInvitationList(orgId, status = "PENDING" /* PENDING */, limit = 100, pageToken) {
+    static orgInvitationList(organizationId, status = "PENDING" /* PENDING */, limit = 100, pageToken) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/invitations",
+        url: "/organizations/{organization_id}/invitations",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "status": status,
@@ -13817,17 +13990,17 @@ var LemmaClient = (() => {
     /**
      * Invite Member
      * Invite a user to join the organization
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationInvitationResponse Successful Response
      * @throws ApiError
      */
-    static orgInvitationInvite(orgId, requestBody) {
+    static orgInvitationInvite(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/invitations",
+        url: "/organizations/{organization_id}/invitations",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -13839,16 +14012,16 @@ var LemmaClient = (() => {
     /**
      * Join Auto-Join Organization
      * Join an organization when the current user's email domain is allowed to auto-join
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgJoinAutoJoin(orgId) {
+    static orgJoinAutoJoin(organizationId) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/join",
+        url: "/organizations/{organization_id}/join",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13858,18 +14031,18 @@ var LemmaClient = (() => {
     /**
      * List Organization Members
      * Get all members of an organization
-     * @param orgId
+     * @param organizationId
      * @param limit
      * @param pageToken
      * @returns OrganizationMemberListResponse Successful Response
      * @throws ApiError
      */
-    static orgMemberList(orgId, limit = 100, pageToken) {
+    static orgMemberList(organizationId, limit = 100, pageToken) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/members",
+        url: "/organizations/{organization_id}/members",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "limit": limit,
@@ -13883,17 +14056,17 @@ var LemmaClient = (() => {
     /**
      * Remove Member
      * Remove a member from the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @returns void
      * @throws ApiError
      */
-    static orgMemberRemove(orgId, memberId) {
+    static orgMemberRemove(organizationId, memberId) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/organizations/{org_id}/members/{member_id}",
+        url: "/organizations/{organization_id}/members/{member_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "member_id": memberId
         },
         errors: {
@@ -13904,18 +14077,18 @@ var LemmaClient = (() => {
     /**
      * Update Member Role
      * Update a member's role in the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @param requestBody
      * @returns OrganizationMemberResponse Successful Response
      * @throws ApiError
      */
-    static orgMemberUpdateRole(orgId, memberId, requestBody) {
+    static orgMemberUpdateRole(organizationId, memberId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}/members/{member_id}/role",
+        url: "/organizations/{organization_id}/members/{member_id}/role",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "member_id": memberId
         },
         body: requestBody,
@@ -14418,6 +14591,31 @@ var LemmaClient = (() => {
   // src/openapi_client/services/PodsService.ts
   var PodsService = class {
     /**
+     * List Pods by Organization
+     * List all pods in an organization
+     * @param organizationId
+     * @param limit
+     * @param pageToken
+     * @returns PodListResponse Successful Response
+     * @throws ApiError
+     */
+    static podList(organizationId, limit = 100, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/pods",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Create Pod
      * Create a new pod
      * @param requestBody
@@ -14430,31 +14628,6 @@ var LemmaClient = (() => {
         url: "/pods",
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * List PodS by Organization
-     * List all pods in an organization
-     * @param organizationId
-     * @param limit
-     * @param pageToken
-     * @returns PodListResponse Successful Response
-     * @throws ApiError
-     */
-    static podList(organizationId, limit = 100, pageToken) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/organization/{organization_id}",
-        path: {
-          "organization_id": organizationId
-        },
-        query: {
-          "limit": limit,
-          "page_token": pageToken
-        },
         errors: {
           422: `Validation Error`
         }
@@ -14940,8 +15113,8 @@ var LemmaClient = (() => {
      * Proactively send a message to a pod member on this surface.
      *
      * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread on the surface (bots can't cold-DM), so a 404 means the member has no
-     * reachable conversation here yet.
+     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
+     * reached, in the vocabulary the notification API uses.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -14966,8 +15139,9 @@ var LemmaClient = (() => {
     /**
      * Get Surface Setup
      * Live setup state for an existing surface: static platform checklist plus
-     * webhook URL and admin-consent status. For the pre-creation checklist (before
-     * any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+     * webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
+     * own shared secrets in it are not. For the pre-creation checklist (before any
+     * surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
      * @param podId
      * @param surfaceName
      * @returns SurfaceSetupResponse Successful Response
@@ -15037,14 +15211,22 @@ var LemmaClient = (() => {
      *
      * Signed-in access is the only gate, and that is enough: every value in here
      * is already public — this deployment's URLs and the scopes its own code
-     * asks for. It carries no credential and reveals nothing about a pod.
+     * asks for. It carries no credential and reveals nothing about a pod: the
+     * agent name is supplied by the caller and echoed back, never read from one.
+     * @param agentName Name the app after this agent, so a bot made for one agent arrives already called by its name. Defaults to Lemma.
      * @returns any Successful Response
      * @throws ApiError
      */
-    static agentSurfaceSlackManifest() {
+    static agentSurfaceSlackManifest(agentName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/surface-setup/slack/manifest"
+        url: "/surface-setup/slack/manifest",
+        query: {
+          "agent_name": agentName
+        },
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
   };
@@ -15139,10 +15321,14 @@ var LemmaClient = (() => {
      * Takes no pod: it describes the deployment, and it is what you need before
      * you have anything to scope it to — the app it creates is what issues the
      * client id that connects the account a surface is built on.
+     *
+     * `agentName` names the app after one agent, for a bot that answers as that
+     * agent alone. One Slack app is one bot user, so this is the only chance to
+     * set the name without a person editing it in Slack afterwards.
      */
-    slackManifest() {
+    slackManifest(agentName) {
       return this.client.request(
-        () => AgentSurfacesService.agentSurfaceSlackManifest()
+        () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
       );
     }
   };
@@ -15386,7 +15572,8 @@ var LemmaClient = (() => {
     /**
      * List My Surfaces
      * Every surface across the current user's pods, grouped by platform, with
-     * the chosen default and a ``conflict`` flag when more than one could answer.
+     * the chosen default and a ``conflict`` flag when two of them answer at the
+     * same address.
      * @returns UserSurfacesResponse Successful Response
      * @throws ApiError
      */
@@ -15441,9 +15628,9 @@ var LemmaClient = (() => {
      * List table records with token pagination only. Use the datastore query endpoint for joins, aggregates, or custom read-only SQL.
      * @param podId
      * @param tableName
-     * @param limit Max number of rows to return.
+     * @param limit Max number of rows to return, up to 1000. Page beyond that with `page_token`.
      * @param offset Row offset for direct pagination.
-     * @param filter Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`. Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={"field":"amount","op":"gt","value":100}` and `filter={"field":"status","op":"eq","value":"OPEN"}`.
+     * @param filter Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{"field":"<column_name>","op":"<operator>","value":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one — to match either literally, escape it with a backslash (`price\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={"field":"amount","op":"gt","value":100}`, `filter={"field":"status","op":"in","value":["OPEN","PENDING"]}`.
      * @param sort Optional repeated JSON sort clauses. Each `sort` value must be a JSON object with shape `{"field":"<column_name>","direction":"<direction>"}`. Allowed directions are: `asc`, `desc`. Repeat the query parameter to provide multi-column sorting in priority order. Example: `sort={"field":"created_at","direction":"desc"}`.
      * @param pageToken Opaque token from a previous response page.
      * @param mode Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.
@@ -15631,7 +15818,7 @@ var LemmaClient = (() => {
     }
     /**
      * Update Record
-     * Patch a record by primary key. Returns the updated record object (no envelope).
+     * Patch a record by primary key. Returns the updated record object (no envelope). Pass `expected_updated_at` to make the patch conditional on the row not having changed since it was read; the request then answers 409 rather than overwriting another client's edit.
      * @param podId
      * @param tableName
      * @param recordId
@@ -15679,8 +15866,13 @@ var LemmaClient = (() => {
       __publicField(this, "client", client);
       __publicField(this, "podId", podId);
       __publicField(this, "bulk", {
-        create: (table, records) => {
-          const payload = { records };
+        // `upsert` is what makes a bulk create idempotent: rows that conflict on
+        // the table's primary key are updated rather than failing the request,
+        // which is what re-seeding needs. The endpoint and the Python SDK have
+        // always accepted it; only this wrapper dropped it.
+        create: (table, records, options = {}) => {
+          var _a;
+          const payload = { records, upsert: (_a = options.upsert) != null ? _a : false };
           return this.client.request(() => RecordsService.recordBulkCreate(this.podId(), table, payload));
         },
         update: (table, records) => {
@@ -15693,6 +15885,10 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * One page of a table's rows. `limit` defaults to 20 and the rest is behind
+     * `next_page_token`; see {@link listAll} when the answer has to be complete.
+     */
     list(table, options = {}) {
       const { filters, sort, limit, pageToken, offset } = options;
       return this.client.request(
@@ -15706,6 +15902,34 @@ var LemmaClient = (() => {
           pageToken
         )
       );
+    }
+    /**
+     * Every matching row, paged to exhaustion.
+     *
+     * "Read a table" and "read all of a table" are different operations and the
+     * difference is invisible at the call site, so a default page of 20 makes a
+     * partial read look complete. The filter and sort are re-sent with every
+     * page, so the walk cannot widen halfway through.
+     */
+    async listAll(table, options = {}) {
+      var _a, _b;
+      const { filters, sort, offset, pageSize } = options;
+      const rows = [];
+      let pageToken;
+      for (; ; ) {
+        const page = await this.list(table, {
+          filters,
+          sort,
+          offset,
+          limit: pageSize != null ? pageSize : 500,
+          pageToken
+        });
+        rows.push(...(_a = page.items) != null ? _a : []);
+        pageToken = (_b = page.next_page_token) != null ? _b : void 0;
+        if (!pageToken) {
+          return rows;
+        }
+      }
     }
     create(table, data) {
       return this.client.request(() => RecordsService.recordCreate(this.podId(), table, { data }));
@@ -16836,7 +17060,7 @@ var LemmaClient = (() => {
   var QueryService = class {
     /**
      * Execute Query
-     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected.
+     * Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.
      * @param podId
      * @param requestBody
      * @param mode Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.
@@ -17061,7 +17285,7 @@ var LemmaClient = (() => {
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
       this._podId = this._config.podId;
-      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl);
+      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,

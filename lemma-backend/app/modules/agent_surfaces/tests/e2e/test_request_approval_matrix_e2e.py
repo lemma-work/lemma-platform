@@ -6,7 +6,7 @@ must complete via its single reply-tool call instead of ever pausing.
 
 ``request_approval`` renders as native tappable Approve/Deny buttons on every
 chat platform (``send_approval_prompt_for_conversation`` →
-``adapter.send_approval`` in ``ingress_service.py``). A tapped button routes
+``adapter._render_decision`` in ``ingress_service.py``). A tapped button routes
 back through ``handler.try_handle_interaction`` → ``handle_interaction``, which
 resolves the paused run with the button's decision (APPROVE_ONCE / DENY). A
 typed "approve"/"deny" reply still works as the text fallback path, but these
@@ -19,6 +19,7 @@ import json
 from uuid import UUID
 
 import pytest
+from sqlalchemy import text
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +29,6 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
 from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -44,13 +44,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_THREAD_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _ensure_connector_trigger,
     _ensure_e2e_runtime_profile,
-    _gmail_payload,
     _load_slack_dm_fixture,
     _load_teams_channel_mention_fixture,
     _messages_for_conversation,
-    _outlook_payload,
     _resend_payload,
     _seed_external_user,
     _set_user_mobile_number,
@@ -62,16 +59,13 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_slack_text,
 )
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    suppress_agent_run_enqueue,
     process_ingress_and_run_scripted,
     resume_latest_scripted_run,
-    script_email_reply,
     script_request_approval,
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.composition.schedule_connectors import (
-    ManagersFactory,
-)
 
 pytestmark = pytest.mark.e2e
 
@@ -122,9 +116,11 @@ async def _run_deferred_approval_reconciliation(
         },
         uow_factory=uow_factory,
     )
+
+
 _INNER_TOOL_ARGS = {
     "type": "WIDGET",
-    "content": "<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>",
+    "content": "<div class='status'><span>Ready</span></div>",
 }
 
 
@@ -875,139 +871,7 @@ async def test_request_approval_whatsapp_native_buttons_then_resumes_on_approve(
     assert result["executed"] is True
 
 
-async def test_request_approval_suppressed_on_gmail_reply_completes_via_reply_tool(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_gmail,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Email surfaces never offer request_approval (agent has no
-    USER_INTERACTION toolset) — the agent must complete via its reply tool."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="gmail",
-        credentials={
-            "connection_id": "gmail-approval-e2e-account",
-        },
-        email="assistant@gmail.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="gmail",
-        trigger_id="gmail_new_message_approval_e2e",
-        event_type="GMAIL_NEW_GMAIL_MESSAGE",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "GMAIL", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_gmail_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@gmail.test",
-                thread_id="gmail-thread-approval-e2e",
-                message_id="gmail-message-approval-1",
-                text="Can you help over Gmail?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[script_email_reply("gmail_reply_email", "Here is my answer.")],
-    )
-
-    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
-    reply = gmail_messages[-1]
-    assert reply["operation_name"] == "GMAIL_REPLY_TO_THREAD"
-    assert "Here is my answer." in json.dumps(reply["payload"])
-
-
-async def test_request_approval_suppressed_on_outlook_reply_completes_via_reply_tool(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_outlook,
-    fake_composio_email,
-    message_store,
-    monkeypatch,
-):
-    """Email surfaces never offer request_approval (agent has no
-    USER_INTERACTION toolset) — the agent must complete via its reply tool."""
-    monkeypatch.setattr(
-        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
-    )
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="outlook",
-        credentials={
-            "connection_id": "outlook-approval-e2e-account",
-        },
-        email="assistant@outlook.test",
-        provider=AuthProvider.COMPOSIO,
-    )
-    await _ensure_connector_trigger(
-        db_session,
-        connector_id="outlook",
-        trigger_id="outlook_message_approval_e2e",
-        event_type="OUTLOOK_MESSAGE_TRIGGER",
-    )
-    _agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "OUTLOOK", "account_id": str(account.id)},
-    )
-    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert surface_model is not None
-    assert surface_model.schedule_id is not None
-
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfaceScheduleIngress(
-            schedule_id=surface_model.schedule_id,
-            payload=_outlook_payload(
-                sender_email=fixed_test_user["email"],
-                assistant_email="assistant@outlook.test",
-                thread_id="outlook-thread-approval-e2e",
-                message_id="outlook-message-approval-1",
-                text="Can you help over Outlook?",
-            ),
-            account_id=account.id,
-            pod_id=UUID(pod_id),
-            user_id=UUID(fixed_test_user["id"]),
-        ),
-        script=[script_email_reply("outlook_reply_email", "Here is my answer.")],
-    )
-
-    outlook_messages = await wait_for_messages(
-        message_store, "OUTLOOK_REPLY", min_count=1
-    )
-    reply = outlook_messages[-1]
-    assert reply["operation_name"] == "OUTLOOK_REPLY_EMAIL"
-    assert "Here is my answer." in json.dumps(reply["payload"])
-
-
-async def test_request_approval_suppressed_on_resend_reply_completes_via_reply_tool(
+async def test_request_approval_on_resend_completes_in_the_one_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -1056,8 +920,131 @@ async def test_request_approval_suppressed_on_resend_reply_completes_via_reply_t
             ),
             headers={},
         ),
-        script=[script_email_reply("resend_reply_email", "Here is my answer.")],
+        script=[script_text("Here is my answer.")],
     )
 
     resend_messages = await wait_for_messages(message_store, "RESEND", min_count=1)
     assert "Here is my answer." in json.dumps(resend_messages[-1])
+
+
+async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_thread(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    """The round trip that went wrong in real use, with a real reply body.
+
+    Email can be asked for approval now, and the answer comes back as an
+    ordinary reply — which carries the quoted thread under it. Gmail soft-wraps
+    a long attribution mid-address, so the reply arrived as
+
+        approve\\n\\nOn Wed, Aug 26, 2026 at 12:26 AM butler via Lemma <
+        butler.lemma2@ops.asur.work> wrote:
+
+    "approve" was no longer the message, so it stopped being a decision, fell
+    through to the ordinary message path, and superseded the approval it was
+    answering. Every fixture wrote that attribution on one line, which is why
+    nothing caught it.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="resend",
+        credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
+        email="assistant@resend.test",
+        provider=AuthProvider.LEMMA,
+    )
+    agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "RESEND", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+    await _make_approved_tool_resolvable(
+        db_session, agent_id=agent["id"], organization_id=fixed_test_org["id"]
+    )
+    assistant_address = surface.get("surface_identity_email")
+    if not assistant_address:
+        surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
+        assistant_address = surface_model.surface_identity_email
+    assert assistant_address
+
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_address=assistant_address,
+                message_id="resend-approval-quoted-1",
+                text="Please show me the widget.",
+            ),
+            headers={},
+        ),
+        script=_approval_script("Done — approved and shown."),
+    )
+    conversation_id = str(context.conversation_id)
+    await wait_for_messages(message_store, "RESEND", min_count=1)
+
+    # The reply as a mail client actually sends it: the answer on top, then the
+    # attribution wrapped mid-address, then the quoted body.
+    quoted_reply = (
+        "approve\n\n"
+        f"On Wed, Aug 26, 2026 at 12:26 AM assistant via Lemma <\n"
+        f"{assistant_address}> wrote:\n"
+        "> Approval needed: Show a widget\n"
+        '> Reply "approve" to run it, or "deny" to cancel.\n'
+    )
+    # Deliberately not `process_ingress_and_run_scripted`: resolving an approval
+    # defers reconciliation to a worker, so there is no RUNNING run for the
+    # helper to drive. The decision itself is recorded synchronously, and the
+    # decision is what this test is about.
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    reply_context = await handler.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_address=assistant_address,
+                message_id="resend-approval-quoted-2",
+                text=quoted_reply,
+                subject="Re: Surface Resend E2E",
+                in_reply_to="<resend-approval-quoted-1@resend-e2e.test>",
+                references=["<resend-approval-quoted-1@resend-e2e.test>"],
+            ),
+            headers={},
+        )
+    )
+    assert reply_context is not None
+    await uow.commit()
+    assert str(reply_context.conversation_id) == conversation_id, (
+        "the reply must land in the conversation it answers, not a new one"
+    )
+    with suppress_agent_run_enqueue():
+        await handler.execute_chat(reply_context)
+    await db_session.commit()
+
+    decision = (
+        await db_session.execute(
+            text(
+                "SELECT decision FROM agent_approval_decisions "
+                "WHERE conversation_id = :cid ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"cid": conversation_id},
+        )
+    ).scalar_one_or_none()
+    assert decision is not None, (
+        "the emailed 'approve' recorded no decision at all -- it was read as an "
+        "ordinary message and superseded the approval it was answering"
+    )
+    assert "APPROVE" in str(decision), f"read as {decision!r}, not an approval"

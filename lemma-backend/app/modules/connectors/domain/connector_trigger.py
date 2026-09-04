@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -50,16 +50,3 @@ class ConnectorTriggerEntity(BaseModel):
     def provider(self) -> AuthProvider:
         """Deprecated alias derived from :attr:`kind`."""
         return kind_to_provider(self.kind)
-
-    @property
-    def config_field_names(self) -> List[str]:
-        """Get the field names from the config schema."""
-        # return field names from json schema of config_schema
-        if not self.config_schema:
-            return []
-        field_names = []
-        for field_name, field_schema in self.config_schema.get(
-            "properties", {}
-        ).items():
-            field_names.append(field_name)
-        return field_names

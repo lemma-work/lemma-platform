@@ -1,4 +1,3 @@
-
 from app.modules.agent.tools.context import BaseAgentContext
 
 from app.core.log.log import get_logger
@@ -37,7 +36,7 @@ async def web_search_internal(
     try:
         return await search_web(request)
     except Exception:
-        logger.debug("agent.web_search.failed", exc_info=True)
+        logger.warning("agent.web_search.failed.degraded", exc_info=True)
         return WebSearchResponse(
             success=False,
             error="Request failed due to unexpected error. Please try again.",

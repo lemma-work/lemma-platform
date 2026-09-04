@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConversationMessage } from "../types.js";
 
-type RuntimeConversationMessage = ConversationMessage & { conversation_id?: string };
+type RuntimeConversationMessage = ConversationMessage & {
+  conversation_id?: string;
+  /** Set when this message arrived as the echo of a provisional turn. */
+  optimistic_id?: string;
+};
 
 export interface UseAssistantRuntimeOptions {
   conversationId?: string | null;
@@ -12,6 +16,13 @@ export interface UseAssistantRuntimeOptions {
    * Re-opening one of these is instant and silent; anything older reloads.
    */
   retainConversations?: number;
+  /**
+   * Called with the conversations whose transcripts have just left the store,
+   * whether retention evicted them or the store was cleared outright. Anyone
+   * caching "we already have this one" has to hear about it, or they will skip
+   * a load for a transcript nobody is holding any more.
+   */
+  onConversationsDropped?: (conversationIds: string[]) => void;
 }
 
 export interface UseAssistantRuntimeResult {
@@ -22,9 +33,21 @@ export interface UseAssistantRuntimeResult {
   ) => ConversationMessage;
   replaceLoadedMessages: (messages: ConversationMessage[]) => void;
   mergeMessages: (messages: ConversationMessage[]) => void;
+  /**
+   * Stamp every message still waiting for a conversation with this one. An
+   * optimistic turn can be appended before its conversation exists, and this is
+   * what settles it once the create returns.
+   */
+  adoptPendingMessages: (conversationId: string) => void;
+  /**
+   * Forget messages still waiting for a conversation. Called when the send that
+   * appended them failed, so an unsent turn cannot leak into the next
+   * conversation opened — nothing else in the store is touched.
+   */
+  dropPendingMessages: () => void;
   /** Whether this conversation's transcript is already in the store. */
   hasConversationMessages: (conversationId: string | null | undefined) => boolean;
-  clear: () => void;
+  clear: (options?: { keepPending?: boolean }) => void;
 }
 
 /**
@@ -47,7 +70,64 @@ function isOptimisticId(messageId: string): boolean {
   return messageId.startsWith("optimistic-user-");
 }
 
-const OPTIMISTIC_MATCH_WINDOW_MS = 2 * 60 * 1000;
+/**
+ * How far back on the SERVER's own timeline an incoming user message may sit
+ * and still be read as the echo of a turn just sent, rather than as history
+ * being loaded. Generous on purpose: all it has to separate is "the message I
+ * just sent" from "a transcript from an earlier session", and those are hours
+ * or days apart, never minutes.
+ */
+const ECHO_RECENCY_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * The newest moment the SERVER has stamped, across every message the store
+ * holds. Provisional turns are excluded deliberately: their times come from the
+ * device clock, and it is mixing the two clocks that this whole file has to
+ * avoid. Everything left is stamped by the one clock all senders share, so the
+ * maximum is the best estimate of "now" available without asking.
+ */
+function newestServerTime(messages: RuntimeConversationMessage[]): number | null {
+  let newest: number | null = null;
+  messages.forEach((message) => {
+    if (isOptimisticId(message.id)) return;
+    const time = messageTime(message);
+    if (newest === null || time > newest) newest = time;
+  });
+  return newest;
+}
+
+/**
+ * Whether this message is recent enough on the server's timeline to be an echo
+ * of something just sent. Server time is compared only against server time, so
+ * a device clock that is hours or days out cannot make a fresh echo look stale.
+ * With nothing server-stamped to compare against, the store holds no history
+ * for the echo to be confused with, and the question does not arise.
+ */
+function isRecentOnServerTimeline(
+  held: RuntimeConversationMessage[],
+  incoming: RuntimeConversationMessage,
+): boolean {
+  const newest = newestServerTime(held);
+  if (newest === null) return true;
+  return messageTime(incoming) >= newest - ECHO_RECENCY_WINDOW_MS;
+}
+
+/**
+ * When to say a turn was sent, for the second it takes the server to say so
+ * itself. The device clock is the obvious answer and the wrong one: on a
+ * machine whose clock is off — Windows with a dead time service, a dual-boot
+ * box reading the RTC as local time, a VM resumed from sleep — it files the
+ * turn hours or days from where it belongs, above the entire transcript on a
+ * clock that is behind. Until the echo lands, this value is what orders the
+ * turn, what the transcript prints under it, and what its duration is measured
+ * from. Anchoring past the newest thing the server has stamped keeps the turn
+ * last in the conversation whatever the device believes the time is.
+ */
+function optimisticCreatedAt(held: RuntimeConversationMessage[]): string {
+  const deviceNow = Date.now();
+  const newest = newestServerTime(held);
+  return new Date(newest === null ? deviceNow : Math.max(deviceNow, newest + 1)).toISOString();
+}
 
 function upsertRuntimeMessage(
   previous: RuntimeConversationMessage[],
@@ -57,37 +137,52 @@ function upsertRuntimeMessage(
   const directIndex = next.findIndex((message) => message.id === incoming.id);
 
   if (directIndex >= 0) {
-    next[directIndex] = incoming;
+    const held = next[directIndex];
+    // A later write to the same message must not forget which provisional turn
+    // it took the place of. The session mirrors its own view of the transcript
+    // over the store's when a run ends, and its copy has never carried the
+    // link — so overwriting wholesale dropped it, changed the turn's identity,
+    // and remounted the turn exactly as the agent's answer landed.
+    next[directIndex] = held.optimistic_id && !incoming.optimistic_id
+      ? { ...incoming, optimistic_id: held.optimistic_id }
+      : incoming;
     return next;
   }
 
-  if (incoming.role === "user") {
+  // Only a message the server has stamped can take a provisional turn's place.
+  // Without that, appending a second provisional turn made it pair with the
+  // first one of the same text and quietly take its place: send "go" twice and
+  // the first bubble vanished, to reappear only when its echo came back.
+  if (incoming.role === "user" && !isOptimisticId(incoming.id)) {
     const incomingText = messageText(incoming);
+    // Pairing used to ask how far apart the two stamps were — a provisional
+    // turn's, from the device clock, against its echo's, from the server's.
+    // On a device whose clock is wrong that distance is the skew rather than
+    // the round-trip, no echo ever matched, and the sender watched their own
+    // message land twice: once where their machine thinks it is now, once
+    // where the server put it. Nothing below compares the two clocks.
     if (incomingText) {
-      const incomingTimestamp = messageTime(incoming);
-      let optimisticIndex = -1;
-      let bestDistance = Number.POSITIVE_INFINITY;
+      // First match wins. Echoes come back in the order their sends went out,
+      // so two turns sharing their text pair up in that same order — and store
+      // order is the ordering to read it from, never the stamps.
+      const optimisticIndex = next.findIndex((message) => (
+        message.role === "user"
+        && isOptimisticId(message.id)
+        && messageText(message) === incomingText
+      ));
 
-      next.forEach((message, index) => {
-        if (
-          message.role !== "user"
-          || !isOptimisticId(message.id)
-          || messageText(message) !== incomingText
-        ) {
-          return;
-        }
-
-        const distance = Math.abs(messageTime(message) - incomingTimestamp);
-        if (distance > OPTIMISTIC_MATCH_WINDOW_MS || distance >= bestDistance) {
-          return;
-        }
-
-        optimisticIndex = index;
-        bestDistance = distance;
-      });
-
-      if (optimisticIndex >= 0) {
-        next[optimisticIndex] = incoming;
+      // Recency is asked second on purpose. Finding a candidate is string work
+      // over a list that almost never holds a provisional turn at all; judging
+      // recency parses a date per held message. Loading a transcript merges
+      // hundreds of user messages through here and must not pay that per
+      // message — only a send with an echo actually waiting for it does.
+      if (optimisticIndex >= 0 && isRecentOnServerTimeline(next, incoming)) {
+        // The echo takes the provisional turn's place *and* remembers whose
+        // place it took, so whoever keys turns can keep them the same one.
+        next[optimisticIndex] = {
+          ...incoming,
+          optimistic_id: next[optimisticIndex].id,
+        };
         return next;
       }
     }
@@ -125,7 +220,12 @@ export function useAssistantRuntime({
   sessionConversationId = null,
   sessionMessages = [],
   retainConversations = DEFAULT_RETAINED_CONVERSATIONS,
+  onConversationsDropped,
 }: UseAssistantRuntimeOptions): UseAssistantRuntimeResult {
+  // Held in a ref so a caller passing an inline function cannot re-run the
+  // retention effect, which would evict on every render.
+  const onConversationsDroppedRef = useRef(onConversationsDropped);
+  onConversationsDroppedRef.current = onConversationsDropped;
   const [runtimeMessages, setRuntimeMessages] = useState<RuntimeConversationMessage[]>([]);
   // Mirrors the committed store so `hasConversationMessages` can answer from an
   // event handler without taking the list as a dependency.
@@ -180,7 +280,7 @@ export function useAssistantRuntime({
       role: "user",
       kind: "TEXT",
       text: trimmed,
-      created_at: new Date().toISOString(),
+      created_at: optimisticCreatedAt(runtimeMessagesRef.current),
       metadata: null,
       ...(optimisticConversationId ? { conversation_id: optimisticConversationId } : {}),
     };
@@ -193,9 +293,38 @@ export function useAssistantRuntime({
     return optimistic;
   }, [conversationId]);
 
-  const clear = useCallback(() => {
+  const adoptPendingMessages = useCallback((targetConversationId: string) => {
+    setRuntimeMessages((previous) => {
+      if (!previous.some((message) => !message.conversation_id)) return previous;
+      return previous.map((message) => (
+        message.conversation_id
+          ? message
+          : { ...message, conversation_id: targetConversationId }
+      ));
+    });
+  }, []);
+
+  const dropPendingMessages = useCallback(() => {
+    setRuntimeMessages((previous) => {
+      const next = previous.filter((message) => !!message.conversation_id);
+      return next.length === previous.length ? previous : next;
+    });
+  }, []);
+
+  const clear = useCallback((options?: { keepPending?: boolean }) => {
+    const dropped = recentConversationIdsRef.current;
     recentConversationIdsRef.current = [];
-    setRuntimeMessages([]);
+    // `keepPending` is for the clear that runs as a conversation is created:
+    // the turn that triggered the create is already on screen and has not been
+    // sent yet, so it is the one thing in the store that is not history.
+    setRuntimeMessages((previous) => (
+      options?.keepPending
+        ? previous.filter((message) => !message.conversation_id)
+        : []
+    ));
+    if (dropped.length > 0) {
+      onConversationsDroppedRef.current?.(dropped);
+    }
   }, []);
 
   const hasConversationMessages = useCallback((targetConversationId: string | null | undefined) => {
@@ -211,13 +340,18 @@ export function useAssistantRuntime({
     lastSessionMessageIdRef.current = null;
     if (!conversationId) return;
 
+    const previousRecent = recentConversationIdsRef.current;
     const recent = [
       conversationId,
-      ...recentConversationIdsRef.current.filter((id) => id !== conversationId),
+      ...previousRecent.filter((id) => id !== conversationId),
     ].slice(0, Math.max(1, retainConversations));
     recentConversationIdsRef.current = recent;
 
     const retained = new Set(recent);
+    const dropped = previousRecent.filter((id) => !retained.has(id));
+    if (dropped.length > 0) {
+      onConversationsDroppedRef.current?.(dropped);
+    }
     setRuntimeMessages((previous) => {
       const next = previous.filter((message) => (
         // A message with no conversation of its own is in-flight local state
@@ -278,6 +412,8 @@ export function useAssistantRuntime({
     appendOptimisticUserMessage,
     replaceLoadedMessages,
     mergeMessages,
+    adoptPendingMessages,
+    dropPendingMessages,
     hasConversationMessages,
     clear,
   };

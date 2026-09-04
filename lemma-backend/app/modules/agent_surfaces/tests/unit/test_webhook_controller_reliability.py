@@ -17,6 +17,10 @@ from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     handle_surface_webhook,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.platforms.resend.inbound import (
+    resend_source_event_id,
+    normalize_resend_inbound,
+)
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 
 
@@ -84,8 +88,9 @@ def _reserved_whatsapp_message() -> bytes:
     ],
 )
 def test_source_event_id_prefers_stable_provider_identifiers(payload, expected):
-    assert _surface_source_event_id("telegram", payload, b"body") == (
-        f"telegram:{expected}"
+    assert (
+        _surface_source_event_id("telegram", payload, b"body", receiver="a-surface")
+        == f"telegram:a-surface:{expected}"
     )
 
 
@@ -93,9 +98,21 @@ def test_source_event_id_hashes_content_when_provider_has_no_identifier():
     raw = b'{"data":"no identifier"}'
     expected = hashlib.sha256(raw).hexdigest()
 
-    assert _surface_source_event_id("custom", {"data": "not-a-dict"}, raw) == (
-        f"custom:content-sha256:{expected}"
+    assert (
+        _surface_source_event_id(
+            "custom", {"data": "not-a-dict"}, raw, receiver="a-surface"
+        )
+        == f"custom:a-surface:content-sha256:{expected}"
     )
+
+
+def test_two_receivers_sharing_a_provider_id_are_two_events():
+    """Telegram's ``update_id`` counts per bot, so every bot has an update 1."""
+    an_update = {"update_id": 1}
+
+    assert _surface_source_event_id(
+        "telegram", an_update, b"body", receiver="surface-a"
+    ) != _surface_source_event_id("telegram", an_update, b"body", receiver="surface-b")
 
 
 def test_webhook_headers_are_redacted_before_event_serialization():
@@ -152,7 +169,7 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
     security.assert_platform_request_allowed.assert_called_once_with("telegram")
     security.verify_platform_request.assert_awaited_once()
     event = publish.await_args.args[1]
-    assert event.source_event_id == "telegram:99"
+    assert event.source_event_id == "telegram:shared:99"
     assert event.source == "telegram"
 
 
@@ -255,7 +272,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
             new=AsyncMock(),
         ) as publish,
         patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
+            "app.modules.agent_surfaces.api.controllers.webhook_ingest."
             "get_surface_service",
             return_value=service,
         ),
@@ -274,7 +291,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
     )
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
-    assert event.source_event_id == "resend:email-1"
+    assert event.source_event_id == f"resend:{surface.id}:email-1"
 
 
 @pytest.mark.asyncio
@@ -307,4 +324,49 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     security.verify_surface_request.assert_awaited_once()
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
-    assert event.source_event_id == "whatsapp:provider-event-1"
+    assert event.source_event_id == f"whatsapp:{surface.id}:provider-event-1"
+
+
+def test_the_resend_webhook_and_the_resend_poller_mint_one_id_for_one_email():
+    """Both Resend paths must land on the same durable id for the same email.
+
+    A deployment can receive an email twice: Resend's inbound webhook fires, and
+    a worker running the poller lists the same message -- the ordinary state
+    when one Resend project serves several environments. The durable inbox only
+    collapses those into one delivery when the two ids match; when they did not,
+    what stopped the second agent run was ``claim_message``, a Redis key with a
+    15-minute TTL, so the guarantee PS-SURF-011 makes "across a restart" held
+    for fifteen minutes and only by accident.
+    """
+    surface_id = str(uuid4())
+    envelope = {
+        "type": "email.received",
+        "data": {
+            "email_id": "b1c2d3e4",
+            "message_id": "<sender-chosen@example.com>",
+            "to": ["pod@inbound.example.com"],
+            "from": "someone@example.com",
+        },
+    }
+    listed_row = {**envelope["data"], "id": envelope["data"]["email_id"]}
+
+    from_webhook = resend_source_event_id(
+        normalize_resend_inbound(envelope), receiver=surface_id
+    )
+    from_poller = resend_source_event_id(
+        normalize_resend_inbound(
+            {"data": {**listed_row, "email_id": listed_row["id"]}}
+        ),
+        receiver=surface_id,
+    )
+
+    assert from_webhook == from_poller == f"resend:{surface_id}:b1c2d3e4"
+
+
+def test_one_email_to_two_surfaces_is_two_deliveries():
+    """The receiver stays part of the id, as it is for every other platform."""
+    normalized = normalize_resend_inbound({"data": {"email_id": "b1c2d3e4"}})
+
+    assert resend_source_event_id(
+        normalized, receiver="surface-a"
+    ) != resend_source_event_id(normalized, receiver="surface-b")

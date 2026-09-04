@@ -88,7 +88,9 @@ async def test_app_assets_support_private_and_public_asset_routes(
         "/public/apps",
         headers={"X-App-Public-Slug": public_slug},
     )
-    assert unlisted_public_res.status_code == status.HTTP_200_OK, unlisted_public_res.text
+    assert unlisted_public_res.status_code == status.HTTP_200_OK, (
+        unlisted_public_res.text
+    )
     assert marker in unlisted_public_res.text
 
     publish_res = await authenticated_client.patch(
@@ -107,7 +109,9 @@ async def test_app_assets_support_private_and_public_asset_routes(
         f"/pods/{pod_id}/apps/{app_name}/assets",
         headers={"If-None-Match": asset_res.headers["etag"]},
     )
-    assert not_modified_res.status_code == status.HTTP_304_NOT_MODIFIED, not_modified_res.text
+    assert not_modified_res.status_code == status.HTTP_304_NOT_MODIFIED, (
+        not_modified_res.text
+    )
 
     spa_fallback_res = await authenticated_client.get(
         f"/pods/{pod_id}/apps/{app_name}/assets/page"
@@ -142,14 +146,49 @@ async def test_app_assets_support_private_and_public_asset_routes(
         "/public/apps/page",
         headers={"X-App-Public-Slug": public_slug},
     )
-    assert public_spa_fallback_res.status_code == status.HTTP_200_OK, public_spa_fallback_res.text
+    assert public_spa_fallback_res.status_code == status.HTTP_200_OK, (
+        public_spa_fallback_res.text
+    )
     assert marker in public_spa_fallback_res.text
 
     public_missing_res = await async_client.get(
         "/public/apps/assets/missing.js",
         headers={"X-App-Public-Slug": public_slug},
     )
-    assert public_missing_res.status_code == status.HTTP_404_NOT_FOUND, public_missing_res.text
+    assert public_missing_res.status_code == status.HTTP_404_NOT_FOUND, (
+        public_missing_res.text
+    )
+
+    # An app whose markdown links to a pod file has that link resolved against
+    # its own origin, so the click lands here. Code still gets JSON; a person
+    # following a link gets a page that says what happened and offers the
+    # workspace, because the file it names does live there.
+    linked_file_res = await async_client.get(
+        "/public/apps/library/rust/rustbook-ownership.md",
+        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+    )
+    assert linked_file_res.status_code == status.HTTP_404_NOT_FOUND
+    assert linked_file_res.headers["content-type"].startswith("text/html")
+    assert "library/rust/rustbook-ownership.md" in linked_file_res.text
+    assert f"/pod/{pod_id}/files?file=" in linked_file_res.text
+    assert 'target="_top"' in linked_file_res.text
+
+    # The same path fetched rather than navigated to keeps the JSON error every
+    # existing client already handles.
+    fetched_file_res = await async_client.get(
+        "/public/apps/library/rust/rustbook-ownership.md",
+        headers={"X-App-Public-Slug": public_slug, "accept": "application/json"},
+    )
+    assert fetched_file_res.status_code == status.HTTP_404_NOT_FOUND
+    assert fetched_file_res.json()["code"] == "APP_NOT_FOUND"
+
+    # A missing chunk is a broken build, not a document: no workspace offer.
+    missing_chunk_res = await async_client.get(
+        "/public/apps/assets/missing.js",
+        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+    )
+    assert missing_chunk_res.status_code == status.HTTP_404_NOT_FOUND
+    assert "/files?file=" not in missing_chunk_res.text
 
     public_js_res = await async_client.get(
         "/public/apps/assets/app.js",
@@ -411,7 +450,11 @@ async def test_delete_app_cleans_up_storage_even_when_archives_share_release_pre
     upload_res = await authenticated_client.post(
         f"/pods/{pod_id}/apps/{app_name}/bundle",
         files={
-            "source_archive": ("source.zip", build_source_archive(marker), "application/zip"),
+            "source_archive": (
+                "source.zip",
+                build_source_archive(marker),
+                "application/zip",
+            ),
             "dist_archive": ("dist.zip", build_dist_archive(marker), "application/zip"),
         },
     )
@@ -420,16 +463,15 @@ async def test_delete_app_cleans_up_storage_even_when_archives_share_release_pre
     assert source_archive_path
 
     app_storage_root = (
-        Path(settings.local_file_storage_root)
-        / "common"
-        / "apps"
-        / app["id"]
+        Path(settings.local_file_storage_root) / "common" / "apps" / app["id"]
     )
     assert app_storage_root.exists()
     # Source archives are content-addressed so a later upload cannot overwrite
     # the version referenced by an in-flight reader.
     assert (app_storage_root / source_archive_path).exists()
-    assert any(path.name == "archive.zip" for path in app_storage_root.rglob("archive.zip"))
+    assert any(
+        path.name == "archive.zip" for path in app_storage_root.rglob("archive.zip")
+    )
 
     delete_res = await authenticated_client.delete(f"/pods/{pod_id}/apps/{app_name}")
     assert delete_res.status_code == status.HTTP_200_OK, delete_res.text
@@ -717,7 +759,11 @@ async def test_redeploying_a_pruned_build_serves_it_again(
         res = await authenticated_client.post(
             f"/pods/{pod_id}/apps/{app_name}/bundle",
             files={
-                "dist_archive": ("dist.zip", build_dist_archive(marker), "application/zip")
+                "dist_archive": (
+                    "dist.zip",
+                    build_dist_archive(marker),
+                    "application/zip",
+                )
             },
         )
         assert res.status_code == status.HTTP_200_OK, res.text
@@ -780,7 +826,11 @@ async def test_a_forged_release_header_cannot_serve_an_old_build_on_the_live_hos
         res = await authenticated_client.post(
             f"/pods/{pod_id}/apps/{app_name}/bundle",
             files={
-                "dist_archive": ("dist.zip", build_dist_archive(marker), "application/zip")
+                "dist_archive": (
+                    "dist.zip",
+                    build_dist_archive(marker),
+                    "application/zip",
+                )
             },
         )
         assert res.status_code == status.HTTP_200_OK, res.text

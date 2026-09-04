@@ -48,9 +48,7 @@ def _service(app, releases):
     )
 
     async def by_number(_app_id, number):
-        return next(
-            (r for r in releases if r.release_number == number), None
-        )
+        return next((r for r in releases if r.release_number == number), None)
 
     repo.get_release_by_number.side_effect = by_number
     return AppReleaseService(repo), repo
@@ -195,7 +193,9 @@ async def test_promote_keeps_working_source_when_the_release_predates_the_column
 
     await service.promote_release(app.pod_id, "orders", "v1", ctx=allow_all_context())
 
-    assert repo.update.await_args.args[0].source_archive_path == "source/new/archive.zip"
+    assert (
+        repo.update.await_args.args[0].source_archive_path == "source/new/archive.zip"
+    )
 
 
 @pytest.mark.asyncio

@@ -41,8 +41,9 @@ existing workbook, use `openpyxl` rather than a pandas round-trip that drops
 formulas or formatting. Keep transformation logic in a script; do not rely on
 manual cell changes. `openpyxl` does not calculate formulas: compute verified
 headline values in Python or recalculate with a spreadsheet engine before
-claiming formula results are validated. Use a non-interactive Matplotlib backend
-for headless runs.
+claiming formula results are validated. Matplotlib is already headless in the
+workspace — `MPLBACKEND=Agg` is set in the image — so don't spend a step
+configuring a backend; do set figure sizes and DPI explicitly.
 
 For a reproducible SQL result, call the CLI without a shell and retain the SQL in
 source code:
@@ -60,9 +61,21 @@ completed = subprocess.run(
     capture_output=True,
     text=True,
 )
+# stdout is the result and nothing else — the CLI writes errors, warnings and
+# progress to stderr — so this parses cleanly or raises, never half-parses.
 payload = json.loads(completed.stdout)
+if payload.get("truncated"):
+    raise RuntimeError(
+        f"query hit the row cap at {payload['total']} rows; aggregate or narrow it"
+    )
 result = pd.DataFrame(payload["items"])
 ```
+
+`total` is the number of rows **returned**, not matched — equal only when
+`truncated` is false. Fail on `truncated` rather than analyzing a prefix: a
+capped extract silently reported as a population is the quality failure this
+whole section exists to prevent. Print `completed.stderr` when a run fails, since
+that is where the diagnosis went.
 
 Never embed tokens or pod IDs when the injected Lemma context already supplies
 them. Fail loudly on nonzero commands, unexpected schemas, empty required

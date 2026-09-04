@@ -13,16 +13,25 @@ from ..chat import (
     render_chat_stream,
     render_user_message,
 )
+from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.resolve_user_approval_request import (
     ResolveUserApprovalRequest,
 )
 
+from ..confirm import confirm_destructive
 from ..context import remember_conversation, selected_conversation, selected_pod
 from ..io import emit, list_items, render_transcript, to_plain
 from ..payload import build_request
 from ..sdk import pod_client
 from ..select import select_from_items
-from ..state import CliState, console, fail, run_with_client, state_from_ctx
+from ..state import (
+    CliState,
+    console,
+    err_console,
+    fail,
+    run_with_client,
+    state_from_ctx,
+)
 
 app = typer.Typer(help="Agent conversation commands.")
 
@@ -99,6 +108,7 @@ def chat_once(
         )
     if show_user_message and state.output != "json":
         render_user_message(message)
+
     def stream(client, s):  # type: ignore[no-untyped-def]
         # Render inside the client session: the SSE response is only readable
         # while the underlying httpx client is open.
@@ -138,6 +148,7 @@ def send_once(
     )
     if conversation_id is None:
         return
+
     def send_and_peek(client, s):  # type: ignore[no-untyped-def]
         # Read the first event inside the client session: the SSE response is
         # only readable while the underlying httpx client is open.
@@ -193,7 +204,7 @@ def interactive_chat(
     while True:
         try:
             message = read_chat_prompt()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             console.print()
             return
         command = message.strip()
@@ -395,7 +406,9 @@ def stop(
     conversation_id = _resolve_conversation_arg(state, conversation)
     result = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).conversations.stop(conversation_id),
+        lambda client, s: pod_client(client, s, pod).conversations.stop(
+            conversation_id
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -426,23 +439,31 @@ def list_approvals(
 def approve(
     ctx: typer.Context,
     approval: str | None = typer.Argument(
-        None, help="Approval id (from `conversation approvals`). Omit to act on ALL pending."
+        None,
+        help="Approval id (from `conversation approvals`). Omit to act on ALL pending.",
     ),
     conversation: str | None = typer.Option(
-        None, "--conversation", "-c", help="Conversation id (default: $LEMMA_CONVERSATION_ID)."
+        None,
+        "--conversation",
+        "-c",
+        help="Conversation id (default: $LEMMA_CONVERSATION_ID).",
     ),
     deny: bool = typer.Option(False, "--deny", help="Reject instead of approving."),
     session: bool = typer.Option(
         False, "--session", help="Approve for the whole session (not just once)."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation when resolving all pending."
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Resolve a pending approval so a gated agent action proceeds from the CLI.
 
     Approves once by default (`--session` to approve for the run, `--deny` to
-    reject). With no approval id, resolves every pending approval in the
-    conversation — handy for driving a file-using agent or an AGENT-node workflow
-    to completion without the frontend.
+    reject). With no approval id, lists every pending approval in the
+    conversation and confirms before resolving them all — handy for driving a
+    file-using agent or an AGENT-node workflow to completion without the
+    frontend.
     """
     state = state_from_ctx(ctx)
     conversation_id = _resolve_conversation_arg(state, conversation)
@@ -455,27 +476,79 @@ def approve(
         if approval:
             ids = [approval]
         else:
-            ids = [
-                str(item.get("id"))
+            # A bare `lemma conversation approve` authorises every gated call
+            # queued on the conversation — the ones gated precisely because they
+            # send mail, write files or run connector operations. That is
+            # irreversible and wider than most deletes, so it shows what it is
+            # about to do and goes through the same confirmation every delete
+            # does (CONVENTIONS.md, "Destructive operations").
+            pending = [
+                item
                 for item in list_items(pc.conversations.approvals(conversation_id))
                 if item.get("id")
             ]
-        for approval_id in ids:
-            pc.conversations.resolve_approval(
-                conversation_id,
-                approval_id,
-                build_request(
-                    ResolveUserApprovalRequest,
-                    {"decision": decision},
-                    context="approval",
-                ),
+            if not pending:
+                return {
+                    "conversation_id": conversation_id,
+                    "decision": decision,
+                    "resolved": [],
+                    "failed": [],
+                }
+            if not yes:
+                _render_pending_approvals(pending, decision)
+            confirm_destructive(
+                f"{decision} all {len(pending)} pending approval(s) "
+                f"on conversation {conversation_id}?",
+                yes,
             )
+            ids = [str(item["id"]) for item in pending]
+
+        resolved: list[str] = []
+        failed: list[dict[str, str]] = []
+        for approval_id in ids:
+            try:
+                pc.conversations.resolve_approval(
+                    conversation_id,
+                    approval_id,
+                    build_request(
+                        ResolveUserApprovalRequest,
+                        {"decision": decision},
+                        context="approval",
+                    ),
+                )
+            except LemmaAPIError as exc:
+                # Report per approval rather than aborting: without this the
+                # command failed on the third of five and never said which two
+                # had already gone through.
+                failed.append({"id": approval_id, "error": str(exc)})
+            else:
+                resolved.append(approval_id)
         return {
             "conversation_id": conversation_id,
             "decision": decision,
-            "resolved": ids,
+            "resolved": resolved,
+            "failed": failed,
         }
 
     result = run_with_client(ctx, run)
     if result is not None:
         emit(state, result)
+        if result.get("failed"):
+            raise typer.Exit(code=1)
+
+
+def _render_pending_approvals(pending: list[dict[str, Any]], decision: str) -> None:
+    """List what a bulk approve is about to authorise, on stderr.
+
+    Diagnostics, not the command's result: the resolved ids are what `emit`
+    prints, and `--json` must stay parseable.
+    """
+    err_console.print(f"[bold]{len(pending)} pending approval(s)[/bold] to {decision}:")
+    for item in pending:
+        name = item.get("tool_name") or item.get("kind") or item.get("type") or "?"
+        detail = item.get("tool_args") or item.get("arguments") or item.get("message")
+        # One line per approval: the point is to recognise them, and a tool call
+        # with a large argument payload would otherwise bury the list it is in.
+        summary = str(detail)[:120] if detail else ""
+        suffix = f" {summary}" if summary else ""
+        err_console.print(f"  [dim]{item['id']}[/dim] {name}{suffix}", highlight=False)

@@ -27,10 +27,14 @@ from ..openapi_client.models.agent_surface_response import AgentSurfaceResponse
 from ..openapi_client.models.available_surface_channels_response import (
     AvailableSurfaceChannelsResponse,
 )
-from ..openapi_client.models.available_surfaces_response import AvailableSurfacesResponse
+from ..openapi_client.models.available_surfaces_response import (
+    AvailableSurfacesResponse,
+)
 from ..openapi_client.models.set_default_surface_request import SetDefaultSurfaceRequest
 from ..openapi_client.models.surface_create_request import SurfaceCreateRequest
-from ..openapi_client.models.surface_platform_setup_guide import SurfacePlatformSetupGuide
+from ..openapi_client.models.surface_platform_setup_guide import (
+    SurfacePlatformSetupGuide,
+)
 from ..openapi_client.models.surface_send_request import SurfaceSendRequest
 from ..openapi_client.models.surface_send_response import SurfaceSendResponse
 from ..openapi_client.models.surface_setup_response import SurfaceSetupResponse
@@ -62,9 +66,7 @@ class PodSurfaces(BoundResource):
     def available(self) -> AvailableSurfacesResponse:
         return self._call(agent_surface_available, self._pod_uuid())
 
-    def create(
-        self, request: SurfaceCreateRequest | dict
-    ) -> AgentSurfaceResponse:
+    def create(self, request: SurfaceCreateRequest | dict) -> AgentSurfaceResponse:
         return self._call(
             agent_surface_create,
             self._pod_uuid(),
@@ -87,15 +89,20 @@ class PodSurfaces(BoundResource):
         """Back-compat create-or-update addressed by surface name (which defaults
         to the lowercased platform). Patches the surface if it exists, else
         creates it. New code should call ``create``/``update`` directly.
+
+        A surface's name is pod-unique and its platform is not, so a caller
+        naming a second Slack surface has to say which platform it is: the
+        platform comes from ``request`` when present, and only falls back to
+        the name for the original ``upsert("slack", ...)`` call shape.
         """
         surface_name = str(name).lower()
         body: dict[str, Any] = dict(request or {})
-        body.pop("platform", None)
+        platform = str(body.pop("platform", None) or name).upper()
         body.pop("name", None)
         try:
             return self.update(surface_name, body)
         except LemmaNotFoundError:
-            return self.create({**body, "platform": str(name).upper(), "name": surface_name})
+            return self.create({**body, "platform": platform, "name": surface_name})
 
     def get(self, name: str) -> AgentSurfaceResponse:
         return self._call(agent_surface_get, self._pod_uuid(), name)

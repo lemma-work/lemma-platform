@@ -1,6 +1,7 @@
 import { Mail, type LemmaIcon } from '@/components/ui/icons';
 
 import type { SurfacePlatformValue } from '@/lib/hooks/use-pod-surfaces';
+import { DEFAULT_RESPONDER_NAME, isPodDefaultAgentName } from '@/lib/utils/agents';
 
 /**
  * What each surface platform needs from the setup UI, in one place.
@@ -234,36 +235,6 @@ const DEFINITIONS: SurfacePlatformDefinition[] = [
         },
     },
     {
-        platform: 'GMAIL',
-        label: 'Gmail',
-        logoSrc: '/connector-logos/gmail.svg',
-        promise: 'Turn mail in a Gmail mailbox into work for {agent}',
-        connectHint: 'Mail from a mailbox you connect becomes work here.',
-        identityOptions: null,
-        accountLabel: 'Gmail mailbox',
-        capabilities: {
-            channelRoutes: false,
-            senderFilters: true,
-            adminConsent: false,
-            autoWebhook: true,
-        },
-    },
-    {
-        platform: 'OUTLOOK',
-        label: 'Outlook',
-        logoSrc: '/connector-logos/outlook.svg',
-        promise: 'Turn mail in an Outlook mailbox into work for {agent}',
-        connectHint: 'Mail from a mailbox you connect becomes work here.',
-        identityOptions: null,
-        accountLabel: 'Outlook mailbox',
-        capabilities: {
-            channelRoutes: false,
-            senderFilters: true,
-            adminConsent: false,
-            autoWebhook: true,
-        },
-    },
-    {
         platform: 'RESEND',
         label: 'Email',
         // No logo, by design — see `glyph`. Lemma runs this mailbox; there is no
@@ -301,7 +272,22 @@ export function getSurfaceDefinition(
     return BY_PLATFORM.get(platform.toUpperCase()) ?? null;
 }
 
-/** Substitutes the agent's name into registry copy. `null` = the pod default. */
+/**
+ * Substitutes the agent's name into registry copy. `null` = the pod default.
+ *
+ * Not `agentName || DEFAULT_RESPONDER_NAME`. `null` was the pod assistant only
+ * while it had no row of its own; it has one now, `GET /surfaces` reports
+ * `agent_name` from that row, and `pod_default` is not falsy — so the guard
+ * stopped firing for the single case it was written for and put an internal
+ * identifier in front of a person. The backend fixed the same expression at
+ * five sites; this is the display site it does not reach.
+ *
+ * Only that one name is mapped. Every other agent keeps the name its author
+ * typed, because this copy also names the Slack app a person is about to
+ * create, and rewriting that is not this function's decision to make.
+ */
 export function forAgent(copy: string, agentName: string | null): string {
-    return copy.replaceAll('{agent}', agentName || 'the pod assistant');
+    const named
+        = agentName && !isPodDefaultAgentName(agentName) ? agentName : DEFAULT_RESPONDER_NAME;
+    return copy.replaceAll('{agent}', named);
 }

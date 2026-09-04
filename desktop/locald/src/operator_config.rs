@@ -13,8 +13,9 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 18] = [
+const SECRET_NAMES: [&str; 19] = [
     "ai.api_key",
+    "integrations.deepgram_api_key",
     "integrations.composio_api_key",
     "integrations.composio_webhook_secret",
     "integrations.google_client_secret",
@@ -102,9 +103,20 @@ pub struct ApplyOperatorConfig {
 
 impl OperatorConfig {
     fn fresh() -> io::Result<Self> {
+        Self::fresh_with_install_id(random_hex(16)?)
+    }
+
+    /// A default configuration that keeps an existing installation's identity.
+    ///
+    /// The identity is not decoration: every one of `SECRET_NAMES` is stored in
+    /// the OS credential vault under `{install_id}:{name}`. Minting a new id
+    /// while healing a broken config would leave all of them in the user's
+    /// keychain, addressable by nothing -- `keyring` needs the account name to
+    /// find an entry, so they could not even be enumerated to clean up.
+    fn fresh_with_install_id(install_id: String) -> io::Result<Self> {
         Ok(Self {
             schema_version: CONFIG_SCHEMA_VERSION,
-            install_id: random_hex(16)?,
+            install_id,
             revision: 0,
             onboarding_complete: false,
             ai: AiProfile {
@@ -157,6 +169,79 @@ impl SecretVault for PlatformVault {
     }
 }
 
+/// Every read of one secret, answered from the first one.
+///
+/// macOS authorizes keychain access per item, per reading process, and an
+/// ad-hoc-signed build is not remembered between reads at all -- so a second
+/// read of the same item is a second modal password prompt. `backend_environment`
+/// alone is called from seven places on the daemon's start and restart paths and
+/// reads two items each time, which is how a single first-run setup put fourteen
+/// prompts in front of the user before the workspace had even opened.
+///
+/// The items themselves do not change underneath us: this process is the only
+/// writer, so `set` and `delete` update the cache rather than clearing it. No
+/// secret is held here that locald was not already holding to hand to the
+/// backend as an environment variable.
+struct CachingVault {
+    inner: Arc<dyn SecretVault>,
+    seen: Mutex<HashMap<(String, String), Option<String>>>,
+}
+
+impl CachingVault {
+    fn new(inner: Arc<dyn SecretVault>) -> Self {
+        Self {
+            inner,
+            seen: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn key(install_id: &str, name: &str) -> (String, String) {
+        (install_id.to_owned(), name.to_owned())
+    }
+}
+
+impl SecretVault for CachingVault {
+    fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
+        let key = Self::key(install_id, name);
+        if let Some(known) = self
+            .seen
+            .lock()
+            .expect("secret cache poisoned")
+            .get(&key)
+            .cloned()
+        {
+            return Ok(known);
+        }
+        // Deliberately outside the lock: a keychain read can block on a modal
+        // prompt, and holding the cache across it would stall every other
+        // secret this process wants behind the one the user is looking at.
+        let value = self.inner.get(install_id, name)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(key, value.clone());
+        Ok(value)
+    }
+
+    fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
+        self.inner.set(install_id, name, value)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(Self::key(install_id, name), Some(value.to_owned()));
+        Ok(())
+    }
+
+    fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
+        self.inner.delete(install_id, name)?;
+        self.seen
+            .lock()
+            .expect("secret cache poisoned")
+            .insert(Self::key(install_id, name), None);
+        Ok(())
+    }
+}
+
 fn vault_error(error: keyring::v1::Error) -> io::Error {
     io::Error::other(format!("operating-system credential vault failed: {error}"))
 }
@@ -176,44 +261,124 @@ pub(crate) struct OperatorConfigState {
 
 impl OperatorConfigStore {
     pub fn load(path: PathBuf) -> io::Result<Arc<Self>> {
-        Self::load_components(
+        Self::load_reporting(path, &mut Vec::new())
+    }
+
+    /// `load`, plus a note for anything it had to repair on the way.
+    ///
+    /// The public entry point takes the vault as an implementation detail; only
+    /// tests substitute one.
+    pub fn load_reporting(path: PathBuf, healed: &mut Vec<String>) -> io::Result<Arc<Self>> {
+        Self::load_healing(
             path,
-            Arc::new(PlatformVault),
+            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
             Arc::new(HttpModelProviderProbe),
+            healed,
         )
     }
 
     #[cfg(test)]
     fn load_with_vault(path: PathBuf, vault: Arc<dyn SecretVault>) -> io::Result<Arc<Self>> {
-        Self::load_components(path, vault, Arc::new(EchoModelProviderProbe))
+        Self::load_with_vault_reporting(path, vault, &mut Vec::new())
     }
 
-    fn load_components(
+    /// A store with both collaborators substituted, for tests that assert on
+    /// provider probing rather than on loading.
+    #[cfg(test)]
+    fn load_probing(
         path: PathBuf,
         vault: Arc<dyn SecretVault>,
         provider_probe: Arc<dyn ModelProviderProbe>,
     ) -> io::Result<Arc<Self>> {
+        Self::load_healing(path, vault, provider_probe, &mut Vec::new())
+    }
+
+    #[cfg(test)]
+    fn load_with_vault_reporting(
+        path: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        healed: &mut Vec<String>,
+    ) -> io::Result<Arc<Self>> {
+        Self::load_healing(path, vault, Arc::new(EchoModelProviderProbe), healed)
+    }
+
+    /// Load the operator's configuration, replacing it only if it is unusable.
+    ///
+    /// This file used to be able to end the daemon three separate ways: a
+    /// permissions check, a strict parse, and an exact `schema_version` match.
+    /// Every nested struct carries `deny_unknown_fields`, so running a build
+    /// that adds a field and then going back to one that does not was enough to
+    /// make an installation refuse to start -- silently, because the reason went
+    /// to a null stderr. `state.json` has self-healed all along; the file on the
+    /// critical path did not.
+    ///
+    /// Order matters: migrate a known older shape, and only quarantine what
+    /// cannot be understood at all. A *newer* schema is quarantined rather than
+    /// downgraded, which is what makes downgrade-then-upgrade recoverable.
+    fn load_healing(
+        path: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        provider_probe: Arc<dyn ModelProviderProbe>,
+        healed: &mut Vec<String>,
+    ) -> io::Result<Arc<Self>> {
         let config = if path.is_file() {
-            ensure_private_file(&path)?;
-            serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid operator configuration: {error}"),
-                )
-            })?
+            match Self::read_existing(&path) {
+                Ok(config) => config,
+                Err(reason) => {
+                    // Salvage the identity before the file naming it goes away.
+                    let salvaged = fs::read(&path)
+                        .ok()
+                        .and_then(|raw| salvage_install_id(&raw));
+                    let aside = crate::paths::quarantine_aside(&path)?;
+                    let config = match salvaged {
+                        Some(install_id) => {
+                            healed.push(format!(
+                                "the operator configuration was unusable ({reason}); kept as {} \
+                                 and replaced, keeping this installation's stored secrets",
+                                aside.display()
+                            ));
+                            OperatorConfig::fresh_with_install_id(install_id)?
+                        }
+                        None => {
+                            healed.push(format!(
+                                "the operator configuration was unusable ({reason}) and its \
+                                 installation id could not be recovered; kept as {} and replaced. \
+                                 Previously stored secrets are unreachable and a full reinstall \
+                                 is the only thing that will clear them",
+                                aside.display()
+                            ));
+                            OperatorConfig::fresh()?
+                        }
+                    };
+                    validate_config(&config)?;
+                    write_private_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
+                    config
+                }
+            }
         } else {
             let config = OperatorConfig::fresh()?;
             validate_config(&config)?;
             write_private_atomic(&path, &serde_json::to_vec_pretty(&config)?)?;
             config
         };
-        validate_config(&config)?;
         Ok(Arc::new(Self {
             path,
             vault,
             provider_probe,
             config: Mutex::new(config),
         }))
+    }
+
+    /// Parse an existing file, migrating an older schema rather than rejecting
+    /// it. Returns the reason it is unusable, for the caller to record.
+    fn read_existing(path: &Path) -> Result<OperatorConfig, String> {
+        ensure_private_file(path).map_err(|error| error.to_string())?;
+        let raw = fs::read(path).map_err(|error| error.to_string())?;
+        let value: Value =
+            serde_json::from_slice(&raw).map_err(|error| format!("invalid JSON: {error}"))?;
+        let config = migrate_config(value).ok_or("unsupported configuration shape")?;
+        validate_config(&config).map_err(|error| error.to_string())?;
+        Ok(config)
     }
 
     pub fn snapshot(&self) -> io::Result<Value> {
@@ -678,6 +843,114 @@ fn validate_config(config: &OperatorConfig) -> io::Result<()> {
     Ok(())
 }
 
+/// The oldest `schema_version` this build knows how to bring forward.
+///
+/// Anything below it, and anything above `CONFIG_SCHEMA_VERSION`, is quarantined
+/// rather than guessed at.
+const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
+
+/// Remove every secret this installation stored, reporting what would not go.
+///
+/// Used only by `lemma-locald reset`. It runs inside *this* binary rather than
+/// the app because the OS credential vault keys an item's access control to the
+/// code identity that created it -- `work.lemma.locald`, fixed by the
+/// `Info.plist` linked into this executable. A delete issued from the Tauri
+/// shell is a different program as far as the vault is concerned, and would
+/// prompt or fail.
+///
+/// Failures are collected rather than raised: a reset that stopped at the first
+/// stubborn keychain item would leave the rest behind *and* skip removing the
+/// state directory, which is the part the user actually asked for.
+pub fn purge_secrets(install_id: &str) -> Vec<String> {
+    let vault = PlatformVault;
+    let mut failures = Vec::new();
+    for name in SECRET_NAMES {
+        if let Err(error) = vault.delete(install_id, name) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    failures
+}
+
+/// Recover an installation identity from a config file that may be unreadable.
+///
+/// Exposed for `lemma-locald reset`, which must find the id *before* it deletes
+/// the file naming it -- and which runs precisely when that file may be the
+/// thing that is broken.
+pub fn recover_install_id(path: &Path) -> Option<String> {
+    salvage_install_id(&fs::read(path).ok()?)
+}
+
+/// Bring a stored configuration up to the current schema, or refuse it.
+///
+/// Operates on a `Value` rather than the typed struct on purpose: every nested
+/// type carries `deny_unknown_fields`, so a strict parse is exactly what cannot
+/// read a document written by a build that added a field. Working untyped first
+/// is what lets a future v1 -> v2 bump drop unknown keys and fill in defaults
+/// instead of bricking the install.
+///
+/// `sharing.json` has done this all along -- this is the same shape.
+fn migrate_config(mut value: Value) -> Option<OperatorConfig> {
+    let version = value.get("schema_version").and_then(Value::as_u64)?;
+    if !(MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION..=CONFIG_SCHEMA_VERSION).contains(&version) {
+        // A newer schema is never downgraded. Quarantining it instead means
+        // downgrade-then-upgrade gets the file back.
+        return None;
+    }
+
+    // Future per-version fixups land here, oldest first. There is only one
+    // schema today, so the sole job right now is to drop keys a newer build
+    // wrote that this one does not know -- which is the case that made a
+    // rollback fatal.
+    let known: &[&str] = &[
+        "schema_version",
+        "install_id",
+        "revision",
+        "onboarding_complete",
+        "ai",
+        "integrations",
+        "surfaces",
+    ];
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|key, _| known.contains(&key.as_str()));
+    }
+    value["schema_version"] = Value::from(CONFIG_SCHEMA_VERSION);
+
+    serde_json::from_value(value).ok()
+}
+
+/// Recover just the installation identity from a file nothing else can read.
+///
+/// Deliberately the most permissive parse in this module: it runs when the
+/// strict one has already failed, and what it protects is the link between this
+/// installation and the 19 secrets in the user's keychain.
+fn salvage_install_id(raw: &[u8]) -> Option<String> {
+    fn looks_like_an_id(candidate: &str) -> bool {
+        candidate.len() == 32 && candidate.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    // The structured read first, for a file that parses but does not fit.
+    if let Ok(value) = serde_json::from_slice::<Value>(raw) {
+        if let Some(install_id) = value.get("install_id").and_then(Value::as_str) {
+            if looks_like_an_id(install_id) {
+                return Some(install_id.to_owned());
+            }
+        }
+    }
+
+    // Then a plain text scan, because the case this exists for is a file that
+    // is not JSON at all -- a truncated write, a torn page. A JSON parser
+    // cannot help there, and the identity is a fixed-width hex string that is
+    // trivially recognisable without one.
+    let text = std::str::from_utf8(raw).ok()?;
+    let after_key = text.split("\"install_id\"").nth(1)?;
+    let opening = after_key.find('"')?;
+    let rest = &after_key[opening + 1..];
+    let closing = rest.find('"')?;
+    let candidate = &rest[..closing];
+    looks_like_an_id(candidate).then(|| candidate.to_owned())
+}
+
 fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
     if config.schema_version != CONFIG_SCHEMA_VERSION
         || config.install_id.len() != 32
@@ -783,8 +1056,50 @@ fn validate_secret_changes(changes: &BTreeMap<String, Option<String>>) -> io::Re
         }
         if let Some(value) = value {
             validate_text(name, value, 16 * 1024)?;
+            validate_vault_capacity(name, value)?;
         }
     }
+    Ok(())
+}
+
+/// Refuse a secret the platform vault cannot hold, before it is offered one.
+///
+/// Windows Credential Manager caps a credential blob at
+/// CRED_MAX_CREDENTIAL_BLOB_SIZE -- 2560 bytes -- and the keyring backend
+/// writes the value as UTF-16, so the real ceiling is 1280 ASCII characters
+/// against the 16 KiB validated just above. macOS Keychain has no comparable
+/// limit, which is why nothing here noticed: a long bearer token (an Entra
+/// access token carrying group claims, a corporate LLM-gateway JWT) passed
+/// validation on both platforms and then failed at the vault on Windows only.
+/// What the user got was the backend's own words -- "longer than the platform
+/// limit of 2560 chars" -- a number that is off by a factor of two, because it
+/// counts bytes and calls them chars.
+///
+/// Checked here so the limit is refused up front and named in the units of the
+/// thing being pasted.
+#[cfg(windows)]
+fn validate_vault_capacity(name: &str, value: &str) -> io::Result<()> {
+    // Counted the way the vault counts it. `validate_text` measures UTF-8
+    // bytes, which is a different number for anything non-ASCII.
+    let blob_bytes = value.encode_utf16().count() * 2;
+    if blob_bytes > WINDOWS_MAX_VAULT_BLOB_BYTES {
+        return Err(invalid(format!(
+            "{name} is too long to store on Windows: the credential vault holds \
+             at most {} characters and this is {}",
+            WINDOWS_MAX_VAULT_BLOB_BYTES / 2,
+            value.chars().count()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+const WINDOWS_MAX_VAULT_BLOB_BYTES: usize = 2560;
+
+/// Nothing to check. The macOS Keychain takes values far larger than anything
+/// a credential field can hold, so there is no limit here to fail early on.
+#[cfg(not(windows))]
+fn validate_vault_capacity(_name: &str, _value: &str) -> io::Result<()> {
     Ok(())
 }
 
@@ -848,8 +1163,9 @@ fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value
     })
 }
 
-fn secret_environment() -> [(&'static str, &'static str); 17] {
+fn secret_environment() -> [(&'static str, &'static str); 18] {
     [
+        ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
             "integrations.composio_webhook_secret",
@@ -1006,16 +1322,29 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     ensure_private_file(path)
 }
 
+/// Make sure the config is a regular file only this user can read.
+///
+/// Over-broad permissions are *repaired* rather than rejected. Refusing to
+/// start does not make the file any less readable -- it just means the
+/// installation never runs again -- and the way this actually happens is
+/// somebody moving their state directory with `cp -R` instead of `cp -Rp`,
+/// which lands 0644 and used to be permanently fatal, silently.
+///
+/// Anything that is not a regular file still fails: a symlink or a directory
+/// here is not a permissions accident, and following one would be the bug.
 fn ensure_private_file(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() || metadata.mode() & 0o077 != 0 {
+        if !metadata.file_type().is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("operator config is not a private file: {}", path.display()),
+                format!("operator config is not a regular file: {}", path.display()),
             ));
+        }
+        if metadata.mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
     }
     #[cfg(not(unix))]
@@ -1109,6 +1438,85 @@ mod tests {
         }
     }
 
+    /// The prompt this exists to stop. macOS authorizes keychain access per
+    /// item per read, and an ad-hoc-signed build is not remembered between
+    /// them, so a second read of one secret is a second modal password box.
+    #[test]
+    fn a_secret_is_read_from_the_vault_once_however_often_it_is_asked_for() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("install", "ai.api_key", "sk-test").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        for _ in 0..7 {
+            assert_eq!(
+                vault.get("install", "ai.api_key").unwrap().as_deref(),
+                Some("sk-test")
+            );
+        }
+
+        assert_eq!(counting.reads_of("ai.api_key"), 1);
+    }
+
+    /// An absent secret costs a round trip too, and `backend_environment` asks
+    /// for one on every call whether the user has set it or not.
+    #[test]
+    fn a_secret_that_is_not_there_is_only_looked_for_once() {
+        let counting = Arc::new(CountingVault::default());
+        let vault = CachingVault::new(counting.clone());
+
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+
+        assert_eq!(counting.reads_of("ai.api_key"), 1);
+    }
+
+    /// This process is the only writer, so a write is the freshest answer there
+    /// is -- and going back to the vault to confirm it would be another prompt.
+    #[test]
+    fn writing_a_secret_answers_the_next_read_without_asking_again() {
+        let counting = Arc::new(CountingVault::default());
+        let vault = CachingVault::new(counting.clone());
+
+        vault.set("install", "ai.api_key", "sk-new").unwrap();
+
+        assert_eq!(
+            vault.get("install", "ai.api_key").unwrap().as_deref(),
+            Some("sk-new")
+        );
+        assert_eq!(counting.reads_of("ai.api_key"), 0);
+    }
+
+    #[test]
+    fn deleting_a_secret_answers_the_next_read_as_absent() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("install", "ai.api_key", "sk-old").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        vault.delete("install", "ai.api_key").unwrap();
+
+        assert!(vault.get("install", "ai.api_key").unwrap().is_none());
+        assert_eq!(counting.reads_of("ai.api_key"), 0);
+    }
+
+    /// Keyed by both halves: a reinstall gets a new install id, and answering
+    /// its reads from the previous one's secrets would be worse than a prompt.
+    #[test]
+    fn two_installs_do_not_share_an_answer() {
+        let counting = Arc::new(CountingVault::default());
+        counting.set("first", "ai.api_key", "sk-first").unwrap();
+        counting.set("second", "ai.api_key", "sk-second").unwrap();
+        let vault = CachingVault::new(counting.clone());
+
+        assert_eq!(
+            vault.get("first", "ai.api_key").unwrap().as_deref(),
+            Some("sk-first")
+        );
+        assert_eq!(
+            vault.get("second", "ai.api_key").unwrap().as_deref(),
+            Some("sk-second")
+        );
+    }
+
     struct FixedModelProviderProbe;
 
     impl ModelProviderProbe for FixedModelProviderProbe {
@@ -1132,7 +1540,7 @@ mod tests {
         // way. locald reads the vault instead and hands the keyset over.
         let root = tempdir().unwrap();
         let vault = Arc::new(MemoryVault::default());
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             vault.clone(),
             Arc::new(FixedModelProviderProbe),
@@ -1172,7 +1580,7 @@ mod tests {
         // whole configuration, a caller that echoed back a stale copy would
         // silently reset the user's sharing and integration settings.
         let root = tempdir().unwrap();
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             Arc::new(MemoryVault::default()),
             Arc::new(FixedModelProviderProbe),
@@ -1213,7 +1621,7 @@ mod tests {
     #[test]
     fn successful_provider_probe_discovers_default_and_marks_profile_ready() {
         let root = tempdir().unwrap();
-        let store = OperatorConfigStore::load_components(
+        let store = OperatorConfigStore::load_probing(
             root.path().join("operator.json"),
             Arc::new(MemoryVault::default()),
             Arc::new(FixedModelProviderProbe),
@@ -1238,6 +1646,120 @@ mod tests {
         );
         assert!(snapshot["config"]["ai"]["last_validated_at_unix_ms"].is_number());
         assert_eq!(snapshot["readiness"]["ai"], "ready");
+    }
+
+    /// A config written by a newer build does not brick the older one.
+    ///
+    /// Every nested struct is `deny_unknown_fields`, so running a build that
+    /// adds a field and then going back was enough to make the daemon refuse to
+    /// start -- silently. The unknown key is dropped and the install comes up.
+    #[test]
+    fn a_config_from_a_newer_build_is_migrated_rather_than_rejected() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        // Built from a real config rather than a hand-written literal, so this
+        // tests the migration and not my memory of the schema.
+        let mut document = serde_json::to_value(OperatorConfig::fresh().unwrap()).unwrap();
+        let install_id = document["install_id"].as_str().unwrap().to_owned();
+        document["revision"] = json!(3);
+        document["a_field_a_later_build_added"] = json!({"nested": true});
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let mut healed = Vec::new();
+        let store = OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            Arc::new(MemoryVault::default()),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert!(
+            healed.is_empty(),
+            "a migration is not a repair; nothing was quarantined: {healed:?}"
+        );
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot["config"]["install_id"], install_id);
+        assert_eq!(
+            snapshot["config"]["revision"], 3,
+            "the operator's own settings survive the migration"
+        );
+    }
+
+    /// An unreadable config keeps the identity that addresses the keychain.
+    ///
+    /// Minting a fresh `install_id` here would strand all 19 secrets under
+    /// `{old_id}:{name}` -- present in the user's login keychain, addressable by
+    /// nothing, and not even enumerable to clean up.
+    #[test]
+    fn healing_an_unparseable_config_keeps_the_installation_identity() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        let install_id = "fedcba9876543210fedcba9876543210";
+        std::fs::write(&path, format!("{{\"install_id\":\"{install_id}\", oops")).unwrap();
+
+        let vault = Arc::new(MemoryVault::default());
+        vault
+            .set(install_id, "ai.api_key", "sk-still-here")
+            .unwrap();
+
+        let mut healed = Vec::new();
+        let store = OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            vault.clone(),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert_eq!(healed.len(), 1, "the replacement is reported");
+        assert!(healed[0].contains("stored secrets"), "{}", healed[0]);
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot["config"]["install_id"], install_id);
+        // The secret is still reachable through the recovered identity.
+        assert_eq!(
+            vault.get(install_id, "ai.api_key").unwrap().as_deref(),
+            Some("sk-still-here")
+        );
+    }
+
+    /// A schema from the future is quarantined, never silently downgraded --
+    /// so upgrading again gets the operator's configuration back.
+    #[test]
+    fn a_config_from_an_unknown_future_schema_is_kept_not_downgraded() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("operator-config.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema_version": 99,
+                "install_id": "0123456789abcdef0123456789abcdef",
+                "revision": 7,
+                "onboarding_complete": true,
+                "ai": {"protocol": "unconfigured"},
+                "integrations": {},
+                "surfaces": {"resend_inbound_domain": ""},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut healed = Vec::new();
+        OperatorConfigStore::load_with_vault_reporting(
+            path.clone(),
+            Arc::new(MemoryVault::default()),
+            &mut healed,
+        )
+        .unwrap();
+
+        assert_eq!(healed.len(), 1);
+        let aside: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".invalid-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "the future config is kept, not deleted");
+        let kept: Value = serde_json::from_slice(&std::fs::read(aside[0].path()).unwrap()).unwrap();
+        assert_eq!(kept["schema_version"], 99);
+        assert_eq!(kept["revision"], 7);
     }
 
     #[test]
@@ -1272,6 +1794,46 @@ mod tests {
         assert!(!fs::read_to_string(root.path().join("operator.json"))
             .unwrap()
             .contains("secret-key"));
+    }
+
+    /// Every secret that can be set has somewhere to go.
+    ///
+    /// Two hand-maintained arrays with hand-maintained lengths describe one
+    /// thing: SECRET_NAMES says what may be stored, secret_environment() says
+    /// what the backend is told. Adding a name to the first and forgetting the
+    /// second gives a field in Local settings that saves happily and changes
+    /// nothing -- the exact shape of the Deepgram gap, where the key had no
+    /// mapping at all and `say` and `listen` could only fail.
+    ///
+    /// `ai.api_key` is the one deliberate exclusion: it is rendered per
+    /// protocol above rather than copied through verbatim.
+    #[test]
+    fn every_settable_secret_reaches_the_backend_environment() {
+        let mapped: std::collections::HashSet<&str> = secret_environment()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        for name in SECRET_NAMES {
+            if name == "ai.api_key" {
+                continue;
+            }
+            assert!(
+                mapped.contains(name),
+                "{name} can be stored but is never passed to the backend; \
+                 add it to secret_environment()"
+            );
+        }
+    }
+
+    /// Speech needs its key under the name the backend actually reads.
+    #[test]
+    fn the_deepgram_key_is_exported_as_deepgram_api_key() {
+        let mapping: std::collections::HashMap<&str, &str> =
+            secret_environment().into_iter().collect();
+        assert_eq!(
+            mapping.get("integrations.deepgram_api_key"),
+            Some(&"DEEPGRAM_API_KEY")
+        );
     }
 
     #[test]
@@ -1381,6 +1943,34 @@ mod tests {
                 secrets: BTreeMap::from([("surfaces.unknown".into(), Some("secret".into()))]),
             })
             .is_err());
+    }
+
+    /// A secret longer than Credential Manager can hold is refused up front,
+    /// in characters, rather than by the vault in mis-stated bytes.
+    ///
+    /// Windows-only because the limit is: the macOS Keychain would take all of
+    /// these. CI's Windows job runs the workspace suite, which is what makes
+    /// this an actual gate rather than documentation.
+    #[cfg(windows)]
+    #[test]
+    fn refuses_a_secret_the_windows_credential_vault_could_not_store() {
+        let at_limit = "k".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2);
+        let over_limit = "k".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2 + 1);
+        assert!(validate_vault_capacity("ai.api_key", &at_limit).is_ok());
+
+        let error = validate_vault_capacity("ai.api_key", &over_limit).unwrap_err();
+        let message = error.to_string();
+        // Names the field, the ceiling, and the actual size -- in characters.
+        assert!(message.contains("ai.api_key"), "{message}");
+        assert!(message.contains("1280"), "{message}");
+        assert!(message.contains("1281"), "{message}");
+
+        // Counted as the vault counts it: UTF-16 units, not UTF-8 bytes. Each
+        // of these is 3 bytes in UTF-8 and 2 in UTF-16, so a value that fits
+        // must not be rejected for its UTF-8 length.
+        let bmp = "\u{20ac}".repeat(WINDOWS_MAX_VAULT_BLOB_BYTES / 2);
+        assert!(bmp.len() > WINDOWS_MAX_VAULT_BLOB_BYTES);
+        assert!(validate_vault_capacity("ai.api_key", &bmp).is_ok());
     }
 
     #[test]

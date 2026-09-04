@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import enum
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from uuid import UUID
+
 from pydantic import Field
 
 from app.core.domain.entity import Entity
@@ -12,6 +13,11 @@ class ConnectRequestStatus(str, enum.Enum):
     """Connect request status choices."""
 
     PENDING = "PENDING"
+    #: Claimed by a callback that is mid-exchange. A separate state, and not
+    #: merely PENDING with a flag, because it is what makes spending a `state`
+    #: atomic: the claim is an UPDATE with `status = 'PENDING'` in its WHERE,
+    #: so of two concurrent callbacks exactly one changes a row.
+    EXCHANGING = "EXCHANGING"
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
 

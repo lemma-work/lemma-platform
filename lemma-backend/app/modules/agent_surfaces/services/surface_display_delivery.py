@@ -42,7 +42,6 @@ def build_agent_surface_ingress_service(
     ``build_surface_event_handler`` dependency; kept here so the tool delivery
     path does not depend on the worker/request context.
     """
-    from app.composition.surface_agent import get_conversation_service
     from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
     from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
         SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -50,14 +49,11 @@ def build_agent_surface_ingress_service(
     from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
         SurfaceConversationLinkRepository,
     )
-    from app.composition.surface_connectors import get_connector_service
 
     return AgentSurfaceIngressService(
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=get_conversation_service(uow),
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
@@ -88,7 +84,7 @@ async def deliver_display_resource_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic",
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
         )
@@ -114,7 +110,7 @@ async def deliver_surface_message_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic",
             conversation_id=conversation_id,
         )
         return False
@@ -142,7 +138,7 @@ async def deliver_voice_note_to_surface(
             )
     except Exception:
         logger.debug(
-            'agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic',
+            "agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic",
             conversation_id=conversation_id,
         )
         return False

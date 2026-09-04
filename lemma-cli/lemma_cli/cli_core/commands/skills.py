@@ -8,6 +8,7 @@ The CLI owns these skills: ``install`` is an UPSERT — it overwrites an existin
 copy so a freshly-installed ``lemma-terminal`` always lines the agent up with the
 skills it bundles.
 """
+
 from __future__ import annotations
 
 import shutil
@@ -24,7 +25,7 @@ from ..skills_bundle import (
     bundled_skill_map,
     iter_bundled_skills,
 )
-from ..state import console, fail, state_from_ctx
+from ..state import console, err_console, fail, state_from_ctx
 
 app = typer.Typer(
     help="Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor)."
@@ -52,13 +53,31 @@ class Target:
 def _targets() -> dict[str, Target]:
     home = Path.home()
     return {
-        "claude": Target("claude", "Claude Code", "claude", home / ".claude" / "skills", ".claude/skills"),
-        "codex": Target("codex", "Codex", "codex", home / ".agents" / "skills", ".agents/skills"),
+        "claude": Target(
+            "claude",
+            "Claude Code",
+            "claude",
+            home / ".claude" / "skills",
+            ".claude/skills",
+        ),
+        "codex": Target(
+            "codex", "Codex", "codex", home / ".agents" / "skills", ".agents/skills"
+        ),
         "opencode": Target(
-            "opencode", "OpenCode", "opencode", home / ".config" / "opencode" / "skills", ".opencode/skills"
+            "opencode",
+            "OpenCode",
+            "opencode",
+            home / ".config" / "opencode" / "skills",
+            ".opencode/skills",
         ),
         "cursor": Target("cursor", "Cursor", "cursor", None, ".cursor/skills"),
-        "agents": Target("agents", "Codex + OpenCode (shared)", None, home / ".agents" / "skills", ".agents/skills"),
+        "agents": Target(
+            "agents",
+            "Codex + OpenCode (shared)",
+            None,
+            home / ".agents" / "skills",
+            ".agents/skills",
+        ),
     }
 
 
@@ -150,7 +169,9 @@ def show_path(
                 {
                     "target": tgt.key,
                     "scope": scope,
-                    "path": str(tgt.dir_for(scope)) if tgt.dir_for(scope) else _NO_USER_DIR,
+                    "path": str(tgt.dir_for(scope))
+                    if tgt.dir_for(scope)
+                    else _NO_USER_DIR,
                 }
                 for tgt in targets
             ]
@@ -162,7 +183,9 @@ def show_path(
 def install_skills(
     ctx: typer.Context,
     names: list[str] | None = typer.Argument(
-        None, metavar="[SKILL...]", help="Skills to install. Defaults to the curated set."
+        None,
+        metavar="[SKILL...]",
+        help="Skills to install. Defaults to the curated set.",
     ),
     target: str | None = typer.Option(
         None,
@@ -174,16 +197,23 @@ def install_skills(
         "user", "--scope", help="user (global) or project (current directory)."
     ),
     dir: Path | None = typer.Option(
-        None, "--dir", help="Install into an arbitrary directory instead of a known target."
+        None,
+        "--dir",
+        help="Install into an arbitrary directory instead of a known target.",
     ),
     all_skills: bool = typer.Option(
         False,
         "--all-skills",
         help="Install every bundled skill, including workspace-runtime helpers.",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be written, write nothing."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be written, write nothing."
+    ),
     yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip the confirmation prompt when replacing symlinked skill targets."
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt when replacing symlinked skill targets.",
     ),
 ) -> None:
     """Install (upsert) bundled skills into your coding agent.
@@ -245,13 +275,23 @@ def install_skills(
 def uninstall_skills(
     ctx: typer.Context,
     names: list[str] | None = typer.Argument(
-        None, metavar="[SKILL...]", help="Skills to remove. Defaults to all bundled skills."
+        None,
+        metavar="[SKILL...]",
+        help="Skills to remove. Defaults to all bundled skills.",
     ),
     target: str | None = typer.Option(
         None, "--target", "-t", help="claude, codex, opencode, cursor, agents, or all."
     ),
     scope: str = typer.Option("user", "--scope", help="user or project."),
-    dir: Path | None = typer.Option(None, "--dir", help="Remove from an arbitrary directory."),
+    dir: Path | None = typer.Option(
+        None, "--dir", help="Remove from an arbitrary directory."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be removed, remove nothing."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
 ) -> None:
     """Remove previously installed bundled skills from a coding agent."""
     state = state_from_ctx(ctx)
@@ -260,8 +300,26 @@ def uninstall_skills(
     wanted = names or list(available)
     for name in wanted:
         if name not in available:
-            raise typer.BadParameter(f"Unknown skill {name!r}. Available: {', '.join(available)}.")
+            raise typer.BadParameter(
+                f"Unknown skill {name!r}. Available: {', '.join(available)}."
+            )
     destinations = _resolve_destinations(target=target, scope=scope, dir=dir)
+
+    present = [
+        dest_dir / name
+        for _label, dest_dir in destinations
+        if dest_dir is not None
+        for name in wanted
+        if (dest_dir / name / "SKILL.md").is_file()
+    ]
+    # This deletes directories in the user's *other* tool's config, and a bare
+    # `lemma skills uninstall` means every bundled skill in every detected
+    # agent. `install` already confirms and has --dry-run; the destructive half
+    # of the pair had neither.
+    if present and not dry_run and not yes:
+        for path in present:
+            err_console.print(f"  [dim]{path}[/dim]")
+        confirm_destructive(f"Delete {len(present)} skill director(ies)?", yes)
 
     rows: list[dict[str, object]] = []
     for dest_label, dest_dir in destinations:
@@ -271,14 +329,18 @@ def uninstall_skills(
         for name in wanted:
             target_dir = dest_dir / name
             removed = (target_dir / "SKILL.md").is_file()
-            if removed:
+            if removed and not dry_run:
                 _remove_existing(target_dir)
+            if removed:
+                action = "would remove" if dry_run else "removed"
+            else:
+                action = "not present"
             rows.append(
                 {
                     "skill": name,
                     "target": dest_label,
                     "path": str(target_dir),
-                    "action": "removed" if removed else "not present",
+                    "action": action,
                 }
             )
     emit(state, {"items": rows})

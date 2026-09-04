@@ -24,6 +24,7 @@ from app.modules.agent.agent_runtime_defaults import (
     AgentRuntimeDefaultError,
     AgentRuntimeDefaultService,
 )
+from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
@@ -332,7 +333,9 @@ def test_credentials_survive_persist_load_round_trip():
         scope=RuntimeProfileScope.ORGANIZATION,
         organization_id=uuid4(),
         name="org-default",
-    ).model_copy(update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")})
+    ).model_copy(
+        update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")}
+    )
 
     # Persist side: what the repository hands to encrypt_json.
     stored = reveal_credentials(profile.credentials)
@@ -404,7 +407,7 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
 
 
 @pytest.mark.asyncio
-async def test_runtime_falls_back_when_model_not_in_selected_profile():
+async def test_runtime_falls_back_when_model_not_in_selected_profile(caplog):
     # A pinned model that is no longer in the profile catalog (deprecated model,
     # swapped key) must degrade to the profile's default model rather than
     # hard-failing every run that relies on the profile.
@@ -416,22 +419,27 @@ async def test_runtime_falls_back_when_model_not_in_selected_profile():
     )
     service = AgentRuntimeProfileService(_ProfileRepository([org_profile]))
 
-    resolved = await service.resolve(
-        runtime=AgentRuntimeConfig(
-            profile_id=org_profile.id,
-            model_name="missing-model",
-        ),
-        organization_id=org_id,
-        user_id=uuid4(),
-    )
+    with caplog.at_level("WARNING"):
+        resolved = await service.resolve(
+            runtime=AgentRuntimeConfig(
+                profile_id=org_profile.id,
+                model_name="missing-model",
+            ),
+            organization_id=org_id,
+            user_id=uuid4(),
+        )
 
     assert resolved.model is not None
     assert resolved.model.name == org_profile.default_model_name
+    # ...and it says so. Silently answering (and billing) on a different model
+    # than the one an agent is pinned to is otherwise undetectable.
+    assert "model_substituted" in caplog.text
+    assert "missing-model" in caplog.text
+    assert org_profile.default_model_name in caplog.text
 
 
 def test_system_runtime_profiles_return_empty_without_server_credentials(monkeypatch):
     from app.core.config import settings
-    from app.modules.agent.services import runtime_profile_service
 
     monkeypatch.setattr(settings, "lemma_openai_api_key", None)
     monkeypatch.setattr(settings, "lemma_anthropic_api_key", None)
@@ -441,20 +449,19 @@ def test_system_runtime_profiles_return_empty_without_server_credentials(monkeyp
     # Keep the test hermetic: production loads the local ``.env`` for runtime
     # credentials, which would otherwise repopulate the keys we just cleared (and
     # make this depend on the developer's .env). Neutralize that reload here.
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
 
     assert AgentRuntimeProfileService().system_profiles() == []
 
 
 def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatch):
     from app.core.config import settings
-    from app.modules.agent.services import runtime_profile_service
 
     # Keep hermetic: the profile builder reloads the local ``.env`` and prefers
     # ``os.getenv`` over ``settings``, which would otherwise leak the developer's
     # real model list/credentials into this test. Neutralize the reload and clear
     # the env so the monkeypatched ``settings`` win.
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
@@ -480,8 +487,7 @@ def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatc
     assert lemma_profile.credentials is not None
     # The system profile uses model names verbatim — public name == provider name.
     system_catalog = [
-        (model.name, model.provider_model_name)
-        for model in lemma_profile.model_catalog
+        (model.name, model.provider_model_name) for model in lemma_profile.model_catalog
     ]
     assert system_catalog == [
         ("model-fast", "model-fast"),
@@ -506,11 +512,10 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
     image tools are withheld there."""
     from app.core.config import settings
     from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
-    from app.modules.agent.services import runtime_profile_service
 
     # Hermetic: neutralize the .env reload and clear env so the monkeypatched
     # ``settings`` drive the catalog (see the sibling test above).
-    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
@@ -642,8 +647,8 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     harness does not advertise — so an unpinned profile must dispatch with no
     model at all.
     """
-    from app.modules.agent.infrastructure.harnesses.agent_host import (
-        _agent_host_run_config,
+    from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+        agent_host_run_config,
     )
 
     org_id = uuid4()
@@ -661,7 +666,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
         extra={"runtime_profile": resolved.public_snapshot()},
     )
 
-    run_config = _agent_host_run_config(options)
+    run_config = agent_host_run_config(options)
     assert run_config.harness_id == pinned.harness_id
     assert run_config.runtime_profile_id == UUID(pinned.id)
     assert run_config.model_name == "grok-4"
@@ -676,7 +681,7 @@ async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
     )
     assert resolved_unpinned.model_name_for_harness == "default"
     assert (
-        _agent_host_run_config(
+        agent_host_run_config(
             HarnessOptions(
                 model_name=resolved_unpinned.model_name_for_harness,
                 extra={"runtime_profile": resolved_unpinned.public_snapshot()},
@@ -833,9 +838,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
 
     org_id = uuid4()
     user_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=user_id, organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=user_id, organization_id=org_id)
     host = next(iter(host_repo.hosts.values()))
     host.last_seen_at = datetime.now(timezone.utc) - timedelta(hours=1)
     service = AgentRuntimeProfileService(
@@ -855,9 +858,7 @@ async def test_create_agent_host_profile_rejects_offline_host():
 async def test_create_agent_host_profile_rejects_unhealthy_harness():
     org_id = uuid4()
     user_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=user_id, organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=user_id, organization_id=org_id)
     host_repo.harnesses[harness_id].health = "AUTH_REQUIRED"
     service = AgentRuntimeProfileService(
         _ProfileRepository([]), host_repository=host_repo
@@ -905,9 +906,7 @@ async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offe
 @pytest.mark.asyncio
 async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else():
     org_id = uuid4()
-    host_repo, harness_id = _ready_agent_host(
-        user_id=uuid4(), organization_id=org_id
-    )
+    host_repo, harness_id = _ready_agent_host(user_id=uuid4(), organization_id=org_id)
     service = AgentRuntimeProfileService(
         _ProfileRepository([]), host_repository=host_repo
     )
@@ -919,7 +918,6 @@ async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else
             harness_id=harness_id,
             name="Someone else's laptop",
         )
-
 
 
 @pytest.mark.asyncio
@@ -1112,7 +1110,12 @@ def test_lemma_harness_builds_dynamic_openai_compatible_model():
     )
 
     assert model is not None
-    assert type(model).__name__ == "OpenAIChatModel"
+    # isinstance, not a name match: the factory builds a subclass that keeps
+    # `stream_options` to the OpenAI schema, and what this test cares about is
+    # that the OpenAI-compatible protocol picked an OpenAI chat model at all.
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    assert isinstance(model, OpenAIChatModel)
 
 
 def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
@@ -1253,7 +1256,9 @@ def _no_discovery(monkeypatch):
         )
 
 
-async def test_renaming_a_provider_keeps_its_stored_key_and_skips_discovery(monkeypatch):
+async def test_renaming_a_provider_keeps_its_stored_key_and_skips_discovery(
+    monkeypatch,
+):
     # The credential never leaves the server, so a rename that quietly replaced
     # it with the SecretStr mask would only surface as auth failures later.
     _no_discovery(monkeypatch)
@@ -1584,9 +1589,7 @@ def _harness_repository_with(*, harness, host):
             }
 
         async def get_many(self, host_ids):
-            return {
-                key: value for key, value in self.hosts.items() if key in host_ids
-            }
+            return {key: value for key, value in self.hosts.items() if key in host_ids}
 
     harnesses = {harness.id: harness} if harness is not None else {}
     hosts = {host.id: host} if host is not None else {}
@@ -1770,6 +1773,7 @@ async def test_a_config_edit_still_needs_the_computer_awake():
             user_id=user_id,
             config_selections={"approval": "always"},
         )
+
 
 async def test_one_unreadable_row_does_not_blank_the_whole_listing():
     """Drives the real repository, not a stand-in.

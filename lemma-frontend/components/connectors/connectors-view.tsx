@@ -8,6 +8,7 @@ import {
     useCreateConnectorAccount,
     useDeleteAccount,
     useDeleteAuthConfig,
+    useRotateAccountCredentials,
     useEnableConnector,
     useRefreshAuthConfigOperations,
     useUpdateAuthConfig,
@@ -21,6 +22,7 @@ import { toast } from 'sonner';
 import type { Account, AuthConfig, Connector } from '@/lib/types';
 import { useOrganization } from '@/components/dashboard/org-context';
 import { ResourceCardGridSkeleton } from '@/components/shared/loading';
+import { ResourceFeedbackBanner } from '@/components/shared/resource-feedback';
 import { ConnectorGrid } from './connector-grid';
 import { ConnectorMosaic } from './connector-mosaic';
 import { ConnectedAccountRow } from './connector-card';
@@ -28,6 +30,7 @@ import { AddYourOwnRow, ConnectionRow } from './connection-rows';
 import { ConnectAccountDialog, type CredentialTarget } from './connect-account-dialog';
 import { AddConnectionDialog, type ConnectionSubmission, type ConnectionTarget } from './add-connection-dialog';
 import { AdvancedConfigDialog, type AdvancedEnablePayload } from './advanced-config';
+import type { AuthConfigMode } from './connector-utils';
 import {
     canConnectWithDefaults,
     describeConnectorError,
@@ -39,6 +42,7 @@ import {
     getKindSpec,
     getTenantConfiguredConnectors,
     getTenantConfiguredKindSpec,
+    installUsesOAuth,
     isTenantConfigured,
     usesDirectCredentials,
     type ConnectorKindSpec,
@@ -63,15 +67,16 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         organizations.find((org) => org.id === effectiveOrganizationId)?.name ||
         currentOrg?.name;
 
-    const { data: accounts, isLoading: isLoadingAccounts, refetch: refetchAccounts } = useAccounts({ organizationId: effectiveOrganizationId, limit: 200 });
-    const { data: authConfigs, isLoading: isLoadingAuthConfigs } = useAuthConfigs({ organizationId: effectiveOrganizationId, limit: 200 });
-    const { data: connectors, isLoading: isLoadingApps } = useConnectors({ limit: 200 });
+    const { data: accounts, isLoading: isLoadingAccounts, error: accountsError, refetch: refetchAccounts } = useAccounts({ organizationId: effectiveOrganizationId, limit: 200 });
+    const { data: authConfigs, isLoading: isLoadingAuthConfigs, error: authConfigsError } = useAuthConfigs({ organizationId: effectiveOrganizationId, limit: 200 });
+    const { data: connectors, isLoading: isLoadingApps, error: connectorsError } = useConnectors({ limit: 200 });
     const deleteAccount = useDeleteAccount(effectiveOrganizationId);
     const enableConnector = useEnableConnector(effectiveOrganizationId);
     const createConnectRequest = useCreateConnectRequest(effectiveOrganizationId);
     const createConnectorAccount = useCreateConnectorAccount(effectiveOrganizationId);
     const updateAuthConfig = useUpdateAuthConfig(effectiveOrganizationId);
     const deleteAuthConfig = useDeleteAuthConfig(effectiveOrganizationId);
+    const rotateAccountCredentials = useRotateAccountCredentials(effectiveOrganizationId);
     const refreshOperations = useRefreshAuthConfigOperations(effectiveOrganizationId);
 
     const [searchTerm, setSearchTerm] = useState('');
@@ -97,6 +102,33 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const [isSavingConnection, setIsSavingConnection] = useState(false);
     const [busyInstallName, setBusyInstallName] = useState<string | null>(null);
     const [installPendingDelete, setInstallPendingDelete] = useState<AuthConfig | null>(null);
+    const [handledInstallParam, setHandledInstallParam] = useState(false);
+    const [advancedMode, setAdvancedMode] = useState<AuthConfigMode | undefined>(undefined);
+
+    /**
+     * `?install=<connector>` opens this page straight on its own-app form.
+     *
+     * Where the link comes from is the point: making a Slack app happens in
+     * Slack, and the three credentials it produces can only be pasted here.
+     * Landing on the connector grid instead left the person holding a client
+     * secret with nothing on screen asking for it — the offer to make the app
+     * is over there, and the only place to finish is over here.
+     *
+     * Once, hence the flag: reopening the dialog every render would make it
+     * impossible to close, and the param outlives the first visit.
+     */
+    useEffect(() => {
+        if (handledInstallParam || !connectors?.length) return;
+        const requested = new URLSearchParams(window.location.search).get('install');
+        if (!requested) return;
+        setHandledInstallParam(true);
+        const app = connectors.find((connector) => connector.id === requested.toLowerCase());
+        if (app) {
+            // Straight to the form the credentials go in.
+            setAdvancedMode('CUSTOM');
+            setAdvancedApp(app);
+        }
+    }, [connectors, handledInstallParam]);
 
     useEffect(() => {
         if (!pendingOAuth) return;
@@ -178,6 +210,45 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         () => new Set(connections.map((install) => install.id)),
         [connections],
     );
+
+    /** The account a connection authenticates with, so its token can be rotated. */
+    const accountIdByInstallId = useMemo(() => {
+        const byInstall = new Map<string, string>();
+        for (const account of accounts || []) {
+            if (!connectionInstallIds.has(account.auth_config_id)) continue;
+            const held = byInstall.get(account.auth_config_id);
+            if (!held || account.is_default) byInstall.set(account.auth_config_id, account.id);
+        }
+        return byInstall;
+    }, [accounts, connectionInstallIds]);
+
+    /**
+     * Connections that sign in through a browser and have nobody signed in yet.
+     *
+     * An MCP install whose server described its own authorization is one of
+     * these, and until it was distinguishable from a token install it was
+     * created with an empty credential set and left unreachable — connected in
+     * appearance, 401 on every call, with no control anywhere that offered to
+     * fix it.
+     */
+    const installIdsNeedingSignIn = useMemo(() => {
+        const connected = new Set(
+            (accounts || [])
+                .filter((account) => !getAccountStatusMeta(account.status).needsAttention)
+                .map((account) => account.auth_config_id),
+        );
+        return new Set(
+            connections
+                .filter(
+                    (install) =>
+                        installUsesOAuth(
+                            install,
+                            getKindSpec(connectorsById.get(install.connector_id), install.kind),
+                        ) && !connected.has(install.id),
+                )
+                .map((install) => install.id),
+        );
+    }, [accounts, connections, connectorsById]);
 
     // A connection's account is the same fact as its connection row, so listing
     // both says everything twice. The exception is an account that needs
@@ -305,7 +376,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             await startOAuth(app.id, authConfig.id);
         } catch (error) {
             console.error('Failed to connect:', error);
-            toast.error('Failed to connect');
+            toast.error(describeConnectorError(error, 'Failed to connect'));
         } finally {
             setBusyAppId(null);
         }
@@ -315,7 +386,18 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
      * Creating a connection is two calls that read as one action: the install
      * carries the address, the account carries the credentials. An account is
      * always created, even with an empty credential set — execution resolves
-     * one even for an MCP server that needs no auth.
+     * one even for an MCP server that needs no auth, and the backend validates
+     * credentials against the kind's schema rather than merely requiring them
+     * to be non-empty, so a server whose token field is optional connects with
+     * nothing filled in.
+     *
+     * Because it is two calls and only one action, a failure on the second
+     * must not leave the first behind. It used to: the install was committed,
+     * the account POST failed, and the person was left with a connection that
+     * can never run — every execution resolves an account — under a name now
+     * taken, so even retrying was refused. The install is removed on that
+     * path; it was created moments ago in this same action and has no other
+     * accounts, so there is nothing else to lose with it.
      */
     const handleConnectionSubmit = async (submission: ConnectionSubmission) => {
         const target = connectionTarget;
@@ -349,10 +431,36 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     config: submission.config,
                     name: submission.name,
                 });
-                await createConnectorAccount.mutateAsync({
-                    authConfigId: install.id,
-                    credentials: submission.credentials,
-                });
+                // Creating the install is what asks the server how it wants to
+                // be authorized, so only now is this knowable. A server that
+                // answered with an authorization server is signed into, and
+                // posting an empty credential set to it produced an account
+                // that looked connected, held no token, and 401'd every call —
+                // with no way back, because nothing in this view offered a
+                // sign-in. The install stays either way: it is valid, and
+                // "Sign in" on its row is the way back if the window is closed.
+                if (installUsesOAuth(install, capability)) {
+                    setConnectionTarget(null);
+                    toast.success(`Added ${submission.name} · sign in to finish`);
+                    await startOAuth(target.connector.id, install.id);
+                    return;
+                }
+                try {
+                    await createConnectorAccount.mutateAsync({
+                        authConfigId: install.id,
+                        credentials: submission.credentials,
+                    });
+                } catch (accountError) {
+                    // Best-effort: if the cleanup itself fails the original
+                    // error is still what the person needs to see, and a
+                    // stranded install is no worse than before.
+                    try {
+                        await deleteAuthConfig.mutateAsync(install.name);
+                    } catch (cleanupError) {
+                        console.error('Failed to remove the partial connection:', cleanupError);
+                    }
+                    throw accountError;
+                }
                 toast.success(`Added ${submission.name}`);
             }
             setConnectionTarget(null);
@@ -361,6 +469,32 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             setConnectionError(describeConnectorError(error, 'Could not save this connection'));
         } finally {
             setIsSavingConnection(false);
+        }
+    };
+
+    /**
+     * Choose which install a bare connector id resolves to.
+     *
+     * The API has accepted `is_default` on the install PATCH all along and the
+     * hook forwards it, but nothing in the app ever passed it — so an
+     * organization with two Slack apps, or two of any connector, was
+     * permanently stuck with whichever it created first. That matters because
+     * the default is what a bare connector id resolves to, in the backend's
+     * own unique index and in every resolver on this side.
+     */
+    const handleMakeDefault = async (install: AuthConfig) => {
+        setBusyInstallName(install.name);
+        try {
+            await updateAuthConfig.mutateAsync({
+                authConfigName: install.name,
+                isDefault: true,
+            });
+            toast.success(`${getInstallLabel(install, connectorsById.get(install.connector_id) ?? null)} is now the default`);
+        } catch (error) {
+            console.error('Failed to set the default connection:', error);
+            toast.error(describeConnectorError(error, 'Could not set the default connection'));
+        } finally {
+            setBusyInstallName(null);
         }
     };
 
@@ -413,14 +547,14 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             setAdvancedApp(null);
 
             const capability = getKindSpec(app, authConfig.kind);
-            if (usesDirectCredentials(capability)) {
+            if (!installUsesOAuth(authConfig, capability) && usesDirectCredentials(capability)) {
                 openCredentialDialog(app, capability, authConfig.id, 'connect');
                 return;
             }
             await startOAuth(app.id, authConfig.id);
         } catch (error) {
             console.error('Failed to enable connector:', error);
-            toast.error('Failed to enable connector');
+            toast.error(describeConnectorError(error, 'Failed to enable connector'));
         } finally {
             setIsEnabling(false);
         }
@@ -437,7 +571,12 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
         // Credential accounts re-link via the form (delete + recreate). OAuth accounts
         // re-run the flow on the same account_id — the backend only blocks CONNECTED.
-        if (usesDirectCredentials(capability)) {
+        //
+        // The install is asked first, because `usesDirectCredentials` reads the
+        // catalog and the catalog is wrong for exactly one kind: every `mcp`
+        // install claims API_KEY there, so reconnecting one that signs in
+        // through a browser offered a bearer-token box instead of the flow.
+        if (!installUsesOAuth(authConfig, capability) && usesDirectCredentials(capability)) {
             openCredentialDialog(app, capability, authConfig.id, 'reconnect', account.id);
             return;
         }
@@ -447,7 +586,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             await startOAuth(account.connector_id, authConfig.id);
         } catch (error) {
             console.error('Failed to reconnect:', error);
-            toast.error('Failed to start reconnect');
+            toast.error(describeConnectorError(error, 'Failed to start reconnect'));
         } finally {
             setReconnectAccountId(null);
         }
@@ -473,14 +612,23 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             }
 
             if (target.mode === 'reconnect' && target.accountId) {
-                await deleteAccount.mutateAsync(target.accountId);
+                // Rotated in place. This used to delete the account and create
+                // a replacement, which loses everything if the create fails —
+                // the old one is already gone, revoked upstream on the way out
+                // — and issues a new id when it succeeds, stranding every
+                // schedule, surface and grant pinned to the old one.
+                await rotateAccountCredentials.mutateAsync({
+                    accountId: target.accountId,
+                    credentials: data,
+                });
+            } else {
+                await createConnectorAccount.mutateAsync({ authConfigId, credentials: data });
             }
-            await createConnectorAccount.mutateAsync({ authConfigId, credentials: data });
             toast.success(`${getAppLabel(target.connector)} ${target.mode === 'reconnect' ? 'reconnected' : 'connected'}`);
             setCredentialTarget(null);
         } catch (error) {
             console.error('Failed to save credentials:', error);
-            toast.error('Failed to save credentials');
+            toast.error(describeConnectorError(error, 'Failed to save credentials'));
         } finally {
             setIsSubmittingCredentials(false);
         }
@@ -495,7 +643,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             setAccountPendingDisconnect(null);
         } catch (error) {
             console.error('Failed to disconnect account:', error);
-            toast.error('Failed to disconnect account');
+            toast.error(describeConnectorError(error, 'Failed to disconnect account'));
         } finally {
             setDeletingAccountId(null);
         }
@@ -516,6 +664,29 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         return (
             <div className={embedded ? 'min-h-[30vh] bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
                 <ResourceCardGridSkeleton count={6} />
+            </div>
+        );
+    }
+
+    // A rejected query leaves `isPending` false and the data undefined, and
+    // every consumer here coalesces undefined to an empty array — so without
+    // this a 403 or a network failure rendered as "you have no connections",
+    // beside a full catalog. Worse when only the accounts query failed: every
+    // row reverted from "Add another" to "Connect", inviting a duplicate
+    // connection against an account the person has and cannot see.
+    const loadError = connectorsError ?? accountsError ?? authConfigsError;
+    if (loadError) {
+        return (
+            <div className={embedded ? 'min-h-[30vh] bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
+                <ResourceFeedbackBanner
+                    tone="error"
+                    title="Could not load your connectors"
+                    description={describeConnectorError(
+                        loadError,
+                        'Something went wrong reaching the connectors service.',
+                    )}
+                    actions={[{ label: 'Try again', onClick: () => { void refetchAccounts(); } }]}
+                />
             </div>
         );
     }
@@ -579,6 +750,24 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                                 connector={connectorsById.get(install.connector_id) ?? null}
                                 organizationId={effectiveOrganizationId}
                                 isBusy={busyInstallName === install.name}
+                                needsSignIn={installIdsNeedingSignIn.has(install.id)}
+                                onSignIn={(target) => void startOAuth(target.connector_id, target.id)}
+                                onReplaceCredentials={
+                                    installIdsNeedingSignIn.has(install.id) ||
+                                    !accountIdByInstallId.has(install.id)
+                                        ? undefined
+                                        : (target) =>
+                                              openCredentialDialog(
+                                                  connectorsById.get(target.connector_id) as Connector,
+                                                  getKindSpec(
+                                                      connectorsById.get(target.connector_id),
+                                                      target.kind,
+                                                  ),
+                                                  target.id,
+                                                  'reconnect',
+                                                  accountIdByInstallId.get(target.id),
+                                              )
+                                }
                                 onEdit={(target) =>
                                     openConnectionDialog(
                                         connectorsById.get(target.connector_id) as Connector,
@@ -586,6 +775,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                                     )
                                 }
                                 onRefresh={(target) => void handleRefreshInstall(target)}
+                                onMakeDefault={(target) => void handleMakeDefault(target)}
                                 onDelete={setInstallPendingDelete}
                             />
                         ))}
@@ -686,9 +876,14 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
             <AdvancedConfigDialog
                 app={advancedApp}
+                existingNames={existingInstallNames}
                 isEnabling={isEnabling}
+                initialMode={advancedMode}
                 onOpenChange={(open) => {
-                    if (!open) setAdvancedApp(null);
+                    if (!open) {
+                        setAdvancedApp(null);
+                        setAdvancedMode(undefined);
+                    }
                 }}
                 onEnable={handleAdvancedEnable}
             />

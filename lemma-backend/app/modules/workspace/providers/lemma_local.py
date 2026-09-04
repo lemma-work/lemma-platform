@@ -37,6 +37,13 @@ from uuid import UUID
 
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
+from app.modules.workspace.providers.lemma_local_snapshot import (
+    guest_id_of as _guest_id_of,
+    is_running as _is_running,
+    is_serving as _is_serving,
+    sandbox_id_from_guest_id as _sandbox_id_from_guest_id,
+    state_of as _state_of,
+)
 from app.modules.workspace.providers.base import (
     ProviderCreateAmbiguous,
     ProviderCreateSpec,
@@ -65,8 +72,13 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class LocalBridgeError(RuntimeError):
-    def __init__(self, message: str, *, code: str = "local_runtime_failed",
-                 retryable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "local_runtime_failed",
+        retryable: bool = True,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
@@ -101,6 +113,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
     # The guest binds a workspace's disk to its sandbox id, so the sandbox is
     # the storage and a replacement would destroy the user's files.
     storage_kind = ProviderStorageKind.SANDBOX_NATIVE
+    # The guest has no start: `sandbox.ensure` is create-or-replace, so a
+    # stopped workspace comes back by being rebuilt against the same volume.
+    # Waiting for one to resume waits forever -- and idle release stops the
+    # container by design, so every desktop workspace broke three minutes after
+    # its last use and stayed broken until something deleted the container.
+    resumes_stopped_instances = False
 
     def __init__(
         self,
@@ -180,9 +198,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
                         "lemma-epoch": str(spec.epoch),
                     },
                     "runtime_token": (
-                        self._runtime_credentials.token(guest_id)
-                        if workspace
-                        else None
+                        self._runtime_credentials.token(guest_id) if workspace else None
                     ),
                     "apps": apps,
                     "resources": {
@@ -209,9 +225,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         except asyncio.TimeoutError as exc:
             # The bridge may have completed the ensure after the timeout. It is
             # idempotent, so the next attempt resolves this by asking again.
-            raise ProviderCreateAmbiguous(
-                "managed runtime create timed out"
-            ) from exc
+            raise ProviderCreateAmbiguous("managed runtime create timed out") from exc
         except LocalBridgeError as exc:
             if exc.retryable:
                 raise ProviderCreateAmbiguous(str(exc)) from exc
@@ -245,21 +259,66 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         kind: SandboxKind,
         deadline_at: datetime,
     ) -> None:
-        """The bridge's ensure does not return until the sandbox is serving.
+        """Confirm a just-created sandbox is serving.
 
-        Health is confirmed once here rather than looped, because a guest that
-        reports ready and is not reachable is a guest fault the caller should
-        see, not something to wait out.
+        The bridge's ensure does not return until the sandbox is up, so this
+        confirms once rather than looping: a guest that reports ready and is
+        not reachable is a guest fault the caller should see, not something to
+        wait out. Only ever reached for a *running* instance -- a stopped one
+        is rebuilt by the service, because nothing here could start it.
         """
+        # Imported here rather than at module scope, matching the workspace
+        # branch below: `sandbox_runtime.errors` pulls in the in-sandbox runtime
+        # package, which must not be a hard import of the provider.
+        from sandbox_runtime.errors import SandboxUnavailable
+
         if kind is not SandboxKind.WORKSPACE:
+            # A function sandbox is confirmed through the guest's own view.
+            #
+            # This used to return here, which made `verify_ready=True` from the
+            # function resolver verify nothing at all: a sandbox that had been
+            # created but was not yet serving was reported ready, and the
+            # failure surfaced later as a runtime endpoint that never answered.
+            # Nothing caught it, because none of the real-guest tests exercise a
+            # FUNCTION sandbox -- they are all workspaces.
+            #
+            # Checked through `inspect`, which is a short status call, rather
+            # than by holding the guest's single control channel open: that
+            # channel serves one request at a time, and a long wait on it stalls
+            # every other sandbox operation on the machine.
+            snapshot = await self._find(instance.provider_id, deadline_at=deadline_at)
+            if snapshot is None:
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} disappeared before "
+                    "it was ready"
+                )
+            if not _is_serving(snapshot):
+                raise SandboxUnavailable(
+                    f"function sandbox {instance.provider_id} is not serving yet "
+                    f"(state {_state_of(snapshot)})"
+                )
             return
-        client = await self._runtime_client(
-            instance.provider_id, deadline_at=deadline_at
-        )
+        # Converted here, not only in `runtime_scope`. `SandboxUnavailable` is
+        # how this codebase spells "worth another go", and every retry the
+        # platform has keys on it: the ensure loop's backoff, `with_backpressure`,
+        # and the directory-ensure loop that sets `force_reconcile=True` and
+        # rebuilds the container. A raw `WorkspaceRuntimeError` slips past all of
+        # them and past `_fail()`, so the sandbox row stays PRESENT and the next
+        # ensure takes the identical branch -- which is why a stopped container
+        # produced four byte-identical failures in a row instead of being
+        # rebuilt on the second.
         try:
-            await client.health(deadline_at=deadline_at)
-        finally:
-            await client.close()
+            client = await self._runtime_client(
+                instance.provider_id, deadline_at=deadline_at
+            )
+            try:
+                await client.health(deadline_at=deadline_at)
+            finally:
+                await client.close()
+        except ProviderGone:
+            raise
+        except (WorkspaceRuntimeError, LocalBridgeError) as exc:
+            raise SandboxUnavailable(str(exc)) from exc
 
     async def release(
         self,
@@ -309,9 +368,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         self, *, deadline_at: datetime
     ) -> tuple[ProviderObject, ...]:
         try:
-            listing = await self._request(
-                "sandbox.list", {}, deadline_at=deadline_at
-            )
+            listing = await self._request("sandbox.list", {}, deadline_at=deadline_at)
         except LocalBridgeError as exc:
             raise ProviderRejected(str(exc)) from exc
 
@@ -428,9 +485,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
         except LocalBridgeError:
             return None
 
-    async def _status(
-        self, guest_id: str, *, deadline_at: datetime
-    ) -> dict[str, Any]:
+    async def _status(self, guest_id: str, *, deadline_at: datetime) -> dict[str, Any]:
         try:
             return await self._request(
                 "sandbox.status", {"sandbox_id": guest_id}, deadline_at=deadline_at
@@ -508,9 +563,7 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             error = response.get("error")
             details = error if isinstance(error, dict) else {}
             code = str(details.get("code") or "local_runtime_failed")
-            failure = (
-                LocalBridgeNotFound if code == "not_found" else LocalBridgeError
-            )
+            failure = LocalBridgeNotFound if code == "not_found" else LocalBridgeError
             raise failure(
                 str(details.get("message") or "managed runtime request failed"),
                 code=code,
@@ -537,41 +590,3 @@ def _app(name: str, port: int, startup: str, exposure: str) -> dict[str, object]
             else "manager_api_key"
         ),
     }
-
-
-def _is_running(snapshot: dict[str, Any]) -> bool:
-    status = snapshot.get("status")
-    if isinstance(status, dict):
-        state = status.get("state") or status.get("status")
-        return str(state).lower() in {"running", "ready"}
-    return str(snapshot.get("state", "")).lower() in {"running", "ready"}
-
-
-def _guest_id_of(entry: dict[str, Any]) -> str | None:
-    """The guest id of one `sandbox.list` entry.
-
-    A list entry wraps the snapshot: the id lives at ``status.id``, while
-    ``sandbox.status`` returns that snapshot unwrapped. Both shapes are read
-    here so a caller never has to know which call produced the dict.
-    """
-
-    status = entry.get("status")
-    if isinstance(status, dict):
-        nested = status.get("id")
-        if isinstance(nested, str) and nested:
-            return nested
-    for key in ("sandbox_id", "id"):
-        value = entry.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _sandbox_id_from_guest_id(guest_id: str) -> UUID | None:
-    prefix, _, raw = guest_id.partition("-")
-    if prefix not in {"w", "f"}:
-        return None
-    try:
-        return UUID(hex=raw)
-    except ValueError:
-        return None

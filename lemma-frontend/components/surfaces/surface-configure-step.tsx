@@ -12,25 +12,20 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { AssistantSurface } from '@/lib/types';
 import { StepLoader } from '@/components/brand/loader';
+import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 export const DEFAULT_AGENT_VALUE = '__pod_default_agent__';
 
 /**
- * "The pod's own assistant answers here" — an explicit choice, and not the same
- * as leaving a route unset.
+ * One channel on the allow-list.
  *
- * Unset means nobody has said, which falls to whoever answers the surface's
- * DMs. Collapsing the two is how an explicit pick made inside Slack came back
- * as a different agent; the value matches Slack's own picker so a route set in
- * either place reads the same in both.
+ * A place, not a choice: a surface answers as exactly one agent, so a channel
+ * says *where* it may be spoken to. It used to name an agent, plus a flag for
+ * "the pod's assistant answers here" that no name could express.
  */
-export const POD_ASSISTANT_VALUE = '__pod_assistant__';
-
 export interface ChannelDraft {
     channel_id: string;
     channel_name: string;
-    agent_name: string | null;
-    use_pod_assistant: boolean;
 }
 
 export interface AvailableChannel {
@@ -64,7 +59,6 @@ export function SurfaceConfigureStep({
     onDraftChange,
     availableChannels,
     isLoadingChannels,
-    defaultRouteAgent = null,
     customAppHref,
     onOpenReference,
     onRebind,
@@ -80,7 +74,6 @@ export function SurfaceConfigureStep({
     onRebind: () => void;
     /** Agent a newly added route answers as — the one whose page opened this.
      * `null` is an explicit pod-assistant choice. */
-    defaultRouteAgent?: string | null;
     /** Where an org sets up its own app for this platform. Passed only when it
      * hasn't already — otherwise the offer is stale. */
     customAppHref?: string;
@@ -98,6 +91,7 @@ export function SurfaceConfigureStep({
     // the list, which was as likely as not a channel it has never been in.
     const firstJoinable = remainingChannels.find((channel) => channel.is_member) ?? remainingChannels[0];
     const anyJoined = availableChannels.some((channel) => channel.is_member);
+
 
     const updateRoute = (index: number, patch: Partial<ChannelDraft>) =>
         onDraftChange({
@@ -119,7 +113,7 @@ export function SurfaceConfigureStep({
                     <SelectContent>
                         {/* Named the same as the route picker below, because it
                             means the same thing to a person. */}
-                        <SelectItem value={DEFAULT_AGENT_VALUE}>Pod assistant</SelectItem>
+                        <SelectItem value={DEFAULT_AGENT_VALUE}>{DEFAULT_RESPONDER_NAME}</SelectItem>
                         {assistants.map((assistant) => (
                             <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
                                 {assistant.name}
@@ -128,15 +122,11 @@ export function SurfaceConfigureStep({
                     </SelectContent>
                 </Select>
                 <p className="text-xs leading-5 text-[var(--text-tertiary)]">
-                    {/* Slack is the one platform where this is not "answers every
-                        DM" — each person picks their own from the App Home, so
-                        this one answers whoever hasn't. Saying otherwise made it
-                        look like a setting that overrides everybody. */}
-                    {definition.platform === 'SLACK'
-                        ? 'Answers anyone who hasn’t picked their own, plus any channel you haven’t set separately.'
-                        : channelRoutes
-                            ? 'Answers direct messages, plus any channel you haven’t set separately.'
-                            : 'Answers everything that arrives here.'}
+                    {/* One bot, one agent: there is no "unless somebody picked
+                        otherwise" any more, on Slack or anywhere else. */}
+                    {channelRoutes
+                        ? 'Answers direct messages, and the channels you allow below.'
+                        : 'Answers everything that arrives here.'}
                 </p>
             </div>
 
@@ -223,7 +213,6 @@ export function SurfaceConfigureStep({
                                         key={index}
                                         route={route}
                                         options={options}
-                                        assistants={assistants}
                                         onChange={(patch) => updateRoute(index, patch)}
                                         onRemove={() =>
                                             onDraftChange({
@@ -246,8 +235,6 @@ export function SurfaceConfigureStep({
                                             {
                                                 channel_id: firstJoinable?.id ?? '',
                                                 channel_name: firstJoinable?.name ?? '',
-                                                agent_name: defaultRouteAgent,
-                                                use_pod_assistant: defaultRouteAgent === null,
                                             },
                                         ],
                                     });
@@ -261,6 +248,11 @@ export function SurfaceConfigureStep({
                 </div>
             ) : null}
 
+            {/* Slack only, because the picker it turns off is Slack's alone.
+                Stated rather than inferred: a surface bound to an agent looks
+                identical whether that agent is the only responder or merely the
+                default, and only the person who made the app knows which they
+                meant. */}
             <div className="surface-panel-muted flex items-center justify-between gap-3 p-3">
                 <div className="min-w-0">
                     <p className="text-sm font-medium text-[var(--text-primary)]">Let agents speak first</p>
@@ -315,13 +307,11 @@ export function SurfaceConfigureStep({
 function ChannelRouteRow({
     route,
     options,
-    assistants,
     onChange,
     onRemove,
 }: {
     route: ChannelDraft;
     options: AvailableChannel[];
-    assistants: Array<{ id?: string | null; name: string }>;
     onChange: (patch: Partial<ChannelDraft>) => void;
     onRemove: () => void;
 }) {
@@ -366,41 +356,6 @@ function ChannelRouteRow({
                                             </span>
                                         ) : null}
                                     </span>
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="grid gap-1">
-                    <label className="type-eyebrow-medium">Agent</label>
-                    <Select
-                        value={
-                            route.use_pod_assistant
-                                ? POD_ASSISTANT_VALUE
-                                : route.agent_name ?? DEFAULT_AGENT_VALUE
-                        }
-                        onValueChange={(value) =>
-                            onChange({
-                                agent_name:
-                                    value === DEFAULT_AGENT_VALUE || value === POD_ASSISTANT_VALUE
-                                        ? null
-                                        : value,
-                                use_pod_assistant: value === POD_ASSISTANT_VALUE,
-                            })
-                        }
-                    >
-                        <SelectTrigger className="h-9 bg-[var(--field-bg)]">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {/* Three answers, in the order they narrow: nobody has said,
-                                the pod's own assistant, one named agent. The middle one
-                                is a choice, not a fallback — see POD_ASSISTANT_VALUE. */}
-                            <SelectItem value={DEFAULT_AGENT_VALUE}>Whoever answers here by default</SelectItem>
-                            <SelectItem value={POD_ASSISTANT_VALUE}>Pod assistant</SelectItem>
-                            {assistants.map((assistant) => (
-                                <SelectItem key={assistant.id || assistant.name} value={assistant.name}>
-                                    {assistant.name}
                                 </SelectItem>
                             ))}
                         </SelectContent>

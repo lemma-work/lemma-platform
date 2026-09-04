@@ -21,6 +21,7 @@ from app.modules.apps.domain.errors import (
 )
 from app.core.runtime_config import (
     APP_BRANDING_SENTINEL,
+    app_api_url,
     build_app_branding,
     runtime_config_token,
 )
@@ -53,7 +54,9 @@ async def _get_public_app_asset(service, public_slug, *, asset_path=None):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"])
+@pytest.mark.parametrize(
+    "visibility", ["POD", "PERSONAL", "RESTRICTED", "", "NONSENSE"]
+)
 async def test_public_slug_route_serves_only_apps_published_to_everyone(visibility):
     """`/public/apps` has no session, so only a PUBLIC app belongs on it.
 
@@ -408,7 +411,9 @@ async def test_get_app_asset_reads_release_contents():
     assert asset.media_type == "text/html"
     # ETag folds in the config hash so a pod/api/auth change busts the cache.
     expected_token = runtime_config_token(
-        app.pod_id, app={"name": app.name, "description": app.description}
+        app.pod_id,
+        app={"name": app.name, "description": app.description},
+        api_url=app_api_url(),
     )
     assert asset.etag == f'"version.{expected_token}"'
     assert asset.is_entrypoint is True
@@ -458,6 +463,7 @@ async def test_public_app_entrypoint_includes_share_metadata(monkeypatch):
             "url": "https://research-desk.apps.lemma.work",
         },
         branding=branding,
+        api_url=app_api_url(),
     )
     assert asset.etag == f'"version.{expected_token}"'
 
@@ -510,7 +516,9 @@ async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
     repo = AsyncMock()
     storage = AsyncMock()
     entitlement = AsyncMock()
-    entitlement.can_remove_app_branding.side_effect = RuntimeError("billing unavailable")
+    entitlement.can_remove_app_branding.side_effect = RuntimeError(
+        "billing unavailable"
+    )
     service = AppService(
         repo,
         Mock(return_value=storage),
@@ -683,7 +691,9 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
     repo.get_release.return_value = release
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
-    config_token = runtime_config_token(app.pod_id, app={"name": app.name})
+    config_token = runtime_config_token(
+        app.pod_id, app={"name": app.name}, api_url=app_api_url()
+    )
     asset = await _get_app_asset(
         service,
         pod_id,
@@ -960,7 +970,10 @@ async def test_redeploying_a_pruned_release_writes_its_bytes_back():
         id=app_id, pod_id=pod_id, user_id=user_id, name="orders", public_slug="orders"
     )
     dist = make_dist_zip(
-        {"index.html": "<html><body>v3</body></html>", "assets/app.js": "console.log(3)"}
+        {
+            "index.html": "<html><body>v3</body></html>",
+            "assets/app.js": "console.log(3)",
+        }
     )
     # The pruned release must carry the dist's real digest: its storage root is
     # derived from it, and that root is where the rewrite has to land.

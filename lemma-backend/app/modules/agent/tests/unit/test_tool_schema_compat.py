@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from pydantic_ai.tools import Tool
 
+from app.modules.agent.capabilities.assembler import _visible_capability
+from app.modules.agent.capabilities.todo import build_todo_toolset
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
@@ -83,11 +85,12 @@ def _pod_default_tool_schemas() -> list[tuple[str, dict]]:
         schemas += _toolset_schemas(toolset_name.value, toolset)
     # The TODO capability's tools are part of the pod-default surface too, so they
     # must also be free of typeless-default nodes that strict providers reject.
-    from app.modules.agent.capabilities.todo import build_todo_capability
 
-    todo_toolset = build_todo_capability(
-        uow_factory=lambda: None,  # not invoked during schema extraction
-        conversation_id=uuid4(),
+    todo_toolset = _visible_capability(
+        build_todo_toolset(
+            uow_factory=lambda: None,  # not invoked during schema extraction
+            conversation_id=uuid4(),
+        )
     ).get_toolset()
     schemas += _toolset_schemas("TODO", todo_toolset)
     return schemas

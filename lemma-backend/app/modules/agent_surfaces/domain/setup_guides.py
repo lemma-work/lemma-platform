@@ -5,6 +5,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 
 
 class SurfaceSetupMode(str, Enum):
@@ -57,173 +58,6 @@ class SurfacePlatformSetupGuide(BaseModel):
     summary: str
     docs_path: str
     connectors: list[SurfaceConnectorSetupGuide] = Field(default_factory=list)
-
-
-class SurfaceSetupActionField(BaseModel):
-    """A copy-able value the user pastes into their provider dashboard."""
-
-    label: str
-    value: str
-    secret: bool = False
-
-
-class SurfaceSetupAction(BaseModel):
-    """A concrete thing the user must do to finish wiring up a surface.
-
-    Only emitted when the user actually has to act (custom/bring-your-own-app
-    credentials, or a pending OAuth grant). Each action carries where to go
-    (``link``), ordered ``steps``, and the values to paste (``fields``).
-    """
-
-    key: str
-    title: str
-    description: str
-    steps: list[str] = Field(default_factory=list)
-    link: str | None = None
-    link_label: str | None = None
-    fields: list[SurfaceSetupActionField] = Field(default_factory=list)
-    # Reference material, not a task: worth keeping to hand, but nothing is
-    # waiting on it. A surface carrying only these is finished, and saying
-    # otherwise puts "messages won't arrive until setup is finished" on a
-    # surface that is already delivering them.
-    informational: bool = False
-
-    @property
-    def is_blocking(self) -> bool:
-        return not self.informational
-
-
-def build_surface_setup_actions(
-    *,
-    platform: SurfacePlatform,
-    is_custom_app: bool,
-    webhook_url: str | None,
-    slack_socket_mode: bool = False,
-    slack_signing_secret_missing: bool = False,
-    slack_repair_url: str | None = None,
-    whatsapp_verify_token: str | None = None,
-) -> list[SurfaceSetupAction]:
-    """The manual steps a user must complete for this surface — usually none.
-
-    ``is_custom_app`` is true only when the connected account was set up with
-    the org's *own* OAuth app (auth config ``ORG_CUSTOM``). When the account
-    uses Lemma's own platform app (``SYSTEM_DEFAULT``), the webhook is already
-    wired up centrally and the user has nothing to configure. Telegram
-    (auto-registers its webhook) and email (Composio polling) never need manual
-    webhook setup. Teams admin consent is handled separately because it applies
-    to both system and custom apps.
-    """
-    if not is_custom_app:
-        return []
-
-    if platform is SurfacePlatform.SLACK:
-        actions: list[SurfaceSetupAction] = []
-        if slack_signing_secret_missing:
-            actions.append(
-                SurfaceSetupAction(
-                    key="slack_signing_secret",
-                    title="Add the Slack signing secret",
-                    description=(
-                        "This workspace uses its own Slack app, but its signing "
-                        "secret is missing. Lemma rejects every event until the "
-                        "secret from Slack's Basic Information page is saved."
-                    ),
-                    link=slack_repair_url,
-                    link_label="Edit Slack credentials",
-                    steps=[
-                        "Open the Slack app's Basic Information page and copy its signing secret.",
-                        "Edit this Slack connector in Lemma and save the signing secret.",
-                    ],
-                )
-            )
-        if slack_socket_mode or not webhook_url:
-            return actions
-        # Reference, not instructions. An app made from Lemma's manifest already
-        # has this URL and every event Lemma listens for — so telling someone to
-        # set them by hand is at best noise, and at worst wrong: the list used to
-        # name four events and the manifest declares six. Following it built an
-        # app whose App Home never opened, because `app_home_opened` was missing.
-        #
-        # Kept for the app that was *not* made from the manifest, where this is
-        # the only place the URL appears. Nothing here restates the events; that
-        # list lives in the manifest, which is the thing that can't drift.
-        actions.append(
-            SurfaceSetupAction(
-                key="slack_event_subscriptions",
-                title="Where Slack sends messages",
-                description=(
-                    "This workspace runs its own Slack app. If you made it from "
-                    "Lemma's manifest, it already points here and there's "
-                    "nothing to do."
-                ),
-                link="https://api.slack.com/apps",
-                link_label="Open your Slack apps",
-                informational=True,
-                fields=[SurfaceSetupActionField(label="Request URL", value=webhook_url)],
-                steps=[
-                    "Messages not arriving? Open your app on api.slack.com and "
-                    "check ‘Event Subscriptions’ shows this URL as Verified.",
-                    "If you changed anything, Slack may ask you to reinstall the "
-                    "app to your workspace.",
-                ],
-            )
-        )
-        return actions
-
-    if platform is SurfacePlatform.TEAMS:
-        if not webhook_url:
-            return []
-        return [
-            SurfaceSetupAction(
-                key="teams_messaging_endpoint",
-                title="Set your Teams bot's messaging endpoint",
-                description=(
-                    "Your tenant uses its own bot registration, so Teams needs "
-                    "Lemma's messaging endpoint."
-                ),
-                link="https://portal.azure.com",
-                link_label="Open Azure Portal",
-                fields=[
-                    SurfaceSetupActionField(label="Messaging endpoint", value=webhook_url)
-                ],
-                steps=[
-                    "In the Azure Portal, open the Azure Bot resource for this tenant.",
-                    "Open ‘Configuration’ and set ‘Messaging endpoint’ to the URL above.",
-                    "Make sure the ‘Microsoft Teams’ channel is enabled on the bot.",
-                    "Save your changes.",
-                ],
-            )
-        ]
-
-    if platform is SurfacePlatform.WHATSAPP:
-        if not webhook_url:
-            return []
-        fields = [SurfaceSetupActionField(label="Callback URL", value=webhook_url)]
-        if whatsapp_verify_token:
-            fields.append(
-                SurfaceSetupActionField(
-                    label="Verify token", value=whatsapp_verify_token, secret=True
-                )
-            )
-        return [
-            SurfaceSetupAction(
-                key="whatsapp_webhook",
-                title="Configure your WhatsApp webhook",
-                description="Your WhatsApp Business app needs to deliver messages to Lemma.",
-                link="https://developers.facebook.com/apps",
-                link_label="Open Meta for Developers",
-                fields=fields,
-                steps=[
-                    "Open developers.facebook.com/apps and select your WhatsApp Business app.",
-                    "Go to ‘WhatsApp → Configuration’.",
-                    "Set the Callback URL and Verify token to the values above.",
-                    "Subscribe to the ‘messages’ webhook field.",
-                    "Click ‘Verify and save’.",
-                ],
-            )
-        ]
-
-    return []
 
 
 def build_surface_setup_guide(platform: SurfacePlatform) -> SurfacePlatformSetupGuide:
@@ -282,23 +116,16 @@ def build_surface_setup_guide(platform: SurfacePlatform) -> SurfacePlatformSetup
                 "Standalone/local workers clear the Telegram webhook and poll automatically for the built-in bot.",
             ],
         )
-    if platform is SurfacePlatform.GMAIL:
-        return _email_account_guide(
-            platform=platform,
-            title="Gmail Surface Setup",
-            docs_path="docs/surfaces/gmail.md",
-            account_label="Connected Gmail account",
-            account_description="Existing Lemma connector account for the Gmail mailbox.",
-        )
-    if platform is SurfacePlatform.OUTLOOK:
-        return _email_account_guide(
-            platform=platform,
-            title="Outlook Surface Setup",
-            docs_path="docs/surfaces/outlook.md",
-            account_label="Connected Outlook account",
-            account_description="Existing Lemma connector account for the Outlook mailbox.",
-        )
-    raise ValueError(f"Unsupported surface platform: {platform}")
+    if platform is SurfacePlatform.RESEND:
+        return _system_email_guide()
+    # Every ``SurfacePlatform`` member is answered above, and
+    # ``test_every_surface_platform_has_a_setup_guide`` keeps it that way. This
+    # remains for a member added without a guide: a typed error the API maps to
+    # a clean response, not the bare ``ValueError`` that used to reach callers
+    # as a 500 for RESEND -- a platform that was always valid and always
+    # auto-provisioned, so the 500 was reachable without anyone configuring
+    # anything.
+    raise AgentSurfaceValidationError(f"Unsupported surface platform: {platform}")
 
 
 def _common_fields(
@@ -464,46 +291,66 @@ def _built_in_or_account_guide(
     )
 
 
-def _email_account_guide(
-    *,
-    platform: SurfacePlatform,
-    title: str,
-    docs_path: str,
-    account_label: str,
-    account_description: str,
-) -> SurfacePlatformSetupGuide:
+def _system_email_guide() -> SurfacePlatformSetupGuide:
+    """Resend: the one surface nobody connects.
+
+    Every agent is given a Resend mailbox at creation, on Lemma's own
+    credentials, so there is no connector account and no account_id. The guide
+    exists to say that -- and to say what the operator must configure once, at
+    deployment level, for the surface to work at all.
+    """
     return SurfacePlatformSetupGuide(
-        platform=platform,
-        title=title,
-        summary="Email surfaces use EMAIL mode and a connected mailbox account.",
-        docs_path=docs_path,
+        platform=SurfacePlatform.RESEND,
+        title="Resend Surface Setup",
+        summary="Provisioned automatically with every agent on Lemma-managed credentials; nothing to connect.",
+        docs_path="docs/surfaces/resend.md",
         connectors=[
             SurfaceConnectorSetupGuide(
-                mode=SurfaceSetupMode.CONNECTED_ACCOUNT,
-                title="Connected mailbox",
-                summary="Use an existing connector account and let Lemma create the polling trigger.",
-                docs_path=docs_path,
-                fields=_common_fields(
-                    include_channel=False,
-                    account_label=account_label,
-                    account_description=account_description,
-                ),
+                mode=SurfaceSetupMode.PLATFORM_BUILT_IN,
+                title="Lemma-managed Resend mailbox",
+                summary="Created with the agent. The address is derived, not chosen, and routing matches inbound mail on it.",
+                docs_path="docs/surfaces/resend.md",
+                fields=[
+                    SurfaceSetupField(
+                        name="surface_identity_email",
+                        label="Provisioned address",
+                        source=SurfaceSetupFieldSource.CREATE_RESPONSE,
+                        description=(
+                            "The inbound address, and the From on replies. Derived per agent; the "
+                            "pod-level fallback is pod-<pod id hex>@<RESEND_INBOUND_DOMAIN>."
+                        ),
+                        required=False,
+                        example="pod-0199f1c4a2b7712e9d3f5a6b8c0d1e2f@mail.example.com",
+                    ),
+                ],
                 steps=[
                     SurfaceSetupStep(
                         phase=SurfaceSetupPhase.PREPARE,
-                        title="Connect the mailbox",
-                        description="Complete the email connector connection flow and keep the account_id.",
+                        title="Verify the catch-all domain",
+                        description=(
+                            "Set RESEND_INBOUND_DOMAIN to a domain verified in Resend and configured "
+                            "as a catch-all, so *@domain reaches one webhook and no address needs "
+                            "registering. Surface creation fails without it."
+                        ),
                     ),
                     SurfaceSetupStep(
-                        phase=SurfaceSetupPhase.CREATE_SURFACE,
-                        title="Create the email surface",
-                        description="POST the surface with platform, mode=EMAIL, and account_id.",
+                        phase=SurfaceSetupPhase.CONFIGURE_PROVIDER,
+                        title="Point Resend at Lemma",
+                        description=(
+                            "Add the inbound webhook in Resend and set RESEND_WEBHOOK_SECRET to its "
+                            "Svix signing secret. Lemma rejects unsigned or missigned deliveries."
+                        ),
                     ),
                     SurfaceSetupStep(
                         phase=SurfaceSetupPhase.VERIFY,
                         title="Verify reply flow",
-                        description="Send an inbound email and confirm Lemma creates or reuses the mapped conversation thread.",
+                        description="Email the provisioned address and confirm the agent replies on the same thread.",
                     ),
+                ],
+                notes=[
+                    "There is no account_id: this surface runs on system credentials, not a connector account.",
+                    "Created automatically with the agent, so it is excluded from adoption metrics — an auto-provisioned mailbox is not somebody connecting a surface.",
+                    "The address uses the full 32-char pod id hex, not a prefix, so two pods can never collide and misroute each other's inbound mail.",
                 ],
             )
         ],

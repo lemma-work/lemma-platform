@@ -21,6 +21,12 @@ class StreamEvent:
     type: str
     data: Any
     agent_run_id: str | None = None
+    #: Which channel a token delta belongs to -- "text", "thinking" or "tool".
+    #: A sibling of ``data`` on the wire, not nested inside it: the server sends
+    #: ``{"type":"token","data":"...","kind":"tool"}`` and ``data`` is always a
+    #: bare string. Reading it from the wrong place is what let a tool call
+    #: reach users as answer text.
+    kind: str | None = None
 
 
 def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
@@ -45,6 +51,7 @@ def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
             agent_run_id=(
                 str(payload["agent_run_id"]) if payload.get("agent_run_id") else None
             ),
+            kind=str(payload["kind"]) if payload.get("kind") else None,
         )
 
     try:
@@ -64,11 +71,7 @@ def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
         if line.startswith("data:"):
             data_lines.append(line[len("data:") :].lstrip())
             continue
-        if (
-            line.startswith("event:")
-            or line.startswith("id:")
-            or line.startswith("retry:")
-        ):
+        if line.startswith(("event:", "id:", "retry:")):
             continue
         data_lines.append(line)
 
@@ -85,6 +88,10 @@ def emit_stream_events(state: CliState, response: Any) -> None:
                 {
                     "type": event.type,
                     "data": event.data,
+                    # Re-emitted, or `--output json` would tell a machine
+                    # consumer that a tool call was the assistant's answer --
+                    # the same defect as the rendered path, one layer down.
+                    **({"kind": event.kind} if event.kind else {}),
                     **(
                         {"agent_run_id": event.agent_run_id}
                         if event.agent_run_id
@@ -198,7 +205,7 @@ class ChatRenderer:
     def handle(self, event: StreamEvent) -> None:
         event_type = event.type.lower()
         if event_type == "token":
-            self._token_event(event.data)
+            self._token_event(event.data, kind=event.kind)
             return
         if event_type == "message":
             self._message(event.data)
@@ -261,27 +268,35 @@ class ChatRenderer:
             console.print(Text(str(value)))
         self.printed_tokens = True
 
-    def _token_event(self, data: Any) -> None:
+    def _token_event(self, data: Any, kind: str | None = None) -> None:
         """Render only the answer channel of a token stream.
 
         Every delta the harness emits is tagged: ``text`` is the answer,
         ``thinking`` is model reasoning, and ``tool`` is the literal serialized
         call — ``{"tool_name": "pod_query", "args": {…}}`` — streamed so a UI can
-        show a tool running. The tag was never read here, so all three were
-        stringified into the answer, and a reply came back as::
+        show a tool running. Without the tag all three are stringified into the
+        answer, and a reply comes back as::
 
             I'll check the items table count.
             {"tool_name":"pod_query","args":{"sql":"SELECT COUNT(*) …"}}1
 
-        `_message` below has always kinded its payloads correctly, and the
-        surfaces token stream filters the same way
-        (``agent_surfaces/services/token_stream.py``). This path was the one that
-        did not.
+        **The tag arrives beside the payload, not inside it.** The server sends
+        ``{"type":"token","data":"…","kind":"tool"}`` with ``data`` a bare
+        string — pinned by the backend's own ``test_sse_frames`` — so the only
+        place to read it is the parsed frame. A previous fix looked for a nested
+        ``data["kind"]``, a shape the wire never produces, so it never once
+        fired and every tool call still reached the answer.
 
-        A bare string with no tag is passed through: not every runtime sends the
-        envelope, and dropping their output would trade a cosmetic bug for a
+        A delta with no tag at all is passed through: not every runtime sends
+        the envelope, and dropping their output would trade a cosmetic bug for a
         silent one.
         """
+        if kind is not None:
+            if kind != "text":
+                return
+            self._token(str(data or ""))
+            return
+        # Nested form, for a runtime that sends the envelope inside `data`.
         if isinstance(data, dict) and "kind" in data:
             if str(data.get("kind") or "") != "text":
                 return

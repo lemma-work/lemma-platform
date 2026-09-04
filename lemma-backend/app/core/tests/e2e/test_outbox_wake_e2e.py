@@ -38,7 +38,6 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = [pytest.mark.e2e]
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 test_database_url = e2e_fixtures.test_database_url
 
@@ -56,9 +55,7 @@ class _WakeEvent(DomainEvent):
 async def outbox_engine(test_database_url: str):
     engine = create_async_engine(test_database_url)
     async with engine.begin() as connection:
-        await connection.run_sync(
-            DomainEventOutbox.__table__.create, checkfirst=True
-        )
+        await connection.run_sync(DomainEventOutbox.__table__.create, checkfirst=True)
     yield engine
     await engine.dispose()
 
@@ -134,7 +131,9 @@ async def test_a_notification_issued_with_no_listener_is_lost(
         **asyncpg_connect_kwargs(test_database_url, application_name="lemma-e2e-probe")
     )
     try:
-        await connection.execute(f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'")
+        await connection.execute(
+            f"NOTIFY {OUTBOX_WAKE_CHANNEL}, 'while_nobody_listens'"
+        )
     finally:
         await connection.close()
 

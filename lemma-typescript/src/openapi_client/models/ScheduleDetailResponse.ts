@@ -14,10 +14,12 @@ export type ScheduleDetailResponse = {
     allowed_actions?: Array<string>;
     config: Record<string, any>;
     connector_trigger_id: (string | null);
+    consecutive_failures?: number;
     created_at: string;
     filter_instruction: (string | null);
     filter_output_schema: (Record<string, any> | null);
     id: string;
+    instruction?: (string | null);
     is_active: boolean;
     is_internal: boolean;
     last_error?: (string | null);
@@ -25,6 +27,10 @@ export type ScheduleDetailResponse = {
     last_fired_at?: (string | null);
     last_run_id?: (string | null);
     name: (string | null);
+    /**
+     * True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.
+     */
+    readonly paused_by_failures: boolean;
     pod_id: (string | null);
     schedule_type: ScheduleType;
     updated_at: string;

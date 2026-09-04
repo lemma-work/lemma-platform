@@ -16,6 +16,13 @@ use sha2::{Digest, Sha256};
 use crate::protocol::{ConfigOption, HarnessCapabilities, HarnessHealth, HarnessSnapshot};
 
 const BUILTIN_MANIFEST: &str = include_str!("../agent-adapters.lock.json");
+
+/// Appended to the reason a harness failed for something that may not fail twice.
+///
+/// Carried in the text because that is the only field surviving the trip from
+/// `resolve` through a `HarnessSnapshot` to the poll loop that decides when to
+/// try again. It is stripped before the reason is stored, so nobody reads it.
+const TRANSIENT_MARKER: &str = " [transient]";
 const SNAPSHOT_TTL: ChronoDuration = ChronoDuration::hours(24);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -211,16 +218,26 @@ impl AdapterManifest {
         };
         let upstream_command = resolve_executable(&spec.upstream_command)
             .ok_or_else(|| anyhow::anyhow!("{} executable was not found", spec.upstream_command))?;
-        let upstream_version = probe_version(&upstream_command, &spec.upstream_version_args);
+        let probed = probe_version(&upstream_command, &spec.upstream_version_args);
+        let upstream_version = probed.clone().ok();
         if let Some(minimum) = spec.minimum_upstream_version.as_deref() {
-            let installed = upstream_version.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
+            let installed = probed.map_err(|reason| match reason {
+                // Says what actually happened, so nobody goes looking at their
+                // agent's version over a busy machine. The marker is what tells
+                // the refresh loop this one is worth trying again shortly.
+                VersionUnknown::TimedOut => anyhow::anyhow!(
+                    "{} did not answer `{}` within {}s{TRANSIENT_MARKER}",
+                    spec.display_name,
+                    spec.upstream_version_args.join(" "),
+                    VERSION_PROBE_TIMEOUT.as_secs(),
+                ),
+                VersionUnknown::Failed => anyhow::anyhow!(
                     "{} version could not be determined (minimum {minimum})",
                     spec.display_name
-                )
+                ),
             })?;
             anyhow::ensure!(
-                version_is_at_least(installed, minimum),
+                version_is_at_least(&installed, minimum),
                 "{} {} is unsupported; version {minimum} or newer is required",
                 spec.display_name,
                 installed
@@ -443,12 +460,14 @@ impl AdapterManifest {
                 snapshot_ready(&resolved)
             }
             Err(error) => {
+                let reason = error.to_string();
                 tracing::info!(
                     harness = %adapter.key,
-                    error = %error,
+                    error = %reason_without_marker(&reason),
+                    transient = reason_is_transient(&reason),
                     "adapter not available on this computer"
                 );
-                snapshot_unavailable(adapter, &error.to_string())
+                snapshot_unavailable(adapter, &reason)
             }
         }
     }
@@ -790,7 +809,59 @@ fn snapshot_unavailable(spec: &AdapterSpec, reason: &str) -> HarnessSnapshot {
     }
 }
 
-fn probe_version(executable: &Path, arguments: &[String]) -> Option<String> {
+/// Whether this reason describes a moment rather than an installation.
+///
+/// Read by the poll loop to choose between trying again in seconds and waiting
+/// out the ordinary refresh. An agent that is simply not installed must answer
+/// `false`, or the host re-probes it forever: on a machine without Cursor that
+/// is every refresh for the life of the process.
+#[must_use]
+pub fn reason_is_transient(reason: &str) -> bool {
+    reason.ends_with(TRANSIENT_MARKER)
+}
+
+/// The reason with the marker taken off, for anywhere a person will read it.
+#[must_use]
+pub fn reason_without_marker(reason: &str) -> &str {
+    reason.trim_end_matches(TRANSIENT_MARKER)
+}
+
+/// How long an agent gets to answer `--version`.
+///
+/// A ceiling on a hang, not a measurement of anything. The command itself takes
+/// milliseconds warm and a couple of seconds cold -- but this runs while the
+/// adapter cache is being downloaded and hashed and the other agents are being
+/// probed, because landing that cache is exactly what triggers the re-probe.
+///
+/// At five seconds that was a coin toss on first launch after an update, and
+/// losing it published Claude Code as unusable with a message blaming the user's
+/// install. Nothing is slower for the larger budget: a healthy agent answers and
+/// the loop exits, so this is only ever reached by one that never will.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const VERSION_PROBE_POLL: Duration = Duration::from_millis(25);
+
+/// Why an agent's version is unknown.
+///
+/// The distinction is the whole point. "Did not answer in time" is about this
+/// machine at this moment and is worth retrying in seconds; "would not run" is
+/// about the installation and is not. They used to be the same `None`, so a busy
+/// laptop and a broken agent produced the same sentence and the same
+/// quarter-hour wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VersionUnknown {
+    TimedOut,
+    Failed,
+}
+
+fn probe_version(executable: &Path, arguments: &[String]) -> Result<String, VersionUnknown> {
+    probe_version_within(executable, arguments, VERSION_PROBE_TIMEOUT)
+}
+
+fn probe_version_within(
+    executable: &Path,
+    arguments: &[String],
+    timeout: Duration,
+) -> Result<String, VersionUnknown> {
     let mut command = Command::new(executable);
     command
         .no_console_window()
@@ -798,15 +869,22 @@ fn probe_version(executable: &Path, arguments: &[String]) -> Option<String> {
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped());
-    let mut child = command.spawn().ok()?;
+    let mut child = command.spawn().map_err(|_| VersionUnknown::Failed)?;
     let started = std::time::Instant::now();
     loop {
-        if started.elapsed() > Duration::from_secs(5) {
-            return None;
+        if started.elapsed() > timeout {
+            // Killed, not abandoned. Dropping a `Child` neither reaps nor stops
+            // it, so every timeout used to leave the agent running against a
+            // question nobody was waiting for an answer to any more.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(VersionUnknown::TimedOut);
         }
         match child.try_wait() {
             Ok(Some(status)) if status.success() => {
-                let output = child.wait_with_output().ok()?;
+                let output = child
+                    .wait_with_output()
+                    .map_err(|_| VersionUnknown::Failed)?;
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let text = if stdout.trim().is_empty() {
@@ -814,10 +892,12 @@ fn probe_version(executable: &Path, arguments: &[String]) -> Option<String> {
                 } else {
                     stdout.trim().to_owned()
                 };
-                return (!text.is_empty()).then_some(text);
+                return (!text.is_empty())
+                    .then_some(text)
+                    .ok_or(VersionUnknown::Failed);
             }
-            Ok(Some(_)) | Err(_) => return None,
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Ok(Some(_)) | Err(_) => return Err(VersionUnknown::Failed),
+            Ok(None) => std::thread::sleep(VERSION_PROBE_POLL),
         }
     }
 }
@@ -975,6 +1055,122 @@ fn push_unique(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A script that reports it started, waits, and reports it finished.
+    ///
+    /// The second marker is the one that matters: it only ever appears if the
+    /// process outlived the probe that gave up on it.
+    #[cfg(unix)]
+    fn slow_agent(directory: &Path, seconds: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = directory.join("slow-agent");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\ntouch '{0}/started'\nsleep {seconds}\ntouch '{0}/finished'\n",
+                directory.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_that_does_not_answer_in_time_is_reported_as_a_timeout() {
+        // These were the same `None`, so a busy laptop and a broken install
+        // produced one sentence -- "version could not be determined (minimum
+        // 2.1.0)" -- which names the user's agent for something the host did to
+        // itself. It sent us reading Claude Code release notes over a probe that
+        // simply ran while the adapter cache was still being hashed.
+        let directory = tempfile::tempdir().unwrap();
+        let executable = slow_agent(directory.path(), 30);
+
+        let outcome = probe_version_within(&executable, &[], Duration::from_millis(200));
+
+        assert_eq!(outcome, Err(VersionUnknown::TimedOut));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn giving_up_on_a_probe_does_not_leave_the_agent_running() {
+        // `return None` dropped the `Child`, and dropping neither reaps nor
+        // kills -- so every timeout left an agent running against a question
+        // nobody was waiting for an answer to.
+        // Three spans, sized off one budget so they cannot eat into each other:
+        // the script sleeps twice the budget, so the timeout is always what ends
+        // it, and the wait afterwards is a second longer than the sleep the
+        // script had left -- which is the window a kill that did not land shows
+        // up in.
+        //
+        // Retried, because one span is not ours to size: the budget also has to
+        // cover forking a shell, and under enough load it does not. That is a
+        // trial with nothing in it -- the stand-in was killed before its first
+        // line, so neither outcome is evidence -- and it used to be an outright
+        // failure on `the stand-in agent never ran`. Measured at roughly one run
+        // in forty on a saturated machine, which is exactly the rate this was
+        // costing CI. The budget grows per attempt, so a slow machine converges
+        // on one it can meet instead of retrying at a number it cannot.
+        for attempt in 1u32..=4 {
+            let directory = tempfile::tempdir().unwrap();
+            let budget = Duration::from_millis(1500 * u64::from(attempt));
+            let executable = slow_agent(directory.path(), 3 * attempt);
+
+            let outcome = probe_version_within(&executable, &[], budget);
+            assert_eq!(outcome, Err(VersionUnknown::TimedOut));
+
+            // Checked, not assumed: "nothing finished" proves nothing about a
+            // kill if the script never ran in the first place.
+            if !directory.path().join("started").exists() {
+                continue;
+            }
+            std::thread::sleep(budget + Duration::from_secs(1));
+            assert!(
+                !directory.path().join("finished").exists(),
+                "the agent outlived the probe that gave up on it"
+            );
+            return;
+        }
+        panic!("the stand-in agent never ran, even given four times the budget");
+    }
+
+    #[test]
+    fn only_a_probe_that_ran_out_of_time_is_worth_trying_again_soon() {
+        // An agent that is not installed fails identically on every refresh. On
+        // a machine without Cursor, treating that as worth retrying re-probes it
+        // for the life of the process.
+        let timed_out = "Claude Code did not answer `--version` within 30s [transient]";
+        let missing = "adapter executable cursor-agent was not found";
+
+        assert!(reason_is_transient(timed_out));
+        assert!(!reason_is_transient(missing));
+        // And the bookkeeping never reaches a reader.
+        assert_eq!(
+            reason_without_marker(timed_out),
+            "Claude Code did not answer `--version` within 30s"
+        );
+        assert_eq!(reason_without_marker(missing), missing);
+    }
+
+    #[test]
+    fn an_unreachable_agent_is_not_described_as_a_slow_one() {
+        // The published reason is what a person reads in the app, so the marker
+        // has to be gone by the time a snapshot carries it.
+        let manifest = AdapterManifest::builtin().unwrap();
+        let spec = manifest.adapters[0].clone();
+        let snapshot = snapshot_unavailable(
+            &spec,
+            "Claude Code did not answer `--version` within 30s [transient]",
+        );
+
+        let reason = snapshot.stale_reason.expect("a reason");
+        assert!(reason_is_transient(&reason), "the loop still needs to know");
+        assert!(
+            !reason_without_marker(&reason).contains("transient"),
+            "but nobody should read the bookkeeping: {reason}"
+        );
+    }
 
     #[test]
     fn an_adapter_is_resolved_once_and_then_served_from_cache() {

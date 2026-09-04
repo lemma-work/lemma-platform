@@ -122,6 +122,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
+                    system_prompt_delivery: None,
                 },
                 scratch_directory: directory.path().join("run"),
                 mcp_server: None,

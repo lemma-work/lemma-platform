@@ -1,14 +1,27 @@
-"""Cache-correct HTTP responses for datastore originals and child artifacts."""
+"""Cache-correct HTTP responses for datastore originals and child artifacts.
+
+Both builders receive a body that is *already* fully in memory. That matters
+for how it is sent: ``StreamingResponse(BytesIO(content))`` looks like it
+streams, but iterating a ``BytesIO`` yields one **line** at a time — it splits
+on ``\n`` — so a binary body is emitted as one ASGI message per newline byte
+it happens to contain. Measured against dev, throughput was a flat ~3,750
+chunks/second regardless of chunk size, which made download time a function of
+how many ``0x0A`` bytes a file contained rather than how large it was: a 2.1MB
+PDF with 51,571 newlines took 13.8 seconds while a 6.4MB one with 28,778 took
+7.6. Reading the same objects straight from storage took 40 milliseconds.
+
+A body held in memory is sent as one response. It is also the more honest
+answer to the client, which now gets a ``Content-Length`` instead of a chunked
+transfer of unknown size.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import unicodedata
-from io import BytesIO
 from urllib.parse import quote
 
 from fastapi import Response, status
-from fastapi.responses import StreamingResponse
 
 from app.modules.datastore.services.files.http_cache import (
     file_cache_headers,
@@ -51,9 +64,7 @@ def build_original_download_response(file_entity, download) -> Response:
     cache_headers["Content-Disposition"] = build_content_disposition(
         "inline" if inline else "attachment", file_entity.name
     )
-    return StreamingResponse(
-        BytesIO(content), media_type=content_type, headers=cache_headers
-    )
+    return Response(content=content, media_type=content_type, headers=cache_headers)
 
 
 def build_child_download_response(
@@ -78,6 +89,4 @@ def build_child_download_response(
         "inline" if inline else "attachment",
         artifact_name.rsplit("/", 1)[-1],
     )
-    return StreamingResponse(
-        BytesIO(content), media_type=content_type, headers=cache_headers
-    )
+    return Response(content=content, media_type=content_type, headers=cache_headers)

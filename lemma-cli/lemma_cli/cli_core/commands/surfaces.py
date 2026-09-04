@@ -5,19 +5,19 @@ from typing import Any
 
 import typer
 
-from ...cli_app.enums import SURFACE_PLATFORMS
+from ...cli_app.enums import SURFACE_PLATFORM_HELP, SURFACE_PLATFORMS
 from ..confirm import confirm_destructive
 from ..io import emit
 from ..payload import read_json
 from ..sdk import pod_client
 from ..state import run_with_client, state_from_ctx
 
-app = typer.Typer(
-    help="Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook."
-)
-
-# Single source for the platform help shown on every platform argument.
+# The list shown on every platform argument. The group's own help comes from
+# `SURFACE_PLATFORM_HELP` so the lazy registry in `cli_core/app.py` can use the
+# same string without importing this module.
 _PLATFORM_HELP = ", ".join(SURFACE_PLATFORMS) + "."
+
+app = typer.Typer(help=SURFACE_PLATFORM_HELP)
 
 
 @app.command("init")
@@ -32,18 +32,23 @@ def init_surface(
     from ...cli_app.scaffold import ScaffoldError, init_resource, report
 
     try:
-        result = init_resource("surface", platform, root=root, force=force, platform=platform)
+        result = init_resource(
+            "surface", platform, root=root, force=force, platform=platform
+        )
     except ScaffoldError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    report(result, next_hint="set default_agent_name + account_id, then `lemma pods import .`")
+    report(
+        result,
+        next_hint="set default_agent_name + account_id, then `lemma pods import .`",
+    )
 
 
 @app.command("schema")
-def schema_surface() -> None:
+def schema_surface(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a surface bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("surface")
+    print_resource_schema(ctx, "surface")
 
 
 def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -178,14 +183,11 @@ def update_channels(
     pod: str | None = typer.Option(None, "--pod"),
     channel_id: str | None = typer.Option(None, "--channel-id"),
     channel_name: str | None = typer.Option(None, "--channel-name"),
-    agent_name: str | None = typer.Option(
-        None, "--agent", "--agent-name", help="Agent that handles this channel."
-    ),
     data: str | None = typer.Option(
         None,
         "--data",
         "-d",
-        help='Raw JSON channel routes, e.g. [{"channel_id": ..., "agent_name": ...}].',
+        help='Raw JSON channel list, e.g. [{"channel_id": ..., "channel_name": ...}].',
     ),
     file: Path | None = typer.Option(
         None,
@@ -196,7 +198,12 @@ def update_channels(
         readable=True,
     ),
 ) -> None:
-    """Replace ALL channel routes on a surface (Slack/Teams only)."""
+    """Replace the channels a surface answers in (Slack/Teams only).
+
+    An allow-list, not a routing table: a surface answers as exactly one agent,
+    so a channel says where that agent may be spoken to. Give an agent its own
+    app if it needs its own channels.
+    """
     state = state_from_ctx(ctx)
     raw = read_json(data, file, required=False)
     if isinstance(raw, dict) and "channels" in raw:
@@ -209,7 +216,6 @@ def update_channels(
                 {
                     "channel_id": channel_id,
                     "channel_name": channel_name,
-                    "agent_name": agent_name,
                 }
             )
         ]
@@ -303,6 +309,81 @@ def setup_status(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).surfaces.setup(platform),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("telegram-setup")
+def start_telegram_setup(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+    name: str | None = typer.Option(
+        None, "--name", help="Pod-unique surface name. Defaults to telegram."
+    ),
+    default_agent_name: str | None = typer.Option(
+        None,
+        "--agent",
+        "--agent-name",
+        help="Agent that answers. Omit to answer as the pod assistant.",
+    ),
+    enabled: bool | None = typer.Option(None, "--enabled/--disabled"),
+    data: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    file: Path | None = typer.Option(
+        None,
+        "--file",
+        "-f",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+    """Start a managed Telegram bot setup and print the link that creates the bot.
+
+    The bot is made inside Telegram: open the returned ``launch_url`` (or show it
+    as a QR), name the bot there, and it binds to this pod on its own -- there is
+    no token to copy back. The surface does not exist until that finishes, so
+    poll ``telegram-setup-status SETUP_ID`` until ``bot_username`` is set.
+
+    Omitting ``--agent`` answers as the pod assistant, which is what lets a brand
+    new pod take Telegram messages before any agent has been created.
+    """
+    state = state_from_ctx(ctx)
+    payload: dict[str, Any] = read_json(data, file, required=False) or {}
+    if name is not None:
+        payload["name"] = name
+    if default_agent_name is not None:
+        payload["default_agent_name"] = default_agent_name
+    if enabled is not None:
+        payload["is_enabled"] = enabled
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).surfaces.start_telegram_bot_setup(
+            payload
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("telegram-setup-status")
+def telegram_setup_status(
+    ctx: typer.Context,
+    setup_id: str = typer.Argument(..., help="Setup id from `telegram-setup`."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Show where a managed Telegram bot setup has got to.
+
+    ``status`` moves while the person is in Telegram; ``bot_username`` and
+    ``surface_id`` are only set once the bot exists and is bound to this pod.
+    ``error`` is set when the setup failed rather than merely being unfinished.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).surfaces.get_telegram_bot_setup(
+            setup_id
+        ),
     )
     if result is not None:
         emit(state, result)

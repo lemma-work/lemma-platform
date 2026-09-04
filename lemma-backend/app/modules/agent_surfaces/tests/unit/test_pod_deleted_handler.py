@@ -16,20 +16,30 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.events import (
+    SurfaceConnectedEvent,
+    SurfaceMessageAnsweredEvent,
+    SurfaceWebhookReceivedEvent,
+)
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
-from app.modules.schedule.domain.events.schedule import (
-    ScheduleDeactivated,
-    ScheduleFired,
-)
-from app.modules.schedule.domain.schedule import ScheduleType
 
 
 @asynccontextmanager
 async def _mock_uow_factory(uow_mock):
     yield uow_mock
+
+
+def _webhook_envelope(**kwargs) -> dict:
+    """A webhook event as it actually arrives: a plain dict off the stream.
+
+    The handler takes ``dict`` and filters on ``event_type`` because
+    ``surface_events`` is shared with the analytics projections. Building the
+    model here and dumping it keeps the test honest about the wire shape while
+    still failing if the event's own fields change.
+    """
+    return SurfaceWebhookReceivedEvent(**kwargs).model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -81,6 +91,9 @@ async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     context = _reply_context()
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
@@ -91,7 +104,7 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"update_id": 1}),
+        _webhook_envelope(source="telegram", payload={"update_id": 1}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -105,10 +118,47 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
+    """WhatsApp may put several messages in one delivery; the parser reads the
+    first. Each part now becomes its own job, and only the first keeps the bare
+    dedup id so an ordinary single-message delivery keys exactly as before."""
+    handler = AsyncMock()
+    handler.try_handle_channel_setup.return_value = False
+    handler.try_handle_lifecycle.return_value = False
+    handler.try_handle_interaction.return_value = False
+    handler.prepare_ingress.return_value = _reply_context()
+    handler.split_webhook_deliveries = lambda request: [request, request, request]
+    job_queue = AsyncMock()
+    uow_mock = AsyncMock()
+    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+
+    envelope = _webhook_envelope(source="whatsapp", payload={"entry": []})
+    event_id = envelope["event_id"]
+    await handlers.handle_surface_webhook(
+        envelope,
+        logging.getLogger("test"),
+        uow_factory=partial(_mock_uow_factory, uow_mock),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
+    )
+
+    assert job_queue.enqueue.await_count == 3
+    job_ids = [call.kwargs["_job_id"] for call in job_queue.enqueue.await_args_list]
+    assert job_ids == [
+        f"surface-event:{event_id}",
+        f"surface-event:{event_id}:1",
+        f"surface-event:{event_id}:2",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     monkeypatch,
 ):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = True
@@ -117,7 +167,7 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"callback_query": {}}),
+        _webhook_envelope(source="telegram", payload={"callback_query": {}}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -131,6 +181,9 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
 @pytest.mark.asyncio
 async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -140,7 +193,7 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="telegram", payload={"update_id": 2}),
+        _webhook_envelope(source="telegram", payload={"update_id": 2}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -154,6 +207,9 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -163,7 +219,7 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     surface_id = uuid4()
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(
+        _webhook_envelope(
             source="telegram",
             surface_id=surface_id,
             payload={"update_id": 3},
@@ -181,71 +237,59 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("has_context", [False, True])
-async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queued(
-    monkeypatch, has_context
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        pytest.param(
+            SurfaceConnectedEvent(
+                surface_id=uuid4(), pod_id=uuid4(), platform="RESEND"
+            ).model_dump(mode="json"),
+            id="surface.connected",
+        ),
+        pytest.param(
+            SurfaceMessageAnsweredEvent(surface_id=uuid4(), pod_id=uuid4()).model_dump(
+                mode="json"
+            ),
+            id="surface.message.answered",
+        ),
+    ],
+)
+async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
+    monkeypatch, envelope
 ):
-    handler = AsyncMock()
-    context = _reply_context() if has_context else None
-    handler.prepare_ingress.return_value = context
-    job_queue = AsyncMock()
-    uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
-    event = ScheduleFired(
-        schedule_id=uuid4(),
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-        payload={"message": "hello"},
-        source_event_id="time:test-fire",
-        pod_id=uuid4(),
-    )
+    """The analytics projections share ``surface_events``. They must not poison it.
 
-    await handlers.handle_surface_schedule_event(
-        event.model_dump(mode="json"),
-        logging.getLogger("test"),
-        uow_factory=partial(_mock_uow_factory, uow_mock),
-        job_queue=job_queue,
-        inbox=PassthroughEventInbox(),
-    )
+    This handler used to annotate its parameter as
+    ``SurfaceWebhookReceivedEvent``, which made fast-depends validate — and
+    fail — before the acknowledgement. An unackable message stays in the
+    pending-entries list and the reclaim subscriber hands it back every 60
+    seconds, forever. In development that ran at ~119 redeliveries an hour off
+    two stuck messages, and it grew by one permanently-stuck message per agent
+    created, because every agent is given an auto-provisioned Resend mailbox
+    whose creation publishes ``surface.connected``.
 
-    ingress = handler.prepare_ingress.await_args.args[0]
-    assert isinstance(ingress, handlers.SurfaceScheduleIngress)
-    if has_context:
-        job_queue.enqueue.assert_awaited_once()
-        assert job_queue.enqueue.await_args.kwargs["_job_id"] == (
-            f"surface-schedule-event:{event.event_id}"
-        )
-    else:
-        job_queue.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_surface_schedule_subscriber_ignores_lifecycle_events(monkeypatch):
-    """A non-fire event on ``schedule_events`` is skipped, not a validation error.
-
-    The stream carries created/updated/deleted/deactivated too. Parsing one as a
-    fire raises, and a poison message is never acked, so XAUTOCLAIM redelivers it
-    forever.
+    ``RESEND`` is the platform on purpose: it is the one that actually happened.
     """
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
-    deactivated = ScheduleDeactivated(
-        schedule_id=uuid4(),
-        user_id=uuid4(),
-        schedule_type=ScheduleType.TIME,
-        consecutive_failures=12,
-    )
 
-    await handlers.handle_surface_schedule_event(
-        deactivated.model_dump(mode="json"),
+    # Returning cleanly is the whole assertion: FastStream acknowledges only a
+    # handler that does not raise, and the ack is what lets the message leave
+    # the PEL. Anything escaping here is the poison loop reopening.
+    await handlers.handle_surface_webhook(
+        envelope,
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
     )
 
+    handler.try_handle_channel_setup.assert_not_awaited()
     handler.prepare_ingress.assert_not_awaited()
     job_queue.enqueue.assert_not_awaited()
 
@@ -297,6 +341,9 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     event with no message text would try to become a run.
     """
     handler = AsyncMock()
+    # Sync on the real service: the delivery is split before anything is
+    # awaited, and every non-batching platform hands the request back.
+    handler.split_webhook_deliveries = lambda request: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = True
     job_queue = AsyncMock()
@@ -304,7 +351,7 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
-        SurfaceWebhookReceivedEvent(source="slack", payload={"type": "event_callback"}),
+        _webhook_envelope(source="slack", payload={"type": "event_callback"}),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,

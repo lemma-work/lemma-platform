@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
-from app.modules.connectors.domain.account import AccountEntity, OAuthCredentials
+from app.core.authorization.context import Context
+
+from app.modules.connectors.domain.account import (
+    AccountEntity,
+    CredentialTypes,
+    OAuthCredentials,
+)
+from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     OAuth2Defaults,
@@ -14,13 +23,23 @@ from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
-from app.modules.connectors.domain.connect_request import ConnectRequestEntity
+
+#: What `PodFileGatewayPort.write_bytes` hands back: the file reference a
+#: connector result carries in place of the bytes it replaced. A mapping rather
+#: than a value object because it is substituted straight into the operation's
+#: JSON result, and it was a bare `dict` -- which is how a result shape four
+#: keys wide went unchecked at both ends.
+WrittenPodFile = dict[str, str | int | None]
 
 
 class ConnectorRepositoryPort(Protocol):
     async def get(self, id: str) -> Optional[ConnectorEntity]: ...
 
     async def update(self, entity: ConnectorEntity) -> ConnectorEntity: ...
+
+    async def titles_for(
+        self, connector_ids: Sequence[str]
+    ) -> dict[str, str | None]: ...
 
     async def list_active(
         self, limit: int = 100, cursor: Optional[str] = None
@@ -79,6 +98,13 @@ class AccountRepositoryPort(Protocol):
         cursor: UUID | None = None,
     ) -> Tuple[Sequence[AccountEntity], UUID | None]: ...
 
+    async def promote_next_default(
+        self,
+        user_id: UUID,
+        auth_config_id: UUID,
+        exclude_account_id: UUID,
+    ) -> Optional[AccountEntity]: ...
+
 
 class ConnectRequestRepositoryPort(Protocol):
     async def create(self, entity: ConnectRequestEntity) -> ConnectRequestEntity: ...
@@ -86,6 +112,10 @@ class ConnectRequestRepositoryPort(Protocol):
     async def update(self, entity: ConnectRequestEntity) -> ConnectRequestEntity: ...
 
     async def get_by_state(self, state: str) -> Optional[ConnectRequestEntity]: ...
+
+    async def claim_pending_by_state(
+        self, state: str, *, not_before: datetime
+    ) -> Optional[ConnectRequestEntity]: ...
 
 
 class ConnectorTriggerRepositoryPort(Protocol):
@@ -115,12 +145,16 @@ class ConnectorTriggerRepositoryPort(Protocol):
 class PodFileGatewayPort(Protocol):
     """Reads and writes pod datastore files on behalf of connector operations.
 
-    Kept as a port so the connectors module never imports datastore internals;
-    the adapter is wired at composition.
+    Kept as a port so the connectors module never imports datastore internals.
+    The adapter is `infrastructure/adapters/pod_file_gateway.py`, over
+    datastore's published file operations -- it was in the composition root,
+    which is where the two `Any`s below came from: nothing on either side of a
+    third module's file could name the authorization context both modules
+    already had a type for.
     """
 
     async def read_bytes(
-        self, *, pod_id: UUID, path: str, ctx: Any
+        self, *, pod_id: UUID, path: str, ctx: Context
     ) -> Tuple[bytes, Optional[str], Optional[str]]: ...
 
     async def write_bytes(
@@ -131,8 +165,8 @@ class PodFileGatewayPort(Protocol):
         name: str,
         content: bytes,
         media_type: Optional[str],
-        ctx: Any,
-    ) -> dict: ...
+        ctx: Context,
+    ) -> WrittenPodFile: ...
 
 
 class ConnectorOperationRepositoryPort(Protocol):
@@ -149,6 +183,7 @@ class ConnectorOperationRepositoryPort(Protocol):
         connector_id: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
+        kind: Optional[str] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
 
     async def list_by_connector_kind(
@@ -158,6 +193,10 @@ class ConnectorOperationRepositoryPort(Protocol):
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
+
+    async def count_by_connector(
+        self, connector_id: str, kind: Optional[str] = None
+    ) -> int: ...
 
     async def get_by_connector_and_name(
         self, connector_id: str, operation_name: str
@@ -171,32 +210,49 @@ class ConnectorOperationRepositoryPort(Protocol):
 
 
 class AuthProviderPort(Protocol):
+    """The scheme-facing half of authentication, over one resolved install.
+
+    ``connect_with_credentials`` belongs here and was missing: it is the only
+    entry point the credential-managed schemes have, and callers were already
+    invoking it through this Protocol on the strength of the concrete classes
+    happening to implement it.
+    """
+
+    async def connect_with_credentials(
+        self,
+        install: ResolvedAuthInstall,
+        user_id: UUID,
+        credentials: dict,
+    ) -> CredentialTypes | dict: ...
+
     async def get_authorization_url(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         user_id: UUID,
         state: str,
         redirect_uri: str,
+        code_verifier: str | None = None,
     ) -> tuple[str, str]: ...
 
     async def exchange_code_for_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         redirect_uri: str,
         user_id: UUID,
         state: Optional[str] = None,
+        code_verifier: str | None = None,
     ) -> OAuthCredentials: ...
 
     async def refresh_credentials(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> OAuthCredentials: ...
 
     async def revoke_connection(
         self,
-        connector: ConnectorEntity,
+        install: ResolvedAuthInstall,
         credentials: OAuthCredentials,
         user_id: UUID,
     ) -> None: ...
@@ -270,8 +326,6 @@ class AppOperationGatewayPort(Protocol):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any: ...
 

@@ -22,6 +22,7 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent
+from pydantic_ai.messages import UserContent
 from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
@@ -35,6 +36,14 @@ logger = get_logger(__name__)
 VISION_TIMEOUT_SECONDS = 120
 MAX_IMAGES_PER_CALL = 8
 MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024
+
+# A guard against a model that will not stop, not a budget the work has to fit
+# inside. At 4096 it was the latter: a dense table or a full-page diagram
+# transcribed verbatim -- which is exactly what the instructions above ask for
+# -- ran past it, `UsageLimitExceeded` was raised, and the whole description was
+# discarded rather than truncated. Eight pages of images may legitimately need
+# this much; a runaway needs stopping long before it.
+VISION_OUTPUT_TOKENS_LIMIT = 32768
 
 _SYSTEM_PROMPT = (
     "You are the eyes of another agent that cannot see images. Answer only "
@@ -127,8 +136,7 @@ async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
     )
     if model is None:
         raise VisionUnavailableError(
-            f"VISION_MODEL '{model_name}' could not be built from the runtime "
-            "profile."
+            f"VISION_MODEL '{model_name}' could not be built from the runtime profile."
         )
     return model
 
@@ -163,7 +171,7 @@ async def describe_images(
         organization_id=organization_id, user_id=user_id
     )
 
-    prompt: list[object] = [
+    prompt: list[UserContent] = [
         (instructions or _DEFAULT_INSTRUCTIONS).strip(),
         "",
         "Images, in order:",
@@ -178,15 +186,17 @@ async def describe_images(
         async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
             result = await agent.run(
                 prompt,
-                usage_limits=UsageLimits(request_limit=1, output_tokens_limit=4096),
+                usage_limits=UsageLimits(
+                    request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
+                ),
             )
     except TimeoutError as exc:
         raise VisionDescriptionError(
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
         ) from exc
     except Exception as exc:
-        logger.debug(
-            "agent.vision_service.description_failed.diagnostic", exc_info=True
+        logger.warning(
+            "agent.vision_service.description_failed.degraded", exc_info=True
         )
         raise VisionDescriptionError(
             "The vision model could not describe the image."

@@ -16,7 +16,8 @@ from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
-from app.composition.workflow_pod import PodMemberRepository
+from app.modules.pod.contracts.members import pod_member_id
+from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.api.schemas import (
     WorkflowRunFormSubmitRequest,
     WorkflowRunListResponse,
@@ -35,7 +36,6 @@ from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
 )
-from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRunRepository,
     SqlAlchemyWorkflowRunWaitRepository,
@@ -93,7 +93,7 @@ async def submit_workflow_run_form(
     run_id: UUID,
     data: WorkflowRunFormSubmitRequest,
 ) -> WorkflowRunResponse:
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
     _verify_pod(run, pod_id)
 
@@ -127,7 +127,7 @@ async def cancel_workflow_run(
     pod_id: UUID,
     run_id: UUID,
 ) -> WorkflowRunResponse:
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
     _verify_pod(run, pod_id)
 
@@ -155,33 +155,43 @@ async def list_waiting_runs_assigned_to_me(
     page_token: str | None = None,
 ) -> WorkflowRunWaitAssignmentListResponse:
     cursor = parse_uuid_page_token(page_token)
+    # Echo what was applied. Uncapped, `?limit=100000` was 100k waits and, until
+    # the batched read below, 100k sequential run lookups on one request.
+    effective_limit = min(limit, MAX_RUN_PAGE_SIZE)
 
-    pod_member = await PodMemberRepository(uow).get_by_pod_and_user_id(pod_id, user.id)
-    if pod_member is None:
+    member_id = await pod_member_id(uow, pod_id, user.id)
+    if member_id is None:
         raise HTTPException(status_code=404, detail="Pod member not found")
 
     wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
     waits, next_cursor = await wait_repo.list_active_for_assignee(
         pod_id=pod_id,
-        assigned_pod_member_id=pod_member.id,
-        limit=limit,
+        assigned_pod_member_id=member_id,
+        limit=effective_limit,
         cursor=cursor,
     )
-    engine = WorkflowEngine(uow)
-    items: list[WorkflowRunWaitAssignment] = []
-    for wait in waits:
-        run = await engine.get_run(wait.run_id, requester_user_id=user.id, ctx=ctx)
-        if run is not None:
-            items.append(
-                WorkflowRunWaitAssignment(
-                    wait=WorkflowRunWaitResponse.model_validate(wait),
-                    run=WorkflowRunSummaryResponse.model_validate(run),
-                )
-            )
+    # One statement for the whole page, and no per-run authorization check.
+    # This used to call `engine.get_run(..., ctx=ctx)` per wait, which *raises*
+    # on denial rather than returning None -- so a single assignment on a
+    # RESTRICTED workflow the caller cannot otherwise read failed the entire
+    # request and emptied their approval queue. Being the named assignee is
+    # itself the grant: every wait here was explicitly assigned to this person
+    # in this pod, and answering it is the whole point of the endpoint.
+    runs = await SqlAlchemyWorkflowRunRepository(uow).list_summaries_by_ids(
+        [wait.run_id for wait in waits]
+    )
+    items = [
+        WorkflowRunWaitAssignment(
+            wait=WorkflowRunWaitResponse.model_validate(wait),
+            run=WorkflowRunSummaryResponse.model_validate(runs[wait.run_id]),
+        )
+        for wait in waits
+        if wait.run_id in runs
+    ]
 
     return WorkflowRunWaitAssignmentListResponse(
         items=items,
-        limit=limit,
+        limit=effective_limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
 
@@ -251,7 +261,7 @@ async def get_run(
     pod_id: UUID,
     run_id: UUID,
 ) -> WorkflowRunResponse:
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
     _verify_pod(run, pod_id)
     assert run is not None
@@ -310,7 +320,7 @@ async def stream_workflow_run(
     subscription = channel_service.subscribe([workflow_run_channel(run_id)])
     iterator = await subscription.__aenter__()
     try:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
         _verify_pod(run, pod_id)
         assert run is not None
@@ -343,7 +353,9 @@ async def stream_workflow_run(
                     # into it would finalize it and end the stream. Waiting on a
                     # retained task times out without disturbing the read.
                     pending = asyncio.ensure_future(anext(iterator))
-                done, _ = await asyncio.wait({pending}, timeout=STREAM_KEEPALIVE_SECONDS)
+                done, _ = await asyncio.wait(
+                    {pending}, timeout=STREAM_KEEPALIVE_SECONDS
+                )
                 if not done:
                     # A comment frame. Keeps idle proxies from dropping a run
                     # that is legitimately quiet between transitions.
@@ -402,7 +414,7 @@ async def visualize_flow_run(
     pod_id: UUID,
     run_id: UUID,
 ):
-    engine = WorkflowEngine(uow)
+    engine = build_workflow_engine(uow)
     run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
     _verify_pod(run, pod_id)
 
@@ -413,9 +425,9 @@ async def visualize_flow_run(
     )
 
     return templates.TemplateResponse(
+        request,
         "workflow_run_view.html",
         {
-            "request": request,
             "run": run.model_dump(mode="json"),
             "workflow": workflow.model_dump(mode="json") if workflow else None,
         },

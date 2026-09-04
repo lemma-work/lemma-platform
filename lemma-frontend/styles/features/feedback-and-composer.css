@@ -2,46 +2,43 @@
   display: none;
 }
 
+/* One card, one border, one type size -- the same object the sidebar and the
+   panels are made of. This used to tint its background and colour its border by
+   type, which is a different visual language from anywhere else in the product:
+   a green-filled, green-outlined box announcing that a rename worked. The type
+   is worth a coloured glyph and nothing more, because a toast that shouts is a
+   toast you dismiss before reading. */
 .lemma-toast {
-  --lemma-toast-state: var(--border-subtle);
   --lemma-toast-state-icon: var(--text-tertiary);
   position: relative !important;
   border: 1px solid var(--card-border-subtle) !important;
-  border-color: var(--lemma-toast-state) !important;
   border-radius: var(--radius-md) !important;
   background: var(--card-bg) !important;
   color: var(--text-primary) !important;
   box-shadow: var(--shadow-sm) !important;
-  max-width: min(420px, calc(100vw - 32px)) !important;
-  padding-right: var(--space-9) !important;
+  gap: var(--space-2-5) !important;
+  max-width: min(360px, calc(100vw - 32px)) !important;
+  padding: var(--space-3) !important;
 }
 
 .lemma-toast-success,
 [data-sonner-toast].lemma-toast[data-type="success"] {
-  --lemma-toast-state: color-mix(in srgb, var(--state-success) 72%, var(--border-subtle));
   --lemma-toast-state-icon: var(--state-success);
-  background: color-mix(in srgb, var(--state-success) 5%, var(--card-bg)) !important;
 }
 
 .lemma-toast-error,
 [data-sonner-toast].lemma-toast[data-type="error"] {
-  --lemma-toast-state: color-mix(in srgb, var(--state-error) 76%, var(--border-subtle));
   --lemma-toast-state-icon: var(--state-error);
-  background: color-mix(in srgb, var(--state-error) 5%, var(--card-bg)) !important;
 }
 
 .lemma-toast-warning,
 [data-sonner-toast].lemma-toast[data-type="warning"] {
-  --lemma-toast-state: color-mix(in srgb, var(--state-warning) 76%, var(--border-subtle));
   --lemma-toast-state-icon: var(--state-warning);
-  background: color-mix(in srgb, var(--state-warning) 5%, var(--card-bg)) !important;
 }
 
 .lemma-toast-info,
 [data-sonner-toast].lemma-toast[data-type="info"] {
-  --lemma-toast-state: color-mix(in srgb, var(--state-info) 72%, var(--border-subtle));
   --lemma-toast-state-icon: var(--state-info);
-  background: color-mix(in srgb, var(--state-info) 4%, var(--card-bg)) !important;
 }
 
 .lemma-toast-title {
@@ -59,22 +56,25 @@
   color: var(--lemma-toast-state-icon) !important;
 }
 
-.lemma-toast-close {
-  inset: var(--space-2) var(--space-2) auto auto !important;
-  transform: none !important;
-  width: 24px !important;
-  height: 24px !important;
-  border-color: transparent !important;
-  border-radius: var(--radius-md) !important;
+/* The one control a toast can carry: Undo, and its kind. Sonner's own action
+   button is a dark pill that belongs to no design system here, and it sat next
+   to a close button on a thing that closes itself. The close button is gone
+   (see `providers.tsx`); this is what is left, and it is a quiet button. */
+.lemma-toast-action {
+  flex-shrink: 0 !important;
+  height: auto !important;
+  border: 1px solid var(--card-border-subtle) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: var(--space-1) var(--space-2) !important;
   background: transparent !important;
-  color: var(--text-tertiary) !important;
-  opacity: 0.72 !important;
+  color: var(--text-secondary) !important;
+  font-size: var(--text-xs) !important;
+  font-weight: 500 !important;
 }
 
-.lemma-toast-close:hover {
+.lemma-toast-action:hover {
   background: var(--card-bg-hover) !important;
-  color: var(--text-secondary) !important;
-  opacity: 1 !important;
+  color: var(--text-primary) !important;
 }
 
 .pod-assistant-composer,

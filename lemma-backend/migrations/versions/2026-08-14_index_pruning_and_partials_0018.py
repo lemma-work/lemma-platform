@@ -21,14 +21,14 @@ organization, and then the time range is the only predicate anything can use.
 
 ``datastore_files`` is the opposite problem. Its dispatch and recovery sweeps
 filter ``status`` with no ``pod_id``, but the only status index led with
-``pod_id``; production logged 39,945 sequential scans reading 325,942,950 rows
-from a 16,050-row table. The replacement leads with ``status`` and carries the
-predicate the sweeps share. That predicate is what makes it cheap: folders are
-created NOT_REQUIRED and non-indexable files never enter PENDING, so at rest the
-index held zero of those 16,050 rows. A row enters it while it is being ingested
-and leaves when it completes. Two redundant indexes on the same table pay for
-it — ``pod_id`` already leads three composites, and ``ix_datastore_files_id``
-duplicates the primary key.
+``pod_id``, so those sweeps fell back to a sequential scan of the whole table and
+repeated it on every tick — reading orders of magnitude more rows than the table
+holds. The replacement leads with ``status`` and carries the predicate the sweeps
+share. That predicate is what makes it cheap: folders are created NOT_REQUIRED
+and non-indexable files never enter PENDING, so at rest the index holds no rows
+at all. A row enters it while it is being ingested and leaves when it completes.
+Two redundant indexes on the same table pay for it — ``pod_id`` already leads
+three composites, and ``ix_datastore_files_id`` duplicates the primary key.
 
 ``schedule_runs`` already had an index for its five-minute recovery sweep. It
 was never used once, because ``ix_schedule_runs_retryable_recovery`` covered
@@ -144,6 +144,4 @@ def downgrade() -> None:
     )
 
     for name in _DEAD_USAGE_INDEXES + _REDUNDANT_USAGE_INDEXES:
-        op.execute(
-            f"CREATE INDEX {name} ON usage_records ({_USAGE_COLUMNS[name]})"
-        )
+        op.execute(f"CREATE INDEX {name} ON usage_records ({_USAGE_COLUMNS[name]})")

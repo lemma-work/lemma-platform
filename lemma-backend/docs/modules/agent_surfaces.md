@@ -8,8 +8,10 @@ receiver ingress, signature verification, event normalization, external-user
 identity resolution, thread-to-conversation links, attachment ingestion,
 platform tools, progress rendering, and outbound delivery.
 
-Supported adapters currently include Slack, Microsoft Teams, Telegram,
-WhatsApp, Gmail, Outlook, and Resend-backed email behavior.
+Supported adapters are Slack, Microsoft Teams, Telegram, WhatsApp, and Resend
+for email. Gmail and Outlook are **connectors**, not surfaces: an agent reaches a
+Gmail account through the connector, but a pod is reached *on* email at its own
+Resend address.
 
 ## Runtime contributions
 
@@ -25,7 +27,7 @@ WhatsApp, Gmail, Outlook, and Resend-backed email behavior.
 
 | Table | Meaning |
 | --- | --- |
-| `agent_surfaces` | Pod/platform/name, agent/account binding, routing, identity and send policy |
+| `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
 | `agent_surface_conversation_links` | External channel/thread to agent conversation mapping |
 
@@ -62,12 +64,25 @@ sequenceDiagram
     Out-->>P: reply in original channel/thread
 ```
 
-Adapters share a contract for parse, enrich, sender profile, send, native
-question/approval rendering (`send_questions`/`send_approval`), interaction
-parsing, processing indicator, and platform tool construction. Attachments may
-be downloaded, stored through datastore, transcribed, or referenced depending on
-size/type. Email surfaces use subject/thread/address semantics rather than chat
-streaming.
+Adapters share a contract for parse, enrich, sender profile, `send_message`,
+`deliver`, interaction parsing, processing indicator, and platform tool
+construction. Attachments may be downloaded, stored through datastore,
+transcribed, or referenced depending on size/type. Email surfaces use
+subject/thread/address semantics rather than chat streaming.
+
+**Outbound content goes through one seam.** An agent produces a
+`SurfaceEnvelope` — text, resources, files, voice, choices, a decision — and
+`deliver()` renders whatever the platform can and degrades the rest, returning a
+`DeliveryReceipt` saying how each part landed (`NATIVE`, `DEGRADED`,
+`UNDELIVERED`). The per-content `_render_*` hooks are a platform's private half
+of that call and are reachable only from `deliver`; there is no public verb per
+kind of content, which is what keeps "every platform gets the full product" a
+behaviour rather than a promise each adapter keeps separately.
+
+**How many messages a platform gets** is `DeliveryCardinality`. Chat platforms
+are `MANY` and each part degrades on its own. Email is `ONE`: the whole envelope
+folds into a single reply, so a file or a voice note is an attachment on it
+rather than a second send.
 
 `enrich_inbound_event` is optional for most adapters and **mandatory for
 Resend**: its `email.received` webhook carries metadata only — no body, no
@@ -101,10 +116,13 @@ observer renders them on the surface and a submission resumes the run.
   a typing bubble via one Cloud API `status:read` + `typing_indicator` call.
   Telegram/Teams use a refreshed typing indicator; Slack streams a status line;
   WhatsApp/email have no per-step streaming.
-- **Email is non-interactive.** On email surfaces `ask_user`/`request_approval`
-  fail fast in-tool (returning an `interaction_fallback`) instead of pausing, so
-  the run never strands in `WAITING`; the agent proceeds and delivers through the
-  email reply tool.
+- **Email is interactive, asynchronously.** `ask_user`/`request_approval` on an
+  email surface put the question in the one reply and end the run. The person
+  answers by replying, and `maybe_resume_pending_interaction` resolves the pause
+  through the same path a tapped Slack button takes. A typed reply that is not a
+  decision is *not* consumed: it falls through to the ordinary message path,
+  which supersedes the pending call with an explicit denial and delivers the
+  person's actual words to the agent.
 
 ### Routing, defaults, and history
 

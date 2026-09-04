@@ -54,8 +54,9 @@ from app.modules.workspace.providers.base import (
     ProviderInstance,
     ProviderNotReady,
     ProviderRejected,
+    resumes_stopped_instances,
 )
-from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -239,6 +240,13 @@ class SandboxService(SandboxVolumeMixin):
                     "workspace.sandbox_service.ensure_retrying",
                     sandbox_id=str(sandbox_id),
                     attempt=attempt,
+                    # Why, not just how many times. Without this a sandbox that
+                    # never comes up produces dozens of identical lines and no
+                    # indication of the cause -- the caller sees only "endpoint
+                    # was not ready before the deadline", and the one process
+                    # that knew the reason threw it away.
+                    reason=str(exc) or type(exc).__name__,
+                    retry_after_ms=exc.retry_after_ms,
                 )
                 await asyncio.sleep(delay)
                 attempt += 1
@@ -283,7 +291,9 @@ class SandboxService(SandboxVolumeMixin):
         if (
             instance is not None
             and instance.provider_id
-            and not self._profile_is_stale(sandbox)
+            and not profile_is_stale(
+                kind=sandbox.kind, recorded_digest=sandbox.profile_digest
+            )
         ):
             name = naming.container_name(sandbox_id, sandbox.kind, sandbox.epoch)
             # A remote call on every ensure, including the warm path: the
@@ -293,6 +303,13 @@ class SandboxService(SandboxVolumeMixin):
             with tracer.start_as_current_span("lemma.sandbox.inspect"):
                 existing = await self._provider.inspect(name, deadline_at=deadline_at)
             if existing is not None:
+                # Rebuilt against the same volume rather than waited for: new
+                # compute, the same files. See `resumes_stopped_instances`.
+                if not existing.running and not resumes_stopped_instances(
+                    self._provider
+                ):
+                    span.set_attribute("lemma.ensure", "rebuild")
+                    return await self._provision(sandbox, deadline_at=deadline_at)
                 if not existing.running:
                     # E2B: resuming a paused sandbox. This is the single most
                     # expensive branch and the one the idle release window
@@ -302,7 +319,7 @@ class SandboxService(SandboxVolumeMixin):
                         await self._start(sandbox, existing, deadline_at=deadline_at)
                 else:
                     span.set_attribute("lemma.ensure", "reuse")
-                await self._touch(sandbox_id)
+                await self._mark_in_use(sandbox, instance)
                 return self._handle(sandbox, existing)
 
             # No container, but a row claiming one. `begin_instance` writes the
@@ -346,6 +363,10 @@ class SandboxService(SandboxVolumeMixin):
             if found is None:
                 continue
             if not found.running:
+                if not resumes_stopped_instances(self._provider):
+                    # Same reason as the ensure path: nothing can start it where
+                    # it is, so the caller should rebuild rather than adopt it.
+                    return None
                 await self._start(sandbox, found, deadline_at=deadline_at)
             await self._touch(sandbox.id)
             return self._handle(sandbox, found)
@@ -354,18 +375,6 @@ class SandboxService(SandboxVolumeMixin):
             sandbox_id=str(sandbox.id),
         )
         return None
-
-    @staticmethod
-    def _profile_is_stale(sandbox: Sandbox) -> bool:
-        """Was this sandbox built from a profile that is no longer configured?
-
-        A row with no digest has never been provisioned (or was backfilled by
-        the migration), which is not stale -- there is nothing to compare and
-        the first provision adopts whatever is configured.
-        """
-
-        recorded = sandbox.profile_digest
-        return bool(recorded) and recorded != profile_for(sandbox.kind).digest
 
     async def _provision(
         self, sandbox: Sandbox, *, deadline_at: datetime
@@ -463,9 +472,7 @@ class SandboxService(SandboxVolumeMixin):
                 # later loss is distinguishable from a first provision.
                 await repository.set_provider_volume(sandbox.id, created.provider_id)
             await repository.touch(sandbox.id)
-            await repository.set_desired_state(
-                sandbox.id, SandboxDesiredState.PRESENT
-            )
+            await repository.set_desired_state(sandbox.id, SandboxDesiredState.PRESENT)
             await uow.commit()
 
         return self._handle(
@@ -474,7 +481,6 @@ class SandboxService(SandboxVolumeMixin):
             epoch=epoch,
             storage_generation=storage_generation,
         )
-
 
     async def _start(
         self, sandbox: Sandbox, instance: ProviderInstance, *, deadline_at: datetime
@@ -514,9 +520,7 @@ class SandboxService(SandboxVolumeMixin):
         async with self._uow_factory() as uow:
             repository = SandboxRepository(uow)
             await repository.mark_instance_released(instance.id)
-            await repository.set_desired_state(
-                sandbox_id, SandboxDesiredState.RELEASED
-            )
+            await repository.set_desired_state(sandbox_id, SandboxDesiredState.RELEASED)
             await uow.commit()
 
     async def destroy(self, sandbox_id: UUID, *, delete_storage: bool = False) -> None:
@@ -530,9 +534,7 @@ class SandboxService(SandboxVolumeMixin):
             return
 
         if instance is not None and instance.provider_id:
-            await self._provider.destroy(
-                instance.provider_id, deadline_at=deadline_at
-            )
+            await self._provider.destroy(instance.provider_id, deadline_at=deadline_at)
         if delete_storage and sandbox.provider_volume_id:
             await self._provider.destroy_volume(
                 sandbox.provider_volume_id, deadline_at=deadline_at
@@ -552,6 +554,18 @@ class SandboxService(SandboxVolumeMixin):
     async def _touch(self, sandbox_id: UUID) -> None:
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).touch(sandbox_id)
+            await uow.commit()
+
+    async def _mark_in_use(self, sandbox: Sandbox, instance) -> None:
+        """Adopting a sandbox is a state change; record it as one.
+
+        The reasoning, and the failure it comes from, is on
+        `SandboxRepository.mark_in_use`.
+        """
+        async with self._uow_factory() as uow:
+            await SandboxRepository(uow).mark_in_use(
+                sandbox.id, instance.id if instance is not None else None
+            )
             await uow.commit()
 
     async def _fail(self, instance_id: UUID, error: str) -> None:

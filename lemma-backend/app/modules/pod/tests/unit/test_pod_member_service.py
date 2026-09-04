@@ -214,6 +214,9 @@ async def test_remove_member_owner_path_emits_event_and_deletes_entity(
         role=OrganizationRole.ORG_MEMBER,
     )
     pod_member_repository_mock.delete_entity.return_value = True
+    # The removed member is a POD_EDITOR: their roles do not administer the pod,
+    # so the last-administrator guard has nothing to weigh.
+    pod_member_repository_mock.roles_grant_permission.return_value = False
 
     pod_member_repository_mock.get_by_pod_and_id.return_value = member
 
@@ -291,6 +294,7 @@ async def test_remove_member_revokes_authorization():
     pod_member_repo = AsyncMock()
     pod_member_repo.get_by_pod_and_id.return_value = member
     pod_member_repo.delete_entity.return_value = True
+    pod_member_repo.roles_grant_permission.return_value = False
     pod_repo = AsyncMock()
     pod_repo.get.return_value = pod
     org_repo = AsyncMock()
@@ -554,7 +558,13 @@ async def test_list_pod_members_requires_membership(
     "org_role,pod_member_role,required_role,expected",
     [
         (OrganizationRole.ORG_OWNER, None, PodRole.ADMIN, True),
-        (OrganizationRole.ORG_EDITOR, None, PodRole.ADMIN, True),
+        # An organization editor is not a pod member here, and reaches nothing:
+        # ownership reaches every pod, everybody else reaches the pods they
+        # belong to. One rule, the same one ``PodService.get_pod`` applies --
+        # an editor who could administer a pod they cannot open was the other
+        # half of PS-POD-030.
+        (OrganizationRole.ORG_EDITOR, None, PodRole.ADMIN, False),
+        (OrganizationRole.ORG_EDITOR, PodRole.ADMIN, PodRole.ADMIN, True),
         (OrganizationRole.ORG_MEMBER, PodRole.ADMIN, PodRole.EDITOR, True),
         (OrganizationRole.ORG_MEMBER, PodRole.EDITOR, PodRole.USER, True),
         (OrganizationRole.ORG_MEMBER, PodRole.USER, PodRole.VIEWER, True),
@@ -586,10 +596,12 @@ async def test_check_pod_permission_role_matrix(
     if pod_member_role is None:
         pod_member_repository_mock.get_by_pod_and_org_member.return_value = None
     else:
-        pod_member_repository_mock.get_by_pod_and_org_member.return_value = PodMemberEntity(
-            pod_id=pod.id,
-            organization_member_id=org_member.id,
-            role=pod_member_role,
+        pod_member_repository_mock.get_by_pod_and_org_member.return_value = (
+            PodMemberEntity(
+                pod_id=pod.id,
+                organization_member_id=org_member.id,
+                role=pod_member_role,
+            )
         )
 
     result = await pod_member_service.check_pod_permission(

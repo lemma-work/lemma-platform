@@ -4,50 +4,49 @@ import mimetypes
 from typing import Any
 
 import httpx
-from pydantic_ai.tools import RunContext
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 
-from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
-    OTHER_ANSWER_SUFFIX as _OTHER_SUFFIX,
     SurfaceApprovalRenderPlan,
-    SurfaceChannelInfo,
-    SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
-    SurfaceQuestion,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
-from app.modules.agent_surfaces.domain.surface_event_metadata import (
-    SlackSurfaceEventMetadata,
-)
 from app.modules.agent_surfaces.platforms.common import (
-    background_channel_context_note,
-    channel_author_label,
+    payload_first,
+    payload_text,
 )
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
+
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     fallback_text,
     feedback_actions_block,
     markdown_block,
 )
+from app.modules.agent_surfaces.platforms.slack.channel_reads import (
+    SlackChannelReadsMixin,
+)
+from app.modules.agent_surfaces.platforms.slack.message_blocks import (
+    _approval_blocks,
+    _display_resource_blocks,
+    _progress_status_text,
+    _question_blocks,
+    slack_acknowledgement_body,
+)
+from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
 from app.modules.agent_surfaces.platforms.slack.client import (
     build_slack_client,
+    classify_slack_error,
     slack_access_token,
     slack_customized_message_kwargs,
+    slack_retry_after,
     slack_scopes,
-)
-from app.modules.agent_surfaces.platforms.slack.models import (
-    SLACK_APPROVAL_ACTION_ID_BY_DECISION,
-    SLACK_FORM_SUBMIT_ACTION_ID,
-    SlackChannelMessageSnapshot,
-    SlackFileAttachment,
-    SlackRecentChannelMessagesParams,
-    SlackRecentChannelMessagesResult,
-    SlackSearchChannelMessagesParams,
-    SlackSearchChannelMessagesResult,
 )
 from app.core.log.log import get_logger
 from app.core.net.capped_read import read_capped
@@ -57,8 +56,14 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 
 logger = get_logger(__name__)
 
+#: One ``chat.postMessage`` body. Slack takes a different set of keys per call
+#: (blocks, thread_ts, the ``chat:write.customize`` identity pair), and the
+#: values are whatever that key's shape is, so the value type stays open --
+#: naming the mapping is what the retry helper needs.
+type SlackMessagePayload = dict[str, object]
 
-class SlackPlatformService:
+
+class SlackPlatformService(SlackChannelReadsMixin):
     def __init__(self, *, credentials: dict[str, Any], parser=None) -> None:
         if parser is None:
             from app.modules.agent_surfaces.platforms.slack.parser import (
@@ -68,6 +73,27 @@ class SlackPlatformService:
             parser = SlackMessageParser()
         self.credentials = credentials
         self.parser = parser
+        self._retry_policy = RetryPolicy()
+
+    async def _post_message(
+        self, client: AsyncWebClient, payload: SlackMessagePayload
+    ) -> None:
+        """Post one message, retrying the failures Slack expects us to retry.
+
+        Slack limits ``chat.postMessage`` per channel and answers a throttled
+        call with 429 and a ``Retry-After`` header. Without this the throttle
+        was caught upstream as a transport error, recorded as UNDELIVERED, and
+        the answer was never sent again -- and a chunked answer left the person
+        reading the first part of something the system had written off. Uses
+        the same ``with_retry`` seam Telegram does, so there is one retry
+        policy across the platforms rather than two.
+        """
+        await with_retry(
+            lambda: client.chat_postMessage(**payload),
+            policy=self._retry_policy,
+            classify=classify_slack_error,
+            retry_after=slack_retry_after,
+        )
 
     async def fetch_sender_profile(
         self,
@@ -78,12 +104,12 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         if not user_id or not token:
             logger.debug(
-                'agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic',
+                "agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic",
                 user_id=user_id,
             )
             return None
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             response = await client.users_info(user=user_id)
             user = response.get("user") or {}
@@ -97,7 +123,7 @@ class SlackPlatformService:
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_fetch_sender_profile_user.propagated',
+                "agent_surfaces.service.slack_fetch_sender_profile_user.propagated",
                 user_id=user_id,
                 exc_info=True,
             )
@@ -113,7 +139,7 @@ class SlackPlatformService:
         if not user_id or not token:
             return None
         try:
-            client = build_slack_client(self.credentials)
+            client = await build_slack_client(self.credentials)
             response = await client.users_info(user=user_id)
             user = response.get("user") or {}
             profile = user.get("profile") or {}
@@ -137,11 +163,11 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_send_message_skipped_due.diagnostic'
+                "agent_surfaces.service.slack_send_message_skipped_due.diagnostic"
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         thread_ts = event.reply_target.get("thread_ts")
         identity_kwargs = slack_customized_message_kwargs(
             self.credentials,
@@ -167,15 +193,56 @@ class SlackPlatformService:
                 if thread_ts:
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
-                await client.chat_postMessage(**payload)
+                await self._post_message(client, payload)
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_send_message_channel_s.propagated',
+                "agent_surfaces.service.slack_send_message_channel_s.propagated",
                 exc_info=True,
             )
             raise
 
-    async def send_display_resource(
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None,
+        show_alert: bool,
+        clear_actions: bool,
+    ) -> None:
+        """Answer a tapped button where it was tapped.
+
+        ``response_url`` is the right instrument for this: Slack mints one per
+        interaction, it needs no token and no scope, and ``replace_original``
+        rewrites the very message the button was in. It expires after 30
+        minutes, which is longer than any tap-to-decision gap.
+
+        Best-effort by construction. The decision has already been recorded by
+        the time this runs, so a failed acknowledgement must never raise and
+        undo it -- but until this existed, a tap on Slack produced no
+        confirmation, left the buttons live, and reported a failure to nobody.
+        """
+        del show_alert  # Slack has no modal alert outside a trigger_id flow.
+        response_url = str(
+            (interaction.raw_payload or {}).get("response_url") or ""
+        ).strip()
+        if not response_url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                await http_client.post(
+                    response_url,
+                    json=slack_acknowledgement_body(
+                        (interaction.raw_payload or {}).get("message") or {},
+                        text=text,
+                        clear_actions=clear_actions,
+                    ),
+                )
+        except httpx.HTTPError, httpx.InvalidURL:
+            logger.debug(
+                "agent_surfaces.service.slack_interaction_acknowledgement_best.observed"
+            )
+
+    async def _render_resource(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -186,11 +253,11 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             logger.debug(
-                'agent_surfaces.service.slack_send_display_resource_skipped.diagnostic'
+                "agent_surfaces.service.slack_send_display_resource_skipped.diagnostic"
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             payload: dict[str, Any] = {
                 "channel": channel,
@@ -208,15 +275,15 @@ class SlackPlatformService:
                     (metadata or {}).get("agent_display_name"),
                 )
             )
-            await client.chat_postMessage(**payload)
+            await self._post_message(client, payload)
         except Exception:
             logger.debug(
-                'agent_surfaces.service.slack_send_display_resource_channel.propagated',
+                "agent_surfaces.service.slack_send_display_resource_channel.propagated",
                 exc_info=True,
             )
             raise
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -228,7 +295,7 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {
             "channel": channel,
             "text": question_plan.title,
@@ -242,10 +309,10 @@ class SlackPlatformService:
                 self.credentials, (metadata or {}).get("agent_display_name")
             )
         )
-        await client.chat_postMessage(**payload)
+        await self._post_message(client, payload)
         return True
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
@@ -257,7 +324,7 @@ class SlackPlatformService:
         channel = event.reply_target.get("channel")
         if not token or not channel:
             return False
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         payload: dict[str, Any] = {
             "channel": channel,
             "text": f"Approval needed: {approval_plan.title}",
@@ -271,7 +338,7 @@ class SlackPlatformService:
                 self.credentials, (metadata or {}).get("agent_display_name")
             )
         )
-        await client.chat_postMessage(**payload)
+        await self._post_message(client, payload)
         return True
 
     async def add_processing_indicator(
@@ -286,11 +353,11 @@ class SlackPlatformService:
         thread_ts = event.reply_target.get("thread_ts")
         if not token or not channel or not timestamp:
             logger.debug(
-                'agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic'
+                "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic"
             )
             return
 
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         try:
             if (
                 event.is_dm
@@ -318,7 +385,7 @@ class SlackPlatformService:
                         # returning, or the DM shows no indicator at all while
                         # the agent works.
                         logger.debug(
-                            'agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic',
+                            "agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic",
                             error_code=error_code,
                         )
                     else:
@@ -332,66 +399,15 @@ class SlackPlatformService:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
                 logger.debug(
-                    'agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic',
+                    "agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic",
                     error_code=error_code,
                 )
                 return
             logger.debug(
-                'agent_surfaces.service.slack_add_processing_indicator_channel.propagated',
+                "agent_surfaces.service.slack_add_processing_indicator_channel.propagated",
                 exc_info=True,
             )
             raise
-
-    async def list_channels(self) -> list[SurfaceChannelInfo]:
-        """List Slack public/private channels for configuring channel routes.
-
-        Private channels need ``groups:read``, which a workspace installed
-        before that scope shipped will not have granted. Slack answers such a
-        request with ``missing_scope``, so the first failure retries with public
-        channels only rather than leaving the picker empty.
-        """
-        client = build_slack_client(self.credentials)
-        channels: list[SurfaceChannelInfo] = []
-        cursor: str | None = None
-        channel_types = "public_channel,private_channel"
-        for _ in range(20):  # bounded pagination safety
-            try:
-                response = await client.conversations_list(
-                    types=channel_types,
-                    exclude_archived=True,
-                    limit=200,
-                    cursor=cursor,
-                )
-            except SlackApiError as exc:
-                error_code = str((exc.response or {}).get("error") or "")
-                if error_code != "missing_scope" or channel_types == "public_channel":
-                    raise
-                logger.debug(
-                    "agent_surfaces.service.slack_list_channels_private_unavailable.diagnostic",
-                    error_code=error_code,
-                )
-                channel_types = "public_channel"
-                continue
-            for item in response.get("channels") or []:
-                channel_id = str((item or {}).get("id") or "").strip()
-                if not channel_id:
-                    continue
-                channels.append(
-                    SurfaceChannelInfo(
-                        id=channel_id,
-                        name=item.get("name"),
-                        is_member=item.get("is_member"),
-                    )
-                )
-            cursor = (
-                str(
-                    (response.get("response_metadata") or {}).get("next_cursor") or ""
-                ).strip()
-                or None
-            )
-            if not cursor:
-                break
-        return channels
 
     async def download_attachment_bytes(
         self,
@@ -403,48 +419,66 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         if not token:
             return None
-        download_url = str(attachment.get("download_url") or "").strip()
-        file_id = str(attachment.get("id") or "").strip()
-        file_item: dict[str, Any] = {}
-        if not download_url and file_id:
-            client = build_slack_client(self.credentials)
-            response = await client.files_info(file=file_id)
-            file_item = response.get("file") or {}
-            download_url = str(
-                file_item.get("url_private_download")
-                or file_item.get("url_private")
-                or ""
-            ).strip()
+        download_url, file_item = await self._resolve_attachment_url(attachment)
         if not download_url:
             return None
-        file_name = (
-            str(attachment.get("name") or "").strip()
-            or str(file_item.get("name") or "").strip()
+        file_name = self._attachment_file_name(attachment, file_item, download_url)
+        content = await self._download_capped(download_url, token)
+        return (
+            content,
+            file_name,
+            _attachment_mime_type(attachment, file_item, file_name),
+        )
+
+    async def _resolve_attachment_url(
+        self, attachment: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """The URL to fetch, asking Slack for it when the event carried none."""
+        download_url = payload_text(attachment, "download_url").strip()
+        if download_url:
+            return download_url, {}
+        file_id = payload_text(attachment, "id").strip()
+        if not file_id:
+            return "", {}
+        client = await build_slack_client(self.credentials)
+        response = await client.files_info(file=file_id)
+        file_item = response.get("file") or {}
+        return (
+            payload_first(file_item, "url_private_download", "url_private").strip(),
+            file_item,
+        )
+
+    def _attachment_file_name(
+        self,
+        attachment: dict[str, Any],
+        file_item: dict[str, Any],
+        download_url: str,
+    ) -> str:
+        """A name for the file: from the event, from Slack, or from the URL."""
+        return (
+            payload_text(attachment, "name").strip()
+            or payload_text(file_item, "name").strip()
             or self._filename_from_url(download_url)
             or "slack_file"
         )
+
+    async def _download_capped(self, url: str, token: str) -> bytes:
+        """Fetch the file, streamed and capped.
+
+        The caller checked ``attachment["size"]`` first, but Slack does not
+        always send one, and a declared size is the sender's claim rather than a
+        limit on what actually arrives.
+        """
         async with httpx.AsyncClient(timeout=60.0) as http_client:
-            # Streamed and capped: the caller checked `attachment["size"]`
-            # first, but Slack does not always send one, and a declared size is
-            # the sender's claim rather than a limit on what arrives.
             async with http_client.stream(
                 "GET",
-                download_url,
+                url,
                 headers={"Authorization": f"Bearer {token}"},
             ) as response:
                 response.raise_for_status()
-                content = await read_capped(
+                return await read_capped(
                     response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
                 )
-        mime_type = (
-            str(
-                attachment.get("mime_type") or attachment.get("content_type") or ""
-            ).strip()
-            or str(file_item.get("mimetype") or "").strip()
-            or mimetypes.guess_type(file_name)[0]
-            or "application/octet-stream"
-        )
-        return content, file_name, mime_type
 
     async def send_file_bytes(
         self,
@@ -462,7 +496,7 @@ class SlackPlatformService:
         if not token or not channel:
             return False
         thread_ts = event.reply_target.get("thread_ts")
-        client = build_slack_client(self.credentials)
+        client = await build_slack_client(self.credentials)
         upload_ticket = await client.files_getUploadURLExternal(
             filename=file_name, length=len(file_bytes)
         )
@@ -499,245 +533,8 @@ class SlackPlatformService:
             await client.files_completeUploadExternal(**fallback_payload)
         return True
 
-    async def get_recent_channel_messages(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: SlackRecentChannelMessagesParams,
-    ) -> SlackRecentChannelMessagesResult:
-        token = slack_access_token(self.credentials)
-        channel = ctx.deps.external_channel_id
-        if not token or not channel:
-            logger.debug(
-                'agent_surfaces.service.slack_get_recent_channel_messages.diagnostic',
-                conversation_id=ctx.deps.conversation_id,
-            )
-            return SlackRecentChannelMessagesResult(
-                success=False,
-                error="Slack conversation context is missing channel credentials.",
-            )
-
-        try:
-            client = build_slack_client(self.credentials)
-            response = await client.conversations_history(
-                **_build_channel_history_kwargs(
-                    channel=str(channel),
-                    limit=request.limit,
-                    current_thread_id=ctx.deps.external_thread_id,
-                    include_current_thread=request.include_current_thread,
-                )
-            )
-            messages = self._normalize_slack_messages(
-                response.get("messages") or [],
-                current_thread_id=ctx.deps.external_thread_id,
-                include_current_thread=request.include_current_thread,
-            )
-            return SlackRecentChannelMessagesResult(
-                success=True,
-                message=background_channel_context_note(len(messages)),
-                messages=messages,
-            )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.service.slack_get_recent_channel_messages.propagated',
-                conversation_id=ctx.deps.conversation_id,
-                exc_info=True,
-            )
-            raise
-
-    async def fetch_recent_context(
-        self,
-        *,
-        event: ParsedInboundSurfaceEvent,
-        limit: int = 15,
-    ) -> list[SurfaceContextMessage]:
-        """Recent thread/channel messages for background context on a mention.
-
-        Uses conversations.replies inside a thread, else conversations.history.
-        Best-effort: missing creds / API errors yield an empty list.
-        """
-        token = slack_access_token(self.credentials)
-        channel = event.external_channel_id
-        if not token or not channel:
-            return []
-        thread_ts = event.external_thread_id
-        try:
-            client = build_slack_client(self.credentials)
-            if thread_ts and str(thread_ts) != str(channel):
-                response = await client.conversations_replies(
-                    channel=str(channel), ts=str(thread_ts), limit=limit
-                )
-                raw = list(response.get("messages") or [])  # oldest-first
-            else:
-                response = await client.conversations_history(
-                    channel=str(channel), limit=limit
-                )
-                # history is newest-first → flip to chronological
-                raw = list(reversed(response.get("messages") or []))
-        except Exception:
-            logger.debug(
-                'agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic'
-            )
-            return []
-
-        current_ts = str(event.external_message_id or "")
-        out: list[SurfaceContextMessage] = []
-        for item in raw[-limit:]:
-            if not isinstance(item, dict):
-                continue
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            ts = str(item.get("ts") or "")
-            if current_ts and ts == current_ts:
-                continue  # the message being handled isn't "context"
-            author = str(item.get("user") or item.get("username") or "").strip() or None
-            out.append(SurfaceContextMessage(author=author, text=text, ts=ts or None))
-        return out
-
-    async def search_current_channel(
-        self,
-        *,
-        ctx: RunContext[ConversationContext],
-        request: SlackSearchChannelMessagesParams,
-    ) -> SlackSearchChannelMessagesResult:
-        token = slack_access_token(self.credentials)
-        channel = ctx.deps.external_channel_id
-        if not token or not channel:
-            logger.debug(
-                'agent_surfaces.service.slack_search_current_channel_missing.diagnostic',
-                conversation_id=ctx.deps.conversation_id,
-            )
-            return SlackSearchChannelMessagesResult(
-                success=False,
-                error="Slack conversation context is missing channel credentials.",
-            )
-
-        try:
-            client = build_slack_client(self.credentials)
-            matches: list[SlackChannelMessageSnapshot] = []
-            cursor: str | None = None
-            remaining = request.scan_limit
-            query = request.query.strip().lower()
-            if not query:
-                return SlackSearchChannelMessagesResult(
-                    success=False,
-                    error="Query cannot be empty.",
-                )
-
-            while remaining > 0 and len(matches) < request.limit:
-                batch_size = min(100, remaining)
-                history_kwargs = _build_channel_history_kwargs(
-                    channel=str(channel),
-                    limit=batch_size,
-                    current_thread_id=ctx.deps.external_thread_id,
-                    include_current_thread=request.include_current_thread,
-                    cursor=cursor,
-                )
-                response = await client.conversations_history(**history_kwargs)
-                normalized_batch = self._normalize_slack_messages(
-                    response.get("messages") or [],
-                    current_thread_id=ctx.deps.external_thread_id,
-                    include_current_thread=request.include_current_thread,
-                )
-                for item in normalized_batch:
-                    remaining -= 1
-                    if query in item.text.lower():
-                        matches.append(item)
-                        if len(matches) >= request.limit:
-                            break
-                    if remaining <= 0:
-                        break
-
-                cursor = (
-                    str(
-                        (response.get("response_metadata") or {}).get("next_cursor")
-                        or ""
-                    ).strip()
-                    or None
-                )
-                if not cursor:
-                    break
-
-            return SlackSearchChannelMessagesResult(
-                success=True,
-                message=background_channel_context_note(len(matches)),
-                matches=matches,
-            )
-        except Exception:
-            logger.debug(
-                'agent_surfaces.service.slack_search_current_channel_channel.propagated',
-                conversation_id=ctx.deps.conversation_id,
-                exc_info=True,
-            )
-            raise
-
-    def _current_message_attachments(
-        self,
-        ctx: RunContext[ConversationContext],
-    ) -> list[SlackFileAttachment]:
-        metadata = ctx.deps.surface_metadata
-        if not isinstance(metadata, SlackSurfaceEventMetadata):
-            return []
-        return list(metadata.attachments)
-
-    def _normalize_slack_messages(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        current_thread_id: str | None,
-        include_current_thread: bool,
-    ) -> list[SlackChannelMessageSnapshot]:
-        normalized: list[SlackChannelMessageSnapshot] = []
-        for item in reversed(messages):
-            if not isinstance(item, dict):
-                continue
-            parsed = (
-                self.parser.normalize_context_message(item) if self.parser else None
-            )
-            if parsed is None:
-                continue
-            snapshot = SlackChannelMessageSnapshot.model_validate(parsed)
-            if (
-                not include_current_thread
-                and current_thread_id
-                and snapshot.thread_ts == current_thread_id
-            ):
-                continue
-            if snapshot.author_label is None:
-                snapshot.author_label = channel_author_label(
-                    snapshot.display_name, snapshot.user
-                )
-            normalized.append(snapshot)
-        return normalized
-
     def _filename_from_url(self, value: str) -> str:
         return str(value or "").rstrip("/").split("/")[-1].strip()
-
-
-def _markdown_chunk(text: str) -> dict[str, Any]:
-    """Model text as a stream chunk.
-
-    A stream is either chunk-based or plain-text for its whole life. Because
-    the step timeline uses chunks, the answer must be a chunk too — appending
-    top-level ``markdown_text`` to a chunk stream is rejected with
-    ``streaming_mode_mismatch``.
-    """
-    return {"type": "markdown_text", "text": text}
-
-
-def _task_chunk(sequence: int, title: str | None, status: str) -> dict[str, Any]:
-    """One step of the agent's work, as a Slack ``task_update`` chunk.
-
-    The id is stable per step so appending the same id with ``complete`` closes
-    the step already on screen rather than adding a second one.
-    """
-    return {
-        "type": "task_update",
-        "id": f"step-{sequence}",
-        "title": _truncate_slack_text(str(title or "Working…"), 200) or "Working…",
-        "status": status,
-    }
 
 
 def _slack_rejected_customized_identity(exc: SlackApiError) -> bool:
@@ -748,209 +545,13 @@ def _slack_rejected_customized_identity(exc: SlackApiError) -> bool:
     return any("username" in str(message).lower() for message in messages)
 
 
-def _progress_status_text(metadata: dict[str, Any] | None) -> tuple[str, str]:
-    progress_text = (metadata or {}).get("progress_text")
-    if isinstance(progress_text, str) and progress_text.strip():
-        text = progress_text.strip()
-        return text, text
-    return "is taking a look...", "Taking a look..."
-
-
-def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None:
-    """A single/multi static_select whose option values are the option labels.
-
-    The block_id is the question header, so the flattened submission comes back
-    keyed by header → the chosen option label(s), ready for AskUserResponse.
-    """
-    options = [
-        {
-            "text": {
-                "type": "plain_text",
-                "text": _truncate_slack_text(
-                    f"{opt.label} (recommended)" if opt.recommended else opt.label,
-                    74,
-                )
-                or "—",
-            },
-            "value": opt.label,
-        }
-        for opt in question.options[:100]
-    ]
-    if not options:
-        return None
-    return {
-        "type": ("multi_static_select" if question.multi_select else "static_select"),
-        "action_id": question.header,
-        "options": options,
-    }
-
-
-def _question_blocks(plan: SurfaceQuestionRenderPlan) -> list[dict[str, Any]]:
-    """Build Block Kit select blocks (+ optional Other text) + a Submit button."""
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": _truncate_slack_text(plan.title, 150) or "Questions",
-            },
-        }
-    ]
-    for question in plan.questions:
-        element = _question_select_element(question)
-        if element is None:
-            continue
-        blocks.append(
-            {
-                "type": "input",
-                "block_id": question.header,
-                "optional": True,
-                "label": {
-                    "type": "plain_text",
-                    "text": _truncate_slack_text(question.question, 150)
-                    or question.header,
-                },
-                "element": element,
-            }
-        )
-        if plan.allow_other:
-            blocks.append(
-                {
-                    "type": "input",
-                    "block_id": f"{question.header}{_OTHER_SUFFIX}",
-                    "optional": True,
-                    "label": {
-                        "type": "plain_text",
-                        "text": "Other (type your own)",
-                    },
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": f"{question.header}{_OTHER_SUFFIX}",
-                    },
-                }
-            )
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": SLACK_FORM_SUBMIT_ACTION_ID,
-                    "style": "primary",
-                    "text": {
-                        "type": "plain_text",
-                        "text": _truncate_slack_text(plan.submit_label, 74) or "Submit",
-                    },
-                    "value": plan.callback_id,
-                }
-            ],
-        }
+def _attachment_mime_type(
+    attachment: dict[str, Any], file_item: dict[str, Any], file_name: str
+) -> str:
+    """The content type: from the event, from Slack, or guessed from the name."""
+    return (
+        payload_first(attachment, "mime_type", "content_type").strip()
+        or payload_text(file_item, "mimetype").strip()
+        or mimetypes.guess_type(file_name)[0]
+        or "application/octet-stream"
     )
-    return blocks
-
-
-def _approval_blocks(plan: SurfaceApprovalRenderPlan) -> list[dict[str, Any]]:
-    """Build a section (title/reason/action) + Approve/Deny action buttons.
-
-    Each button's ``action_id`` encodes the decision; its ``value`` carries the
-    callback id so the block_actions parser can route the tap back to the run.
-    """
-    text_parts = [f"*Approval needed:* {_slack_escape(plan.title)}"]
-    if plan.reason:
-        text_parts.append(_slack_escape(plan.reason))
-    if plan.action_summary:
-        text_parts.append(f"> Action: `{_slack_escape(plan.action_summary)}`")
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": _truncate_slack_text("\n".join(text_parts), 2900),
-            },
-        }
-    ]
-    elements: list[dict[str, Any]] = []
-    for button in plan.buttons:
-        action_id = SLACK_APPROVAL_ACTION_ID_BY_DECISION.get(button.decision)
-        if action_id is None:
-            continue
-        element: dict[str, Any] = {
-            "type": "button",
-            "action_id": action_id,
-            "text": {
-                "type": "plain_text",
-                "text": _truncate_slack_text(button.label, 74) or "Approve",
-            },
-            "value": plan.callback_id,
-        }
-        if button.style in ("primary", "danger"):
-            element["style"] = button.style
-        elements.append(element)
-    blocks.append({"type": "actions", "elements": elements})
-    return blocks
-
-
-def _display_resource_blocks(
-    render_plan: SurfaceDisplayRenderPlan,
-) -> list[dict[str, Any]]:
-    text_parts = [f"*{_slack_escape(render_plan.title)}*"]
-    if render_plan.summary:
-        text_parts.append(_slack_escape(render_plan.summary))
-    for line in render_plan.detail_lines[:4]:
-        text_parts.append(f"> {_slack_escape(line)}")
-
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": _truncate_slack_text("\n".join(text_parts), 2900),
-            },
-        }
-    ]
-    action = render_plan.primary_action
-    if action is not None:
-        blocks.append(
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": _truncate_slack_text(action.label, 75),
-                        },
-                        "url": action.url,
-                    }
-                ],
-            }
-        )
-    return blocks
-
-
-def _slack_escape(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _truncate_slack_text(value: str, max_length: int) -> str:
-    if len(value) <= max_length:
-        return value
-    return value[: max_length - 1].rstrip() + "..."
-
-
-def _build_channel_history_kwargs(
-    *,
-    channel: str,
-    limit: int,
-    current_thread_id: str | None,
-    include_current_thread: bool,
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"channel": channel, "limit": limit}
-    if cursor:
-        kwargs["cursor"] = cursor
-        return kwargs
-    if current_thread_id and not include_current_thread and not channel.startswith("D"):
-        kwargs["latest"] = current_thread_id
-        kwargs["inclusive"] = False
-    return kwargs

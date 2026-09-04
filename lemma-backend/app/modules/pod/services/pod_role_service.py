@@ -7,13 +7,14 @@ from uuid import UUID
 from fastapi import HTTPException, status
 
 from app.core.authorization.cache import invalidate_role_snapshot_cache
+from app.core.authorization.conferral import refuse_conferral_beyond
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.grants import delete_grantee_grants
+from app.core.authorization.permissions import SYSTEM_ROLE_PERMISSIONS
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod.domain.role_entities import PodRoleEntity, SYSTEM_ROLE_NAMES
 from app.modules.pod.domain.roles import PodRole
 from app.modules.pod.domain.visibility import (
-    ROLE_HIERARCHY,
     normalize_role_list,
     normalize_role_name,
     roles_allow_required,
@@ -130,7 +131,9 @@ class PodRoleService:
         if not normalized_roles:
             raise HTTPException(status_code=400, detail="At least one role is required")
 
-        role_rows = await self._roles.get_roles_by_names(pod_id=pod_id, names=normalized_roles)
+        role_rows = await self._roles.get_roles_by_names(
+            pod_id=pod_id, names=normalized_roles
+        )
         missing = set(normalized_roles) - {role.name for role in role_rows}
         if missing:
             raise HTTPException(
@@ -177,9 +180,7 @@ class PodRoleService:
             grantee_type="POD_MEMBER",
             grantee_id=pod_member_id,
         )
-        self._uow.after_commit(
-            lambda: invalidate_role_snapshot_cache(user_id=user_id)
-        )
+        self._uow.after_commit(lambda: invalidate_role_snapshot_cache(user_id=user_id))
 
     async def get_member_roles_by_user_id(
         self,
@@ -204,29 +205,96 @@ class PodRoleService:
         requester_user_id: UUID,
         target_roles: list[str | PodRole],
         target_user_id: UUID | None = None,
+        requester_is_org_owner: bool = False,
     ) -> None:
+        """Refuse an assignment that would confer more than the requester holds.
+
+        The bound used to be a rank comparison against ``ROLE_HIERARCHY``, which
+        names only the four built-in roles -- so ``.get(role, 0)`` scored every
+        *custom* role zero and waved it through. A custom role carrying
+        ``pod.member.manage`` was, to that check, indistinguishable from
+        POD_VIEWER, and assigning it made the target an administrator in
+        everything but name.
+
+        Ranks cannot express the rule PS-POD-013 states. A custom role is a set
+        of permissions and nothing else, so the bound is a set comparison: every
+        permission the target roles carry must be one the requester already
+        holds. Built-in roles obey it for free (POD_ADMIN's permissions are not
+        a subset of POD_EDITOR's), which is why there is now one check rather
+        than a rank cap plus a hole where custom roles fall through.
+        """
         requester_roles = await self.get_member_roles_by_user_id(
             pod_id=pod_id,
             user_id=requester_user_id,
         )
-        if roles_allow_required(requester_roles, PodRole.ADMIN):
+        if not roles_allow_required(requester_roles, PodRole.ADMIN):
+            if not roles_allow_required(requester_roles, PodRole.EDITOR):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Pod editor or admin role is required",
+                )
+            if target_user_id == requester_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Editors cannot change their own pod roles",
+                )
+        # An organization owner already holds every authority the organization
+        # can express, so there is nothing for the bound to protect -- the same
+        # exemption ``assert_can_confer`` makes for them.
+        if requester_is_org_owner:
             return
-        if not roles_allow_required(requester_roles, PodRole.EDITOR):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Pod editor or admin role is required",
-            )
-        if target_user_id == requester_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Editors cannot change their own pod roles",
-            )
-        normalized_target_roles = normalize_role_list(target_roles)
-        if any(
-            ROLE_HIERARCHY.get(role, 0) > ROLE_HIERARCHY[PodRole.EDITOR.value]
-            for role in normalized_target_roles
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Editors cannot assign roles above POD_EDITOR",
-            )
+        await self._refuse_conferral_beyond_requester(
+            pod_id=pod_id,
+            requester_roles=requester_roles,
+            target_roles=normalize_role_list(target_roles),
+        )
+
+    async def _refuse_conferral_beyond_requester(
+        self,
+        *,
+        pod_id: UUID,
+        requester_roles: list[str],
+        target_roles: list[str],
+    ) -> None:
+        carried = await self._permission_ids_by_role_name(
+            pod_id=pod_id,
+            role_names=sorted({*requester_roles, *target_roles}),
+        )
+        held: set[str] = set()
+        for role in requester_roles:
+            held |= carried.get(role, set())
+        requested: set[str] = set()
+        for role in target_roles:
+            requested |= carried.get(role, set())
+        # Raised as a DomainError and left to propagate: the global handler
+        # translates it with its own code intact, where an HTTPException would
+        # flatten the refusal to a bare HTTP_403 the client cannot branch on.
+        refuse_conferral_beyond(
+            held=held,
+            requested=requested,
+            action="assign a role carrying permissions you do not hold",
+        )
+
+    async def _permission_ids_by_role_name(
+        self,
+        *,
+        pod_id: UUID,
+        role_names: list[str],
+    ) -> dict[str, set[str]]:
+        """Permission ids per role name, with built-in roles resolved from code.
+
+        The rows are authoritative for custom roles. Built-in roles are seeded
+        from ``SYSTEM_ROLE_PERMISSIONS`` and are re-seeded on demand, so a pod
+        whose system rows have not been written yet would otherwise resolve
+        POD_ADMIN to the empty set -- and an empty target set passes any bound.
+        Reading them from the constant makes the check independent of whether
+        the seeding has happened.
+        """
+        stored = await self._roles.get_permission_ids_by_role_name(
+            pod_id=pod_id,
+            names=role_names,
+        )
+        return {
+            name: set(SYSTEM_ROLE_PERMISSIONS.get(name, ())) | stored.get(name, set())
+            for name in role_names
+        }

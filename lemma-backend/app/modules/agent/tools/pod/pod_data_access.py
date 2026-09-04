@@ -18,15 +18,12 @@ from typing import AsyncIterator
 
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.context import BaseAgentContext
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     DatastoreFileService,
     RecordService,
     TableService,
@@ -34,17 +31,7 @@ from app.composition.agent_datastore import (
     build_record_service,
     build_table_service,
 )
-from app.composition.authorization import (
-    create_authorization_service,
-)
-
-
-def _is_default_pod_agent(deps: BaseAgentContext) -> bool:
-    """The pod default assistant runs with the user's own permissions."""
-    return deps.workload_id in (None, DEFAULT_POD_AGENT_ID) or deps.agent_name in (
-        None,
-        DEFAULT_POD_AGENT_NAME,
-    )
+from app.core.authorization.factory import create_authorization_data_service
 
 
 @dataclass(slots=True)
@@ -65,14 +52,14 @@ async def pod_services(deps: BaseAgentContext) -> AsyncIterator[PodServices]:
     grants are the sole limiter (matching the agent's real workspace token).
     """
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await create_authorization_service(
+        auth_ctx = await create_authorization_data_service(
             uow
         ).build_delegated_workload_context(
             user_id=deps.user_id,
             principal_type="AGENT",
             principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
             pod_id=deps.pod_id,
-            is_default_pod_agent=_is_default_pod_agent(deps),
+            is_default_pod_agent=deps.is_pod_default_agent,
             delegation_actor_name=deps.agent_name,
             # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
             delegation_session_id=str(deps.conversation_id),
@@ -120,7 +107,9 @@ async def empty_data_error(
     services: PodServices, request: PodWriteRecordRequest
 ) -> str:
     columns = await writable_column_names(services, request.table_name)
-    listed = f' Columns on "{request.table_name}": {", ".join(columns)}.' if columns else ""
+    listed = (
+        f' Columns on "{request.table_name}": {", ".join(columns)}.' if columns else ""
+    )
     return (
         f"`data` must be a non-empty object of column->value for "
         f'action=\'{request.action}\', e.g. {{"title": "..."}}. The payload was '

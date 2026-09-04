@@ -19,7 +19,15 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
  * queues the request. The response says which happened rather than guessing up
  * front, because the policy is not readable from out here.
  */
-export function JoinPodPanel({ podId }: { podId: string }) {
+export function JoinPodPanel({
+    podId,
+    intro,
+}: {
+    podId: string;
+    /** Overrides the ask for a link that *is* the pod, where "this lives in a
+     *  pod you're not part of" describes nothing the reader clicked. */
+    intro?: string;
+}) {
     const queryClient = useQueryClient();
     const client = getLemmaClient();
     const requestKey = ['share-join-request', podId];
@@ -83,8 +91,12 @@ export function JoinPodPanel({ podId }: { podId: string }) {
     return (
         <section className="rounded-lg border border-[color:var(--border-subtle)] bg-[var(--surface-1)] p-5 text-center">
             <p className="text-sm text-[var(--text-secondary)]">
-                This lives in a pod you&apos;re not part of. Join it to open this and everything
-                else the pod shares.
+                {intro ?? (
+                    <>
+                        This lives in a pod you&apos;re not part of. Join it to open this and everything
+                        else the pod shares.
+                    </>
+                )}
             </p>
             <Button
                 type="button"

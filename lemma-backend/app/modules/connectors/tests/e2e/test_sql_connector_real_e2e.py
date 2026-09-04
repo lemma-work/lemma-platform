@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
+import os
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -32,9 +34,45 @@ from app.modules.connectors.infrastructure.adapters.sql_executor import SqlExecu
 from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.services.execution import KindDispatcher
 
+
+# Before settings is read anywhere, so the worker and any other reader see it
+# too — patching the attribute alone reaches one instance and one moment.
+os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
+
+
+@pytest.fixture(autouse=True)
+def _reachable_local_server(monkeypatch):
+    """These connect to a real server on loopback, so model self-hosting.
+
+    The kind re-checks its target when the call is made now, not only when the
+    install was created, and production refuses loopback — correctly. Scoped to
+    this file rather than the whole e2e suite on purpose: a blanket fixture
+    would also disable the guard for the tests that assert it *refuses*, which
+    is how a security check quietly stops being tested.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
+
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
-_TENANT_DB = "connector_sql_e2e"
+
+def _tenant_db_name(worker_id: str) -> str:
+    """Namespace the tenant database per xdist worker.
+
+    The e2e stack now shares one Postgres server across all xdist workers
+    (see ``shared_postgres`` in test_utils.py) rather than giving each
+    worker its own container. A fixed name here would let two workers'
+    concurrent DROP DATABASE/CREATE DATABASE calls race on the same
+    database -- exactly what happened before this fix, surfacing as
+    ``InvalidCatalogNameError: database "connector_sql_e2e" does not
+    exist`` when one worker's teardown yanked it out from under another's
+    still-running test.
+    """
+    import re
+
+    return f"connector_sql_e2e_{re.sub(r'[^0-9a-zA-Z_]', '_', worker_id)}"
 
 
 def _admin_url(test_database_url: str) -> str:
@@ -52,16 +90,19 @@ def _parts(url: str) -> dict:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def tenant_database(test_database_url):
+async def tenant_database(test_database_url, worker_id):
     """A real database standing in for the customer's, seeded with real rows."""
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    tenant_db = _tenant_db_name(worker_id)
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE IF EXISTS "{_TENANT_DB}" WITH (FORCE)'))
-        await conn.execute(text(f'CREATE DATABASE "{_TENANT_DB}"'))
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
+        await conn.execute(text(f'CREATE DATABASE "{tenant_db}"'))
     await admin.dispose()
 
     base = test_database_url.rsplit("/", 1)[0]
-    tenant_url = f"{base}/{_TENANT_DB}"
+    tenant_url = f"{base}/{tenant_db}"
     engine = create_async_engine(tenant_url)
     async with engine.begin() as conn:
         await conn.execute(
@@ -74,7 +115,9 @@ async def tenant_database(test_database_url):
             )
         )
         await conn.execute(text("CREATE SCHEMA reporting"))
-        await conn.execute(text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)"))
+        await conn.execute(
+            text("CREATE TABLE reporting.invoices (id integer PRIMARY KEY)")
+        )
         await conn.execute(
             text(
                 "INSERT INTO invoices (id, customer, amount_cents, paid) "
@@ -86,19 +129,21 @@ async def tenant_database(test_database_url):
 
     yield {"url": tenant_url, **_parts(test_database_url)}
 
-    admin = create_async_engine(_admin_url(test_database_url), isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(
+        _admin_url(test_database_url), isolation_level="AUTOCOMMIT"
+    )
     async with admin.connect() as conn:
-        await conn.execute(text(f'DROP DATABASE IF EXISTS "{_TENANT_DB}" WITH (FORCE)'))
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{tenant_db}" WITH (FORCE)'))
     await admin.dispose()
 
 
 @pytest.fixture
-def connection_config(tenant_database):
+def connection_config(tenant_database, worker_id):
     return {
         "dialect": "postgresql",
         "host": tenant_database["host"],
         "port": tenant_database["port"],
-        "database": _TENANT_DB,
+        "database": _tenant_db_name(worker_id),
     }
 
 
@@ -140,7 +185,9 @@ class TestReadPath:
     async def test_list_tables_sees_both_schemas_and_hides_the_catalog(
         self, connection_config, credentials
     ):
-        result = await _run(SqlExecutor(), "list_tables", {}, connection_config, credentials)
+        result = await _run(
+            SqlExecutor(), "list_tables", {}, connection_config, credentials
+        )
         found = {(row["table_schema"], row["table_name"]) for row in result["rows"]}
         assert ("public", "invoices") in found
         assert ("reporting", "invoices") in found
@@ -150,7 +197,11 @@ class TestReadPath:
         self, connection_config, credentials
     ):
         result = await _run(
-            SqlExecutor(), "list_tables", {"schema": "reporting"}, connection_config, credentials
+            SqlExecutor(),
+            "list_tables",
+            {"schema": "reporting"},
+            connection_config,
+            credentials,
         )
         assert {row["table_schema"] for row in result["rows"]} == {"reporting"}
 
@@ -212,7 +263,9 @@ class TestTheServerEnforcesReadOnly:
     )
     async def test_writes_are_rejected(self, sql, connection_config, credentials):
         with pytest.raises(OperationExecutionValidationError):
-            await _run(SqlExecutor(), "query", {"query": sql}, connection_config, credentials)
+            await _run(
+                SqlExecutor(), "query", {"query": sql}, connection_config, credentials
+            )
 
     async def test_a_write_smuggled_past_the_parser_still_fails_on_the_server(
         self, connection_config, credentials
@@ -266,21 +319,33 @@ class TestFailureHandling:
             )
 
     async def test_statement_timeout_stops_a_runaway_query(
-        self, connection_config, credentials
+        self, connection_config, credentials, monkeypatch
     ):
-        # pg_sleep well past the 30s statement_timeout would hang the worker if
-        # the timeout were not actually applied to the connection.
+        # What is under test is that a statement_timeout is applied to the
+        # connection at all -- a runaway tenant query has to be stopped by
+        # Postgres rather than by hanging a worker. Which number it is set to
+        # is configuration, and waiting out the real 30s default made this the
+        # fifth-slowest test in the e2e suite for no extra proof. Shrink the
+        # timeout and sleep past the small one instead.
+        monkeypatch.setattr(
+            "app.modules.connectors.infrastructure.adapters.sql_executor."
+            "_DEFAULT_STATEMENT_TIMEOUT_MS",
+            1_000,
+        )
         executor = SqlExecutor()
         with pytest.raises(OperationExecutionInfrastructureError):
             await asyncio.wait_for(
                 _run(
                     executor,
                     "query",
-                    {"query": "SELECT pg_sleep(45)"},
+                    {"query": "SELECT pg_sleep(30)"},
                     connection_config,
                     credentials,
                 ),
-                timeout=40,
+                # Comfortably longer than the patched timeout and far shorter
+                # than the pg_sleep: if this deadline is what fires, the
+                # statement_timeout did not.
+                timeout=15,
             )
         await executor.dispose_all()
 
@@ -349,3 +414,67 @@ class TestThroughTheDispatcher:
         )
         result = await dispatcher.execute(request)
         assert result["rows"][0]["n"] == 50
+
+
+class TestTheRowCapActuallyBoundsTheFetch:
+    """A cap that only slices an already-materialised list is not a cap.
+
+    `row_cap` was applied with `fetchmany` on a buffered result, so asyncpg had
+    drained every row into the worker before the cap was consulted. Measured
+    against a two-million-row query on this same database: 460 MB resident and
+    1.0s to hand back 101 rows. The tenant writes the SQL, so the row count is
+    theirs to choose and nothing bounded it.
+    """
+
+    async def test_a_huge_result_costs_neither_time_nor_memory(
+        self, connection_config, credentials
+    ):
+        import resource
+        import time
+
+        before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        started = time.perf_counter()
+        result = await _run(
+            SqlExecutor(),
+            "query",
+            {
+                "query": (
+                    "SELECT repeat('x', 100) AS c FROM generate_series(1, 2000000)"
+                )
+            },
+            connection_config,
+            credentials,
+        )
+        elapsed = time.perf_counter() - started
+        growth_mb = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) / 1e6
+
+        assert result["truncated"] is True
+        assert len(result["rows"]) <= 1000
+        # Generous next to the 460 MB the buffered path cost, and far below it:
+        # the point is that the fetch stopped, not that it was merely quick.
+        assert growth_mb < 100, (
+            f"fetched the whole result into memory ({growth_mb:.0f} MB)"
+        )
+        assert elapsed < 10, f"drained the whole result before capping ({elapsed:.1f}s)"
+
+    async def test_a_colon_bearing_query_still_runs(
+        self, connection_config, credentials
+    ):
+        """Streaming needs a statement object, and `text()` reads `:name` as a
+        bind -- so the escaping that avoids it has to leave jsonb literals,
+        `::` casts and time strings working. The old path sidestepped this by
+        going to the driver verbatim; this is what replaces that guarantee."""
+        result = await _run(
+            SqlExecutor(),
+            "query",
+            {"query": """SELECT '{"a":1}'::jsonb AS j, '12:30:00'::time AS t"""},
+            connection_config,
+            credentials,
+        )
+        # `_coerce_row` stringifies anything that is not a scalar, so the jsonb
+        # arrives as a repr rather than a mapping. That is this executor's
+        # existing contract and not what this test is about -- what matters
+        # here is that the statement ran at all rather than being rejected for
+        # a bind parameter nobody wrote.
+        assert result["rows"][0]["j"] == "{'a': 1}"
+        assert result["rows"][0]["t"] == "12:30:00"

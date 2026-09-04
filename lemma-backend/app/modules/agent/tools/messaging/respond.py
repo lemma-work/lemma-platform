@@ -19,13 +19,15 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.composition.agent_notifications import (
+from app.modules.agent_surfaces.contracts.notifications import (
     notification_form_action,
     record_notification_response,
 )
-from app.composition.agent_workflow_forms import submit_workflow_form as submit_form
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
+from app.modules.workflow.contracts.forms import (
+    submit_workflow_form as submit_form,
+)
 
 logger = get_logger(__name__)
 
@@ -40,7 +42,8 @@ class RespondToNotificationRequest(BaseModel):
         ),
     )
     data: dict | None = Field(
-        default=None, description="Structured values, when specific fields were asked for."
+        default=None,
+        description="Structured values, when specific fields were asked for.",
     )
 
 
@@ -80,7 +83,8 @@ async def respond_to_notification(
     return RespondToNotificationResponse(
         success=True,
         message=(
-            "Recorded. The person who asked will see it the next time they check."
+            "Recorded. If this was the last thing the asking agent was owed, it "
+            "picks up again now; otherwise it does when the rest come in."
         ),
     )
 

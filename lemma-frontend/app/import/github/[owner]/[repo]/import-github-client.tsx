@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { GitHubReadmePage } from '@/components/bundle/github-readme-page';
 import { ImportDialog } from '@/components/bundle/import-dialog';
@@ -25,10 +25,19 @@ import {
 } from '@/components/ui/icons';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
+import { useSuggestedOrganizations } from '@/lib/hooks/use-organizations';
+import { useProfile } from '@/lib/hooks/use-user';
+import { useEnsureOrganization } from '@/components/onboarding/use-ensure-organization';
 import type { PublicGitHubReadme } from '@/lib/github/public-repository';
+import {
+    buildImportReturnUrl,
+    hasResumeMarker,
+    withoutResumeMarker,
+    type ImportDestination,
+} from '@/lib/github/import-resume';
 import { cn } from '@/lib/utils';
 
-type Destination = 'new' | 'existing';
+type Destination = ImportDestination;
 
 export function ImportGithubClient({
     owner,
@@ -43,6 +52,10 @@ export function ImportGithubClient({
 }) {
     const { isAuthenticated, isLoading: isAuthLoading, redirectToAuth } = useLemmaAuth();
     const { data, isLoading: isLoadingPods } = useAccessiblePods({ enabled: isAuthenticated });
+    const profileQuery = useProfile();
+    const profile = profileQuery.data;
+    const suggestedOrganizations = useSuggestedOrganizations({ enabled: isAuthenticated });
+    const ensureOrganization = useEnsureOrganization();
     const organizations = data.organizations;
     const pods = data.items;
     const showOrgLabels = data.hasMultipleOrganizations;
@@ -50,9 +63,12 @@ export function ImportGithubClient({
     const [destination, setDestination] = useState<Destination>(initialDestination);
     const [orgId, setOrgId] = useState('');
     const [podId, setPodId] = useState('');
+    const [isPreparingWorkspace, setIsPreparingWorkspace] = useState(false);
+    const [workspaceError, setWorkspaceError] = useState('');
     const [dialog, setDialog] = useState<{ createNew?: { organizationId: string }; podId?: string } | null>(
         null,
     );
+    const resumedRef = useRef(false);
 
     const presetGithub = useMemo(() => ({ owner, repo }), [owner, repo]);
     const effectiveOrg = orgId || organizations[0]?.id || '';
@@ -60,27 +76,94 @@ export function ImportGithubClient({
     const selectedPod = pods.find((pod) => pod.id === effectivePod);
     const repoUrl = `https://github.com/${owner}/${repo}`;
 
-    function continueToInstall() {
+    const continueToInstall = useCallback(async () => {
         if (!isAuthenticated) {
-            const redirectUri = new URL(window.location.href);
-            redirectUri.searchParams.set('destination', destination);
-            redirectToAuth({ redirectUri: redirectUri.toString() });
+            // Signing up is a detour, not a change of mind: the return URL
+            // carries both the destination and the fact that they asked.
+            redirectToAuth({
+                redirectUri: buildImportReturnUrl(window.location.href, destination),
+            });
             return;
         }
 
-        if (destination === 'new' && effectiveOrg) {
+        if (destination === 'existing') {
+            if (effectivePod) setDialog({ podId: effectivePod });
+            return;
+        }
+
+        if (effectiveOrg) {
             setDialog({ createNew: { organizationId: effectiveOrg } });
             return;
         }
-        if (destination === 'existing' && effectivePod) {
-            setDialog({ podId: effectivePod });
+
+        // No workspace at all. An account that signed up from this page never
+        // passed through the root route, so nothing has made it one — and the
+        // installer is the wrong place to teach someone what a workspace is.
+        // Make it the way onboarding would have, and carry on to the plan.
+        setIsPreparingWorkspace(true);
+        setWorkspaceError('');
+        try {
+            const ensured = await ensureOrganization({
+                email: profile?.email,
+                organizationIds: organizations.map((organization) => organization.id),
+                suggestedOrganizationId: suggestedOrganizations.data?.items?.[0]?.id ?? null,
+            });
+            if (ensured) {
+                setOrgId(ensured.organizationId);
+                setDialog({ createNew: { organizationId: ensured.organizationId } });
+                return;
+            }
+            setWorkspaceError('We could not set up a workspace. Try again in a moment.');
+        } catch (error) {
+            setWorkspaceError(
+                error instanceof Error && error.message
+                    ? `We could not set up a workspace: ${error.message}`
+                    : 'We could not set up a workspace. Try again in a moment.',
+            );
+        } finally {
+            setIsPreparingWorkspace(false);
         }
-    }
+    }, [
+        destination,
+        effectiveOrg,
+        effectivePod,
+        ensureOrganization,
+        isAuthenticated,
+        organizations,
+        profile?.email,
+        redirectToAuth,
+        suggestedOrganizations.data,
+    ]);
+
+    // The return leg of that detour. Wait for auth and the pod list to settle —
+    // resuming against a half-loaded account would create a second workspace for
+    // someone who already has one.
+    useEffect(() => {
+        if (resumedRef.current) return;
+        if (typeof window === 'undefined') return;
+        if (!hasResumeMarker(window.location.href)) return;
+        if (!isAuthenticated || isAuthLoading || isLoadingPods) return;
+        if (suggestedOrganizations.isLoading || profileQuery.isLoading) return;
+
+        resumedRef.current = true;
+        window.history.replaceState(null, '', withoutResumeMarker(window.location.href));
+        void continueToInstall();
+    }, [
+        continueToInstall,
+        isAuthLoading,
+        isAuthenticated,
+        isLoadingPods,
+        profileQuery.isLoading,
+        suggestedOrganizations.isLoading,
+    ]);
 
     const canContinue =
         !isAuthenticated ||
         (!isAuthLoading &&
-            (destination === 'new' ? Boolean(effectiveOrg) : Boolean(effectivePod)));
+            !isPreparingWorkspace &&
+            // "New pod" no longer waits on a workspace existing: when there is
+            // none, making one is part of what the button does.
+            (destination === 'new' ? true : Boolean(effectivePod)));
 
     return (
         <main className="github-import-page">
@@ -170,7 +253,7 @@ export function ImportGithubClient({
                                                 <SelectTrigger id="github-import-workspace">
                                                     <SelectValue placeholder="Choose a workspace" />
                                                 </SelectTrigger>
-                                                <SelectContent>
+                                                <SelectContent className="github-import-select-content">
                                                     {organizations.map((organization) => (
                                                         <SelectItem key={organization.id} value={organization.id}>
                                                             {organization.name}
@@ -182,7 +265,12 @@ export function ImportGithubClient({
                                     ) : (
                                         <div className="github-import-target-summary">
                                             <span>Workspace</span>
-                                            <strong>{organizations[0]?.name || 'No workspace available'}</strong>
+                                            {/* An account with none is not blocked any more — it
+                                                gets one on the way to the plan. Say that, rather
+                                                than reporting an absence as a dead end. */}
+                                            <strong>
+                                                {organizations[0]?.name ?? 'Created for you'}
+                                            </strong>
                                         </div>
                                     )
                                 ) : pods.length ? (
@@ -192,7 +280,7 @@ export function ImportGithubClient({
                                             <SelectTrigger id="github-import-pod">
                                                 <SelectValue placeholder="Choose a pod" />
                                             </SelectTrigger>
-                                            <SelectContent>
+                                            <SelectContent className="github-import-select-content">
                                                 {pods.map((pod) => (
                                                     <SelectItem key={pod.id} value={pod.id}>
                                                         {pod.name}
@@ -215,15 +303,23 @@ export function ImportGithubClient({
                         <Button variant="primary"
                             className="github-import-continue"
                             disabled={!canContinue}
-                            onClick={continueToInstall}
+                            onClick={() => { void continueToInstall(); }}
                         >
-                            {isAuthenticated
-                                ? destination === 'new'
-                                    ? 'Create pod & review'
-                                    : 'Review installation'
-                                : 'Continue to Lemma'}
+                            {isPreparingWorkspace
+                                ? 'Setting up your workspace…'
+                                : isAuthenticated
+                                  ? destination === 'new'
+                                      ? 'Create pod & review'
+                                      : 'Review installation'
+                                  : 'Continue to Lemma'}
                             <ArrowRight className="h-4 w-4" />
                         </Button>
+
+                        {workspaceError ? (
+                            <p className="github-import-target-error" role="alert">
+                                {workspaceError}
+                            </p>
+                        ) : null}
 
                         <div className="github-import-assurance">
                             <ShieldCheck className="h-4 w-4" />

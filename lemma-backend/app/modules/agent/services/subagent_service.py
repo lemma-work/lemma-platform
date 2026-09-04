@@ -20,7 +20,10 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID, DEFAULT_POD_AGENT_NAME
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_ID,
+    DEFAULT_POD_AGENT_NAME,
+)
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
@@ -33,8 +36,9 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
-from app.composition.authorization import create_authorization_service
-from app.composition.agent_usage import build_usage_service
+from app.modules.agent.services.poll_backoff import poll_delay
+from app.core.authorization.factory import create_authorization_data_service
+from app.modules.usage.contracts.execution import build_usage_service
 
 
 class SubAgentError(RuntimeError):
@@ -48,6 +52,9 @@ class SubAgentHandle:
     status: str
 
 
+#: Pause between the first few checks of a child run; `poll_delay` grows it
+#: from there, because a wait that lasts minutes should not spend a pooled
+#: connection every second asking.
 _AWAIT_POLL_SECONDS = 1.0
 
 
@@ -57,29 +64,25 @@ class SubAgentService:
 
     # -- context helpers ----------------------------------------------------
 
-    def _is_default(self, deps) -> bool:
-        return deps.workload_id in (None, DEFAULT_POD_AGENT_ID) or deps.agent_name in (
-            None,
-            DEFAULT_POD_AGENT_NAME,
-        )
-
     def _conversation_service(self, uow) -> ConversationService:
         return ConversationService(
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_service(uow),
+            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         )
 
     async def _agent_ctx(self, uow, deps):
         """Parent agent's delegated context (honors its agent.execute grant)."""
-        return await create_authorization_service(uow).build_delegated_workload_context(
+        return await create_authorization_data_service(
+            uow
+        ).build_delegated_workload_context(
             user_id=deps.user_id,
             principal_type="AGENT",
             principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,
             pod_id=deps.pod_id,
-            is_default_pod_agent=self._is_default(deps),
+            is_default_pod_agent=deps.is_pod_default_agent,
             delegation_actor_name=deps.agent_name,
             # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
             delegation_session_id=str(deps.conversation_id),
@@ -108,10 +111,10 @@ class SubAgentService:
         # grant check. `is_self` is derived from server-side deps, never from a
         # model-supplied *other* name, so a named other agent stays grant-gated.
         is_self = agent_name is None or (
-            not self._is_default(deps) and agent_name == deps.agent_name
+            not deps.is_pod_default_agent and agent_name == deps.agent_name
         )
         target_name = (
-            (None if self._is_default(deps) else deps.agent_name)
+            (None if deps.is_pod_default_agent else deps.agent_name)
             if is_self
             else agent_name
         )
@@ -195,12 +198,12 @@ class SubAgentService:
                 if (
                     status_filter
                     and status_filter.upper() == "ACTIVE"
-                    and (latest is None or latest.status not in ACTIVE_AGENT_RUN_STATUSES)
+                    and (
+                        latest is None or latest.status not in ACTIVE_AGENT_RUN_STATUSES
+                    )
                 ):
                     continue
-                agent = (
-                    await agent_repo.get(child.agent_id) if child.agent_id else None
-                )
+                agent = await agent_repo.get(child.agent_id) if child.agent_id else None
                 rows.append(
                     {
                         "conversation_id": str(child.id),
@@ -321,6 +324,7 @@ class SubAgentService:
         """Poll the child run until terminal or timeout (fresh reads each tick)."""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout_seconds
+        attempt = 0
         while True:
             async with self.uow_factory() as uow:
                 await self._owned_child(uow, deps, conversation_id)
@@ -344,4 +348,11 @@ class SubAgentService:
                         "or interact_subagent (action='await') again."
                     ),
                 }
-            await asyncio.sleep(_AWAIT_POLL_SECONDS)
+            attempt += 1
+            await asyncio.sleep(
+                poll_delay(
+                    attempt,
+                    base_seconds=_AWAIT_POLL_SECONDS,
+                    remaining_seconds=deadline - loop.time(),
+                )
+            )

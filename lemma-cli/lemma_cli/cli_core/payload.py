@@ -45,9 +45,17 @@ def read_json(
 
 # Resource types that expose a `lemma <type> schema` command (see _authoring);
 # a validation error for one points the user at it for the full shape + enums.
-_SCHEMA_RESOURCES = frozenset(
-    {"agent", "function", "table", "workflow", "schedule", "surface"}
-)
+# Mapped to the plural group rather than held as a bare set: both spellings are
+# registered and both run, but every skill and doc teaches the plural, so a hint
+# in the singular reads as a typo for a command that does not exist.
+_SCHEMA_RESOURCES = {
+    "agent": "agents",
+    "function": "functions",
+    "table": "tables",
+    "workflow": "workflows",
+    "schedule": "schedules",
+    "surface": "surfaces",
+}
 
 
 @lru_cache(maxsize=None)
@@ -93,10 +101,10 @@ def ignored_fields(model_cls: Any, data: dict[str, Any]) -> list[str]:
 def _schema_hint(context: str | None) -> str:
     if not context:
         return ""
-    resource = context.split()[0]
-    if resource not in _SCHEMA_RESOURCES:
+    group = _SCHEMA_RESOURCES.get(context.split()[0])
+    if group is None:
         return ""
-    return f" Run `lemma {resource} schema` for the required fields and valid enums."
+    return f" Run `lemma {group} schema` for the required fields and valid enums."
 
 
 def build_request(
@@ -145,4 +153,13 @@ def build_request(
         field = f": {key}" if key else ""
         raise ValueError(f"Missing required field{field}.{where}{hint}") from exc
     except TypeError as exc:
+        raise ValueError(f"Invalid field value{where}: {exc}{hint}") from exc
+    except ValueError as exc:
+        # Generated enums reject a bad value with a plain ValueError, which used
+        # to sail past every layer that knows what the valid values are: no
+        # member list, and not even the schema hint, because that was only
+        # appended inside the two branches above. So `'text' is not a valid
+        # DatastoreDataType` arrived naming the type and nothing else -- not the
+        # members, not that they are upper-case, and not the command that prints
+        # them.
         raise ValueError(f"Invalid field value{where}: {exc}{hint}") from exc

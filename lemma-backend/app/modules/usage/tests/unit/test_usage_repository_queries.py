@@ -133,7 +133,7 @@ async def test_an_empty_window_summarizes_to_zero_without_failing() -> None:
 
 class _ListResult:
     def scalars(self):
-        return SimpleNamespace(all=lambda: [])
+        return SimpleNamespace(all=list)
 
 
 class _ListSession:

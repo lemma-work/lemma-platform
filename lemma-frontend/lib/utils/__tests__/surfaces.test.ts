@@ -9,37 +9,30 @@ import {
 } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
 
-type Route = {
-    channel_id?: string;
-    channel_name?: string;
-    agent_name?: string | null;
-    use_pod_assistant?: boolean;
-};
+type Route = { channel_id?: string; channel_name?: string };
 
 /**
- * A Slack surface: one workspace install, a default responder, N channel
- * routes, and whatever each person picked for their own DMs.
+ * A Slack surface: one workspace install, one agent, and the channels that
+ * agent is allowed to answer in.
+ *
+ * It used to carry a per-channel agent and a per-person DM map, because one bot
+ * could serve a whole pod. One bot is one agent now, so a channel is a place.
  */
-function slack(
-    defaultAgent: string | null,
-    channels: Route[] = [],
-    dmAgentByUser: Record<string, string> = {},
-): AssistantSurface {
+function slack(agentName: string | null, channels: Route[] = []): AssistantSurface {
     return {
         name: 'slack',
         surface_type: 'SLACK',
-        agent_name: defaultAgent,
-        uses_default_agent: defaultAgent === null,
-        config: { channels, slack: { dm_agent_by_user: dmAgentByUser } },
+        agent_name: agentName,
+        uses_default_agent: agentName === null,
+        config: { channels },
     } as unknown as AssistantSurface;
 }
 
 describe('surface reaches', () => {
-    it('lists direct messages and every channel routed to the agent', () => {
+    it('gives an agent its DMs and every channel it is allowed in', () => {
         const surface = slack('sales-agent', [
-            { channel_id: 'C1', channel_name: 'sales', agent_name: 'sales-agent' },
-            { channel_id: 'C2', channel_name: 'support', agent_name: 'support-agent' },
-            { channel_id: 'C3', channel_name: 'deals', agent_name: 'sales-agent' },
+            { channel_id: 'C1', channel_name: 'sales' },
+            { channel_id: 'C3', channel_name: 'deals' },
         ]);
 
         expect(surfaceReaches(surface, 'sales-agent').map((reach) => reach.label)).toEqual([
@@ -49,48 +42,15 @@ describe('surface reaches', () => {
         ]);
     });
 
-    it('gives an agent its channels without claiming the DMs it holds none of', () => {
+    it('gives another agent nothing on a surface that is not theirs', () => {
+        // A channel is an allow-list entry, not a route: it cannot hand one
+        // channel of this bot to a different agent. That agent needs its own.
         const surface = slack('sales-agent', [
-            { channel_id: 'C2', channel_name: 'support', agent_name: 'support-agent' },
+            { channel_id: 'C2', channel_name: 'support' },
         ]);
 
-        const reaches = surfaceReaches(surface, 'support-agent');
-        expect(reaches.map((reach) => reach.label)).toEqual(['#support']);
+        expect(surfaceReaches(surface, 'support-agent')).toEqual([]);
         expect(surfaceAnswersDirectMessages(surface, 'support-agent')).toBe(false);
-    });
-
-    it('gives DMs to every agent someone picked, not just the default', () => {
-        const surface = slack('sales-agent', [], {
-            U1: 'support-agent',
-            U2: 'support-agent',
-            U3: '__pod_assistant__',
-        });
-
-        // The default still answers everyone who never picked...
-        expect(surfaceAnswersDirectMessages(surface, 'sales-agent')).toBe(true);
-        // ...and picking is what gives anyone else a reach at all.
-        expect(surfaceReaches(surface, 'support-agent')[0]).toMatchObject({
-            kind: 'dm',
-            detail: '2 people chose this agent',
-        });
-        // Choosing the pod assistant is stored, so it reaches too.
-        expect(surfaceAnswersDirectMessages(surface, null)).toBe(true);
-    });
-
-    it('tells an explicit pod-assistant route from one nobody has set', () => {
-        const surface = slack('sales-agent', [
-            { channel_id: 'C8', channel_name: 'asks', use_pod_assistant: true },
-            { channel_id: 'C9', channel_name: 'general' },
-        ]);
-
-        // Explicit: the pod assistant answers, and no agent does.
-        expect(surfaceReaches(surface, null).map((reach) => reach.label)).toEqual(['#asks']);
-        expect(surfaceReachesDefaultAgent(surface)).toBe(true);
-        // Unset: falls to the surface default, which is a *different* answer.
-        expect(surfaceReaches(surface, 'sales-agent').map((reach) => reach.label)).toEqual([
-            'Direct messages',
-            '#general',
-        ]);
     });
 
     it('hands the pod default assistant the DMs when no agent claims them', () => {
@@ -101,11 +61,11 @@ describe('surface reaches', () => {
 
     it('prefixes a channel name once, whether or not it arrives with one', () => {
         const surface = slack(null, [
-            { channel_id: 'C1', channel_name: '#already', agent_name: null },
-            { channel_id: 'C2', channel_name: 'bare', agent_name: null },
+            { channel_id: 'C1', channel_name: '#already' },
+            { channel_id: 'C2', channel_name: 'bare' },
             // No name — the id is all we can show, and showing nothing would
             // silently drop a route that really does deliver messages.
-            { channel_id: 'C3', agent_name: null },
+            { channel_id: 'C3' },
         ]);
 
         expect(surfaceReaches(surface, null).map((reach) => reach.label)).toEqual([
@@ -118,17 +78,31 @@ describe('surface reaches', () => {
 
     it('keys channels distinctly so exploded chips stay stable', () => {
         const surface = slack(null, [
-            { channel_id: 'C1', channel_name: 'a', agent_name: null },
-            { channel_id: 'C2', channel_name: 'b', agent_name: null },
+            { channel_id: 'C1', channel_name: 'a' },
+            { channel_id: 'C2', channel_name: 'b' },
         ]);
 
         const keys = surfaceReaches(surface, null).map((reach) => reach.key);
         expect(new Set(keys).size).toBe(keys.length);
     });
 
+    it('finds the assistant only on a surface that is actually its own', () => {
+        // Lem's page selects the surfaces it can be reached through with this.
+        // A channel used to be able to name her on somebody else's bot, so the
+        // agent's own surface answering for her is the whole of it now.
+        expect(
+            surfaceReachesDefaultAgent(slack(null, [{ channel_id: 'C1', channel_name: 'ops' }])),
+        ).toBe(true);
+        expect(
+            surfaceReachesDefaultAgent(
+                slack('sales-agent', [{ channel_id: 'C1', channel_name: 'ops' }]),
+            ),
+        ).toBe(false);
+    });
+
     it('still describes reach as one line for the tooltip', () => {
         const surface = slack('sales-agent', [
-            { channel_id: 'C1', channel_name: 'sales', agent_name: 'sales-agent' },
+            { channel_id: 'C1', channel_name: 'sales' },
         ]);
 
         expect(describeReach(surface, 'sales-agent')).toBe('Direct messages · #sales');
@@ -141,7 +115,6 @@ function connected(connection: Record<string, unknown> | null): AssistantSurface
     return {
         name: 'telegram',
         surface_type: 'TELEGRAM',
-        agent_name: 'ops',
         config: { channels: [] },
         ...(connection ? { connection: { account_id: 'a1', connector_id: 'telegram', status: 'CONNECTED', ...connection } } : {}),
     } as unknown as AssistantSurface;

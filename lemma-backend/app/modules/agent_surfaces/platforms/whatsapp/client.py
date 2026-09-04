@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
@@ -246,6 +247,7 @@ class WhatsAppClient:
     ) -> str | None:
         """Upload a media object; return its media id."""
         url = f"{self._api_base}/{phone_number_id}/media"
+        await assert_safe_api_base(url, platform="WhatsApp")
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 url,
@@ -258,6 +260,7 @@ class WhatsAppClient:
 
     async def get_media_info(self, media_id: str) -> dict[str, Any] | None:
         url = f"{self._api_base}/{media_id}"
+        await assert_safe_api_base(url, platform="WhatsApp")
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(url, headers=self._auth_headers)
         data = self._parse(response, method="media.info")
@@ -298,6 +301,9 @@ class WhatsAppClient:
     async def _post_json(
         self, url: str, *, json: dict[str, Any], method: str
     ) -> dict[str, Any]:
+        # `api_base_url` is tenant-supplied (a sovereign Graph endpoint is a
+        # real deployment), so the target is checked before the token goes out.
+        await assert_safe_api_base(url, platform="WhatsApp")
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(url, json=json, headers=self._auth_headers)
         return self._parse(response, method=method)
@@ -311,7 +317,9 @@ class WhatsAppClient:
             )
         try:
             data = response.json()
-        except Exception:
+        except ValueError:
+            # httpx raises json.JSONDecodeError -- a ValueError -- for a body
+            # that is not JSON. Anything else here is our bug, not theirs.
             data = {}
         return data if isinstance(data, dict) else {}
 

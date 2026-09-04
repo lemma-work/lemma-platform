@@ -40,8 +40,8 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType, JsonObject
 from app.modules.agent.tools.callable_tool_factory import (
-    _inline_schema,
-    _normalize_json_schema,
+    inline_schema,
+    normalize_json_schema,
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
@@ -153,9 +153,7 @@ def build_final_answer_toolset(
                 name=FINAL_ANSWER_TOOL_NAME,
                 function=_final_answer,
                 description=_description(bool(output_schema)),
-                validator=cast(
-                    SchemaValidator, TypeAdapter(dict[str, Any]).validator
-                ),
+                validator=cast(SchemaValidator, TypeAdapter(dict[str, Any]).validator),
                 json_schema=schema,
                 takes_ctx=True,
                 is_async=True,
@@ -180,7 +178,7 @@ def _description(has_schema: bool) -> str:
 
 def _final_answer_input_schema(output_schema: JsonObject | None) -> JsonObject:
     output = (
-        _inline_schema(_normalize_json_schema(output_schema))
+        inline_schema(normalize_json_schema(output_schema))
         if output_schema
         else {"type": "string"}
     )
@@ -211,7 +209,9 @@ def _is_validatable_schema(schema: JsonObject | None) -> bool:
     except SchemaError:
         # A stored schema we cannot compile means we cannot validate against it —
         # which is a reason to skip validation, never to fail the run.
-        logger.debug("agent.final_answer.unusable_output_schema.diagnostic")
+        logger.warning(
+            "agent.final_answer.unusable_output_schema.degraded", exc_info=True
+        )
         return False
     return True
 
@@ -245,18 +245,16 @@ async def _persist(
     if uow_factory is None or not isinstance(agent_run_id, UUID):
         return
     try:
-        from app.modules.agent.infrastructure.agent_host_final_answer import (
+        from app.modules.agent.infrastructure.agent_host.final_answer import (
             store_final_answer,
         )
 
-        await store_final_answer(
-            uow_factory, agent_run_id=agent_run_id, record=record
-        )
+        await store_final_answer(uow_factory, agent_run_id=agent_run_id, record=record)
     except SQLAlchemyError:
         # See docstring: losing the authoritative copy is survivable (the event
         # stream still carries the answer); turning a good final answer into a
         # tool error is not.
-        logger.debug("agent.final_answer.persist_failed.diagnostic", exc_info=True)
+        logger.warning("agent.final_answer.persist_failed.degraded", exc_info=True)
 
 
 __all__ = [

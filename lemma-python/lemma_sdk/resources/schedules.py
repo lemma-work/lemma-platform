@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from ..errors import LemmaNotFoundError
 from ..openapi_client.api.schedules import (
     schedule_create,
     schedule_delete,
@@ -24,17 +25,29 @@ from .base import BoundResource, as_uuid
 
 class PodSchedules(BoundResource):
     def _schedule_id(self, schedule: str) -> UUID:
+        """Resolve a schedule id or name to an id.
+
+        The name goes to the server's exact-match filter rather than being
+        matched client-side over a listing: a listing is capped, so a pod with
+        more schedules than the cap reported "not found" for a schedule that
+        exists -- and every name-addressed call paid for a full page first.
+        """
         try:
             return as_uuid(schedule)
         except ValueError:
             pass
 
-        schedules = self.list(limit=1000)
-        for item in getattr(schedules, "items", []) or []:
-            item_name = getattr(item, "name", None)
-            if item_name == schedule:
+        page = self.list(name=schedule, limit=2)
+        for item in getattr(page, "items", []) or []:
+            if getattr(item, "name", None) == schedule:
                 return item.id
-        raise ValueError(f"Schedule not found in pod: {schedule}")
+        raise LemmaNotFoundError(
+            status_code=404,
+            message=(
+                f"No schedule named {schedule!r} in this pod. "
+                "Pass a schedule id, or list schedules to see the names."
+            ),
+        )
 
     def list(
         self,
@@ -65,10 +78,19 @@ class PodSchedules(BoundResource):
         return self._call(schedule_create, self._pod_uuid(), body=request)
 
     def get(self, schedule_id: str) -> ScheduleDetailResponse:
-        return self._call(schedule_get, self._pod_uuid(), self._schedule_id(schedule_id))
+        return self._call(
+            schedule_get, self._pod_uuid(), self._schedule_id(schedule_id)
+        )
 
-    def update(self, schedule_id: str, request: UpdateScheduleRequest) -> ScheduleDetailResponse:
-        return self._call(schedule_update, self._pod_uuid(), self._schedule_id(schedule_id), body=request)
+    def update(
+        self, schedule_id: str, request: UpdateScheduleRequest
+    ) -> ScheduleDetailResponse:
+        return self._call(
+            schedule_update,
+            self._pod_uuid(),
+            self._schedule_id(schedule_id),
+            body=request,
+        )
 
     def delete(self, schedule_id: str) -> None:
         self._call(schedule_delete, self._pod_uuid(), self._schedule_id(schedule_id))

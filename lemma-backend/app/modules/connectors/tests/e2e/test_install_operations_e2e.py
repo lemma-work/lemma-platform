@@ -179,10 +179,12 @@ class TestTenantIsolation:
         )
         await db_session.commit()
 
-        assert {
-            op.name for op in await repo.list_by_auth_config(install.id)
-        } == {"mine"}
-        assert {op.name for op in await repo.list_by_auth_config(other.id)} == {"theirs"}
+        assert {op.name for op in await repo.list_by_auth_config(install.id)} == {
+            "mine"
+        }
+        assert {op.name for op in await repo.list_by_auth_config(other.id)} == {
+            "theirs"
+        }
 
     async def test_deleting_an_install_takes_its_operations_with_it(
         self, db_session, install

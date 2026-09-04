@@ -26,7 +26,14 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, *, parsed: Any = None, content: bytes = b"", headers: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        parsed: Any = None,
+        content: bytes = b"",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self.parsed = parsed
         self.content = content
@@ -34,13 +41,22 @@ class FakeResponse:
 
 
 class FakeEndpoint:
-    """Stands in for a generated endpoint module with sync_detailed()."""
+    """Stands in for a generated endpoint module.
+
+    Implements the two entry points the transport uses: ``_get_kwargs``, which
+    every generated module builds its request through (and which the transport
+    reads the HTTP verb from), and ``sync_detailed``.
+    """
 
     __name__ = "fake_endpoint"
 
-    def __init__(self, outcomes: list[Any]):
+    def __init__(self, outcomes: list[Any], *, method: str = "get"):
         self._outcomes = list(outcomes)
+        self._method = method
         self.calls = 0
+
+    def _get_kwargs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"method": self._method, "url": "/fake"}
 
     def sync_detailed(self, *args: Any, client: Any = None, **kwargs: Any) -> Any:
         self.calls += 1
@@ -51,7 +67,9 @@ class FakeEndpoint:
 
 
 def make_transport(max_retries: int = 2) -> LemmaTransport:
-    return LemmaTransport(base_url="https://api.example.test", token="t", max_retries=max_retries)
+    return LemmaTransport(
+        base_url="https://api.example.test", token="t", max_retries=max_retries
+    )
 
 
 # --- .call() (typed-resource path) ----------------------------------------
@@ -67,10 +85,54 @@ def test_call_retries_retryable_status_then_succeeds():
 def test_call_honors_retry_after_then_succeeds():
     transport = make_transport()
     endpoint = FakeEndpoint(
-        [FakeResponse(429, headers={"retry-after": "0"}), FakeResponse(200, parsed={"ok": True})]
+        [
+            FakeResponse(429, headers={"retry-after": "0"}),
+            FakeResponse(200, parsed={"ok": True}),
+        ]
     )
     assert transport.call(endpoint) == {"ok": True}
     assert endpoint.calls == 2
+
+
+def test_call_does_not_replay_a_write_on_a_gateway_error():
+    # A 504 usually means the handler is still running, so replaying the POST
+    # would create a second record / start a second agent run.
+    transport = make_transport()
+    endpoint = FakeEndpoint(
+        [FakeResponse(504), FakeResponse(200, parsed={"ok": True})], method="post"
+    )
+    with pytest.raises(LemmaServerError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
+
+
+def test_call_still_retries_a_write_on_429():
+    # The rate limiter refuses the request before the handler runs, so a replay
+    # cannot repeat a side effect.
+    transport = make_transport()
+    endpoint = FakeEndpoint(
+        [
+            FakeResponse(429, headers={"retry-after": "0"}),
+            FakeResponse(200, parsed={"ok": True}),
+        ],
+        method="post",
+    )
+    assert transport.call(endpoint) == {"ok": True}
+    assert endpoint.calls == 2
+
+
+def test_call_does_not_replay_when_the_method_is_unknown():
+    # An endpoint the transport cannot read a verb from is assumed to write.
+    class VerblessEndpoint(FakeEndpoint):
+        _get_kwargs = None
+
+    transport = make_transport()
+    endpoint = VerblessEndpoint(
+        [FakeResponse(503), FakeResponse(200, parsed={"ok": True})]
+    )
+    with pytest.raises(LemmaServerError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
 
 
 def test_call_does_not_retry_500():
@@ -84,7 +146,13 @@ def test_call_does_not_retry_500():
 def test_call_maps_404_to_typed_error_with_request_id():
     transport = make_transport(max_retries=0)
     endpoint = FakeEndpoint(
-        [FakeResponse(404, parsed={"message": "missing", "code": "not_found"}, headers={"x-request-id": "req-1"})]
+        [
+            FakeResponse(
+                404,
+                parsed={"message": "missing", "code": "not_found"},
+                headers={"x-request-id": "req-1"},
+            )
+        ]
     )
     with pytest.raises(LemmaNotFoundError) as excinfo:
         transport.call(endpoint)
@@ -97,7 +165,10 @@ def test_call_maps_404_to_typed_error_with_request_id():
 def test_call_exhausts_retries_and_surfaces_retry_after():
     transport = make_transport(max_retries=1)
     endpoint = FakeEndpoint(
-        [FakeResponse(429, headers={"retry-after": "3"}), FakeResponse(429, headers={"retry-after": "3"})]
+        [
+            FakeResponse(429, headers={"retry-after": "3"}),
+            FakeResponse(429, headers={"retry-after": "3"}),
+        ]
     )
     with pytest.raises(LemmaRateLimitError) as excinfo:
         transport.call(endpoint)
@@ -117,7 +188,14 @@ def test_call_maps_timeout_and_transport_errors():
 
 
 class FakeHttpxResponse:
-    def __init__(self, status_code: int, *, json_body: Any = None, text: str = "", headers: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        json_body: Any = None,
+        text: str = "",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._json = json_body
         self.text = text
@@ -143,10 +221,14 @@ class FakeHttpxClient:
         return outcome
 
 
-def _patch_httpx(transport: LemmaTransport, client: FakeHttpxClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_httpx(
+    transport: LemmaTransport, client: FakeHttpxClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # .request() only reaches generated.get_httpx_client(); swap the whole
     # generated client for a stub exposing it (the real method is read-only).
-    monkeypatch.setattr(transport, "generated", SimpleNamespace(get_httpx_client=lambda: client))
+    monkeypatch.setattr(
+        transport, "generated", SimpleNamespace(get_httpx_client=lambda: client)
+    )
 
 
 def test_request_returns_parsed_json(monkeypatch: pytest.MonkeyPatch):
@@ -156,20 +238,104 @@ def test_request_returns_parsed_json(monkeypatch: pytest.MonkeyPatch):
     assert transport.request("GET", "/x") == {"ok": True}
 
 
-def test_request_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch):
+def test_request_retries_a_read_then_succeeds(monkeypatch: pytest.MonkeyPatch):
     transport = make_transport()
     client = FakeHttpxClient(
         [FakeHttpxResponse(503), FakeHttpxResponse(200, json_body={"ok": True})]
     )
     _patch_httpx(transport, client, monkeypatch)
-    assert transport.request("POST", "/x") == {"ok": True}
+    assert transport.request("GET", "/x") == {"ok": True}
     assert client.calls == 2
+
+
+def test_request_does_not_replay_a_write_on_a_gateway_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    transport = make_transport()
+    client = FakeHttpxClient(
+        [FakeHttpxResponse(503), FakeHttpxResponse(200, json_body={"ok": True})]
+    )
+    _patch_httpx(transport, client, monkeypatch)
+    with pytest.raises(LemmaServerError):
+        transport.request("POST", "/x")
+    assert client.calls == 1
 
 
 def test_request_maps_error_status(monkeypatch: pytest.MonkeyPatch):
     transport = make_transport(max_retries=0)
-    client = FakeHttpxClient([FakeHttpxResponse(404, text='{"message":"nope","code":"not_found"}')])
+    client = FakeHttpxClient(
+        [FakeHttpxResponse(404, text='{"message":"nope","code":"not_found"}')]
+    )
     _patch_httpx(transport, client, monkeypatch)
     with pytest.raises(LemmaNotFoundError) as excinfo:
         transport.request("GET", "/x")
     assert excinfo.value.code == "not_found"
+
+
+# --- .stream() (Server-Sent Events path) ----------------------------------
+
+
+class StreamEndpoint:
+    """A generated streaming endpoint: only `_get_kwargs` is ever used."""
+
+    __name__ = "stream_endpoint"
+
+    def _get_kwargs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"method": "post", "url": "/stream"}
+
+
+def stream_transport(
+    handler: Any, *, max_retries: int = 2
+) -> tuple[LemmaTransport, list[httpx.Request]]:
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    transport = make_transport(max_retries=max_retries)
+    transport.generated.set_httpx_client(
+        httpx.Client(
+            transport=httpx.MockTransport(record),
+            base_url="https://api.example.test",
+        )
+    )
+    return transport, seen
+
+
+def test_stream_sends_no_read_deadline():
+    # The gap between two SSE frames is the agent thinking. A read deadline
+    # would end every run longer than it -- the buffered path's 30s bug.
+    transport, seen = stream_transport(
+        lambda _: httpx.Response(200, content=b"data: {}\n\n")
+    )
+    response = transport.stream(StreamEndpoint())
+    try:
+        assert response.read() == b"data: {}\n\n"
+    finally:
+        response.close()
+    timeout = seen[0].extensions["timeout"]
+    assert timeout["read"] is None
+    assert timeout["connect"] == 30.0
+
+
+def test_stream_does_not_replay_a_run_on_a_gateway_error():
+    transport, seen = stream_transport(lambda _: httpx.Response(503))
+    with pytest.raises(LemmaServerError):
+        transport.stream(StreamEndpoint())
+    assert len(seen) == 1
+
+
+def test_stream_maps_an_error_status_to_a_typed_error_with_request_id():
+    transport, _ = stream_transport(
+        lambda _: httpx.Response(
+            404,
+            json={"message": "no such conversation", "code": "not_found"},
+            headers={"x-request-id": "req-7"},
+        )
+    )
+    with pytest.raises(LemmaNotFoundError) as excinfo:
+        transport.stream(StreamEndpoint())
+    assert excinfo.value.code == "not_found"
+    assert excinfo.value.request_id == "req-7"
+    assert excinfo.value.message == "no such conversation"

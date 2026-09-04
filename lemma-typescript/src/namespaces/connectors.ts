@@ -187,14 +187,55 @@ export class ConnectorsNamespace {
       )),
   };
 
+  /**
+   * Enable a connector for an organization, reusing an existing install only
+   * when the caller has described nothing that would distinguish a new one.
+   *
+   * This used to return ANY active install with a matching connector id,
+   * ignoring the submitted kind, config and name. The backend deliberately
+   * permits many installs of one connector -- see the comment on the
+   * `auth_configs` model, which says there is deliberately no
+   * `(organization_id, connector_id)` uniqueness -- so this was the SDK
+   * enforcing a constraint the schema had dropped, client-side and silently.
+   *
+   * Two things it broke. Every MCP server shares the catalog id `mcp`, every
+   * database shares `sql`, every REST API shares `openapi`: a second one
+   * returned the first, and the caller was told it worked. And choosing "use
+   * my own credentials" for a connector the org already had returned the
+   * Lemma-managed install, dropping the submitted client id and secret, so
+   * OAuth then ran against Lemma's app rather than theirs.
+   */
   async enableApp(
     organizationId: string,
     connectorId: string,
     options: EnableAppOptions = {},
   ) {
-    const configs = await this.authConfigs.list(organizationId, { limit: 100 });
-    const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
-    if (existing) return existing;
+    // A name, a config, or bringing your own credentials all describe a
+    // particular install rather than "make sure this connector is on".
+    const describesAParticularInstall = Boolean(
+      options.name || options.config || options.config_source === "ORG_CUSTOM",
+    );
+    if (!describesAParticularInstall) {
+      const configs = await this.authConfigs.list(organizationId, { limit: 100 });
+      // `kind` narrows the match rather than forcing a create: "enable gmail
+      // as composio" should still reuse an existing composio install. But it
+      // must narrow, because a connector can ship several kinds -- choosing
+      // "Native OAuth" in Advanced setup for an org already holding a Composio
+      // install used to return that install, and the caller then read the kind
+      // back off the returned row and ran the Composio flow, having been told
+      // it enabled the one they picked.
+      const candidates = configs.items.filter((config) =>
+        config.connector_id === connectorId
+        && config.status === "ACTIVE"
+        && (!options.kind || config.kind === options.kind),
+      );
+      // The default is the install a bare connector id resolves to everywhere
+      // else -- `findDefaultInstallName` in the frontend, and the backend's own
+      // `uq_auth_configs_default_per_connector`. Taking the first row in list
+      // order instead made this the one place that disagreed.
+      const existing = candidates.find((config) => config.is_default) ?? candidates[0];
+      if (existing) return existing;
+    }
 
     return this.authConfigs.create(organizationId, {
       connector_id: connectorId,
@@ -203,6 +244,25 @@ export class ConnectorsNamespace {
       config: options.config,
       name: options.name,
     });
+  }
+
+  /**
+   * Replace a credential-managed account's credential, keeping its id.
+   *
+   * Deleting and reconnecting also rotates a credential, and issues a new
+   * account id doing it — stranding every schedule, surface and grant pinned
+   * to the old one, and leaving nothing behind at all if the reconnect fails.
+   */
+  rotateAccountCredentials(
+    organizationId: string,
+    accountId: string,
+    credentials: Record<string, unknown>,
+  ) {
+    return this.client.request(() => ConnectorsService.connectorAccountUpdate(
+      organizationId,
+      accountId,
+      { credentials } as never,
+    ));
   }
 
   createConnectRequest(organizationId: string, input: ConnectRequestInput) {

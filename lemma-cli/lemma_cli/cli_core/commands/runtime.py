@@ -27,9 +27,7 @@ def list_profiles(ctx: typer.Context) -> None:
 @profiles_app.command("get")
 def get_profile(
     ctx: typer.Context,
-    selector: str = typer.Argument(
-        ..., help="Profile id or name (case-insensitive)."
-    ),
+    selector: str = typer.Argument(..., help="Profile id or name (case-insensitive)."),
 ) -> None:
     """Show one runtime profile, including its model catalog.
 
@@ -38,7 +36,10 @@ def get_profile(
     an app's model picker) without hitting the API directly."""
     state = state_from_ctx(ctx)
 
-    def _run(client, _s):  # type: ignore[no-untyped-def]
+    # noqa: RET503 — the last statement is `fail()`, which is NoReturn; ruff
+    # resolves that annotation only within a file, so it reads the end as
+    # reachable. An explicit `return None` here would be dead code.
+    def _run(client, _s):  # type: ignore[no-untyped-def] # noqa: RET503
         profiles = list_items(client.org_runtime.profiles())
         needle = selector.casefold()
         for profile in profiles:
@@ -47,9 +48,10 @@ def get_profile(
                 or str(profile.get("name") or "").casefold() == needle
             ):
                 return profile
-        names = ", ".join(
-            sorted(str(p.get("name")) for p in profiles if p.get("name"))
-        ) or "(none)"
+        names = (
+            ", ".join(sorted(str(p.get("name")) for p in profiles if p.get("name")))
+            or "(none)"
+        )
         fail(f"Runtime profile not found: '{selector}'. Available: {names}.")
 
     result = run_with_client(ctx, _run)

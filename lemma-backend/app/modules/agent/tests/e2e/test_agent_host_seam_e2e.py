@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 from sqlalchemy import select
@@ -25,9 +26,12 @@ from sqlalchemy import select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
     AgentHostCommandKind,
+    AgentHostCommandRejection,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
+    AgentHostRejectionCode,
+    AgentHostRunSpec,
     AgentHostRunState,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -38,22 +42,44 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     MessageKind,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host import (
+from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
     RemoteHarness,
-    _AgentHostRunConfig,
+    AgentHostRunConfig,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+    _resumed_tool_call_id,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
-from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
+from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
+from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostCommandModel,
+    AgentRuntimeProfileModel,
+)
+from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
+from app.modules.agent.services.mcp_pausing_calls import (
+    close_pausing_tool_call,
+    record_pausing_tool_call,
+)
+from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
+from app.modules.agent.tools.snooze.models import SnoozeRequest
+from app.modules.agent.tools.snooze.pydantic_adapter import snooze
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
+    stale_after,
 )
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
 
@@ -159,7 +185,7 @@ async def _drive(harness, *, run_id, agent, conversation, ctx) -> list:
         ctx=ctx,
         conversation=conversation,
         options=HarnessOptions(model_name="gpt-5-codex"),
-        run_config=_AgentHostRunConfig(
+        run_config=AgentHostRunConfig(
             harness_id=uuid7(),
             runtime_profile_id=uuid7(),
             config_selections={},
@@ -208,7 +234,17 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
         if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
     )
     messages = [event.data for event in events if event.type is AgentEventType.MESSAGE]
-    persisted = "".join(m.text for m in messages if m.text and m.tool_call_id is None)
+    # kind == TEXT: the agent's thinking ("Checking the file.") is correctly
+    # persisted too, as its own MessageKind.THINKING draft (_flush_messages) --
+    # a real, separate record, not part of the answer. streamed already
+    # excludes it via its own kind == "text" filter above; persisted must
+    # match, or a thought landing between the two message chunks looks like a
+    # lost/reordered answer instead of the working-as-designed split it is.
+    persisted = "".join(
+        m.text
+        for m in messages
+        if m.text and m.tool_call_id is None and m.kind == MessageKind.TEXT
+    )
 
     # The whole answer, not just the part after the tool call.
     assert streamed == "Let me look. It is the readme."
@@ -242,7 +278,9 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
         batch=AgentHostEventBatch(
             events=[
                 at(1, AgentHostEventType.AGENT_MESSAGE_CHUNK, {"text": "One moment. "}),
-                at(2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "One moment. "}),
+                at(
+                    2, AgentHostEventType.AGENT_MESSAGE_UPSERT, {"text": "One moment. "}
+                ),
                 at(
                     3,
                     AgentHostEventType.PERMISSION_REQUEST,
@@ -321,7 +359,7 @@ class _RecordingArtifactWriter:
         self.mime_types: list[str] = []
 
     async def materialize_event(self, *, payload, **_kwargs):
-        from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+        from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
             AgentHostArtifactMaterialization,
             _inline_images,
         )
@@ -482,7 +520,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
             ),
             conversation=_conversation(conversation_id, pod_id),
             options=HarnessOptions(model_name="gpt-5-codex"),
-            run_config=_AgentHostRunConfig(
+            run_config=AgentHostRunConfig(
                 harness_id=uuid7(),
                 runtime_profile_id=uuid7(),
                 config_selections={},
@@ -526,9 +564,16 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
 
 async def _await_refresh_command(db_session, run_id: UUID, *, timeout: float = 20.0):
     """The REFRESH_CREDENTIAL row, once the running turn has queued it."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        found = (
+
+    async def probe():
+        # The rollback is load-bearing, not cleanup: it releases this session's
+        # snapshot so the *next* query can see the row committed by the
+        # harness's own (different) session -- without it, this session keeps
+        # reading its original snapshot and never observes that commit.
+        # Running it before the first query too (a no-op there) keeps the
+        # ordering simple: every read in this loop is preceded by one.
+        await db_session.rollback()
+        return (
             (
                 await db_session.execute(
                     select(AgentHostCommandModel).where(
@@ -541,8 +586,568 @@ async def _await_refresh_command(db_session, run_id: UUID, *, timeout: float = 2
             .scalars()
             .first()
         )
-        if found is not None:
-            return found
-        await db_session.rollback()
-        await asyncio.sleep(0.1)
-    return None
+
+    try:
+        return await eventually(
+            label=f"REFRESH_CREDENTIAL command for run {run_id}",
+            probe=probe,
+            done=lambda found: found is not None,
+            timeout_seconds=timeout,
+            interval_seconds=0.1,
+        )
+    except pytest.fail.Exception:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_off(
+    db_session, scenario
+):
+    """The whole sleep, on the real seam: tool, turn, wake.
+
+    `snooze` is the one tool an agent uses to say "not now, later". In-process it
+    raises and the run loop catches it. A remote harness cannot be interrupted
+    from inside its own MCP tool call, so this is the path where every step is
+    different: Lemma has to end the turn, read a stopped run as a sleeping one,
+    and start the woken run itself.
+
+    The failure this guards is silent in every piece and only visible whole — a
+    turn that never stops leaves a run active, and the wake finds one and does
+    nothing, so the agent sleeps forever and the conversation looks busy.
+    """
+    await scenario.create_org_with_pod(name_prefix="Snooze")
+    pod_id = scenario.pod_id
+    conversation_id, run_id, host_id = await _seed_run(db_session, scenario, pod_id)
+    await db_session.commit()
+
+    ctx = BaseAgentContext(
+        user_id=UUID(scenario.owner_user["id"]),
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        # False for every Agent Host run: nothing here catches a raised pause.
+        supports_pause_signal=False,
+    )
+    tool_call_id = await record_pausing_tool_call(
+        lambda: SqlAlchemyUnitOfWork(db_session),
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        tool_name=SNOOZE_TOOL_NAME,
+        arguments={"reason": "waiting for the nightly build", "seconds": 600},
+    )
+    await db_session.commit()
+
+    answer = await snooze(
+        SimpleNamespace(deps=ctx, tool_call_id=tool_call_id),
+        SnoozeRequest(
+            reason="waiting for the nightly build",
+            seconds=600,
+            note_to_self="check whether it went green",
+        ),
+    )
+    assert answer.success is True
+
+    # The host was really told to stop, on the real lease.
+    commands = (
+        (
+            await db_session.execute(
+                select(AgentHostCommandModel).where(
+                    AgentHostCommandModel.run_id == run_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [command.kind for command in commands] == [
+        AgentHostCommandKind.CANCEL_RUN.value
+    ]
+
+    # ... and the host stops, reporting what it saw. Which is not what happened.
+    repository = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
+    ack = await repository.append_events(
+        host_id=host_id,
+        batch=AgentHostEventBatch(
+            events=[
+                AgentHostEvent(
+                    run_id=run_id,
+                    lease_epoch=1,
+                    sequence=1,
+                    type=AgentHostEventType.TERMINAL.value,
+                    payload={
+                        "state": AgentHostRunState.CANCELLED.value,
+                        "stop_reason": "cancelled",
+                    },
+                    occurred_at=datetime.now(timezone.utc),
+                )
+            ]
+        ),
+    )
+    assert ack.acked_through == 1
+
+    events = await _drive(
+        RemoteHarness(lambda: SqlAlchemyUnitOfWork(db_session)),
+        run_id=run_id,
+        agent=_agent(pod_id),
+        conversation=_conversation(conversation_id, pod_id),
+        ctx=ctx,
+    )
+    # Not STOPPED, which reads as "the user pressed Stop" and leaves the
+    # conversation looking finished while a timer counts down to wake it.
+    assert events[-1].type is AgentEventType.WAITING
+    assert events[-1].data["tool_call_id"] == tool_call_id
+
+    # The run has to be over before the timer fires, or the wake sees a live run
+    # and quietly declines to start a second one.
+    await ConversationRepository(SqlAlchemyUnitOfWork(db_session)).finish_agent_run(
+        agent_run_id=run_id, status=AgentRunStatus.COMPLETED
+    )
+    await db_session.commit()
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    waits = AgentConversationWaitRepository(uow)
+    wait = await waits.find_active_for_run(run_id)
+    assert wait is not None and wait.tool_call_id == tool_call_id
+
+    woke = await SnoozeWakeService(uow).wake(wait=wait)
+    await db_session.commit()
+    assert woke is True
+
+    runs = (
+        (
+            await db_session.execute(
+                select(AgentRunModel)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(runs) == 2, "the timer did not start the run that carries on"
+    assert runs[-1].run_metadata["source"] == "snooze_resume"
+    # Named so the dispatch can prompt the woken agent with what it woke to,
+    # rather than re-sending a request its provider session already holds.
+    assert runs[-1].run_metadata["resumed_tool_call_id"] == tool_call_id
+    assert _resumed_tool_call_id(runs[-1].to_entity()) == tool_call_id
+
+    messages, _ = await ConversationRepository(uow).list_messages(
+        conversation_id=conversation_id, limit=50
+    )
+    returned = [
+        message
+        for message in messages
+        if message.kind is MessageKind.TOOL_RETURN
+        and message.tool_call_id == tool_call_id
+    ]
+    assert len(returned) == 1, "the wake wrote no return, or wrote two"
+    assert returned[0].tool_result["woke_because"] == "TIMER"
+    assert returned[0].tool_result["note_to_self"] == "check whether it went green"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
+    db_session, scenario
+):
+    """A pausing call that answers at once must not stay open.
+
+    `snooze(5)` is rejected on purpose — waking replays the conversation, so a
+    poll loop costs more than it saves. But the call is on the record by then,
+    and `start_resume_run_if_ready` refuses to resume a run while any pausing
+    call in it is outstanding. So the rejected one would sit there and the real
+    snooze after it would wake to a resume that quietly declines to start: an
+    agent asleep forever, with nothing reporting a failure anywhere.
+    """
+    await scenario.create_org_with_pod(name_prefix="Snooze")
+    pod_id = scenario.pod_id
+    conversation_id, run_id, _ = await _seed_run(db_session, scenario, pod_id)
+    await db_session.commit()
+
+    uow_factory = lambda: SqlAlchemyUnitOfWork(db_session)  # noqa: E731
+    ctx = BaseAgentContext(
+        user_id=UUID(scenario.owner_user["id"]),
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        supports_pause_signal=False,
+    )
+
+    rejected_id = await record_pausing_tool_call(
+        uow_factory,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        tool_name=SNOOZE_TOOL_NAME,
+        arguments={"reason": "polling", "seconds": 5},
+    )
+    refusal = await snooze(
+        SimpleNamespace(deps=ctx, tool_call_id=rejected_id),
+        SnoozeRequest(reason="polling", seconds=5),
+    )
+    assert refusal.success is False
+    await close_pausing_tool_call(
+        uow_factory,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        tool_call_id=rejected_id,
+        tool_name=SNOOZE_TOOL_NAME,
+        result=refusal,
+    )
+    await db_session.commit()
+
+    real_id = await record_pausing_tool_call(
+        uow_factory,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        tool_name=SNOOZE_TOOL_NAME,
+        arguments={"reason": "the nightly build", "seconds": 600},
+    )
+    slept = await snooze(
+        SimpleNamespace(deps=ctx, tool_call_id=real_id),
+        SnoozeRequest(reason="the nightly build", seconds=600),
+    )
+    assert slept.success is True
+    await close_pausing_tool_call(
+        uow_factory,
+        conversation_id=conversation_id,
+        agent_run_id=run_id,
+        tool_call_id=real_id,
+        tool_name=SNOOZE_TOOL_NAME,
+        result=slept,
+    )
+    await ConversationRepository(uow_factory()).finish_agent_run(
+        agent_run_id=run_id, status=AgentRunStatus.COMPLETED
+    )
+    await db_session.commit()
+
+    uow = uow_factory()
+    wait = await AgentConversationWaitRepository(uow).find_active_for_run(run_id)
+    assert wait is not None and wait.tool_call_id == real_id
+    assert await SnoozeWakeService(uow).wake(wait=wait) is True
+    await db_session.commit()
+
+    runs = (
+        (
+            await db_session.execute(
+                select(AgentRunModel).where(
+                    AgentRunModel.conversation_id == conversation_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(runs) == 2, "the rejected snooze held the real one's wake shut"
+
+    # And closing the rejected one did not also close the real one: the return
+    # under the sleeping call has to be the wake, not the acknowledgement the
+    # model already read. `append_pause_tool_return` is idempotent, so a return
+    # written early is the wake never being written at all.
+    messages, _ = await ConversationRepository(uow).list_messages(
+        conversation_id=conversation_id, limit=50
+    )
+    returns = {
+        message.tool_call_id: message.tool_result
+        for message in messages
+        if message.kind is MessageKind.TOOL_RETURN
+    }
+    assert returns[real_id]["woke_because"] == "TIMER"
+    assert returns[rejected_id]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenario):
+    """The whole dispatch seam: admit -> poll START_RUN -> append -> consume.
+
+    Earlier seam tests drive ``_consume`` directly and seed the lease by hand,
+    so ``agent_host_admission`` (admit exactly once, refuse conflicts) and the
+    repository's ``poll_commands`` handout were never exercised together. This
+    goes through the real admission, hands the START_RUN out the way a host's
+    poll does, appends a real terminal event batch, and then consumes to
+    completion — all in-process and deterministic.
+    """
+    await scenario.create_org_with_pod(name_prefix="Dispatch")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="dispatch e2e")
+
+    # A fresh run with no lease yet; admission creates the lease and the
+    # START_RUN command together.
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "dispatch"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.commit()
+    run_id = run.id
+
+    # A real harness-bound runtime profile row the lease can reference.
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Dispatch profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    profile_id = profile.id
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    repository = AgentHostDispatchRepository(uow)
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        model_name="gpt-5-codex",
+        config_selections={},
+        system_prompt="Dispatch test system prompt.",
+        prompt=[{"role": "user", "content": "Say the dispatch secret."}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={"encrypted": True},
+        now=now,
+    )
+    assert admitted.kind == AgentHostCommandKind.START_RUN
+    # Admission is exactly-once: re-admitting the same run returns the same command.
+    again = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    assert again.id == admitted.id
+    await db_session.commit()
+
+    # The host polls and is handed the START_RUN, and its lease is advanced.
+    polled = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    started = [c for c in polled if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(started) == 1, list(polled)
+    # The wire command carries the decrypted MCP config (the encrypted blob
+    # stays in the DB), and names the run it is for.
+    assert "mcp" in started[0].payload
+    assert started[0].payload["agent_run_id"] == str(run_id)
+    await db_session.commit()
+
+    # The host appends a real terminal turn, then the harness consumes it.
+    ack = await repository.append_events(
+        host_id=machine["host_id"],
+        batch=AgentHostEventBatch(
+            events=[
+                _event(
+                    1,
+                    AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                    {"text": "The "},
+                    run_id=run_id,
+                ),
+                _event(
+                    2,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "The "},
+                    run_id=run_id,
+                ),
+                _event(
+                    3,
+                    AgentHostEventType.AGENT_MESSAGE_CHUNK,
+                    {"text": "secret."},
+                    run_id=run_id,
+                ),
+                _event(
+                    4,
+                    AgentHostEventType.AGENT_MESSAGE_UPSERT,
+                    {"text": "secret."},
+                    run_id=run_id,
+                ),
+                _event(
+                    5,
+                    AgentHostEventType.TERMINAL,
+                    {
+                        "state": AgentHostRunState.SUCCEEDED.value,
+                        "stop_reason": "end_turn",
+                    },
+                    run_id=run_id,
+                ),
+            ]
+        ),
+    )
+    assert ack.acked_through == 5
+    await db_session.commit()
+
+    events = await _drive(
+        RemoteHarness(lambda: SqlAlchemyUnitOfWork(db_session)),
+        run_id=run_id,
+        agent=_agent(pod_id),
+        conversation=_conversation(conversation_id, pod_id),
+        ctx=BaseAgentContext(
+            user_id=UUID(scenario.owner_user["id"]),
+            pod_id=pod_id,
+            conversation_id=conversation_id,
+        ),
+    )
+    streamed = "".join(
+        event.data["data"]
+        for event in events
+        if event.type is AgentEventType.TOKEN and event.data["kind"] == "text"
+    )
+    assert "The secret." in streamed
+    assert events[-1].type is AgentEventType.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
+    db_session, scenario
+):
+    """A host refusing a START_RUN for a superseded revision repairs it.
+
+    ``agent_host_command_remint`` re-aims the delivered command at the harness
+    as it is published now and requeues it, instead of terminalizing a run
+    whose only fault is that the harness moved underneath it.
+    """
+    await scenario.create_org_with_pod(name_prefix="Remint")
+    pod_id = scenario.pod_id
+    machine = await paired_machine(scenario, display_name="remint e2e")
+
+    created = await scenario.owner_client.post(
+        f"/pods/{pod_id}/conversations", json={"title": "remint"}
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    profile = AgentRuntimeProfileModel(
+        organization_id=UUID(scenario.org_id),
+        runtime_type="HARNESS",
+        harness_id=machine["harness_id"],
+        user_id=UUID(scenario.owner_user["id"]),
+        scope="PERSONAL",
+        kind="HARNESS",
+        protocol="AGENT_HOST",
+        name=f"Remint profile {uuid4().hex[:8]}",
+        default_model_name="gpt-5-codex",
+        model_catalog=[],
+        config={"harness_id": str(machine["harness_id"]), "config_options": []},
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    await db_session.commit()
+    run_id, profile_id = run.id, profile.id
+
+    repository = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
+    now = datetime.now(timezone.utc)
+    run_spec = AgentHostRunSpec(
+        agent_run_id=run_id,
+        conversation_id=conversation_id,
+        harness_id=machine["harness_id"],
+        profile_revision="rev-1",
+        config_selections={},
+        system_prompt="Remint test.",
+        prompt=[{"role": "user", "content": "run"}],
+        run_deadline=now + timedelta(minutes=30),
+    )
+    _admitted = await repository.enqueue_run(
+        host_id=machine["host_id"],
+        harness_id=machine["harness_id"],
+        runtime_profile_id=profile_id,
+        run_spec=run_spec,
+        encrypted_mcp_payload={},
+        now=now,
+    )
+    await db_session.commit()
+
+    # The host takes the START_RUN once.
+    first_poll = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[],
+        available_run_slots=1,
+        now=now,
+    )
+    delivered = [c for c in first_poll if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(delivered) == 1
+    delivered_command_id = delivered[0].command_id
+    await db_session.commit()
+
+    # Meanwhile the harness was republished at a newer revision.
+    republished = await scenario.async_client.put(
+        "/agent-host/harnesses",
+        json={
+            "harnesses": [
+                {
+                    "harness_key": "codex",
+                    "display_name": "Codex",
+                    "adapter_version": "1.0.0",
+                    "health": "READY",
+                    "capabilities": {"load_session": True},
+                    "config_revision": "rev-2",
+                    "config_options": [],
+                    "stale_after": stale_after(),
+                }
+            ]
+        },
+        headers={"Authorization": f"Bearer {machine['host_secret']}"},
+    )
+    assert republished.status_code == 200, republished.text
+
+    # The host refuses the stale-revision command; the backend re-aims it.
+    rejected = await repository.poll_commands(
+        host_id=machine["host_id"],
+        limit=10,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        rejections=[
+            AgentHostCommandRejection(
+                command_id=delivered_command_id,
+                run_id=run_id,
+                lease_epoch=1,
+                code=AgentHostRejectionCode.CONFIG_REVISION_STALE,
+                retryable=False,
+                detail="config changed",
+            )
+        ],
+        available_run_slots=1,
+        now=now,
+    )
+    await db_session.commit()
+
+    reaimed = [c for c in rejected if c.kind == AgentHostCommandKind.START_RUN]
+    assert len(reaimed) == 1, list(rejected)
+    # The re-aimed payload now names the current harness revision.
+    assert reaimed[0].payload["profile_revision"] == "rev-2"
+    assert reaimed[0].command_id == delivered_command_id

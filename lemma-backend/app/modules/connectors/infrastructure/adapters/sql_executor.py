@@ -29,6 +29,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from app.core.log.log import get_logger
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_host
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
@@ -39,14 +40,32 @@ logger = get_logger(__name__)
 
 # Reuse the datastore read-only policy (mutation/DDL nodes forbidden anywhere).
 _FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
-    exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Create, exp.Drop,
-    exp.Alter, exp.TruncateTable, exp.Grant, exp.Revoke, exp.Copy, exp.Command,
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Merge,
+    exp.Create,
+    exp.Drop,
+    exp.Alter,
+    exp.TruncateTable,
+    exp.Grant,
+    exp.Revoke,
+    exp.Copy,
+    exp.Command,
 )
 _ALLOWED_ROOTS: tuple[type[exp.Expression], ...] = (
-    exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery, exp.With,
+    exp.Select,
+    exp.Union,
+    exp.Intersect,
+    exp.Except,
+    exp.Subquery,
+    exp.With,
 )
 
-_DIALECT_DRIVERS = {"postgresql": "postgresql+asyncpg", "postgres": "postgresql+asyncpg"}
+_DIALECT_DRIVERS = {
+    "postgresql": "postgresql+asyncpg",
+    "postgres": "postgresql+asyncpg",
+}
 _DEFAULT_ROW_CAP = 1000
 _MAX_ROW_CAP = 10_000
 _DEFAULT_STATEMENT_TIMEOUT_MS = 30_000
@@ -64,16 +83,24 @@ def _ensure_read_only(sql: str) -> None:
             details={"reason": "query_too_long"},
         )
     try:
-        statements = [s for s in sqlglot.parse(sql, dialect="postgres") if s is not None]
+        statements = [
+            s for s in sqlglot.parse(sql, dialect="postgres") if s is not None
+        ]
     except SqlglotError as exc:
-        raise OperationExecutionValidationError(f"Could not parse SQL query: {exc}") from exc
+        raise OperationExecutionValidationError(
+            f"Could not parse SQL query: {exc}"
+        ) from exc
     if not statements:
         raise OperationExecutionValidationError("Empty SQL query.")
     if len(statements) > 1:
-        raise OperationExecutionValidationError("Only a single SQL statement is allowed.")
+        raise OperationExecutionValidationError(
+            "Only a single SQL statement is allowed."
+        )
     statement = statements[0]
     if not isinstance(statement, _ALLOWED_ROOTS) or statement.find(*_FORBIDDEN_NODES):
-        raise OperationExecutionValidationError("Only read-only SELECT queries are allowed.")
+        raise OperationExecutionValidationError(
+            "Only read-only SELECT queries are allowed."
+        )
 
 
 def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
@@ -89,7 +116,7 @@ def _resolve_row_cap(connection_config: dict[str, Any]) -> int:
         return _DEFAULT_ROW_CAP
     try:
         requested = int(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         raise OperationExecutionValidationError(
             "SQL connection 'row_cap' must be an integer.",
             details={"reason": "row_cap_not_an_integer"},
@@ -161,7 +188,9 @@ class SqlExecutor:
         return sql, None
 
     @staticmethod
-    def _build_list_tables(payload: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    def _build_list_tables(
+        payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any] | None]:
         schema = payload.get("schema")
         sql = (
             "SELECT table_schema, table_name FROM information_schema.tables "
@@ -218,6 +247,17 @@ class SqlExecutor:
                 details={"reason": "missing_host_or_database"},
             )
         port = connection_config.get("port") or 5432
+        # Re-check the host at execution, not only at install. The stored host is
+        # tenant-supplied; a rebind since install would otherwise open a database
+        # connection straight into the internal network. `assert_safe_host` is
+        # the URL guard's bare host/port form, made for exactly this.
+        try:
+            await assert_safe_host(str(host), int(port))
+        except UnsafeUrlError as exc:
+            raise OperationExecutionValidationError(
+                f"Refusing to connect to an unsafe database host: {exc}",
+                details={"reason": exc.reason},
+            ) from exc
         user = quote_plus(str(creds.get("username") or ""))
         password = quote_plus(str(creds.get("password") or ""))
         userinfo = f"{user}:{password}@" if user else ""
@@ -240,7 +280,9 @@ class SqlExecutor:
             del self._engines[cache_key]
             await engine.dispose()
 
-        engine = create_async_engine(dsn, pool_size=2, max_overflow=2, pool_pre_ping=True)
+        engine = create_async_engine(
+            dsn, pool_size=2, max_overflow=2, pool_pre_ping=True
+        )
         self._engines[cache_key] = (engine, secret)
         self._engines.move_to_end(cache_key)
         while len(self._engines) > connector_settings.connector_sql_engine_cache_size:
@@ -270,19 +312,34 @@ class SqlExecutor:
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SET TRANSACTION READ ONLY"))
-                await conn.execute(text(f"SET statement_timeout = {_DEFAULT_STATEMENT_TIMEOUT_MS}"))
+                await conn.execute(
+                    text(f"SET statement_timeout = {_DEFAULT_STATEMENT_TIMEOUT_MS}")
+                )
+                # Streamed, over a server-side cursor. `row_cap` used to be
+                # applied with `fetchmany` on a buffered result, which bounds
+                # what is RETURNED and not what is FETCHED -- asyncpg has
+                # already drained every row into memory by then. Measured
+                # against a two-million-row query: 460 MB and 1.0s to hand back
+                # 101 rows, versus 0 MB and 0.1s here. A tenant's own warehouse
+                # and their own SQL, so the row count is theirs to choose and
+                # the worker's memory is not.
                 if params is None:
-                    # The tenant's own SQL goes to the driver verbatim.
-                    # `text()` would scan it for ``:name`` bind parameters, so a
-                    # legitimate query containing a colon -- a jsonb literal like
-                    # '{"a":1}', a cast, a time string -- would be rejected as a
-                    # missing bind rather than being run.
-                    result = await conn.exec_driver_sql(sql)
+                    # The tenant's SQL is not ours to interpret, but `stream`
+                    # needs a statement and `text()` scans for ``:name`` binds
+                    # -- so a jsonb literal like '{"a":1}', a `::` cast or a
+                    # time string would be read as a missing bind. Escaping
+                    # every colon is what tells `text()` there are none;
+                    # verified to parse zero binds and to round-trip all three.
+                    statement = text(sql.replace(":", r"\:"))
                 else:
                     # Our own introspection statements, which do use binds.
-                    result = await conn.execute(text(sql), params)
+                    statement = text(sql).bindparams(**params)
+                result = await conn.stream(
+                    statement.execution_options(max_row_buffer=row_cap + 1)
+                )
                 columns = list(result.keys())
-                rows = result.fetchmany(row_cap + 1)
+                rows = await result.fetchmany(row_cap + 1)
+                await result.close()
         except OperationExecutionValidationError:
             raise
         except (SQLAlchemyError, OSError, PostgresError) as exc:

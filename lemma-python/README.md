@@ -10,7 +10,7 @@ token). The CLI and TUI live in the sibling `lemma-cli` package.
 
 - package name: `lemma-sdk`
 - import root: `lemma_sdk`
-- Python `>=3.11` ([`uv`](https://docs.astral.sh/uv/) recommended)
+- Python `>=3.14,<3.15` ([`uv`](https://docs.astral.sh/uv/) recommended)
 
 > **Reading the source.** In a Lemma sandbox the full SDK source is available at
 > `/sdk/lemma-python` (and the TypeScript SDK at `/sdk/lemma-typescript`). When you
@@ -19,10 +19,41 @@ token). The CLI and TUI live in the sibling `lemma-cli` package.
 
 ## Install
 
+The published package is `lemma-sdk`, not `lemma-python` — that is the directory
+it is built from.
+
+```bash
+uv add lemma-sdk            # or: pip install lemma-sdk
+```
+
+From a checkout, for working on the SDK itself:
+
 ```bash
 uv pip install .            # or: uv pip install --editable .
 python -c "from lemma_sdk import Pod, Lemma; print(Pod, Lemma)"
 ```
+
+**This package requires Python 3.14** (`requires-python = ">=3.14,<3.15"`), which
+is not what `python3` is on current distributions or on macOS. Check before you
+install, because the failure is quiet: on an older interpreter neither `pip` nor
+`uv` errors — the resolver walks back to `0.6.2`, the last release that allowed
+3.11, and installs that instead. You get an SDK two minors behind the API you
+are calling and nothing says so. Confirm what you actually got with
+`python -c "import importlib.metadata as m; print(m.version('lemma-sdk'))"`.
+
+`uv` will provision 3.14 for you:
+
+```bash
+uv venv --python 3.14 && uv pip install lemma-sdk   # standalone environment
+```
+
+In a uv project, put `requires-python = ">=3.14"` in your `pyproject.toml`
+before `uv add lemma-sdk`; otherwise the project's own floor is what makes the
+resolver reach for the old release.
+
+The `lemma` CLI is unaffected by any of this: `uv tool install lemma-terminal`
+provisions its own interpreter, so the CLI works whatever `python3` on your
+machine happens to be.
 
 ## Two entry points
 
@@ -43,6 +74,31 @@ lemma = Lemma.from_env(org_id="org-id") # org-scoped client; lemma.pod("id") -> 
 ```python
 with Pod.from_env() as pod:
     pod.functions.run("triage_ticket", {"ticket_id": "rec-1"})
+```
+
+`lemma.pod(...)` and `lemma.for_org(...)` are *views* of the client they come
+from: same endpoint, same credential, same connection pool, so closing the
+parent closes everything. Only a directly constructed `Pod`/`Lemma` owns a
+transport of its own.
+
+### Every call is synchronous
+
+There is no async client. Each method makes a blocking HTTP request, and a
+retried request sleeps (up to a few seconds) on the calling thread. That is what
+you want in a script, a function handler doing one thing at a time, or a worker
+thread — and it is not what you want on an event loop. From `async def` code
+that also serves other work, hand each call to a thread:
+
+```python
+import asyncio
+
+row = await asyncio.to_thread(pod.table("tickets").get, ticket_id)
+
+# Fanning out? to_thread + gather runs the round trips concurrently; a plain
+# loop of SDK calls serializes them and freezes the loop for the whole batch.
+rows = await asyncio.gather(*(
+    asyncio.to_thread(pod.table("tickets").get, tid) for tid in ticket_ids
+))
 ```
 
 ## Authentication & configuration
@@ -133,6 +189,10 @@ row = t.get(ticket_id)                            # bare record dict, no envelop
 t.update(ticket_id, {"status": "resolved"})       # only passed fields change
 t.delete(ticket_id)
 
+# Writing more than a row or two? Use the batch form -- one round trip instead
+# of N. A loop of t.create(...) pays a full request per row.
+t.bulk_create([{"title": f"Refund {i}", "status": "new"} for i in range(50)])
+
 rows = pod.records.list(
     "tickets", limit=50,
     filter=[
@@ -142,6 +202,12 @@ rows = pod.records.list(
     sort=[{"field": "created_at", "direction": "desc"}],
 ).to_dict()["items"]
 
+# `list` returns one page — `limit` defaults to 20 and the rest is behind
+# `next_page_token`. When the answer has to be complete, page to exhaustion:
+every_open = pod.records.list_all(
+    "tickets", filter=[{"field": "status", "op": "eq", "value": "new"}]
+)   # -> list of plain row dicts; t.list_all() is the same walk for one table
+
 totals = pod.query(
     "select status, count(*) as total from tickets group by status"
 ).to_dict()["items"]
@@ -149,7 +215,8 @@ totals = pod.query(
 
 The `pod.records` / `pod.table(...)` create/get/update helpers return the bare
 record as a plain dict (no `.to_dict()`, no `["data"]` unwrap). `list` and
-`query` return response objects; call `.to_dict()` and read `["items"]`.
+`query` return response objects; call `.to_dict()` and read `["items"]`;
+`list_all` returns the rows themselves.
 
 Record data is dynamic because table schemas are user-defined.
 
@@ -168,6 +235,11 @@ change the permission a write needs: writing any table requires the
 read-only `query` endpoint can join across tables only when they are non-RLS.
 
 ### Bulk record operations
+
+Reach for these whenever you write more than a couple of rows: each one is a
+single request, where a loop of `create` is one request per row. The same three
+methods exist on the bound helper — `pod.table("tickets").bulk_create(rows)` —
+so you never have to leave the table handle to get a batch.
 
 ```python
 # create: row dicts (ids generated)
@@ -282,7 +354,7 @@ results = lemma.tools.web_search("vendor SLA policy", max_results=5)
 ```
 
 Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
-`lemma.connectors` · `lemma.tools` · `lemma.runtime` · `lemma.org_runtime`.
+`lemma.connectors` · `lemma.tools` · `lemma.agent_hosts` · `lemma.org_runtime`.
 
 ## Writing a function
 

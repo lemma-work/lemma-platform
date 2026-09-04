@@ -8,6 +8,7 @@ from app.core.authorization.context import (
     ActorType,
     AuthorizationDecision,
     Context,
+    PrincipalRef,
     ResourceRef,
     ResourceType,
 )
@@ -56,13 +57,21 @@ def allow_all_context(
     user_id: UUID | None = None,
     pod_id: UUID | None = None,
 ) -> Context:
-    """A user context whose authorizer allows every action. Unit tests only."""
+    """A user context whose authorizer allows every action. Unit tests only.
+
+    Carries a POD_MEMBER principal ref as well as the permissive authorizer.
+    Membership is not a permission -- ``assert_pod_membership`` reads the refs
+    directly and never asks the authorizer -- so a context that allows every
+    action while reading as an outsider is not "allow all", it is a double that
+    disagrees with its own name.
+    """
     resolved_user_id = user_id or uuid4()
     return Context(
         actor_type=ActorType.USER,
         actor_id=str(resolved_user_id),
         user_id=resolved_user_id,
         pod_id=pod_id,
+        principal_refs=frozenset({PrincipalRef("POD_MEMBER", uuid4())}),
         authorizer=AllowAllAuthorizer(),
     )
 

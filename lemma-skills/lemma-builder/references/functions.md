@@ -157,8 +157,9 @@ The sandbox binds a client to the invocation, so the shortest path is the contex
 you were handed:
 
 ```python
-async def execute(context, data: Input) -> Output:
-    pod = context.pod          # already authenticated for this invocation
+# the handler's name is whatever `#function_name:` declares — not `execute`
+async def save_expense(ctx: FunctionContext, data: SaveExpenseInput) -> SaveExpenseResult:
+    pod = ctx.pod              # already authenticated for this invocation
 ```
 
 `Pod.from_env()` is equivalent and is what you want in a helper that doesn't have
@@ -171,10 +172,13 @@ pod = Pod.from_env()        # authenticated as the invoking user, with this func
 ```
 
 **What that identity means** is the part people get wrong. The call runs as the
-**invoking user**, so RLS tables scope to *their* rows and `/me` is *their* tree —
-but authorization is **grant-first**: the user's own roles do **not** carry over.
-The function needs its own explicit grant on every table, folder, and connector it
-touches, or the call comes back 403 even though the user could do it by hand.
+**invoking user**, so RLS tables scope to *their* rows and `/me` is *their* tree — but
+the user's own access is a **ceiling, not a substitute for grants**. Both halves have
+to hold: the function needs its own explicit grant on every table, folder, and
+connector it touches (or `MISSING_WORKLOAD_RESOURCE_GRANT`, even though the user could
+do it by hand), *and* the invoking user must be able to do the same thing themselves
+(or `DELEGATION_EXCEEDS_INVOKER`, which no amount of granting fixes). See
+`authorization-model.md` §2.
 
 `Pod` exposes resource facades (all synchronous): `pod.records` / `pod.table(name)`,
 `pod.files`, `pod.connectors`, `pod.workflows`, `pod.agents`, `pod.conversations`,
@@ -203,7 +207,7 @@ Response shapes differ by operation:
 | --- | --- | --- |
 | `records.create / get / update`, `table.create / get / update` | bare record dict | `record["id"]`, `record["status"]` |
 | `records.list`, `table.list` | `RecordListResponse` | `.to_dict()["items"]` |
-| `records.bulk_create / bulk_update / bulk_delete` | integer affected-row count | use directly |
+| `records.bulk_create / bulk_update / bulk_delete`, `table.bulk_*` | integer affected-row count | use directly |
 | `pod.query(sql)` | `DatastoreQueryResponse` | `.to_dict()["items"]` |
 | `connectors.execute(...)` | `OperationExecutionResponse` | `.to_dict()["result"]` |
 
@@ -229,6 +233,11 @@ t.update(ticket_id, {"status": "resolved"})
 # delete
 t.delete(ticket_id)
 
+# write many rows -- ONE request. Never loop t.create(): from inside a sandbox
+# every call is a round trip back to the API, so 50 rows in a loop costs 50 of
+# them and dominates the whole function's runtime.
+t.bulk_create([{"title": f"Refund {i}", "status": "new"} for i in range(50)])
+
 # list with filters + sort
 rows = pod.records.list(
     "tickets", limit=50,
@@ -248,6 +257,9 @@ totals = pod.query(
 ### Bulk record operations
 
 Use these whenever you touch more than a couple of rows — one round-trip instead of N.
+All three also exist on the bound helper (`t.bulk_create(rows)`,
+`t.bulk_update(rows)`, `t.bulk_delete(ids)`), so holding a `pod.table(...)`
+handle is never a reason to fall back to a per-row loop.
 
 ```python
 # bulk create: list of row dicts (no id; ids are generated)

@@ -10,6 +10,7 @@ export type UpdateScheduleRequest = {
     config?: (Record<string, any> | null);
     filter_instruction?: (string | null);
     filter_output_schema?: (Record<string, any> | null);
+    instruction?: (string | null);
     is_active?: (boolean | null);
     name?: (string | null);
     visibility?: (string | null);

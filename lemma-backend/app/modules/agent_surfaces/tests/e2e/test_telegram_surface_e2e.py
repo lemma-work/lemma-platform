@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent_surfaces.config import surface_settings
 import json
 from uuid import UUID
@@ -8,11 +9,29 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import delete
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
+)
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.services.identity_resolution_service import (
+    SurfaceIdentityResolutionService,
+)
+from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -82,7 +101,9 @@ async def test_telegram_built_in_dm_surface_uses_default_agent_and_replies(
         script=[script_text("E2E agent reply [TELEGRAM]")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.agent_name is None
+    # The assistant answers, and it has a name now -- it used to be named by
+    # having none.
+    assert context.agent_name == DEFAULT_POD_AGENT_NAME
     assert context.surface_id == UUID(surface["id"])
 
     conversation = await _conversation_by_external_thread(
@@ -91,7 +112,9 @@ async def test_telegram_built_in_dm_surface_uses_default_agent_and_replies(
         external_thread_id="111222333",
     )
     assert conversation is not None
-    assert conversation["agent_id"] is None
+    # Answered by the assistant, which now names itself by its row rather
+    # than by the absence of one.
+    assert conversation["agent_id"] == pod_id
 
     telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
     assert telegram_messages[-1]["chat_id"] == "111222333"
@@ -307,14 +330,16 @@ async def test_telegram_group_injects_reply_as_channel_context(
     assert isinstance(context, SurfaceChatContext)
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
     channel_context = (user_message.get("metadata") or {}).get("channel_context")
     assert channel_context, channel_context
-    assert any(
-        "ship on Friday" in (m.get("text") or "") for m in channel_context
-    ), channel_context
+    assert any("ship on Friday" in (m.get("text") or "") for m in channel_context), (
+        channel_context
+    )
 
 
 async def test_telegram_dm_has_no_channel_context(
@@ -348,7 +373,9 @@ async def test_telegram_dm_has_no_channel_context(
     assert isinstance(context, SurfaceChatContext)
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
     assert "channel_context" not in (user_message.get("metadata") or {})
@@ -472,7 +499,9 @@ async def test_telegram_username_resolves_user_without_contact_share(
     )
 
     # _telegram_payload's sender carries username="surfaceuser".
-    payload = _telegram_payload(text="hello directly", message_id=70, sender_id=55501234)
+    payload = _telegram_payload(
+        text="hello directly", message_id=70, sender_id=55501234
+    )
     context = await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
@@ -566,3 +595,58 @@ async def test_telegram_contact_share_links_user_then_allows_chat(
     # Text is rendered as MarkdownV2, so reserved chars ([ ] _) are escaped.
     assert "E2E agent reply" in telegram_messages[-1]["text"]
     assert "TELEGRAM" in telegram_messages[-1]["text"]
+
+
+async def test_a_deactivated_telegram_handle_resolves_to_nobody(
+    db_session: AsyncSession,
+    fixed_test_user,
+):
+    """A departed colleague's @username must not still be an authority grant.
+
+    Resolution runs the telegram-username lookup *first*, so it decides who an
+    inbound message executes as before the filtered email path is ever reached.
+    The email lookup has excluded deactivated and deleted rows for exactly this
+    reason; this one did not, and PS-SURF-012 gives a resolved person "exactly
+    the access their Lemma identity has" -- which for a deactivated identity is
+    none.
+    """
+    user_id = UUID(fixed_test_user["id"])
+    await _set_user_mobile_number(
+        db_session,
+        user_id=fixed_test_user["id"],
+        mobile_number="+15559990099",
+        telegram_username="departedcolleague",
+    )
+    uow = SqlAlchemyUnitOfWork(session=db_session)
+    service = SurfaceIdentityResolutionService(
+        uow=uow,
+        external_user_repository=ExternalSurfaceUserRepository(uow),
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="900200",
+        sender_external_user_id="900200",
+        message_text="let me back in",
+        is_dm=True,
+        metadata={"sender_username": "departedcolleague"},
+    )
+
+    live = await service.resolve(event=event)
+    assert live.internal_user_id == user_id
+
+    user = await db_session.get(User, user_id)
+    assert user is not None
+    user.is_active = False
+    await db_session.commit()
+    # The cached ExternalSurfaceUser row the first resolve wrote would answer
+    # ahead of any lookup, so this asks the question the repository answers.
+    await db_session.execute(
+        delete(AgentSurfaceExternalUser).where(
+            AgentSurfaceExternalUser.external_user_id == "900200"
+        )
+    )
+    await db_session.commit()
+
+    departed = await service.resolve(event=event)
+    assert departed.internal_user_id is None

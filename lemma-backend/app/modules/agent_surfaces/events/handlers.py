@@ -24,8 +24,6 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.core.log.log import get_logger
-from app.composition.surface_agent import get_conversation_service
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
@@ -34,8 +32,8 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
-    SurfaceScheduleIngress,
 )
+from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -48,13 +46,18 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
+    get_surface_event_dedup_store,
+)
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
-from app.composition.surface_connectors import get_connector_service
+from app.modules.agent_surfaces.services.surface_inbound import (
+    release_ingress_claim,
+)
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
-from app.modules.schedule.domain.events.schedule import ScheduleEvents, ScheduleFired
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
+from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -74,8 +77,6 @@ def build_surface_event_handler(uow):
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=get_conversation_service(uow),
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
@@ -87,18 +88,67 @@ def build_surface_event_handler(uow):
     consumer="surface-webhook-events-consumer",
 )
 async def handle_surface_webhook(
-    event: SurfaceWebhookReceivedEvent,
+    event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
+    # ``surface_events`` also carries ``surface.connected`` and
+    # ``surface.message.answered``, which exist for the analytics projections.
+    # Only the webhook belongs here, so the parameter stays untyped and the
+    # event is parsed after the tag check -- declaring
+    # ``SurfaceWebhookReceivedEvent`` here instead moves validation ahead of the
+    # acknowledgement, which turns every other event on the stream into a poison
+    # message: never acked, and reclaimed by XAUTOCLAIM forever. That is not
+    # hypothetical; it ran at ~119 redeliveries an hour until this was fixed,
+    # and it grew by one permanently-stuck message per agent created, because
+    # every agent is given an auto-provisioned Resend mailbox whose creation
+    # publishes ``surface.connected``. ``handle_surface_schedule_event`` below
+    # carries the same warning for ``schedule_events``.
+    if event.get("event_type") != SurfaceWebhookReceivedEvent.get_event_type():
+        return
+
+    received = SurfaceWebhookReceivedEvent.model_validate(event)
+
     async def process() -> None:
         await _process_surface_webhook(
-            event, fs_logger, uow_factory=uow_factory, job_queue=job_queue
+            received, fs_logger, uow_factory=uow_factory, job_queue=job_queue
         )
 
-    await inbox.process("agent-surfaces.webhook", event, process)
+    await inbox.process("agent-surfaces.webhook", received, process)
+
+
+async def _release_claim_for_retry(
+    context: AgentSurfaceContext,
+    *,
+    event: SurfaceWebhookReceivedEvent,
+) -> None:
+    """Say the delivery reached no job, then hand its claim back.
+
+    Said first, because it is true whether or not the release then works, and
+    because ``error`` is the point: a message somebody sent has not been
+    answered. The only record before was the duplicate line inside preparation,
+    at ``debug``, which ``LOG_LEVEL=INFO`` drops -- so a message lost this way
+    left no trace anywhere.
+
+    Called from a ``finally``, so the exception being propagated is still the
+    current one and ``exc_info`` carries the reason the enqueue failed.
+    """
+    surface_id = context.surface_id
+    logger.error(
+        "agent_surfaces.handlers.surface_message_not_enqueued.failed",
+        source=event.source,
+        surface_id=str(surface_id) if surface_id else None,
+        # LOG014 reads "not inside an `except`" as "no exception to attach".
+        # This runs while one is unwinding through a `finally`, where
+        # `sys.exc_info()` is still the failure being propagated -- and that
+        # traceback is the whole reason an operator can act on this line.
+        exc_info=True,  # noqa: LOG014
+    )
+    await release_ingress_claim(
+        context, event_dedup_store=get_surface_event_dedup_store()
+    )
 
 
 async def _process_surface_webhook(
@@ -139,81 +189,46 @@ async def _process_surface_webhook(
         if await handler.try_handle_interaction(ingress_request):
             return
 
-        context = await handler.prepare_ingress(ingress_request)
-
-    if not context:
-        return
-
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-            mode="json"
-        ),
-        _job_id=f"surface-event:{event.event_id}",
-    )
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    ScheduleEvents.STREAM,
-    group="surface-schedule-events",
-    consumer="surface-schedule-events-consumer",
-)
-async def handle_surface_schedule_event(
-    event: dict,
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-) -> None:
-    # ``schedule_events`` carries the lifecycle events too (created, updated,
-    # deleted, deactivated). Only fires reach a surface, so the parameter stays
-    # untyped and the fire is parsed after the tag check — declaring
-    # ``ScheduleFired`` here instead makes every lifecycle event a validation
-    # error that is redelivered forever, because a poison message is never
-    # acked and XAUTOCLAIM keeps reclaiming it.
-    if event.get("event_type") != ScheduleFired.get_event_type():
-        return
-
-    fired = ScheduleFired.model_validate(event)
-
-    async def process() -> None:
-        await _process_surface_schedule_event(
-            fired, fs_logger, uow_factory=uow_factory, job_queue=job_queue
-        )
-
-    await inbox.process("agent-surfaces.schedule", fired, process)
-
-
-async def _process_surface_schedule_event(
-    event: ScheduleFired,
-    fs_logger: Logger,
-    *,
-    uow_factory: UnitOfWorkFactory,
-    job_queue: SharedStreaqJobQueue,
-) -> None:
-    async with uow_factory() as uow:
-        handler = build_surface_event_handler(uow)
-        context = await handler.prepare_ingress(
-            SurfaceScheduleIngress(
-                schedule_id=event.schedule_id,
-                payload=event.payload,
-                account_id=event.account_id,
-                pod_id=event.pod_id,
-                user_id=event.user_id,
+        # One delivery can carry more than one message on a platform that
+        # batches; every other platform hands back the request unchanged.
+        contexts = [
+            (index, await handler.prepare_ingress(part))
+            for index, part in enumerate(
+                handler.split_webhook_deliveries(ingress_request)
             )
-        )
+        ]
 
-    if not context:
-        return
-
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-            mode="json"
-        ),
-        _job_id=f"surface-schedule-event:{event.event_id}",
-    )
+    for index, context in contexts:
+        if not context:
+            continue
+        # `prepare_ingress` spent the delivery claim above, and the work that
+        # claim guards is this enqueue. Losing the enqueue -- a Redis blip, a
+        # worker restart, a cancellation -- while still holding the claim makes
+        # the inbox's retry a no-op: the replay re-enters preparation, is told
+        # the message is a duplicate, and drops it for good. `finally` rather
+        # than `except` so cancellation counts too, since `CancelledError` is
+        # not an `Exception`. The deterministic `_job_id` already makes a double
+        # enqueue harmless, so handing the claim back costs nothing.
+        enqueued = False
+        try:
+            await job_queue.enqueue(
+                "process_surface_message",
+                payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+                    mode="json"
+                ),
+                # The first part keeps the bare id, so the dedup key for an
+                # ordinary single-message delivery is byte-identical to what it
+                # was.
+                _job_id=(
+                    f"surface-event:{event.event_id}"
+                    if index == 0
+                    else f"surface-event:{event.event_id}:{index}"
+                ),
+            )
+            enqueued = True
+        finally:
+            if not enqueued:
+                await _release_claim_for_retry(context, event=event)
 
 
 @reliable_redis_stream_subscriber(

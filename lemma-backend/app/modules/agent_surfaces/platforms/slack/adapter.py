@@ -52,19 +52,20 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             metadata=metadata,
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await self._service(credentials).send_display_resource(
+    ) -> bool:
+        await self._service(credentials)._render_resource(
             event=event,
             render_plan=render_plan,
             metadata=metadata,
         )
+        return True
 
     async def add_processing_indicator(
         self,
@@ -126,7 +127,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             event, progress_handle, message, metadata
         )
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -134,11 +135,11 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await self._service(credentials).send_questions(
+        return await self._service(credentials)._render_choices(
             event=event, question_plan=question_plan, metadata=metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -146,7 +147,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await self._service(credentials).send_approval(
+        return await self._service(credentials)._render_decision(
             event=event, approval_plan=approval_plan, metadata=metadata
         )
 
@@ -187,14 +188,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         trigger_id: str,
         channel_id: str,
         channel_label: str | None,
-        agent_names: list[str],
+        agent_name: str,
         surface_id: str | None = None,
     ) -> bool:
         return await self._home(credentials).open_channel_setup_modal(
             trigger_id=trigger_id,
             channel_id=channel_id,
             channel_label=channel_label,
-            agent_names=agent_names,
+            agent_name=agent_name,
             surface_id=surface_id,
         )
 
@@ -205,30 +206,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             user_id=user_id, prompt=prompt
         )
 
-    async def open_dm_agent_modal(
-        self,
-        *,
-        credentials: dict[str, Any],
-        trigger_id: str,
-        agent_names: list,
-        current: str | None,
-        surface_id: str | None = None,
-    ) -> bool:
-        return await self._home(credentials).open_dm_agent_modal(
-            trigger_id=trigger_id,
-            agent_names=list(agent_names),
-            current=current,
-            surface_id=surface_id,
-        )
-
     async def publish_home_view(
         self,
         *,
         credentials: dict[str, Any],
         user_id: str,
         pod_name: str | None,
-        dm_agent_name: str | None,
-        channel_routes: list,
+        agent_name: str,
+        channel_ids: list[str],
         agents: list | None = None,
         apps: list | None = None,
         workspace_url: str | None = None,
@@ -239,8 +224,8 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         return await self._home(credentials).publish_home_view(
             user_id=user_id,
             pod_name=pod_name,
-            dm_agent_name=dm_agent_name,
-            channel_routes=channel_routes,
+            agent_name=agent_name,
+            channel_ids=channel_ids,
             agents=agents,
             apps=apps,
             workspace_url=workspace_url,
@@ -261,14 +246,28 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         title: str,
     ) -> bool:
-        return await self._home(credentials).set_thread_title(
-            event=event, title=title
-        )
+        return await self._home(credentials).set_thread_title(event=event, title=title)
 
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceInteraction | None:
         return self.parser.parse_interaction(payload, headers)
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await self._service(credentials).acknowledge_interaction(
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
 
     async def fetch_thread_context(
         self,
@@ -292,7 +291,7 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
             event, attachment
         )
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],

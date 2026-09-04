@@ -5,6 +5,7 @@ import type {
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
     AvailableModelInfo,
+    PodConfig,
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
 import { humanizeName } from '@/lib/utils/display-name';
@@ -183,6 +184,28 @@ export function resolveDefaultAgentRuntime(
         ?? hydrateRuntimeModel(catalog?.default_runtime, catalog);
 }
 
+/**
+ * What a pod runs on when nothing more specific is configured.
+ *
+ * Mirrors `PodConfig.resolved_default_runtime()` in the backend
+ * (pod/domain/pod_entities.py), which is what actually dispatches a run: the
+ * stored `default_runtime` — profile *and* model — wins, and
+ * `default_profile_id` is only the legacy provider-only mirror to fall back on.
+ *
+ * Reading that mirror on its own is the bug this exists to prevent. It is
+ * written from `default_runtime.profile_id` and never carries a model, so
+ * resolving through it names the *profile's* default model — which is a
+ * different model from the one the pod is set to whenever someone picked
+ * anything other than the profile default.
+ */
+export function resolvePodDefaultRuntime(
+    config?: Pick<PodConfig, 'default_runtime' | 'default_profile_id'> | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): AgentRuntimeConfig | null {
+    if (config?.default_runtime) return hydrateRuntimeModel(config.default_runtime, catalog);
+    return resolveDefaultAgentRuntime(catalog, config?.default_profile_id);
+}
+
 export function formatAgentRuntime(
     runtime?: AgentRuntimeConfig | null,
     catalog?: AgentRuntimeProfileListResponse,
@@ -224,22 +247,12 @@ export function shortModelName(modelName: string): string {
 /**
  * The model name as a person reads it: the short name, humanised.
  *
- * Kept separate from `shortModelName` on purpose — that one is also fed to
- * `modelPathHint`, which does string surgery against the raw value, and to the
- * picker's search haystack. Humanising in there would break both.
+ * Kept separate from `shortModelName` on purpose — that one also feeds the
+ * picker's search haystack, which matches against the raw model name.
+ * Humanising in there would break it.
  */
 export function humanizeModelName(modelName: string): string {
     return humanizeName(shortModelName(modelName));
-}
-
-export function modelPathHint(modelName: string): string | null {
-    const shortName = shortModelName(modelName);
-    if (shortName === modelName) return null;
-    return modelName.replace(new RegExp(`/?${escapeRegExp(shortName)}$`), '').replace(/\/$/, '') || modelName;
-}
-
-export function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // A paired Agent Host reports each harness's health from its own probe, so
@@ -305,6 +318,62 @@ export function agentHostHarnessHealth(health: string): { label: string; detail:
         label: humanizeAgentHostState(health),
         detail: 'That computer reported a state this version of Lemma does not recognize yet.',
         ready: false,
+    };
+}
+
+/**
+ * One harness, described once, for whichever layout is drawing it.
+ *
+ * `HarnessRow` draws a card in onboarding; the models ledger draws a bare row.
+ * They disagreed about how much to say once already — which is why the row was
+ * extracted in the first place — so what a harness *is* lives here, and only
+ * where the pieces land is the layout's business.
+ */
+export function describeHarness(
+    harness: {
+        harness_key: string;
+        upstream_version?: string | null;
+        health: string;
+        config_options?: Array<{ category: string; options?: Array<Record<string, unknown>> }> | null;
+    },
+    { hostOnline = true }: { hostOnline?: boolean } = {},
+): {
+    logo: string | undefined;
+    /** The agent's version and model count — the two facts a reader can act on. */
+    facts: string[];
+    /**
+     * The same two facts, apart, for a caller that wants only one of them.
+     *
+     * The models ledger wants the model count and not the version: the version
+     * string an agent publishes routinely carries its own name — "2.1.233
+     * (Claude Code)" — so printing it beside a row already titled Claude Code
+     * said the name twice and buried the one fact worth reading.
+     */
+    version: string | null;
+    modelCount: number;
+    statusLabel: string;
+    usable: boolean;
+    /** What to say when the row cannot take work and the status alone won't explain it. */
+    blockedReason: string | null;
+} {
+    const health = agentHostHarnessHealth(harness.health);
+    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
+    const usable = health.ready && hostOnline;
+    return {
+        logo: harnessLogo(harness.harness_key),
+        facts: [
+            harness.upstream_version ? `agent ${harness.upstream_version}` : null,
+            modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
+        ].filter((fact): fact is string => fact !== null),
+        version: harness.upstream_version ?? null,
+        modelCount,
+        // Reachability decides first: a healthy agent on a sleeping laptop is
+        // not "Ready", whatever the harness itself last reported.
+        statusLabel: hostOnline ? health.label : 'Computer offline',
+        usable,
+        // An unreachable computer is stated by the computer's own row; repeating
+        // it under every agent it owns is the same sentence three times.
+        blockedReason: usable || !hostOnline ? null : health.detail,
     };
 }
 

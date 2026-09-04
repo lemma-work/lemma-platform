@@ -31,7 +31,8 @@ The repository does not use submodules. Backend code depends on sibling packages
 | Path | Purpose |
 |------|---------|
 | `../lemma-frontend/` | Next.js frontend used by the local app runner |
-| `../lemma-python/` | Python SDK and `lemma` CLI |
+| `../lemma-python/` | `lemma-sdk`, the Python SDK (the `lemma` CLI is `lemma-terminal`, in `../lemma-cli/`) |
+| `../lemma-pod-bundle/` | The pod bundle format, shared with the CLI |
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
 | `lemma-connectors/` | Backend-local editable Python connector package |
@@ -65,7 +66,7 @@ make logs               # tail backend logs
 - API: `http://localhost:8710`
 - API docs (Scalar): `http://localhost:8710/scalar`
 
-`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn standalone_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
+`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn local_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
 
 ```bash
 lemma servers select local-dev

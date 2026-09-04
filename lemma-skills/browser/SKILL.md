@@ -22,7 +22,8 @@ agent-browser snapshot -i        # ALWAYS re-snapshot after the page changes
 Environment facts:
 
 - Nothing is running at startup — call `start-browser [url]` once, then reuse the same session for everything.
-- The session is preconfigured: headed Chromium at `/usr/local/bin/workspace-chrome` on virtual display, persistent profile at `/workspace/.browser-profile` (cookies/logins survive across commands and tasks), session name `workspace`.
+- The session is preconfigured: headed Chromium at `/usr/local/bin/workspace-chrome` on virtual display `:99`, profile at `/tmp/lemma-browser/profile`, session name `workspace`.
+- **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there. If a login has to outlive the session, save it explicitly — `agent-browser state save ./auth.json` onto `/workspace`, or `lemma files upload` it — and reload it on the next run.
 - Dashboard on port 4848 for human observation (signed URL via the sandbox runtime Manager `/sandboxes/<id>/browser-url`).
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
@@ -86,7 +87,7 @@ save-webpage https://example.com/article --formats markdown,pdf --out research
 
 ## Recipes
 
-**Login + persist.** Fill the form via refs, `wait --url "**/dashboard"`, done — the persistent profile keeps you logged in for later commands. For repeatable logins without secrets in shell history:
+**Login + persist.** Fill the form via refs, `wait --url "**/dashboard"`, done — the profile keeps you logged in for later commands *in this workspace session*, and only that (see Environment facts). For a login that has to be repeatable, or to survive a suspend, save it rather than relying on the profile:
 
 ```bash
 agent-browser auth save my-app --url https://app.example.com/login \
@@ -114,20 +115,25 @@ lemma apps open support-app                          # a DEPLOYED app, by slug �
 lemma apps open --url http://localhost:5173 --no-auth # a `npm run dev` app — it already self-authenticates via the dev token
 ```
 
-`lemma apps open <slug>` registers the current access token as an
-`Authorization: Bearer` header scoped to the API origin (so the app's cross-origin
-API calls authenticate), then opens the app — no login UI. A local dev server
-(`npm run dev`) seeds the token itself, so pass `--url <dev-url> --no-auth`. From
-there it's the normal core loop: `snapshot -i` → `click`/`fill` → re-`snapshot`,
-plus `screenshot` to capture the rendered UI.
+`lemma apps open <slug>` seeds the current access token into the app's
+`localStorage` (the browser SDK's `injectedToken` mode — the only signal its auth
+check honours) *and* registers it as an `Authorization: Bearer` header scoped to
+the API origin, so cross-origin API calls authenticate too. Then it opens the app
+— no login UI. A local dev server (`npm run dev`) seeds the token itself, so pass
+`--url <dev-url> --no-auth`. From there it's the normal core loop: `snapshot -i` →
+`click`/`fill` → re-`snapshot`, plus `screenshot` to capture the rendered UI.
 
 **See it with your own eyes.** Take a `screenshot`, then use the **view-image**
 capability on that PNG to actually *view* the rendered app (layout, charts, broken
-styles, error overlays). view-image also reads **pod and workspace files
-directly** — a downloaded page render (`lemma files child …/pages/page_0001.jpg`),
-an uploaded image, or a local screenshot — so you can confirm a chart or document
-looks right without a browser. (App design, deploy, and test details:
-`lemma-builder/references/apps.md`.)
+styles, error overlays). view-image reads from **either store** — pass exactly one
+of `workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it
+never guesses from the path shape, and giving both or neither is an error. So a
+local screenshot, an uploaded image, or a rendered page from a pod document
+(`lemma files child …/pages/page_0001.jpg`) all work, and you can confirm a chart
+or document looks right without a browser at all. It handles **images only**: a
+PDF comes back with a pointer to `pod_view_document_pages`, which renders that
+document's pages for you and is the shorter route anyway. (App design, deploy,
+and test details: `lemma-builder/references/apps.md`.)
 
 ## Troubleshooting
 

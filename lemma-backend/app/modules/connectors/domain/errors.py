@@ -11,7 +11,27 @@ def _safe_connector_details(details: object | None) -> dict | None:
         key: value
         for key, value in details.items()
         if str(key).lower()
-        in {"status", "status_code", "code", "error", "reason", "error_type", "upstream_status", "upstream_code"}
+        in {
+            "status",
+            "status_code",
+            "code",
+            "error",
+            "reason",
+            "error_type",
+            "upstream_status",
+            "upstream_code",
+            # What the provider itself said. Hiding it left a caller holding a
+            # status code and no way to tell "invalid_scope" from "repository
+            # not found". Scrubbed of secret-shaped text where it is built.
+            "upstream_message",
+            # Which connector and operation, and when to come back. The circuit
+            # breaker builds both and they were dropped here, so a caller got
+            # `details: null` and a message naming nothing at all.
+            "scope",
+            "connector_id",
+            "operation_name",
+            "retry_after",
+        }
     }
     return redact_value(allowed) if allowed else None
 
@@ -126,6 +146,28 @@ class AccountNotFoundError(_ConnectorNotFoundBase):
         self.code = "ACCOUNT_NOT_FOUND"
 
 
+class OrganizationConnectorsNotFoundError(_ConnectorNotFoundBase):
+    """What a caller is told when they may not act in this organization.
+
+    404 rather than 403 on purpose: whether an organization exists, and whether
+    somebody is in it, are both things a stranger should not learn from a
+    refusal. But the noun has to be the one they named. This used to raise
+    `AccountNotFoundError(str(organization_id))`, so a member without the
+    editor role who tried to install a connector was told that an *account*
+    -- named with an organization's uuid, which they never referenced -- did
+    not exist.
+    """
+
+    def __init__(self, organization_id: str):
+        _ConnectorNotFoundBase.__init__(
+            self,
+            f"No connectors are available in organization '{organization_id}'. "
+            "You may not be a member of it, or the action may need an "
+            "organization owner or editor.",
+        )
+        self.code = "ORGANIZATION_CONNECTORS_NOT_FOUND"
+
+
 class CredentialsNotFoundError(_ConnectorNotFoundBase):
     def __init__(self, account_id: str):
         _ConnectorNotFoundBase.__init__(
@@ -136,9 +178,7 @@ class CredentialsNotFoundError(_ConnectorNotFoundBase):
 
 class AccountAlreadyConnectedError(ConnectorConflictError):
     def __init__(self, connector_id: str):
-        super().__init__(
-            f"Account already connected for connector '{connector_id}'"
-        )
+        super().__init__(f"Account already connected for connector '{connector_id}'")
         self.code = "ACCOUNT_ALREADY_CONNECTED"
 
 
@@ -234,6 +274,25 @@ class OperationExecutionValidationError(OperationExecutionError):
         )
 
 
+class OperationExecutionRateLimitedError(OperationExecutionError):
+    """The provider asked the caller to slow down.
+
+    Deliberately not an infrastructure error, even though it is transient: the
+    provider is healthy and answering, the caller is simply asking too often.
+    Counting it toward the circuit breaker would let one busy caller disable an
+    operation for everyone sharing that provider, which is the opposite of what
+    a rate limit is asking for. Backing off is the caller's job.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message="Connector provider is rate limiting these requests.",
+            code="OPERATION_EXECUTION_RATE_LIMITED",
+            status_code=429,
+            details=_safe_connector_details(details),
+        )
+
+
 class OperationExecutionUnauthorizedError(OperationExecutionError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
@@ -285,12 +344,19 @@ class OperationExecutionCircuitOpenError(OperationExecutionInfrastructureError):
     ``OperationExecutionError`` directly rather than ``super()``: the parent
     fixes its own message and code, which is the whole thing this class exists
     to override.
+
+    The caller's *message* is kept, which it previously was not. The breaker
+    carefully builds one naming the connector and operation, and this class
+    shadowed it with a fixed string -- so a caller was told "a connector is
+    disabled" without being told which, and the seven of these in one
+    production incident were attributable to no provider at all.
     """
 
     def __init__(self, message: str, details: object | None = None):
         OperationExecutionError.__init__(
             self,
-            message="Connector provider is temporarily disabled after repeated failures.",
+            message=message
+            or "Connector provider is temporarily disabled after repeated failures.",
             code="OPERATION_EXECUTION_CIRCUIT_OPEN",
             status_code=503,
             details=_safe_connector_details(details),

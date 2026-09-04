@@ -9,56 +9,6 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
 )
 
-TERMINAL_TOOL_EVENT_TYPES = frozenset(
-    {
-        AgentEventType.ERROR,
-        AgentEventType.STOPPED,
-        AgentEventType.REJECTED,
-    }
-)
-
-
-@dataclass(slots=True)
-class OutstandingToolCalls:
-    calls: dict[str, str] = field(default_factory=dict)
-
-    def observe(self, event: AgentEvent) -> None:
-        if event.type is not AgentEventType.MESSAGE:
-            return
-        message = event.data
-        tool_call_id = getattr(message, "tool_call_id", None)
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            return
-        if getattr(message, "kind", None) is MessageKind.TOOL_CALL:
-            tool_name = getattr(message, "tool_name", None)
-            self.calls[tool_call_id] = (
-                tool_name
-                if isinstance(tool_name, str) and tool_name
-                else "unknown_tool"
-            )
-        elif getattr(message, "kind", None) is MessageKind.TOOL_RETURN:
-            self.calls.pop(tool_call_id, None)
-
-    def discard(self, tool_call_id: str) -> None:
-        self.calls.pop(tool_call_id, None)
-
-    def close(self, terminal_event: AgentEvent) -> list[AgentEvent]:
-        return [
-            *missing_tool_return_events(
-                outstanding_tool_calls=self.calls,
-                terminal_event=terminal_event,
-            ),
-            terminal_event,
-        ]
-
-    def before(self, event: AgentEvent) -> list[AgentEvent]:
-        if event.type not in TERMINAL_TOOL_EVENT_TYPES:
-            return []
-        return missing_tool_return_events(
-            outstanding_tool_calls=self.calls,
-            terminal_event=event,
-        )
-
 
 def missing_tool_return_events(
     *,
@@ -103,3 +53,56 @@ def _missing_tool_return_error(event_type: AgentEventType) -> str:
     if event_type == AgentEventType.WAITING:
         return "The agent run paused for user input before the tool returned a result."
     return "The agent run completed without a tool return."
+
+
+@dataclass(slots=True)
+class OutstandingToolCalls:
+    """Tool calls this run announced and has not answered yet.
+
+    A run that dies between a tool executing and its result being recorded
+    leaves a call with no return. The next run rebuilds history, finds the
+    orphan, and `pydantic_ai_history._build_tool_batch` synthesizes "This tool
+    call was interrupted before a result was recorded... Run it again if you
+    still need the result." So a send that *succeeded* is reported to the model
+    as never having happened, and the model is told to do it again: a duplicate
+    email, a duplicate record write, a destructive command run twice.
+
+    The remote harness has closed its outstanding calls since it was written.
+    The in-process one declared this bookkeeping and never used it.
+    """
+
+    _calls: dict[str, str] = field(default_factory=dict)
+
+    def observe(self, event: AgentEvent) -> None:
+        """Track a tool call, or forget one that has just been answered."""
+        draft = event.data
+        if event.type is not AgentEventType.MESSAGE:
+            return
+        if not isinstance(draft, MessageDraft):
+            return
+        tool_call_id = draft.tool_call_id
+        if not tool_call_id:
+            return
+        if draft.kind is MessageKind.TOOL_CALL:
+            self._calls[tool_call_id] = draft.tool_name or "unknown"
+        elif draft.kind is MessageKind.TOOL_RETURN:
+            self._calls.pop(tool_call_id, None)
+
+    def closing_events(
+        self, terminal_event: AgentEvent, *, skip_tool_call_id: str | None = None
+    ) -> list[AgentEvent]:
+        """Returns that close whatever is still open, given how the run ended.
+
+        `skip_tool_call_id` is the pausing call on the WAITING path: `ask_user`
+        and `request_approval` get their real return appended when the user
+        answers, so closing them here would duplicate it.
+        """
+        outstanding = {
+            call_id: name
+            for call_id, name in self._calls.items()
+            if call_id != skip_tool_call_id
+        }
+        self._calls.clear()
+        return missing_tool_return_events(
+            outstanding_tool_calls=outstanding, terminal_event=terminal_event
+        )

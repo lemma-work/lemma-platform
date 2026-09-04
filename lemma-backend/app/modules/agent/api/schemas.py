@@ -6,10 +6,18 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    computed_field,
+    model_validator,
+)
 
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
@@ -22,6 +30,8 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
+from app.modules.agent.services.workspace_location import pod_cwd_for
+from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
@@ -65,6 +75,10 @@ class AgentResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
+    # Which of these the pod came with. A client renders the default
+    # assistant beside the agents somebody made, and has to be able to tell
+    # them apart to withhold edit and delete -- it is the same list.
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"
@@ -100,6 +114,10 @@ class AgentSummaryResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
+    # Which of these the pod came with. A client renders the default
+    # assistant beside the agents somebody made, and has to be able to tell
+    # them apart to withhold edit and delete -- it is the same list.
+    kind: AgentKind = AgentKind.USER
     description: str | None = None
     icon_url: str | None = None
     visibility: str = "POD"
@@ -118,6 +136,13 @@ class AgentSummaryResponse(BaseModel):
     # stays on the detail response; a list caller only ever asks "is one pinned?"
     # and had to fetch every agent to find out.
     has_pinned_runtime: bool = False
+    # Whether the agent declares typed inputs. Same bargain as
+    # `has_pinned_runtime`: the schema itself stays on the detail response, but
+    # the one question every list caller asks is answerable with a boolean.
+    # It is a category line, not a detail — an agent with typed inputs is
+    # *called* with arguments, an agent without one is *talked to*, and a list
+    # of agents someone can open a conversation with holds only the second.
+    takes_input: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,6 +167,7 @@ class ConversationResponse(BaseModel):
     status: ConversationStatus | None = None
     output: JsonValue | None = None
     metadata: JsonObject | None = None
+    is_archived: bool = False
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_finished_at: datetime | None = None
@@ -150,6 +176,27 @@ class ConversationResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field(  # type: ignore[prop-decorator]
+        return_type=str,
+        description=(
+            "The conversation's working directory in pod files. Anything a "
+            "person attaches here is what the agent finds by a bare filename, "
+            "because this is the directory its pod tools resolve against."
+        ),
+    )
+    @property
+    def pod_cwd(self) -> str:
+        # Derived rather than stored: the cwd already lives in metadata, and
+        # `workspace_location` owns the ladder that reads it. A client that
+        # rebuilt this path itself would be a second implementation of a rule
+        # the agent's tools also depend on, which is how an upload ends up
+        # somewhere the agent never looks.
+        return pod_cwd_for(
+            metadata=self.metadata,
+            conversation_id=self.id,
+            created_at=self.created_at,
+        )
 
 
 class ConversationListResponse(BaseModel):
@@ -216,10 +263,13 @@ class CreateConversationRequest(BaseModel):
 
 
 class UpdateConversationRequest(BaseModel):
+    #: Send an explicit null (or a blank string) to clear a title and hand the
+    #: conversation back to auto-titling. An omitted field changes nothing.
     title: str | None = None
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     metadata: JsonObject | None = None
+    is_archived: bool | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -233,7 +283,16 @@ class CreateAgentRequest(BaseModel):
     description: str | None = None
     icon_url: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
-    toolsets: list[AgentToolset] = Field(default_factory=list)
+    # Omitting toolsets means "the sensible ones", not "none" -- see
+    # NEW_AGENT_DEFAULT_TOOLSETS. An explicit empty list still means none, so a
+    # bundle or an editor that states the toolsets keeps stating them exactly.
+    toolsets: list[AgentToolset] = Field(
+        default_factory=lambda: list(NEW_AGENT_DEFAULT_TOOLSETS),
+        description=(
+            "Toolsets the agent declares. Omit the field to start with web "
+            "search and memory; pass an explicit empty list for none."
+        ),
+    )
     input_schema: JsonObject | None = None
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility = ResourceVisibility.POD
@@ -409,21 +468,3 @@ class AgentRuntimeProfileDetailResponse(AgentRuntimeProfileResponse):
 
     harness: AgentHostHarnessResponse | None = None
     host_status: AgentHostStatus | None = None
-
-
-class AgentRunResponse(BaseModel):
-    id: UUID
-    conversation_id: UUID
-    agent_id: UUID | None = None
-    parent_run_id: UUID | None = None
-    status: AgentRunStatus
-    agent_runtime: AgentRuntimeConfig
-    started_at: datetime
-    finished_at: datetime | None = None
-    error: str | None = None
-    output_data: JsonValue | None = None
-    metadata: JsonObject | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)

@@ -32,6 +32,15 @@ class RoleSnapshot:
     permission_ids: frozenset[str]
     principal_refs: frozenset[PrincipalRef]
     grant_principal_sets: tuple[frozenset[PrincipalRef], ...]
+    #: Whether the pod this snapshot is scoped to has been deleted.
+    #:
+    #: Carried here rather than read per request, because the pod-scoped
+    #: lookup deliberately answers without touching the ``Pod`` row on a hit
+    #: (see ``_snapshot_suffix``) and putting the check back in the resolver
+    #: would reinstate exactly the read that was optimised away. It is written
+    #: on the miss path, where the row is being read anyway, and the pod's
+    #: deletion drops the cache — so a hit is never older than the fact.
+    pod_is_deleted: bool = False
 
 
 _role_cache: RedisJsonCache | None = None
@@ -94,6 +103,7 @@ def _serialize(snapshot: RoleSnapshot) -> str:
                 [_principal_to_json(p) for p in group]
                 for group in snapshot.grant_principal_sets
             ],
+            "pod_is_deleted": snapshot.pod_is_deleted,
         }
     )
 
@@ -111,6 +121,10 @@ def _deserialize(payload: str) -> RoleSnapshot:
             frozenset(_principal_from_json(p) for p in group)
             for group in d["grant_principal_sets"]
         ),
+        # `.get`, not `[...]`: entries written before this field existed are
+        # still in Redis under the same key, and a deploy must not turn them
+        # into a KeyError that reads as a cache miss for every warm request.
+        pod_is_deleted=bool(d.get("pod_is_deleted", False)),
     )
 
 

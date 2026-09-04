@@ -42,7 +42,6 @@ import httpx
 TERMINAL = {"COMPLETED", "FAILED", "FAILED_PERMANENT", "NOT_REQUIRED"}
 
 
-
 def default_corpus_dir() -> Path:
     """Where the benchmark PDFs live.
 
@@ -371,7 +370,9 @@ def summarize(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-url", default=os.getenv("LEMMA_API_URL", "http://localhost:8000"))
+    parser.add_argument(
+        "--api-url", default=os.getenv("LEMMA_API_URL", "http://localhost:8000")
+    )
     parser.add_argument("--token", default=os.getenv("LEMMA_TOKEN"))
     parser.add_argument("--whale-pod", required=True)
     parser.add_argument("--small-pod", required=True)

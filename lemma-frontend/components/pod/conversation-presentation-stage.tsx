@@ -2,10 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Maximize2, PanelRightClose } from '@/components/ui/icons';
+import { ArrowUpRight, X } from '@/components/ui/icons';
 import { useEffect, useRef, type ReactNode } from 'react';
 
-import { useApp } from '@/components/app/app-context';
+import { useAppPage } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
 import { StepLoader } from '@/components/brand/loader';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -48,7 +48,7 @@ function presentationTitle(resourceHref: string): string {
 
 /**
  * The app itself, in the pane — no workspace around it. The stage's own header
- * already names the app and holds the close and full-view controls, so the frame
+ * already names the app and holds the close and open-in-tab controls, so the frame
  * draws without the context bar it would otherwise claim from the conversation.
  */
 function StageAppBody({
@@ -105,14 +105,11 @@ export function ConversationPresentationStage({
 }) {
     const router = useRouter();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
-    const { pages, isLoading: appsLoading } = useApp();
     // An app is presented in place rather than framed: the stage already sits
     // inside the pod's `AppProvider`, so it can mount the app's own frame
     // directly instead of re-loading the workspace to reach `AppFrameHost`.
     const appSlug = conversationStageAppSlug(resourceHref, podId);
-    const appPage = appSlug
-        ? pages.find((page) => page.slug === appSlug) ?? null
-        : null;
+    const { page: appPage, isResolving: appResolving } = useAppPage(appSlug);
     const embedHref = appSlug ? null : buildConversationStageEmbedHref(resourceHref);
     const standaloneHref = buildConversationStandaloneResourceHref(resourceHref);
 
@@ -136,7 +133,7 @@ export function ConversationPresentationStage({
         : presentationTitle(resourceHref);
 
     const stageBody = appSlug ? (
-        <StageAppBody podId={podId} page={appPage} title={title} isLoading={appsLoading} />
+        <StageAppBody podId={podId} page={appPage} title={title} isLoading={appResolving} />
     ) : embedHref ? (
         <iframe
             key={embedHref}
@@ -165,10 +162,10 @@ export function ConversationPresentationStage({
                         size="icon"
                         onClick={onClose}
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
-                        aria-label="Back to conversation"
-                        title="Back to conversation"
+                        aria-label="Close"
+                        title="Close"
                     >
-                        <PanelRightClose className="h-4 w-4" strokeWidth={1.8} />
+                        <X className="h-4 w-4" strokeWidth={1.8} />
                     </Button>
                     <div className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
                         {title}
@@ -179,8 +176,8 @@ export function ConversationPresentationStage({
                         size="icon"
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
                     >
-                        <Link href={standaloneHref} aria-label="Open full view" title="Open full view">
-                            <Maximize2 className="h-4 w-4" strokeWidth={1.8} />
+                        <Link href={standaloneHref} aria-label="Open in new tab" title="Open in new tab">
+                            <ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
                         </Link>
                     </Button>
                 </header>

@@ -142,32 +142,20 @@ obvious ones:
 ### How much a clean sweep actually proves
 
 `LEMMA_CONNECTION_SCOPE_REPORT=1` runs the monitor over a whole pytest session
-and writes what it saw, grouped by site. Early results:
+and writes what it saw, grouped by site. Run it before and after a fix and the
+difference is the evidence.
 
-| Suite | Tests | Holds |
-| --- | --- | --- |
-| pod e2e | 97 | 1 |
-| datastore + apps e2e | 98 | 4 (3 sites) |
-| datastore records e2e, run alone | 17 | 0 |
-| real sandbox + real LLM, before the fixes | 80 | 95 (7 sites) |
-| real sandbox + real LLM, after | 80 | 86 (9 sites) |
+The runs against a real sandbox and a real model are the ones that mattered,
+because they are the only ones where the slow calls are real. They found and
+then confirmed two fixes — `build_user_context`, and the request-scoped unit of
+work that `record_controller.bulk_create_records` held for the length of the
+response — and they showed that a real-LLM agent run holds **no** connection
+across the model call. `AgentRunnerService` was already correct; the sweep
+turned a reading of the code into evidence.
 
-The two real-execution rows are the ones that mattered, because they are the
-only runs where the slow calls are real. They drove two fixes and measured
-them:
-
-| Site | Before | After |
-| --- | --- | --- |
-| `build_user_context` | 59 holds, worst 2784 ms | 6 holds, worst 309 ms |
-| `record_controller.bulk_create_records` | (hidden behind the above) | fixed: 2291 ms held for 64 ms of querying |
-
-A real-LLM agent run holds **no** connection across the model call — 6 passed
-with zero holds attributed to the agent path. `AgentRunnerService` was already
-correct, and now there is evidence rather than a reading of the code.
-
-That last row is the important one. The same file contributed a 546 ms hold in
-the combined run and none on its own, so those were **cold-start artifacts** —
-first-touch model loading and schema setup — not per-request holds.
+Read the reports with one caveat: a site can show a hold in a combined run and
+none on its own, which makes it a **cold-start artifact** — first-touch model
+loading and schema setup — rather than a per-request hold.
 
 Which sets the real limit on this evidence: **the hermetic e2e suite mocks
 exactly the calls that cause the worst holds.** `E2E_LLM_MODE=mock` replaces the
@@ -182,56 +170,57 @@ connection is held across it — that tests the structure (was the session close
 before the call?), which is the property that actually has to hold, and it
 tests it in the hermetic suite where the real call never happens.
 
-## The audit
+## Why a green gate was not enough
 
-Every module was audited (2026-08-14) against both defect classes — a
-connection held across non-database work, and work that blocks the event loop.
-**~103 findings: 35 CRITICAL, 31 HIGH, 12 MEDIUM, 16 LOW.** Both gates were
-green at the time, in every slice.
+Both gates were green across every slice while real defects existed, and the
+reason is worth recording: the static gate had six structural blind spots. All
+are closed now, and each was invisible until something looked for it.
 
-They were green because the static gate had six structural blind spots, all now
-closed. Worth recording, because each was invisible until something looked:
-
-| Blind spot | What it cost |
+| Blind spot | Why it mattered |
 | --- | --- |
-| `SessionUnitOfWorkFactory(...)()` not recognised as a session open | 20+ sites in `app/composition`, several holding an open write transaction across an HTTP download |
-| `ctx.uow()` not recognised | the entire streaq worker surface |
-| Session-yielding context managers (`pod_services`, `uow_scope`, …) not recognised | 71 session-holding blocks treated as ordinary code |
-| Propagation required exactly one definition of a callee name | everything reached through an interface |
-| Third-party SDK calls invisible — no definition in `app/` for a name lookup to find | every SuperTokens / aiohttp / Redis call |
-| `dependencies=[...]` in a route decorator never read | the pod_bundle SSE routes |
+| `SessionUnitOfWorkFactory(...)()` not recognised as a session open | missed `app/composition` entirely, including open write transactions held across an HTTP download |
+| `ctx.uow()` not recognised | missed the whole streaq worker surface |
+| Session-yielding context managers (`pod_services`, `uow_scope`, …) not recognised | session-holding blocks read as ordinary code |
+| Propagation required exactly one definition of a callee name | missed everything reached through an interface |
+| Third-party SDK calls invisible — no definition in `app/` for a name lookup to find | missed every SuperTokens / aiohttp / Redis call |
+| `dependencies=[...]` in a route decorator never read | missed the pod_bundle SSE routes |
 
 Session-yielding context managers are now **discovered rather than listed**, so
 the next such helper is covered the day it is written.
 
-### Structural findings
+### The structural defaults that produce findings
 
-- **190 of 271 route handlers (70%) hold a connection for the whole request**
-  via `Depends(get_uow)`, directly or through a service dependency. Most are
-  harmless — a handler that only queries holds it about as long as it needs.
-  The problem is that holding is the **default**, so a slow call added later
-  costs a connection with nothing at the call site to say so. That is exactly
-  how the surface-route findings happened. The fix is targeted rather than a
-  global flip; the gate is what stops new ones appearing.
-- **53% of thread offloads bypass the named limiters** (28 `asyncio.to_thread`
-  + 9 bare `anyio` against 33 `run_blocking`), so `OFFLOAD_*_LIMIT` governs
-  under half the traffic it names. `asyncio.to_thread` uses asyncio's *default
-  executor* — a different pool from anyio's, shared with every `getaddrinfo`
-  the process makes, and untouched by the headroom `configure_thread_pool()`
-  raises at startup. Enforced now by `make lint-io-hygiene`.
-- **11 `aiohttp.ClientSession()` built with no timeout.** aiohttp's default is
-  **five minutes** (httpx's is five seconds). Where the caller holds a DB
-  session, it parks a pooled connection for that long. Also enforced by
+- **A route handler holds a connection for the whole request** whenever it takes
+  `Depends(get_uow)`, directly or through a service dependency — which most do.
+  Most are harmless; a handler that only queries holds it about as long as it
+  needs. The problem is that holding is the **default**, so a slow call added
+  later costs a connection with nothing at the call site to say so. That is
+  exactly how the surface-route findings happened. The fix is targeted rather
+  than a global flip; the gate is what stops new ones appearing.
+- **A thread offload that bypasses the named limiters** — `asyncio.to_thread` or
+  bare `anyio` instead of `run_blocking` — leaves `OFFLOAD_*_LIMIT` governing
+  less than it names. `asyncio.to_thread` uses asyncio's *default executor*: a
+  different pool from anyio's, shared with every `getaddrinfo` the process
+  makes, and untouched by the headroom `configure_thread_pool()` raises at
+  startup. Enforced now by `make lint-io-hygiene`.
+- **An `aiohttp.ClientSession()` built with no timeout** inherits aiohttp's
+  default of **five minutes** (httpx's is five seconds). Where the caller holds
+  a DB session, it parks a pooled connection for that long. Also enforced by
   `make lint-io-hygiene`.
 
-### The worst individual finding
+### The one that reached furthest
 
 `app/core/security.py` — `verify_auth` is a global dependency on every request,
-and SuperTokens' `get_session` reaches a **synchronous `requests.get`** on the
+and SuperTokens' `get_session` reached a **synchronous `requests.get`** on the
 event loop, under a threading mutex, with no negative cache for an unknown
-`kid`. `kid` is read from the token *before* signature verification, so an
-unauthenticated client can force one blocking round trip per request with a
-forged JWT.
+`kid`. Because `kid` is read from the token *before* signature verification,
+that made an unauthenticated request able to cost a blocking round trip.
+
+**Fixed and released.**
+`app/modules/identity/infrastructure/supertokens_auth/jwks_guard.py` refuses a
+key id already looked up and not found, bounded by
+`AUTH_JWKS_UNKNOWN_KID_TTL_SECONDS` and `AUTH_JWKS_UNKNOWN_KID_CACHE_SIZE`, so
+an unverified `kid` cannot reach the network more than once per TTL.
 
 ### Fix pattern
 
@@ -400,7 +389,7 @@ not ours. The complete fix is a `BackgroundScheduler` on its own thread with
 job callbacks marshalled back via `run_coroutine_threadsafe`, which is a real
 architectural change to scheduling and wants its own PR and its own e2e
 coverage. The exposure is bounded: a local Postgres round trip, not the
-74 ms-class CPU stalls this document's audit was chasing.
+loop-blocking CPU stalls the detector above exists to catch.
 
 ## Pooler compatibility
 

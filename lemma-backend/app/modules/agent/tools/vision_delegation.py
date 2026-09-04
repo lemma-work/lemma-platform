@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.modules.agent.services.vision_service import (
     MAX_IMAGES_PER_CALL,
     VisionDescriptionError,
@@ -65,7 +66,7 @@ async def describe_single_image(
     except VisionDescriptionError as exc:
         return ViewImageResponse(
             success=False,
-            error=str(exc),
+            error=safe_error_text(exc),
             file_path=file_path,
             media_type=media_type,
             source=source,
@@ -118,12 +119,12 @@ async def describe_document_pages(
                 "path": path,
                 "error": (
                     f"{exc} This agent's model cannot read images, so PDF pages "
-                    "cannot be viewed. Use `pod_read_file` with "
-                    "format='markdown' to read the page text instead."
+                    "cannot be viewed. Use `pod_read_file` to read the page "
+                    "text instead."
                 ),
             }
         except VisionDescriptionError as exc:
-            return {"success": False, "path": path, "error": str(exc)}
+            return {"success": False, "path": path, "error": safe_error_text(exc)}
         descriptions.append(
             {
                 "pages": [page.page_number for page in chunk],

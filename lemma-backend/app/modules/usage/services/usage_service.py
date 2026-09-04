@@ -14,7 +14,11 @@ from app.modules.usage.domain.entities import (
     UsageRecord,
     UsageReservation,
 )
-from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
+from app.modules.usage.domain.ports import (
+    UsageLimitPort,
+    UsageLimitValues,
+    normalize_limit_values,
+)
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import (
     ModelUsageEvent,
@@ -180,8 +184,12 @@ class UsageService(UsagePricing):
 
         profile_id = self._profile_value(runtime_profile, "profile_id") or "unknown"
         profile_scope = self._profile_value(runtime_profile, "scope") or "ORGANIZATION"
-        model_name = self._profile_value(runtime_profile, "model_name") or usage_data.model_name
-        provider_model_name = self._profile_value(runtime_profile, "provider_model_name")
+        model_name = (
+            self._profile_value(runtime_profile, "model_name") or usage_data.model_name
+        )
+        provider_model_name = self._profile_value(
+            runtime_profile, "provider_model_name"
+        )
         cache_read_tokens = self._coerce_token_count(
             (usage_data.metadata or {}).get("cache_read_tokens")
         )
@@ -261,13 +269,9 @@ class UsageService(UsagePricing):
             "operation": usage_kind,
         }
         if input_tokens > 0:
-            token_counter.add(
-                input_tokens, {**labels, "gen_ai.token.type": "input"}
-            )
+            token_counter.add(input_tokens, {**labels, "gen_ai.token.type": "input"})
         if output_tokens > 0:
-            token_counter.add(
-                output_tokens, {**labels, "gen_ai.token.type": "output"}
-            )
+            token_counter.add(output_tokens, {**labels, "gen_ai.token.type": "output"})
         if cost_usd:
             cost_counter.add(cost_usd, labels)
 
@@ -441,17 +445,24 @@ class UsageService(UsagePricing):
             organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
-            organization_id
-            if limit_values.user_limit_scope == "organization"
-            else None
+            organization_id if limit_values.user_limit_scope == "organization" else None
         )
         excluded_organization_ids = (
             limit_values.excluded_organization_ids
             if limit_values.user_limit_scope == "global"
             else ()
         )
+        # Six serial aggregates became three. The two user windows are one scan
+        # with a FILTER apiece, and the reserved counters are one grouped read
+        # of all three scopes; only the organization total keeps a statement of
+        # its own, because its predicate is a whole org rather than one user in
+        # it and folding it in would widen the scan to every user.
+        #
+        # Not cached, and not gathered. These numbers gate spending, so a cached
+        # answer lets a caller overspend by the TTL; and six concurrent
+        # checkouts from a pool_size=10, max_overflow=0 pool is a worse trade
+        # than three sequential statements.
         org_used = 0.0
-        org_reserved = 0.0
         if organization_id is not None:
             org_used = await self.usage_repository.get_system_cost(
                 organization_id=organization_id,
@@ -459,38 +470,28 @@ class UsageService(UsagePricing):
                 start=month_start,
                 end=now,
             )
-            org_reserved = await self.usage_repository.get_reserved_cost(
-                organization_id=organization_id,
-                user_id=None,
-                window_kind="org_month",
-                window_start=month_start,
-            )
-        user_weekly_used = await self.usage_repository.get_system_cost(
+        user_used = await self.usage_repository.get_system_cost_by_window(
             organization_id=user_limit_organization_id,
             user_id=user_id,
-            start=week_start,
+            window_starts={"user_week": week_start, "user_month": month_start},
             end=now,
             exclude_organization_ids=excluded_organization_ids,
         )
-        user_weekly_reserved = await self.usage_repository.get_reserved_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            window_kind="user_week",
-            window_start=week_start,
+        user_weekly_used = user_used["user_week"]
+        user_monthly_used = user_used["user_month"]
+
+        reserved_scopes: list[tuple[UUID | None, UUID | None, str, datetime]] = [
+            (user_limit_organization_id, user_id, "user_week", week_start),
+            (user_limit_organization_id, user_id, "user_month", month_start),
+        ]
+        if organization_id is not None:
+            reserved_scopes.append((organization_id, None, "org_month", month_start))
+        reserved = await self.usage_repository.get_reserved_costs(
+            scopes=reserved_scopes
         )
-        user_monthly_used = await self.usage_repository.get_system_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            start=month_start,
-            end=now,
-            exclude_organization_ids=excluded_organization_ids,
-        )
-        user_monthly_reserved = await self.usage_repository.get_reserved_cost(
-            organization_id=user_limit_organization_id,
-            user_id=user_id,
-            window_kind="user_month",
-            window_start=month_start,
-        )
+        org_reserved = reserved.get("org_month", 0.0)
+        user_weekly_reserved = reserved["user_week"]
+        user_monthly_reserved = reserved["user_month"]
         org_scope = self._limit_scope(
             limit_usd=limit_values.org_monthly_limit_usd,
             used_usd=org_used,
@@ -541,20 +542,11 @@ class UsageService(UsagePricing):
         # opts into admission by implementing the usage-owned limit port.
         if self.usage_limit_port is None:
             return UsageLimitValues()
-        resolved = await self.usage_limit_port.resolve_limits(
-            organization_id=organization_id,
-            user_id=user_id,
-        )
-        if isinstance(resolved, UsageLimitValues):
-            return resolved
-        # Backwards-compatible guard for older tests/adapters returning
-        # ``(org_monthly, user_weekly)``.
-        org_monthly, user_weekly = resolved
-        return UsageLimitValues(
-            org_monthly_limit_usd=org_monthly,
-            user_weekly_limit_usd=user_weekly,
-            user_monthly_limit_usd=None,
-            user_limit_scope="organization",
+        return normalize_limit_values(
+            await self.usage_limit_port.resolve_limits(
+                organization_id=organization_id,
+                user_id=user_id,
+            )
         )
 
     @staticmethod
@@ -672,6 +664,7 @@ class UsageService(UsagePricing):
                 )
             ]
         )
+
 
 def assert_system_pricing_covers_catalog(
     model_names: Iterable[tuple[str, str | None]],

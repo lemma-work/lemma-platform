@@ -7,7 +7,9 @@ from app.modules.test_support.e2e_authz import signup_user
 pytestmark = pytest.mark.e2e
 
 
-async def _create_pod(authenticated_client: AsyncClient, org_id: str, *, name: str) -> dict:
+async def _create_pod(
+    authenticated_client: AsyncClient, org_id: str, *, name: str
+) -> dict:
     payload = {
         "name": name,
         "organization_id": org_id,
@@ -34,7 +36,7 @@ async def test_pod_workflow(authenticated_client, fixed_test_org):
     # 3. List Pods
     # Note: API requires organization ID to list pods
     response = await authenticated_client.get(
-        f"/pods/organization/{org_id}", follow_redirects=True
+        f"/organizations/{org_id}/pods", follow_redirects=True
     )
 
     assert response.status_code == 200
@@ -80,7 +82,9 @@ async def test_pod_workflow(authenticated_client, fixed_test_org):
     assert len(member_items) >= 1
 
     # 7. Delete Pod
-    response = await authenticated_client.delete(f"/pods/{pod_id}", follow_redirects=True)
+    response = await authenticated_client.delete(
+        f"/pods/{pod_id}", follow_redirects=True
+    )
     assert response.status_code == 204
 
     # 8. Verify deleted pods are no longer visible
@@ -88,7 +92,7 @@ async def test_pod_workflow(authenticated_client, fixed_test_org):
     assert response.status_code == 404
 
     response = await authenticated_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         follow_redirects=True,
     )
     assert response.status_code == 200
@@ -102,7 +106,7 @@ async def test_list_pods_by_organization(authenticated_client, fixed_test_org):
     pod = await _create_pod(authenticated_client, org_id, name="E2E List Pod")
 
     response = await authenticated_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         follow_redirects=True,
     )
 
@@ -123,7 +127,7 @@ async def test_list_pods_by_organization_uses_last_returned_id_as_next_page_toke
     await _create_pod(authenticated_client, org_id, name="Cursor Pod C")
 
     first_page = await authenticated_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         params={"limit": 2},
         follow_redirects=True,
     )
@@ -134,7 +138,7 @@ async def test_list_pods_by_organization_uses_last_returned_id_as_next_page_toke
     assert first_payload["next_page_token"] == first_payload["items"][-1]["id"]
 
     second_page = await authenticated_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         params={"limit": 2, "page_token": first_payload["next_page_token"]},
         follow_redirects=True,
     )
@@ -184,18 +188,25 @@ async def _add_org_member(
 
 
 async def _assert_pod_fully_gone(client: AsyncClient, org_id: str, pod_id: str, **kw):
-    """A soft-deleted pod must not surface anywhere and re-deleting yields 404."""
+    """A soft-deleted pod surfaces nowhere, and deleting it again still succeeds.
+
+    The re-delete used to be asserted as 404, which contradicted `PS-POD-050`:
+    "the system shall keep deleting safe to repeat, so that a retried deletion
+    reports success rather than failing on the second attempt". A client that
+    never saw the first response sends the request again, and answering 404
+    turns a completed deletion into an error nobody can clear.
+    """
     detail = await client.get(f"/pods/{pod_id}", follow_redirects=True, **kw)
     assert detail.status_code == 404, detail.text
 
     listing = await client.get(
-        f"/pods/organization/{org_id}", follow_redirects=True, **kw
+        f"/organizations/{org_id}/pods", follow_redirects=True, **kw
     )
     assert listing.status_code == 200, listing.text
     assert all(item["id"] != pod_id for item in listing.json().get("items", []))
 
     redelete = await client.delete(f"/pods/{pod_id}", follow_redirects=True, **kw)
-    assert redelete.status_code == 404, redelete.text
+    assert redelete.status_code == 204, redelete.text
 
 
 @pytest.mark.asyncio
@@ -249,7 +260,7 @@ async def test_org_owner_can_delete_pod_they_do_not_belong_to(
 
     # The org owner sees it in the list and can delete it.
     listing = await authenticated_client.get(
-        f"/pods/organization/{org_id}", follow_redirects=True
+        f"/organizations/{org_id}/pods", follow_redirects=True
     )
     assert any(item["id"] == pod_id for item in listing.json().get("items", []))
 
@@ -306,7 +317,7 @@ async def test_deleted_pod_name_can_be_reused(authenticated_client, fixed_test_o
     assert second_pod["id"] != first_pod["id"]
 
     deleted_pod_response = await authenticated_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         follow_redirects=True,
     )
     assert deleted_pod_response.status_code == 200
@@ -406,9 +417,7 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     org_id = fixed_test_org["id"]
     pod = await _create_pod(authenticated_client, org_id, name="Visible To Creator")
 
-    outsider = await signup_user(
-        async_client, f"pod-list-{uuid4().hex[:10]}"
-    )
+    outsider = await signup_user(async_client, f"pod-list-{uuid4().hex[:10]}")
     outsider_email = outsider["email"]
     outsider_token = outsider["token"]
 
@@ -426,7 +435,7 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     assert accept_response.status_code == 200, accept_response.text
 
     response = await async_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         headers={"Authorization": f"Bearer {outsider_token}"},
         follow_redirects=True,
     )

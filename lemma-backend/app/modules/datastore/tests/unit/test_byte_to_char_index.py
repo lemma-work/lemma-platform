@@ -38,7 +38,16 @@ def test_byte_to_char_index_matches_the_per_character_version():
     for content in samples:
         data = content.encode("utf-8")
         offsets = sorted(
-            {0, 1, 2, 3, len(data) // 2, max(0, len(data) - 1), len(data), len(data) + 25}
+            {
+                0,
+                1,
+                2,
+                3,
+                len(data) // 2,
+                max(0, len(data) - 1),
+                len(data),
+                len(data) + 25,
+            }
         )
         assert KreuzbergDocumentProcessor._byte_to_char_index(
             content, offsets

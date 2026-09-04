@@ -24,7 +24,6 @@ from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
-    FunctionStatus,
     FunctionType,
     FunctionUpdateEntity,
 )
@@ -41,6 +40,10 @@ from app.modules.function.domain.ports import (
     FunctionRunRepositoryPort,
 )
 from app.modules.function.domain.types import JsonObject
+from app.modules.function.services.execution_preflight import (
+    require_ready_revision,
+    validate_input,
+)
 
 from app.modules.pod.contracts import PodRole
 from app.core.log.log import get_logger
@@ -123,14 +126,6 @@ class ResolvedExecution:
 
     function: FunctionEntity
     run: FunctionRunEntity
-
-
-class LegacyFunctionRevisionRequired(Exception):
-    """Internal control flow for a pre-artifact function definition."""
-
-    def __init__(self, function: FunctionEntity):
-        super().__init__(function.name)
-        self.function = function
 
 
 @dataclass(slots=True)
@@ -544,12 +539,10 @@ class FunctionService:
             ),
         )
 
-        if function.status != FunctionStatus.READY:
-            raise FunctionValidationError("Function has no ready executable revision")
-        if function.revision_hash is None:
-            if function.code_path is not None:
-                raise LegacyFunctionRevisionRequired(function)
-            raise FunctionValidationError("Function has no ready executable revision")
+        require_ready_revision(function)
+        # Before the run row, the lease and (often) a cold sandbox start, so a
+        # mistyped field is a refusal naming the field rather than a failed run.
+        validate_input(function, input_data)
 
         revision_hash = function.revision_hash
         if revision_ref is not None:

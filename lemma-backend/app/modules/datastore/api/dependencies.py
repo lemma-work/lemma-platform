@@ -20,8 +20,8 @@ from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
-from app.composition.authorization import create_authorization_service
-from app.composition.identity_notifications import create_user_reader
+from app.core.authorization.factory import create_authorization_data_service
+from app.modules.identity.contracts.organizations import build_user_directory
 from app.modules.datastore.composition import get_datastore_composition
 
 _schema_manager_instance: Optional[SchemaManager] = None
@@ -60,19 +60,18 @@ def build_table_service(uow) -> TableService:
     return TableService(
         table_repository=DatastoreTableRepository(uow, message_bus=message_bus),
         schema_manager=get_schema_manager(),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
     )
 
 
 def build_record_service(uow) -> RecordService:
     """Construct a RecordService from a unit of work (single wiring source)."""
-    message_bus = get_message_bus()
     return RecordService(
         record_repository=DatastoreRecordRepository(
             schema_manager=get_schema_manager()
         ),
-        authorization_service=create_authorization_service(uow),
-        user_repository=create_user_reader(uow, message_bus=message_bus),
+        authorization_service=create_authorization_data_service(uow),
+        user_repository=build_user_directory(uow),
     )
 
 
@@ -82,7 +81,7 @@ def build_file_service(uow) -> DatastoreFileService:
     return DatastoreFileService(
         file_repository=DatastoreFileRepository(uow, message_bus=message_bus),
         storage=create_datastore_storage(),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         search_service_factory=get_datastore_composition().build_search_service,
     )
 

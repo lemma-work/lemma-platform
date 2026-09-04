@@ -43,10 +43,7 @@ def test_reliable_subscriber_reads_new_and_reclaims_abandoned_messages():
     streams = [subscriber.stream_sub for subscriber in router.subscribers]
 
     assert len(streams) == 2
-    assert {
-        (stream.consumer, stream.min_idle_time)
-        for stream in streams
-    } == {
+    assert {(stream.consumer, stream.min_idle_time) for stream in streams} == {
         ("pod-provisioning-events-consumer", None),
         ("pod-provisioning-events-consumer-reclaimer", 60_000),
     }
@@ -89,14 +86,15 @@ async def test_ensure_consumer_groups_ignores_existing_group(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_consumer_groups_swallows_unexpected_errors(monkeypatch):
+async def test_ensure_consumer_groups_reports_but_does_not_raise(monkeypatch):
     monkeypatch.setattr(
         ss, "_REGISTERED_STREAM_GROUPS", {("agent_events", "agent-events")}
     )
     client = AsyncMock()
     client.xgroup_create = AsyncMock(side_effect=Exception("connection refused"))
 
-    # Must never raise — group plumbing cannot crash the worker.
+    # Must never raise — group plumbing cannot crash the worker. What it does
+    # report is pinned in app/core/tests/unit/test_consumer_group_visibility.py.
     created = await ss.ensure_consumer_groups(client)
 
     assert created == 0

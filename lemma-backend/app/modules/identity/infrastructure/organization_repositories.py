@@ -27,6 +27,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationInvitationStatus,
     OrganizationJoinPolicy,
     OrganizationMemberEntity,
+    OrganizationRole,
 )
 from app.modules.identity.domain.ports import OrganizationRepositoryPort
 from app.modules.identity.infrastructure.models import (
@@ -79,7 +80,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
         if status == OrganizationInvitationStatus.EXPIRED:
             return query.where(
                 or_(
-                    OrganizationInvitation.status == OrganizationInvitationStatus.EXPIRED,
+                    OrganizationInvitation.status
+                    == OrganizationInvitationStatus.EXPIRED,
                     and_(
                         OrganizationInvitation.status
                         == OrganizationInvitationStatus.PENDING,
@@ -100,12 +102,6 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
     async def get(self, id: UUID) -> Optional[OrganizationEntity]:
         stmt = select(Organization).where(Organization.id == id)
-        result = await self.session.execute(stmt)
-        instance = result.scalars().first()
-        return instance.to_entity() if instance else None
-
-    async def get_by_name(self, name: str) -> Optional[OrganizationEntity]:
-        stmt = select(Organization).where(Organization.name == name)
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
@@ -266,6 +262,38 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
         return [m.to_entity() for m in members], next_cursor
 
+    async def count_members(self, organization_id: UUID) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(OrganizationMember)
+            .where(OrganizationMember.organization_id == organization_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_members_with_role_for_update(
+        self, organization_id: UUID, role: OrganizationRole
+    ) -> int:
+        """How many members hold ``role``, with those rows locked.
+
+        Selects the rows rather than asking the database to count them, because
+        the count feeds a check-then-act guard: two owners leaving at the same
+        moment would each see the other and both be allowed through, leaving an
+        organization with no owner -- which is permanent, since every path that
+        grants ORG_OWNER needs an existing owner to walk it. ``FOR UPDATE``
+        makes the second transaction wait for the first and then see the truth.
+        (Postgres refuses ``FOR UPDATE`` alongside an aggregate, so the count
+        happens here.)
+        """
+        result = await self.session.execute(
+            select(OrganizationMember.id)
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.role == role.value,
+            )
+            .with_for_update()
+        )
+        return len(result.scalars().all())
+
     async def get_user_organizations(
         self, user_id: UUID, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[OrganizationEntity], Optional[str]]:
@@ -362,7 +390,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def list_organization_invitations(
         self,
         organization_id: UUID,
-        status: OrganizationInvitationStatus | None = OrganizationInvitationStatus.PENDING,
+        status: OrganizationInvitationStatus
+        | None = OrganizationInvitationStatus.PENDING,
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[OrganizationInvitationEntity], Optional[str]]:
@@ -389,7 +418,8 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def list_user_invitations(
         self,
         user_email: str,
-        status: OrganizationInvitationStatus | None = OrganizationInvitationStatus.PENDING,
+        status: OrganizationInvitationStatus
+        | None = OrganizationInvitationStatus.PENDING,
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[OrganizationInvitationEntity], Optional[str]]:
@@ -417,7 +447,9 @@ class OrganizationRepository(OrganizationRepositoryPort):
     async def update_invitation(
         self, entity: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        stmt = select(OrganizationInvitation).where(OrganizationInvitation.id == entity.id)
+        stmt = select(OrganizationInvitation).where(
+            OrganizationInvitation.id == entity.id
+        )
         result = await self.session.execute(stmt)
         invitation = result.scalars().first()
         if not invitation:

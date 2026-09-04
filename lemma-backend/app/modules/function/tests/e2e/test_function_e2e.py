@@ -1,69 +1,58 @@
+"""Function shape: lifecycle, authorization, and datastore writes.
+
+The runtime journeys -- queueing, concurrency, timeouts, cancellation and
+connector operations -- are in `test_function_execution_e2e.py`. The two were
+one 200-second file, which was the floor for the whole Backend E2E workflow:
+the shard planner could not split a file, and `--dist loadscope` groups a
+module's functions onto one xdist worker, so no worker count could either.
+Halves land on separate runners.
+
+The line is what a test is *about*. Everything here is a claim about a
+function's shape or who may touch it, and reaches the sandbox only far enough
+to prove the claim.
+"""
+
 from __future__ import annotations
 
-import asyncio
 import time
-from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
 
-from app.modules.connectors.infrastructure.models.account import Account
-from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
-from app.modules.connectors.infrastructure.models.connector import Connector
-from app.modules.connectors.infrastructure.models.connector_operation import (
-    ConnectorOperation,
+from app.modules.test_support.e2e.function_helpers import (
+    bulk_facade_function_code,
+    create_folder,
+    create_function,
+    create_table,
+    function_payload,
+    record_grant_function_code,
+    replace_function_resource_grants,
+    replace_role_resource_grants,
+    run_function,
+    typed_function_code,
+    wait_for_run_completion,
 )
-from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
 )
 
+# `usefixtures` is deliberately NOT here. At module scope it made every test
+# boot a uvicorn backend server and a local sandbox server, including the ones
+# that never supply `code` and only assert status codes -- the duplicate-name
+# check measured 18.8s in CI to prove a 409. It is applied per test below, to
+# the ones that actually reach the runtime.
+#
+# `workspace` stays at module scope: it is what the sandbox shard's marker
+# filter selects on, and moving it would change which shard these run in. Both
+# halves of the split carry it for that reason, and a contract test
+# (test_workspace_marked_files_are_routed_consistently_within_a_directory)
+# fails if they ever disagree.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.workspace,
-    pytest.mark.usefixtures("configure_workspace_api_url"),
 ]
-
-
-async def _wait_for_run_completion(
-    authenticated_client,
-    pod_id: str,
-    function_name: str,
-    run_id: str,
-    timeout_seconds: int = 60,
-):
-    for _ in range(timeout_seconds):
-        res = await authenticated_client.get(
-            f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
-        )
-        assert res.status_code == status.HTTP_200_OK, res.text
-        run_data = res.json()
-        if run_data["status"] in ["COMPLETED", "FAILED"]:
-            return run_data
-        await asyncio.sleep(1)
-    raise AssertionError("Function execution timed out")
-
-
-async def _create_function(authenticated_client, pod_id: str, payload: dict) -> dict:
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/functions",
-        json=payload,
-        follow_redirects=True,
-    )
-    assert response.status_code == status.HTTP_201_CREATED, response.text
-    return response.json()
-
-
-def _function_payload(name: str, visibility: str | None = None) -> dict:
-    payload = {
-        "name": name,
-        "description": "Function visibility e2e",
-    }
-    if visibility is not None:
-        payload["visibility"] = visibility
-    return payload
 
 
 @pytest.mark.asyncio
@@ -76,287 +65,22 @@ async def test_create_function_rejects_duplicate_name_in_same_pod(
 
     first = await authenticated_client.post(
         f"/pods/{pod_id}/functions",
-        json=_function_payload(function_name),
+        json=function_payload(function_name),
         follow_redirects=True,
     )
     assert first.status_code == status.HTTP_201_CREATED, first.text
 
     second = await authenticated_client.post(
         f"/pods/{pod_id}/functions",
-        json=_function_payload(function_name),
+        json=function_payload(function_name),
         follow_redirects=True,
     )
     assert second.status_code == status.HTTP_409_CONFLICT, second.text
     assert second.json()["code"] == "FUNCTION_CONFLICT"
 
 
-async def _run_function(
-    authenticated_client,
-    pod_id: str,
-    function_name: str,
-    input_data: dict,
-    *,
-    expected_status: str = "COMPLETED",
-) -> dict:
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/functions/{function_name}/runs",
-        json={"input_data": input_data},
-        follow_redirects=True,
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    run_id = response.json()["id"]
-    final_run = await _wait_for_run_completion(
-        authenticated_client,
-        pod_id,
-        function_name,
-        run_id,
-    )
-    assert final_run["status"] == expected_status, {
-        "status": final_run["status"],
-        "error": final_run.get("error"),
-        "run_id": final_run["id"],
-    }
-    return final_run
-
-
-async def _create_table(
-    authenticated_client,
-    pod_id: str,
-    table_name: str,
-    *,
-    visibility: str | None = None,
-    enable_rls: bool = True,
-) -> dict:
-    payload = {
-        "name": table_name,
-        "primary_key_column": "id",
-        "enable_rls": enable_rls,
-        "columns": [
-            {"name": "id", "type": "UUID", "required": True, "auto": True},
-            {"name": "title", "type": "TEXT", "required": True},
-            {"name": "note", "type": "TEXT", "required": False},
-        ],
-    }
-    if visibility is not None:
-        payload["visibility"] = visibility
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/datastore/tables",
-        json=payload,
-    )
-    assert response.status_code == status.HTTP_201_CREATED, response.text
-    return response.json()
-
-
-async def _create_folder(
-    authenticated_client,
-    pod_id: str,
-    path: str,
-    *,
-    visibility: str | None = None,
-) -> dict:
-    payload = {"path": path}
-    if visibility is not None:
-        payload["visibility"] = visibility
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/datastore/files/folders",
-        json=payload,
-    )
-    assert response.status_code == status.HTTP_201_CREATED, response.text
-    return response.json()
-
-
-async def _replace_role_resource_grants(
-    authenticated_client,
-    pod_id: str,
-    role_name: str,
-    grants: list[dict],
-) -> dict:
-    response = await authenticated_client.put(
-        f"/pods/{pod_id}/roles/{role_name}/permissions",
-        json={"grants": grants},
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    return response.json()
-
-
-async def _replace_function_resource_grants(
-    authenticated_client,
-    pod_id: str,
-    function_name: str,
-    grants: list[dict],
-) -> dict:
-    response = await authenticated_client.put(
-        f"/pods/{pod_id}/functions/{function_name}/permissions",
-        json={"grants": grants},
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    return response.json()
-
-
-async def _seed_connector_operation(
-    db_session,
-    *,
-    connector_id: str,
-    organization_id: str,
-    user_id=None,
-    api_key: str | None = None,
-):
-    app = await db_session.get(Connector, connector_id)
-    if app is None:
-        app = Connector(
-            id=connector_id,
-            title=f"{connector_id} title",
-            description="Mock app for function e2e",
-            kinds=[
-                {
-                    "kind": "package",
-                    "auth_scheme": "API_KEY",
-                    "system_default_available": True,
-                }
-            ],
-            is_active=True,
-        )
-        db_session.add(app)
-
-    auth_config = AuthConfig(
-        id=uuid4(),
-        organization_id=organization_id,
-        connector_id=connector_id,
-        name=connector_id,
-        kind="package",
-        config_source="SYSTEM_DEFAULT",
-        status="ACTIVE",
-    )
-    db_session.add(auth_config)
-
-    operation = await db_session.get(
-        ConnectorOperation,
-        f"{connector_id}:send_payload",
-    )
-    if operation is None:
-        db_session.add(
-            ConnectorOperation(
-                id=f"{connector_id}:send_payload",
-                connector_id=connector_id,
-                name="send_payload",
-                provider_operation_name="send_payload",
-                display_name="Send Payload",
-                description="Mock send payload operation",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"},
-                        "caller_user_id": {"type": "string"},
-                    },
-                    "required": ["message", "caller_user_id"],
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "echoed_message": {"type": "string"},
-                        "used_api_key": {"type": "string"},
-                    },
-                    "required": ["echoed_message", "used_api_key"],
-                },
-            )
-        )
-
-    account = None
-    if user_id is not None:
-        account = Account(
-            id=uuid4(),
-            connector_id=connector_id,
-            organization_id=organization_id,
-            auth_config_id=auth_config.id,
-            user_id=user_id,
-            credentials={"api_key": api_key},
-        )
-        db_session.add(account)
-    await db_session.commit()
-    return account
-
-
-async def _seed_user(db_session):
-    user = User(
-        id=uuid4(),
-        email=f"function-e2e-{uuid4().hex[:12]}@example.test",
-        is_verified=True,
-        is_active=True,
-    )
-    db_session.add(user)
-    await db_session.commit()
-    return user
-
-
-def _connector_function_code(
-    function_name: str,
-    connector_id: str,
-    *,
-    account_id: str | None = None,
-) -> str:
-    account_id_argument = f',\n        account_id="{account_id}"' if account_id else ""
-    return f"""#input_type_name: SendPayloadInput
-#output_type_name: SendPayloadResult
-#function_name: {function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext, Pod
-
-class SendPayloadInput(BaseModel):
-    message: str
-
-class SendPayloadResult(BaseModel):
-    echoed_message: str
-    used_api_key: str
-    caller_user_id: str
-
-async def {function_name}(ctx: FunctionContext, data: SendPayloadInput) -> SendPayloadResult:
-    pod = Pod.from_env()
-    response = pod.connectors.execute(
-        "{connector_id}",
-        "send_payload",
-        {{
-            "message": data.message,
-            "caller_user_id": str(ctx.user_id),
-        }}{account_id_argument},
-    )
-    result = response.result
-    return SendPayloadResult(
-        echoed_message=result["echoed_message"],
-        used_api_key=result["used_api_key"],
-        caller_user_id=result["caller_user_id"],
-    )"""
-
-
-def _patch_connector_operation_execution(connector_id: str):
-    expected_connector_id = connector_id
-
-    async def fake_execute_operation(
-        _self,
-        connector_id,
-        operation_name,
-        payload,
-        third_party_credentials,
-        auth_token=None,
-        api_url=None,
-    ):
-        del auth_token, api_url
-        assert connector_id == expected_connector_id
-        assert operation_name == "send_payload"
-        return {
-            "echoed_message": payload["message"],
-            "used_api_key": third_party_credentials["api_key"],
-            "caller_user_id": payload["caller_user_id"],
-        }
-
-    return patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway."
-        "LemmaOperationGateway.execute_operation",
-        new=fake_execute_operation,
-    )
-
-
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_lifecycle(authenticated_client, test_pod):
     pod_id = test_pod["id"]
     func_name = f"func_{uuid4().hex[:8]}"
@@ -377,7 +101,7 @@ class UppercaseResult(BaseModel):
 async def {func_name}(ctx: FunctionContext, data: UppercaseInput) -> UppercaseResult:
     return UppercaseResult(result=data.text.upper())"""
 
-    func = await _create_function(
+    func = await create_function(
         authenticated_client,
         pod_id,
         {
@@ -388,7 +112,9 @@ async def {func_name}(ctx: FunctionContext, data: UppercaseInput) -> UppercaseRe
     )
     assert func["name"] == func_name
 
-    get_response = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}")
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
     assert get_response.status_code == status.HTTP_200_OK, get_response.text
     assert get_response.json()["id"] == func["id"]
 
@@ -427,16 +153,16 @@ async def test_function_list_and_access_respects_pod_roles(
     editor_name = f"editor_func_{uuid4().hex[:8]}"
     custom_name = f"custom_func_{uuid4().hex[:8]}"
 
-    await _create_function(authenticated_client, pod_id, _function_payload(default_name))
-    await _create_function(
+    await create_function(authenticated_client, pod_id, function_payload(default_name))
+    await create_function(
         authenticated_client,
         pod_id,
-        _function_payload(editor_name, "RESTRICTED"),
+        function_payload(editor_name, "RESTRICTED"),
     )
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
-        _function_payload(custom_name, "RESTRICTED"),
+        function_payload(custom_name, "RESTRICTED"),
     )
 
     editor_function = await authenticated_client.get(
@@ -572,6 +298,7 @@ async def test_function_list_and_access_respects_pod_roles(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_execution_datastore_and_file_round_trip(
     authenticated_client,
     test_pod,
@@ -583,13 +310,13 @@ async def test_function_execution_datastore_and_file_round_trip(
     table_name = f"expenses_{suffix}"
     folder_path = f"/function-grants-{suffix}"
 
-    table = await _create_table(
+    table = await create_table(
         authenticated_client,
         pod_id,
         table_name,
         visibility="RESTRICTED",
     )
-    folder = await _create_folder(
+    folder = await create_folder(
         authenticated_client,
         pod_id,
         folder_path,
@@ -645,7 +372,7 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
         caller_user_email=ctx.user_email,
     )"""
 
-    function = await _create_function(
+    function = await create_function(
         authenticated_client,
         pod_id,
         {
@@ -673,20 +400,20 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
         },
     ]
     grants = [function_self_grant, *table_and_folder_grants]
-    await _replace_role_resource_grants(
+    await replace_role_resource_grants(
         authenticated_client,
         pod_id,
         "POD_ADMIN",
         grants,
     )
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
         [function_self_grant],
     )
 
-    denied_run = await _run_function(
+    denied_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -695,14 +422,14 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
     )
     assert denied_run["error"]
 
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
         grants,
     )
 
-    final_run = await _run_function(
+    final_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -740,59 +467,6 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
     assert download_response.text == "airport pickup"
 
 
-def _record_grant_function_code(function_name: str, table_name: str) -> str:
-    """Function body that writes a record and reads it back.
-
-    Data-access failures are caught and surfaced as structured output so the
-    test can assert on the real HTTP status/code instead of an opaque run
-    failure. Reads/writes are gated by record permissions only.
-    """
-    # Uses typing.Optional on purpose: under Python 3.14 (PEP 649) deferred
-    # annotations, schema extraction must resolve typing names from the
-    # function's namespace, not just builtins. This guards the sandbox runtime's
-    # fix that registers the execution namespace as a real module.
-    return f"""#input_type_name: WriteInput
-#output_type_name: WriteResult
-#function_name: {function_name}
-
-from typing import Optional
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext, Pod
-from lemma_sdk.errors import LemmaAPIError
-
-class WriteInput(BaseModel):
-    title: str
-    note: str
-
-class WriteResult(BaseModel):
-    denied: bool
-    status_code: Optional[int] = None
-    error_code: Optional[str] = None
-    record_id: Optional[str] = None
-    read_title: Optional[str] = None
-
-async def {function_name}(ctx: FunctionContext, data: WriteInput) -> WriteResult:
-    pod = Pod.from_env()
-    try:
-        record = pod.table("{table_name}").create(
-            {{"title": data.title, "note": data.note}}
-        )
-    except LemmaAPIError as exc:
-        return WriteResult(
-            denied=True,
-            status_code=exc.status_code,
-            error_code=exc.code,
-        )
-    row = record
-    fetched = pod.table("{table_name}").get(str(row["id"]))
-    read_row = fetched
-    return WriteResult(
-        denied=False,
-        record_id=str(row["id"]),
-        read_title=str(read_row["title"]),
-    )"""
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "function_type,enable_rls",
@@ -803,6 +477,7 @@ async def {function_name}(ctx: FunctionContext, data: WriteInput) -> WriteResult
         pytest.param("JOB", False, id="job-no-rls"),
     ],
 )
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_record_write_honors_record_grants_for_all_table_types(
     authenticated_client,
     test_pod,
@@ -818,21 +493,21 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
     function_name = f"rec_writer_{suffix}"
     table_name = f"sync_runs_{suffix}"
 
-    await _create_table(
+    await create_table(
         authenticated_client,
         pod_id,
         table_name,
         enable_rls=enable_rls,
     )
 
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
             "name": function_name,
             "description": "Record write grant matrix",
             "type": function_type,
-            "code": _record_grant_function_code(function_name, table_name),
+            "code": record_grant_function_code(function_name, table_name),
         },
     )
 
@@ -843,14 +518,14 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
     }
 
     # No table grant at all -> the data call must fail with a real 403.
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
         [function_self_grant],
     )
 
-    denied_run = await _run_function(
+    denied_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -859,11 +534,13 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
     denied_output = denied_run["output_data"]
     assert denied_output["denied"] is True, denied_output
     assert denied_output["status_code"] == 403, denied_output
-    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", denied_output
+    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", (
+        denied_output
+    )
 
     # Grant record read/write (plus table.read for metadata). Notably NOT
     # table.update: data access is governed by record permissions only.
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
@@ -881,7 +558,7 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
         ],
     )
 
-    granted_run = await _run_function(
+    granted_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -903,6 +580,84 @@ async def test_function_record_write_honors_record_grants_for_all_table_types(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_a_function_writes_many_rows_through_the_table_facade(
+    authenticated_client,
+    test_pod,
+    worker,
+):
+    """``pod.table(...).bulk_*`` reaches the real bulk endpoints and is correct.
+
+    The unit tests pin that each facade method delegates to the right endpoint
+    with the table bound and the body intact; they cannot show that the round
+    trip works. This runs the real SDK against the real API and Postgres.
+    """
+    pod_id = test_pod["id"]
+    suffix = uuid4().hex[:8]
+    function_name = f"bulk_writer_{suffix}"
+    table_name = f"bulk_rows_{suffix}"
+    rows = 50
+
+    await create_table(authenticated_client, pod_id, table_name, enable_rls=False)
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": function_name,
+            "description": "Batch writes through the bound table helper",
+            "type": "API",
+            "code": bulk_facade_function_code(function_name, table_name),
+        },
+    )
+    await replace_function_resource_grants(
+        authenticated_client,
+        pod_id,
+        function_name,
+        [
+            {
+                "resource_type": "function",
+                "resource_name": function_name,
+                "permission_ids": ["function.read"],
+            },
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table_name,
+                "permission_ids": [
+                    "datastore.table.read",
+                    "datastore.record.read",
+                    "datastore.record.write",
+                ],
+            },
+        ],
+    )
+
+    run = await run_function(
+        authenticated_client, pod_id, function_name, {"rows": rows}
+    )
+    output = run["output_data"]
+
+    # Each bulk call reports the rows it affected, not a bare acknowledgement.
+    assert output["created"] == rows, output
+    assert output["updated"] == 1, output
+    assert output["upserted"] == 1, output
+    assert output["deleted"] == 2, output
+    assert output["retitled"] == "renamed", output
+
+    records_response = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/{table_name}/records",
+        params={"limit": rows},
+    )
+    assert records_response.status_code == status.HTTP_200_OK, records_response.text
+    payload = records_response.json()
+    # The upsert landed on the existing row rather than inserting a duplicate,
+    # so the only rows missing are the two that were deleted.
+    assert payload["total"] == rows - 2, payload
+    titles = {item["title"] for item in payload["items"]}
+    assert "renamed" in titles and "upserted" in titles, titles
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_record_write_requires_record_write_not_table_update(
     authenticated_client,
     test_pod,
@@ -916,21 +671,21 @@ async def test_function_record_write_requires_record_write_not_table_update(
     function_name = f"rec_writer_perm_{suffix}"
     table_name = f"shared_log_{suffix}"
 
-    await _create_table(
+    await create_table(
         authenticated_client,
         pod_id,
         table_name,
         enable_rls=False,
     )
 
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
             "name": function_name,
             "description": "record write requires record.write",
             "type": "JOB",
-            "code": _record_grant_function_code(function_name, table_name),
+            "code": record_grant_function_code(function_name, table_name),
         },
     )
 
@@ -941,7 +696,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
     }
 
     # Schema permissions only (table.read + table.update), no record.write.
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
@@ -958,7 +713,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
         ],
     )
 
-    denied_run = await _run_function(
+    denied_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -967,10 +722,12 @@ async def test_function_record_write_requires_record_write_not_table_update(
     denied_output = denied_run["output_data"]
     assert denied_output["denied"] is True, denied_output
     assert denied_output["status_code"] == 403, denied_output
-    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", denied_output
+    assert denied_output["error_code"] == "MISSING_WORKLOAD_RESOURCE_GRANT", (
+        denied_output
+    )
 
     # Swap table.update for record.write -> the write now succeeds.
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         function_name,
@@ -988,7 +745,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
         ],
     )
 
-    granted_run = await _run_function(
+    granted_run = await run_function(
         authenticated_client,
         pod_id,
         function_name,
@@ -1000,93 +757,7 @@ async def test_function_record_write_requires_record_write_not_table_update(
 
 
 @pytest.mark.asyncio
-async def test_api_function_concurrent_hot_runs_reports_average_execution_time(
-    authenticated_client,
-    test_pod,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"hot_api_{suffix}"
-    total_runs = 20
-    concurrency = 5
-
-    code = f"""#input_type_name: HotInput
-#output_type_name: HotResult
-#function_name: {function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class HotInput(BaseModel):
-    value: int
-
-class HotResult(BaseModel):
-    value: int
-    doubled: int
-    caller_user_id: str
-
-async def {function_name}(ctx: FunctionContext, data: HotInput) -> HotResult:
-    return HotResult(
-        value=data.value,
-        doubled=data.value * 2,
-        caller_user_id=str(ctx.user_id),
-    )"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Hot API concurrency and latency smoke test",
-            "type": "API",
-            "code": code,
-        },
-    )
-
-    warm_run = await _run_function(
-        authenticated_client,
-        pod_id,
-        function_name,
-        {"value": -1},
-    )
-    assert warm_run["output_data"]["doubled"] == -2
-
-    semaphore = asyncio.Semaphore(concurrency)
-
-    async def run_one(index: int) -> tuple[int, float, dict]:
-        async with semaphore:
-            started = time.perf_counter()
-            final_run = await _run_function(
-                authenticated_client,
-                pod_id,
-                function_name,
-                {"value": index},
-            )
-            elapsed = time.perf_counter() - started
-            return index, elapsed, final_run
-
-    wall_started = time.perf_counter()
-    results = await asyncio.gather(*(run_one(index) for index in range(total_runs)))
-    wall_elapsed = time.perf_counter() - wall_started
-
-    durations = [elapsed for _, elapsed, _ in results]
-    average_elapsed = sum(durations) / len(durations)
-    print(
-        "Function API hot concurrency benchmark: "
-        f"runs={total_runs} concurrency={concurrency} "
-        f"avg={average_elapsed:.3f}s wall={wall_elapsed:.3f}s "
-        f"min={min(durations):.3f}s max={max(durations):.3f}s"
-    )
-
-    for index, _elapsed, final_run in results:
-        output = final_run["output_data"]
-        assert output["value"] == index
-        assert output["doubled"] == index * 2
-        assert output["caller_user_id"]
-
-
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_api_function_datastore_read_write_latency_sequence(
     authenticated_client,
     test_pod,
@@ -1099,7 +770,7 @@ async def test_api_function_datastore_read_write_latency_sequence(
     reader_name = f"latency_reader_{suffix}"
     total_hot_runs = 12
 
-    table = await _create_table(authenticated_client, pod_id, table_name)
+    table = await create_table(authenticated_client, pod_id, table_name)
 
     writer_code = f"""#input_type_name: WriteInput
 #output_type_name: WriteResult
@@ -1154,7 +825,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
         note=row.get("note"),
     )"""
 
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
@@ -1164,7 +835,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
             "code": writer_code,
         },
     )
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
@@ -1174,7 +845,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
             "code": reader_code,
         },
     )
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         writer_name,
@@ -1189,7 +860,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
             }
         ],
     )
-    await _replace_function_resource_grants(
+    await replace_function_resource_grants(
         authenticated_client,
         pod_id,
         reader_name,
@@ -1204,7 +875,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
             }
         ],
     )
-    await _replace_role_resource_grants(
+    await replace_role_resource_grants(
         authenticated_client,
         pod_id,
         "POD_ADMIN",
@@ -1223,7 +894,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
 
     async def timed_run(function_name: str, input_data: dict) -> tuple[float, dict]:
         started = time.perf_counter()
-        final_run = await _run_function(
+        final_run = await run_function(
             authenticated_client,
             pod_id,
             function_name,
@@ -1280,714 +951,7 @@ async def {reader_name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
 
 
 @pytest.mark.asyncio
-async def test_function_connector_operation_resolves_user_owned_account_in_backend(
-    authenticated_client,
-    test_pod,
-    fixed_test_user,
-    db_session,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    connector_id = f"dynamic_app_{suffix}"
-    function_name = f"dynamic_app_func_{suffix}"
-    await _seed_connector_operation(
-        db_session,
-        connector_id=connector_id,
-        organization_id=test_pod["organization_id"],
-        user_id=fixed_test_user["id"],
-        api_key="dynamic-secret",
-    )
-
-    function = await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Function app operation using dynamic account resolution",
-            "code": _connector_function_code(
-                function_name,
-                connector_id,
-            ),
-        },
-    )
-    await _replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
-    )
-    await _replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
-    )
-
-    with _patch_connector_operation_execution(connector_id):
-        final_run = await _run_function(
-            authenticated_client,
-            pod_id,
-            function_name,
-            {"message": "hello-dynamic"},
-        )
-
-    output = final_run["output_data"]
-    assert output["echoed_message"] == "hello-dynamic"
-    assert output["used_api_key"] == "dynamic-secret"
-    assert output["caller_user_id"] == str(fixed_test_user["id"])
-
-
-@pytest.mark.asyncio
-async def test_function_connector_operation_resolves_agent_owned_account_in_backend(
-    authenticated_client,
-    test_pod,
-    fixed_test_user,
-    db_session,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    connector_id = f"fixed_app_{suffix}"
-    function_name = f"fixed_app_func_{suffix}"
-    fixed_account_owner = await _seed_user(db_session)
-    account = await _seed_connector_operation(
-        db_session,
-        connector_id=connector_id,
-        organization_id=test_pod["organization_id"],
-        user_id=fixed_account_owner.id,
-        api_key="fixed-secret",
-    )
-
-    function = await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Function app operation using fixed account resolution",
-            "code": _connector_function_code(
-                function_name,
-                connector_id,
-                account_id=str(account.id),
-            ),
-        },
-    )
-    await _replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
-    )
-    await _replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
-    )
-
-    with _patch_connector_operation_execution(connector_id):
-        final_run = await _run_function(
-            authenticated_client,
-            pod_id,
-            function_name,
-            {"message": "hello-fixed"},
-        )
-
-    output = final_run["output_data"]
-    assert output["echoed_message"] == "hello-fixed"
-    assert output["used_api_key"] == "fixed-secret"
-    assert output["caller_user_id"] == str(fixed_test_user["id"])
-
-
-@pytest.mark.asyncio
-async def test_function_connector_operation_fails_when_user_owned_account_missing(
-    authenticated_client,
-    test_pod,
-    fixed_test_user,
-    db_session,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    connector_id = f"missing_account_app_{suffix}"
-    function_name = f"missing_account_func_{suffix}"
-    await _seed_connector_operation(
-        db_session,
-        connector_id=connector_id,
-        organization_id=test_pod["organization_id"],
-    )
-
-    function = await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Function app operation missing user account",
-            "code": _connector_function_code(
-                function_name,
-                connector_id,
-            ),
-        },
-    )
-    await _replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            }
-        ],
-    )
-    await _replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ],
-    )
-
-    final_run = await _run_function(
-        authenticated_client,
-        pod_id,
-        function_name,
-        {"message": "hello-missing"},
-        expected_status="FAILED",
-    )
-
-    assert final_run["error"]
-    assert "ACCOUNT_RESOLUTION_ERROR" in final_run["error"]
-    assert "Connect your account first" in final_run["error"]
-
-
-@pytest.mark.asyncio
-async def test_api_function_timeout_marks_run_failed_and_stops_execution(
-    authenticated_client,
-    test_pod,
-    monkeypatch,
-):
-    from app.core.config import settings as backend_settings
-
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"api_timeout_{suffix}"
-    table_name = f"timeout_records_{suffix}"
-
-    await _create_table(authenticated_client, pod_id, table_name)
-
-    code = f"""#input_type_name: TimeoutInput
-#output_type_name: TimeoutResult
-#function_name: {function_name}
-
-import asyncio
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext, Pod
-
-class TimeoutInput(BaseModel):
-    title: str
-
-class TimeoutResult(BaseModel):
-    record_id: str
-
-async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutResult:
-    await asyncio.sleep(5)
-    pod = Pod.from_env()
-    record = pod.table("{table_name}").create(
-        {{
-            "title": data.title,
-        }}
-    )
-    row = record
-    return TimeoutResult(record_id=str(row["id"]))"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "API function timeout smoke test",
-            "type": "API",
-            "code": code,
-        },
-    )
-
-    # Function creation performs schema extraction and prewarms the revision
-    # worker. Restrict only the execution whose timeout behavior this test owns.
-    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/functions/{function_name}/runs",
-        json={"input_data": {"title": "should-not-write"}},
-        follow_redirects=True,
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    run_id = response.json()["id"]
-
-    final_run = await _wait_for_run_completion(
-        authenticated_client,
-        pod_id,
-        function_name,
-        run_id,
-        timeout_seconds=15,
-    )
-    assert final_run["status"] == "FAILED", final_run
-    assert final_run["error"]
-    assert "timed out" in final_run["error"].lower()
-
-    await asyncio.sleep(4)
-
-    rerun_response = await authenticated_client.get(
-        f"/pods/{pod_id}/functions/{function_name}/runs/{run_id}"
-    )
-    assert rerun_response.status_code == status.HTTP_200_OK, rerun_response.text
-    assert rerun_response.json()["status"] == "FAILED"
-
-    records_response = await authenticated_client.get(
-        f"/pods/{pod_id}/datastore/tables/{table_name}/records",
-    )
-    assert records_response.status_code == status.HTTP_200_OK, records_response.text
-    assert records_response.json()["total"] == 0
-
-
-@pytest.mark.asyncio
-async def test_job_function_run_completes_via_worker(
-    authenticated_client,
-    test_pod,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"job_func_{suffix}"
-
-    code = f"""#input_type_name: JobInput
-#output_type_name: JobResult
-#function_name: {function_name}
-
-import asyncio
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class JobInput(BaseModel):
-    text: str
-
-class JobResult(BaseModel):
-    result: str
-
-async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
-    await asyncio.sleep(1)
-    return JobResult(result=data.text.upper())"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Queued function execution smoke test",
-            "type": "JOB",
-            "code": code,
-        },
-    )
-
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/functions/{function_name}/runs",
-        json={"input_data": {"text": "queued hello"}},
-        follow_redirects=True,
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    run = response.json()
-    assert run["status"] in {"PENDING", "RUNNING"}
-    assert run["job_id"]
-
-    final_run = await _wait_for_run_completion(
-        authenticated_client,
-        pod_id,
-        function_name,
-        run["id"],
-        timeout_seconds=30,
-    )
-    assert final_run["status"] == "COMPLETED", final_run
-    assert final_run["output_data"]["result"] == "QUEUED HELLO"
-
-
-@pytest.mark.asyncio
-async def test_job_function_execution_writes_datastore_record(
-    authenticated_client,
-    test_pod,
-    worker,
-):
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"job_store_{suffix}"
-    table_name = f"expenses_{suffix}"
-
-    response = await authenticated_client.post(
-        f"/pods/{pod_id}/datastore/tables",
-        json={
-            "name": table_name,
-            "primary_key_column": "id",
-            "enable_rls": True,
-            "columns": [
-                {"name": "title", "type": "TEXT", "required": True},
-                {"name": "note", "type": "TEXT", "required": False},
-            ],
-        },
-    )
-    assert response.status_code == status.HTTP_201_CREATED, response.text
-    table = response.json()
-
-    code = f"""#input_type_name: SaveExpenseInput
-#output_type_name: SaveExpenseResult
-#function_name: {function_name}
-
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext, Pod
-
-class SaveExpenseInput(BaseModel):
-    title: str
-    note: str
-
-class SaveExpenseResult(BaseModel):
-    record_id: str
-    caller_user_id: str
-    caller_user_email: str | None = None
-
-async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveExpenseResult:
-    pod = Pod.from_env()
-    record = pod.table("{table_name}").create(
-        {{
-            "title": data.title,
-            "note": data.note,
-        }}
-    )
-    row = record
-    return SaveExpenseResult(
-        record_id=str(row["id"]),
-        caller_user_id=str(ctx.user_id),
-        caller_user_email=ctx.user_email,
-    )"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "Queued datastore write smoke test",
-            "type": "JOB",
-            "code": code,
-        },
-    )
-    await _replace_function_resource_grants(
-        authenticated_client,
-        pod_id,
-        function_name,
-        [
-            {
-                "resource_type": "datastore_table",
-                "resource_name": table["name"],
-                "permission_ids": [
-                    "datastore.table.read",
-                    "datastore.record.write",
-                ],
-            }
-        ],
-    )
-    await _replace_role_resource_grants(
-        authenticated_client,
-        pod_id,
-        "POD_ADMIN",
-        [
-            {
-                "resource_type": "datastore_table",
-                "resource_name": table["name"],
-                "permission_ids": [
-                    "datastore.table.read",
-                    "datastore.record.read",
-                    "datastore.record.write",
-                ],
-            }
-        ],
-    )
-
-    final_run = await _run_function(
-        authenticated_client,
-        pod_id,
-        function_name,
-        {"title": "Taxi", "note": "airport pickup"},
-    )
-    assert final_run["status"] == "COMPLETED", final_run
-    output = final_run["output_data"]
-    assert output["caller_user_id"]
-
-    records_response = await authenticated_client.get(
-        f"/pods/{pod_id}/datastore/tables/{table_name}/records",
-    )
-    assert records_response.status_code == status.HTTP_200_OK, records_response.text
-    records_payload = records_response.json()
-    assert records_payload["total"] == 1
-    assert records_payload["items"][0]["id"] == output["record_id"]
-    assert records_payload["items"][0]["title"] == "Taxi"
-    assert records_payload["items"][0]["note"] == "airport pickup"
-    assert records_payload["items"][0]["user_id"] == output["caller_user_id"]
-
-
-@pytest.mark.slow
-@pytest.mark.asyncio
-async def test_job_function_long_run_is_not_destroyed_while_active(
-    authenticated_client,
-    test_pod,
-    worker,
-):
-    """An active run prevents function-sandbox idle release without heartbeats.
-
-    The idle window is squeezed to five seconds so a sixty-second run is many
-    times longer than it, which is what makes the assertion mean something:
-    the run finishing proves activity held the sandbox, not that the sweep
-    simply never came round.
-    """
-    from app.modules.workspace.config import workspace_settings
-
-    original_idle = workspace_settings.idle_release_seconds
-    workspace_settings.idle_release_seconds = 5
-    try:
-        pod_id = test_pod["id"]
-        suffix = uuid4().hex[:8]
-        function_name = f"job_long_{suffix}"
-        code = f"""#input_type_name: JobInput
-#output_type_name: JobResult
-#function_name: {function_name}
-
-import asyncio
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class JobInput(BaseModel):
-    seconds: int
-
-class JobResult(BaseModel):
-    slept: int
-
-async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
-    await asyncio.sleep(data.seconds)
-    return JobResult(slept=data.seconds)"""
-
-        await _create_function(
-            authenticated_client,
-            pod_id,
-            {
-                "name": function_name,
-                "description": "Long-running job: sandbox keepalive smoke test",
-                "type": "JOB",
-                "code": code,
-            },
-        )
-
-        response = await authenticated_client.post(
-            f"/pods/{pod_id}/functions/{function_name}/runs",
-            json={"input_data": {"seconds": 60}},
-            follow_redirects=True,
-        )
-        assert response.status_code == status.HTTP_200_OK, response.text
-        run = response.json()
-
-        final_run = await _wait_for_run_completion(
-            authenticated_client,
-            pod_id,
-            function_name,
-            run["id"],
-            timeout_seconds=150,
-        )
-        assert final_run["status"] == "COMPLETED", final_run
-        assert final_run["output_data"]["slept"] == 60
-    finally:
-        workspace_settings.idle_release_seconds = original_idle
-
-
-@pytest.mark.asyncio
-async def test_concurrent_api_function_runs_all_complete(
-    authenticated_client,
-    test_pod,
-):
-    """3-4 API runs fired together (same user -> shared sandbox) all complete.
-
-    Concurrent cold-start callers must coordinate on one sandbox creation
-    (Redis creation lock) and then share the RUNNING sandbox; none should fail
-    with a sandbox readiness / "Sandbox not found" race.
-    """
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"api_concurrent_{suffix}"
-    code = f"""#input_type_name: ConcInput
-#output_type_name: ConcResult
-#function_name: {function_name}
-
-import asyncio
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class ConcInput(BaseModel):
-    n: int
-
-class ConcResult(BaseModel):
-    doubled: int
-
-async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(2)
-    return ConcResult(doubled=data.n * 2)"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "concurrency smoke (API)",
-            "type": "API",
-            "code": code,
-        },
-    )
-
-    async def run_one(n: int) -> dict:
-        return await _run_function(
-            authenticated_client, pod_id, function_name, {"n": n}
-        )
-
-    results = await asyncio.gather(*(run_one(n) for n in range(1, 5)))
-    for n, final in zip(range(1, 5), results):
-        assert final["status"] == "COMPLETED", final
-        assert final["output_data"]["doubled"] == n * 2
-
-
-@pytest.mark.asyncio
-async def test_concurrent_job_function_runs_all_complete(
-    authenticated_client,
-    test_pod,
-    worker,
-):
-    """3-4 JOB runs fired together (same user -> shared sandbox) all complete."""
-    pod_id = test_pod["id"]
-    suffix = uuid4().hex[:8]
-    function_name = f"job_concurrent_{suffix}"
-    code = f"""#input_type_name: ConcInput
-#output_type_name: ConcResult
-#function_name: {function_name}
-
-import asyncio
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext
-
-class ConcInput(BaseModel):
-    n: int
-
-class ConcResult(BaseModel):
-    doubled: int
-
-async def {function_name}(ctx: FunctionContext, data: ConcInput) -> ConcResult:
-    await asyncio.sleep(3)
-    return ConcResult(doubled=data.n * 2)"""
-
-    await _create_function(
-        authenticated_client,
-        pod_id,
-        {
-            "name": function_name,
-            "description": "concurrency smoke (JOB)",
-            "type": "JOB",
-            "code": code,
-        },
-    )
-
-    async def trigger(n: int) -> str:
-        resp = await authenticated_client.post(
-            f"/pods/{pod_id}/functions/{function_name}/runs",
-            json={"input_data": {"n": n}},
-            follow_redirects=True,
-        )
-        assert resp.status_code == status.HTTP_200_OK, resp.text
-        return resp.json()["id"]
-
-    run_ids = await asyncio.gather(*(trigger(n) for n in range(1, 5)))
-    finals = await asyncio.gather(
-        *(
-            _wait_for_run_completion(
-                authenticated_client, pod_id, function_name, rid, timeout_seconds=150
-            )
-            for rid in run_ids
-        )
-    )
-    for final in finals:
-        assert final["status"] == "COMPLETED", final
-
-
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
 async def test_function_execute_requires_only_execute_not_read(
     authenticated_client,
     async_client,
@@ -2020,7 +984,7 @@ async def test_function_execute_requires_only_execute_not_read(
         f"async def {name}(ctx: FunctionContext, data: PingInput) -> PingResult:\n"
         "    return PingResult(doubled=data.n * 2)\n"
     )
-    function = await _create_function(
+    function = await create_function(
         authenticated_client,
         pod_id,
         {
@@ -2059,186 +1023,220 @@ async def test_function_execute_requires_only_execute_not_read(
     assert run_response.status_code == status.HTTP_200_OK, run_response.text
 
     # Confirm it actually executed (poll as admin, who can read the run).
-    final_run = await _wait_for_run_completion(
+    final_run = await wait_for_run_completion(
         authenticated_client, pod_id, name, run_response.json()["id"]
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["doubled"] == 42
 
 
-def _mcp_function_code(function_name: str, auth_config_name: str) -> str:
-    return f"""#input_type_name: AddInput
-#output_type_name: AddResult
-#function_name: {function_name}
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_update_function_replaces_code_and_activates_new_revision(
+    authenticated_client, test_pod
+):
+    """``update_function``'s code path (compile+activate a new immutable
+    revision via ``_apply_code``, then persist it) is otherwise untested:
+    ``test_function_lifecycle`` only PATCHes ``description``, whose
+    ``plan.code`` is ``None`` and never reaches it."""
+    pod_id = test_pod["id"]
+    func_name = f"update_code_{uuid4().hex[:8]}"
 
-from pydantic import BaseModel
-from lemma_sdk import FunctionContext, Pod
-
-class AddInput(BaseModel):
-    a: int
-    b: int
-
-class AddResult(BaseModel):
-    total: int
-
-async def {function_name}(ctx: FunctionContext, data: AddInput) -> AddResult:
-    pod = Pod.from_env()
-    response = pod.connectors.execute(
-        "{auth_config_name}",
-        "add",
-        {{"a": data.a, "b": data.b}},
+    original_code = typed_function_code(func_name, expression="data.value * 2")
+    func = await create_function(
+        authenticated_client,
+        pod_id,
+        {"name": func_name, "description": "before", "code": original_code},
     )
-    result = response.result
-    text = str(result)
-    digits = "".join(c for c in text if c.isdigit())
-    return AddResult(total=int(digits))"""
+    original_revision = func["revision_hash"]
+    assert original_revision and func["status"] == "READY"
+
+    original_result = await run_function(
+        authenticated_client, pod_id, func_name, {"value": 10}
+    )
+    assert original_result["output_data"]["result"] == 20
+
+    updated_code = typed_function_code(func_name, expression="data.value * 3")
+    update_response = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{func_name}",
+        json={"code": updated_code},
+    )
+    assert update_response.status_code == status.HTTP_200_OK, update_response.text
+    updated = update_response.json()
+    assert updated["status"] == "READY"
+    # A different revision was compiled and atomically activated -- not just
+    # the same row with a new description.
+    assert updated["revision_hash"] != original_revision
+
+    updated_result = await run_function(
+        authenticated_client, pod_id, func_name, {"value": 10}
+    )
+    assert updated_result["output_data"]["result"] == 30
 
 
 @pytest.mark.asyncio
-async def test_function_runs_a_tenant_connector_operation_for_real(
-    authenticated_client,
-    test_pod,
-    fixed_test_user,
-    db_session,
-    worker,
-    monkeypatch,
+async def test_update_function_replaces_icon_and_the_change_persists(
+    authenticated_client, test_pod
 ):
-    """A function calls an MCP server through `pod.connectors.execute`.
+    """``update_function``'s icon-cleanup branch (``service.delete_old_icon``,
+    called with no pooled connection held once the persist UoW closes) never
+    runs unless an update actually changes ``icon_url``; every function in
+    this file otherwise either has no icon or leaves it untouched."""
+    pod_id = test_pod["id"]
+    func_name = f"update_icon_{uuid4().hex[:8]}"
 
-    The other connector function tests patch the gateway, so they prove the
-    delegated-workload authorization path but stop short of a real call. This
-    one runs a live MCP server, installs it as a tenant connector, and has a
-    function in the pod runtime execute one of its discovered tools -- so
-    nothing between the function and the server is a stand-in.
-    """
-    import asyncio
-    import contextlib
-    import socket
-    from uuid import UUID
-
-    from fastmcp import FastMCP
-
-    from app.core.config import settings
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.connectors.api.dependencies import get_connector_service
-    from app.modules.connectors.domain.auth_config import AuthConfigSource
-    from app.modules.connectors.infrastructure.models.connector import Connector
-
-    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
-
-    server = FastMCP("function-runtime")
-
-    @server.tool
-    def add(a: int, b: int) -> int:
-        """Add two integers."""
-        return a + b
-
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+    func = await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "icon test",
+            "icon_url": "https://example.test/old-icon.png",
+        },
     )
-    for _ in range(100):
-        if task.done():
-            raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+    assert func["icon_url"] == "https://example.test/old-icon.png"
 
-    try:
-        suffix = uuid4().hex[:8]
-        connector_id = f"mcp_fn_{suffix}"
-        function_name = f"mcp_fn_func_{suffix}"
+    update_response = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{func_name}",
+        json={"icon_url": "https://example.test/new-icon.png"},
+    )
+    assert update_response.status_code == status.HTTP_200_OK, update_response.text
+    assert update_response.json()["icon_url"] == "https://example.test/new-icon.png"
 
-        db_session.add(
-            Connector(
-                id=connector_id,
-                title="Function MCP",
-                description="MCP server reached from a function.",
-                kinds=[
-                    {
-                        "kind": "mcp",
-                        "auth_scheme": "API_KEY",
-                        "discovery": "mcp",
-                        "auth_config_schema": {
-                            "type": "object",
-                            "required": ["server_url"],
-                            "properties": {"server_url": {"type": "string"}},
-                            "additionalProperties": False,
-                        },
-                    }
-                ],
-                is_active=True,
-            )
-        )
-        await db_session.commit()
+    # Re-fetch (rather than trust the PATCH echo) to confirm the new URL was
+    # actually persisted, not just returned.
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert get_response.status_code == status.HTTP_200_OK, get_response.text
+    assert get_response.json()["icon_url"] == "https://example.test/new-icon.png"
 
-        org_id = UUID(str(test_pod["organization_id"]))
-        user_id = UUID(str(fixed_test_user["id"]))
-        service = get_connector_service(SqlAlchemyUnitOfWork(db_session))
-        install = await service.create_auth_config(
-            user_id=user_id,
-            organization_id=org_id,
-            connector_id=connector_id,
-            config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            config={"server_url": f"http://127.0.0.1:{port}/mcp"},
-            name=f"mcp-fn-{suffix}",
-        )
-        await service.create_account(
-            user_id=user_id,
-            organization_id=org_id,
-            auth_config_id=install.id,
-            credentials={"api_key": "unused-by-this-server"},
-        )
 
-        function = await _create_function(
-            authenticated_client,
-            test_pod["id"],
-            {
-                "name": function_name,
-                "description": "Runs an MCP tool through the connectors SDK",
-                "code": _mcp_function_code(function_name, install.name),
-            },
-        )
-        grants = [
-            {
-                "resource_type": "function",
-                "resource_name": function["name"],
-                "permission_ids": ["function.read"],
-            },
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-        ]
-        await _replace_function_resource_grants(
-            authenticated_client, test_pod["id"], function_name, grants
-        )
-        await _replace_role_resource_grants(
-            authenticated_client, test_pod["id"], "POD_ADMIN", grants
-        )
+@pytest.mark.asyncio
+async def test_delete_function_cleans_up_icon_and_the_function_becomes_unreachable(
+    authenticated_client, test_pod
+):
+    """``delete_function``'s icon cleanup (``service.delete_icon``, run after
+    ``resolve_delete``'s UoW closes) is a no-op whenever the deleted function
+    never had an icon -- which is every delete in ``test_function_lifecycle``."""
+    pod_id = test_pod["id"]
+    func_name = f"delete_icon_{uuid4().hex[:8]}"
 
-        final_run = await _run_function(
-            authenticated_client,
-            test_pod["id"],
-            function_name,
-            {"a": 17, "b": 25},
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "to delete",
+            "icon_url": "https://example.test/icon.png",
+        },
+    )
+
+    delete_response = await authenticated_client.delete(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert delete_response.status_code == status.HTTP_200_OK, delete_response.text
+
+    get_response = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}"
+    )
+    assert get_response.status_code == status.HTTP_404_NOT_FOUND
+
+    run_response = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/runs",
+        json={"input_data": {}},
+        follow_redirects=True,
+    )
+    assert run_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_input_that_does_not_match_the_declaration_is_refused_not_run(
+    authenticated_client, test_pod
+):
+    """PS-FUNC-001: refuse before executing, and say which part was wrong.
+
+    The failure mode this replaces is expensive and misleading: the mismatch
+    was only found inside the sandbox, so a mistyped field name created a run,
+    took a worker lease, usually paid a cold start, and answered 200 with a run
+    that had failed. Nothing may be created here.
+    """
+    pod_id = test_pod["id"]
+    func_name = f"strict_input_{uuid4().hex[:8]}"
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "declares value: int",
+            "code": typed_function_code(func_name, expression="data.value * 2"),
+        },
+    )
+
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/runs",
+        json={"input_data": {"valu": 10}},
+        follow_redirects=True,
+    )
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+    body = refused.json()
+    assert body["code"] == "FUNCTION_VALIDATION_ERROR"
+    assert "value" in body["message"]
+
+    runs = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}/runs")
+    assert runs.status_code == status.HTTP_200_OK, runs.text
+    assert runs.json()["items"] == [], "a refused call must not create a run"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_deleting_a_function_keeps_the_record_of_what_it_did(
+    authenticated_client, test_pod, db_session
+):
+    """PS-FUNC-004: stop it being runnable, keep the history of what it did.
+
+    ``function_runs.function_id`` used to cascade, so tidying up a pod erased
+    every input, output and log the function had ever produced. The rows now
+    outlive the definition holding everything they recorded.
+    """
+    from sqlalchemy import select
+
+    from app.modules.function.infrastructure.models import FunctionRunModel
+
+    pod_id = test_pod["id"]
+    func_name = f"delete_history_{uuid4().hex[:8]}"
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "runs once, then is deleted",
+            "code": typed_function_code(func_name, expression="data.value + 1"),
+        },
+    )
+    completed = await run_function(
+        authenticated_client, pod_id, func_name, {"value": 41}
+    )
+    run_id = UUID(completed["id"])
+
+    deleted = await authenticated_client.delete(f"/pods/{pod_id}/functions/{func_name}")
+    assert deleted.status_code == status.HTTP_200_OK, deleted.text
+
+    gone = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}")
+    assert gone.status_code == status.HTTP_404_NOT_FOUND, gone.text
+
+    surviving = (
+        await db_session.execute(
+            select(FunctionRunModel).where(FunctionRunModel.id == run_id)
         )
-        # 17 + 25, computed by the MCP server, reached from inside the pod
-        # runtime through the connectors SDK.
-        assert final_run["output_data"]["total"] == 42
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    ).scalar_one_or_none()
+    assert surviving is not None, "the delete took the run history with it"
+    assert surviving.function_id is None, "the run should be detached, not repointed"
+    assert surviving.output_data == {"result": 42}
+    assert surviving.status == "COMPLETED"
 
 
 def _revision_code(func_name: str, marker: str, *, extra_field: bool = False) -> str:
@@ -2261,6 +1259,7 @@ async def {func_name}(ctx: FunctionContext, data: MarkInput) -> MarkResult:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("sandbox_reachable_backend", "worker")
 async def test_function_revision_history_and_rollback(authenticated_client, test_pod):
     """Save code three times, then go back to the first revision.
 
@@ -2271,7 +1270,7 @@ async def test_function_revision_history_and_rollback(authenticated_client, test
     pod_id = test_pod["id"]
     func_name = f"func_rev_{uuid4().hex[:8]}"
 
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {
@@ -2342,6 +1341,7 @@ async def test_function_revision_history_and_rollback(authenticated_client, test
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("sandbox_reachable_backend", "worker")
 async def test_resaving_identical_code_does_not_mint_a_second_revision(
     authenticated_client, test_pod
 ):
@@ -2351,7 +1351,7 @@ async def test_resaving_identical_code_does_not_mint_a_second_revision(
     func_name = f"func_same_{uuid4().hex[:8]}"
     code = _revision_code(func_name, "STABLE")
 
-    await _create_function(
+    await create_function(
         authenticated_client,
         pod_id,
         {"name": func_name, "description": "idempotent revision", "code": code},

@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   publish:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
 
     steps:
@@ -33,7 +34,7 @@ jobs:
           sha: ${{ github.sha }}
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -69,11 +70,17 @@ jobs:
               raise SystemExit("Could not find __version__ in lemma-cli/lemma_cli/__init__.py")
           path.write_text(text)
 
+          # Both halves of the specifier, or the rewrite silently drops the
+          # ceiling and every published CLI floats onto whatever SDK comes next.
+          # Before 1.0 the next minor is the break; after it, the next major.
+          major, minor, *_ = version.split(".")
+          ceiling = f"{major}.{int(minor) + 1}" if major == "0" else f"{int(major) + 1}"
+
           pyproject = pathlib.Path("lemma-cli/pyproject.toml")
           pp_text = pyproject.read_text()
           pp_text, pp_count = re.subn(
               r'(?m)^(\s*)"lemma-sdk>=[^"]+",',
-              rf'\g<1>"lemma-sdk>={version}",',
+              rf'\g<1>"lemma-sdk>={version},<{ceiling}",',
               pp_text,
               count=1,
           )

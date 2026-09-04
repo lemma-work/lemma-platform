@@ -25,7 +25,10 @@ structure.
   private canonical material.
 - Act only as the current user. Respect pod membership, workload grants, RLS, and
   file visibility. A delegated agent uses the invoking user's RLS scope and
-  `/me`; it gains no service-account or admin view.
+  `/me`; it gains no service-account or admin view. Its authority is its own
+  grants **intersected with** what the invoking user could do — never their
+  union — so a grant can only narrow the investigation's reach, never widen it
+  past the person you are acting for.
 - Treat an empty result as "not visible or not found in this scope," not proof
   that the information does not exist. Never bypass RLS or a missing grant.
 - Keep observable research records, not hidden chain-of-thought. Record queries,
@@ -119,11 +122,14 @@ for what it shows. Prefer the pod's converted markdown and page images; use
 `liteparse-documents` only for outside-pod documents or when the derived artifacts
 are missing or insufficient.
 
-Remember that CSV, JSON, XLSX, images, and email files are stored but not indexed.
-Only successfully processed, search-enabled documents with extracted chunks appear
-in search; a stored non-indexed file does not appear by filename alone. Check
+Remember that spreadsheets (CSV, TSV, JSON, YAML, XLSX, ODS), presentations
+(PPTX, ODP), images, and email files are stored but not indexed. Only
+successfully processed, search-enabled documents with extracted chunks appear in
+search; a stored non-indexed file does not appear by filename alone. Check
 `lemma files stat <path>`, then list or download known files instead of concluding
-that search found everything.
+that search found everything. `NOT_REQUIRED` means the file was never eligible;
+`PENDING`/`PROCESSING` means retry shortly; `FAILED_PERMANENT` means retrying
+will never help and the document has to be read another way.
 
 ### Workspace files
 
@@ -146,8 +152,20 @@ date or a domain, rather than broadly. There is no CLI search command: search is
 capability you already have, and the CLI's wrapper around it was removed.
 
 Open promising results and inspect the source itself. Use the browser for
-JavaScript-rendered pages, authentication, tables, or navigation. Preserve a
-decisive or volatile page when the investigation needs a durable snapshot:
+authentication, form navigation, or anything you have to interact with. Preserve
+a decisive or volatile page when the investigation needs a durable snapshot;
+which command depends on what you have:
+
+- With the `WEB_SEARCH` toolset, `web_fetch` is the direct route and needs no
+  shell. It takes a **list** of up to 5 URLs in one call, writes each page to
+  `out_dir` in the workspace, and returns the file paths and a short preview
+  rather than the page text. `formats` defaults to `["markdown"]`; add `pdf`,
+  `jpeg` or `png` when the layout is the evidence (a chart, a table, a signed
+  page) and view the result with the image-viewing capability. Set `render: true`
+  for pages that build their content with JavaScript, or when a plain fetch came
+  back near-empty. Pages reported as not attempted should be re-requested on
+  their own, not by repeating the whole list.
+- With a workspace shell, `save-webpage` does the same through the agent browser:
 
 ```bash
 save-webpage https://example.com/source --formats markdown,pdf --out research
@@ -243,6 +261,9 @@ Choose the destination deliberately:
 - Treat an agent's `/me` as the invoking user's private tree, never agent-private
   storage. If a workload receives `MISSING_WORKLOAD_RESOURCE_GRANT` for a shared
   folder, report the missing grant; do not relocate or self-elevate to bypass it.
+  `DELEGATION_EXCEEDS_INVOKER` is the other refusal and means the opposite: the
+  agent is granted the folder and the person it acts for is not, so no grant will
+  open it. Report that, and publish where the invoking user can actually write.
 - Skip pod writes when the user asked only for an answer and did not authorize a
   durable artifact. Keep the result in the response and state what could be saved.
 

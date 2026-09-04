@@ -7,6 +7,23 @@ When Lemma Desktop is installed, the CLI discovers its durable
 schema, OS credential vault, and private runtime. It does not start a second
 stack.
 
+## Install
+
+`lemma-stack` is not published to PyPI and Desktop does not install it, so
+`pip install lemma-stack` will not find it. The bootstrap script installs it
+from this repository as a `uv` tool and registers the running Desktop
+installation as the `lemma` CLI's `local` server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lemma-work/lemma-platform/main/install.sh |
+  bash -s -- --cli-only
+```
+
+Without `--cli-only` the same script runs `lemma-stack install`, the external
+Docker/Podman compatibility path described at the end of this file — not what a
+Desktop user wants. From a checkout, `uv tool install ./lemma-stack` does the
+install half.
+
 ## Managed Desktop commands
 
 ```bash

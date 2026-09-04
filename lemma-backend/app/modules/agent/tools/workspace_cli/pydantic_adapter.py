@@ -44,16 +44,16 @@ async def exec_command(
 
         exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
         -> completed: false, process_id: "abc"
-        manage_process(action="input", process_id="abc", chars="")
+        manage_process(action="input", process_id="abc")
         -> completed: false        # repeat; each poll returns new output
-        manage_process(action="input", process_id="abc", chars="")
+        manage_process(action="input", process_id="abc")
         -> completed: true, exit_code: 0
 
     Never re-run a command because it did not finish — that starts a second
     build alongside the first. If you lose a `process_id`, `action="list"`
     recovers it.
     """
-    return await workspace_cli.exec_command(ctx.deps, request)
+    return await workspace_cli.exec_command_internal(ctx.deps, request)
 
 
 async def manage_process(
@@ -64,24 +64,22 @@ async def manage_process(
     Drive a process started by `exec_command`.
 
     `input` sends characters to a running process, or polls its output when
-    `chars=""`. `kill` stops it. `list` shows tracked processes in this
+    `chars` is omitted. `kill` stops it. `list` shows tracked processes in this
     workspace. `resize` changes an interactive terminal's `cols`/`rows`. All but
     `list` need `process_id`.
     """
     if request.action == "list":
-        return await workspace_cli.list_processes(
+        return await workspace_cli.list_processes_internal(
             ctx.deps, ListProcessesRequest(comment=request.comment)
         )
     if not request.process_id:
         return ExecCommandResult(
             success=False,
             completed=False,
-            error=(
-                "process_id is required for action='input', 'kill', and 'resize'."
-            ),
+            error=("process_id is required for action='input', 'kill', and 'resize'."),
         )
     if request.action == "resize":
-        return await workspace_cli.resize_terminal(
+        return await workspace_cli.resize_terminal_internal(
             ctx.deps,
             ResizeTerminalRequest(
                 process_id=request.process_id,
@@ -91,14 +89,14 @@ async def manage_process(
             ),
         )
     if request.action == "kill":
-        return await workspace_cli.terminate_process(
+        return await workspace_cli.terminate_process_internal(
             ctx.deps,
             TerminateProcessRequest(
                 process_id=request.process_id, comment=request.comment
             ),
         )
     # action == "input"
-    return await workspace_cli.write_stdin(
+    return await workspace_cli.write_stdin_internal(
         ctx.deps,
         WriteStdinRequest(
             process_id=request.process_id,
@@ -121,7 +119,7 @@ async def execute_python(
     in shell. Kernel state — imports, variables, objects — persists across calls,
     so build up an analysis stepwise instead of repeating setup.
     """
-    return await workspace_cli.execute_python(ctx.deps, request)
+    return await workspace_cli.execute_python_internal(ctx.deps, request)
 
 
 async def view_image(
@@ -129,17 +127,22 @@ async def view_image(
     request: ViewImageRequest,
 ) -> Any:
     """
-    Load an image file from the private workspace and return it as binary tool content.
+    Load an image and return it as binary tool content, from either store.
 
     Use this for screenshots, generated images, charts, or any other visual artifact
     that the agent should inspect.
 
     PATH HANDLING:
-    - This tool reads only from the private current conversation workspace directory.
-    - Always pass a relative path such as `images/output.png`.
-    - Do not pass absolute paths or paths outside the current workspace directory.
+    - Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,
+      or neither, is refused — the store is the one you name, never inferred
+      from the shape of the path.
+    - `workspace_file_path` is relative to the conversation's sandbox, e.g.
+      `images/output.png`. Use it for artifacts this run just produced.
+    - `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a
+      file that lives in the pod.
+    - Images only. For a PDF, use `pod_view_document_pages` instead.
     """
-    return await workspace_cli.view_image(ctx.deps, request)
+    return await workspace_cli.view_image_internal(ctx.deps, request)
 
 
 _WORKSPACE_CLI_BASE_TOOLS = [

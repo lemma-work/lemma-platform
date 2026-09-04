@@ -13,6 +13,16 @@ from app.core.observability.connection_scope import attach_connection_scope_moni
 _engine = None
 _session_maker = None
 
+#: Session settings this engine always carries, in both pooling branches.
+#:
+#: ``TimeZone`` because a ``DATETIME`` column is ``TIMESTAMP WITH TIME ZONE``:
+#: anything zone-less reaching the server -- a literal in a caller's own SQL,
+#: ``now()`` rendered back out -- is resolved against this setting, so leaving
+#: it to the server's default made the same value mean different instants on
+#: two deployments. Pinned rather than merely documented, because nothing in a
+#: pod's data says which zone it was written in.
+_DATASTORE_SESSION_SETTINGS: dict[str, str] = {"TimeZone": "UTC"}
+
 
 def _json_serial(obj):
     if isinstance(obj, (datetime, date)):
@@ -23,9 +33,61 @@ def _json_serial(obj):
 
 
 def _build_datastore_connect_args() -> dict:
-    """Build asyncpg connect_args with server-side session settings."""
-    connect_args: dict = {}
-    server_settings: dict[str, str] = {}
+    """Build asyncpg connect_args with server-side session settings.
+
+    The two cache knobs are the ones that are not about timeouts, and they are
+    here rather than on the primary engine because only this one runs SQL
+    against tables a person can change.
+
+    Prepared statements are cached per connection, keyed on the SQL text. A
+    record read is ``SELECT * FROM "<schema>"."<table>"`` — the same text before
+    and after a column is added or removed, and the same text for two pods whose
+    tables share a name, because the pod is selected by ``SET LOCAL search_path``
+    rather than by anything in the statement. So a cached plan is reused with a
+    result descriptor that no longer matches the table.
+
+    Worse than one bad request, because the connection is pooled. Any request
+    landing on it hit the same failure, and it cleared itself only when the
+    connection recycled — a table that broke and then healed with nothing done
+    in between. Which operation triggered it was never about the operation but
+    about which connection served the next read; ``pool_use_lifo`` makes that
+    reliably unpredictable.
+
+    **Both names are required, and only one of them is the one that matters.**
+    ``statement_cache_size`` is asyncpg's own; ``prepared_statement_cache_size``
+    is SQLAlchemy's, which the asyncpg dialect implements on top because it
+    prepares every statement itself, and which defaults to 100 per connection.
+    Setting only asyncpg's — which is what this did — leaves SQLAlchemy's cache
+    fully active, so the fix this docstring describes never took effect. It cost
+    59 HTTP 500s in a single day in production, all from
+    ``execute_readonly_query``, as ``InvalidCachedStatementError`` and as raw
+    protocol desyncs (``the number of columns in the result row (1) is different
+    from what was described (2)``, ``unexpected trailing 942 bytes in buffer``,
+    ``cannot decode UUID, expected 16 bytes, got 554``).
+
+    Twice, now. DEV-DATA-004 was closed in #505 by setting only asyncpg's knob,
+    and the register entry was deleted in the same change -- so ``issues.md``
+    said this was fixed while every deployment with a real pool still had it.
+    SQLAlchemy documents the hazard plainly: a cached prepared statement goes
+    stale "when DDL has been emitted to the PostgreSQL database which modifies
+    the tables", and the dialect can only invalidate its cache within one
+    process and engine, which is not the arrangement here.
+
+    It was found the second time from two directions at once -- the production
+    500s above, and the product scenario suite run against a real install.
+    Nothing cheaper could have: in ``testing`` this engine pools with
+    ``NullPool``, so no connection lives long enough to reuse a stale statement
+    and the entire failure is invisible to a booted test stack.
+
+    The cost is a parse per statement. That is the right trade for a schema
+    that belongs to users rather than to migrations: the primary engine keeps
+    its cache, because its tables change only at deploy time.
+    """
+    connect_args: dict = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
+    server_settings: dict[str, str] = dict(_DATASTORE_SESSION_SETTINGS)
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
         server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
@@ -42,7 +104,17 @@ def get_datastore_engine():
     if _engine is None:
         url = settings.datastore_database_url or settings.database_url
         engine_kwargs = {}
-        connect_args = {}
+        # In both branches, because it is a property of what this engine runs
+        # rather than of where it runs. Testing pools with NullPool, so a stale
+        # cached plan cannot survive to be reused there — which is exactly why
+        # this bug was invisible to the whole scenario suite locally and showed
+        # up only against a deployment with a real pool. Setting it in one
+        # branch would have preserved that difference.
+        connect_args: dict = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+            "server_settings": dict(_DATASTORE_SESSION_SETTINGS),
+        }
         if settings.environment == "testing":
             engine_kwargs["poolclass"] = NullPool
         else:

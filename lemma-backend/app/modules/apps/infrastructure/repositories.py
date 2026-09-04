@@ -83,7 +83,9 @@ class AppRepository(AppRepositoryPort):
             self.uow.set_message_bus(message_bus)
 
     async def create(self, entity: AppEntity) -> AppEntity:
-        model = AppModel(**entity.model_dump(exclude_unset=True, exclude={"allowed_actions"}))
+        model = AppModel(
+            **entity.model_dump(exclude_unset=True, exclude={"allowed_actions"})
+        )
         self.session.add(model)
         await self.session.flush()
         # `AppEntity` is a plain BaseModel carrying its own `id`, so it cannot be
@@ -134,7 +136,9 @@ class AppRepository(AppRepositoryPort):
         ctx: Context | None = None,
     ) -> AppEntity | None:
         if ctx is None:
-            stmt = select(AppModel).where(AppModel.pod_id == pod_id, AppModel.name == name)
+            stmt = select(AppModel).where(
+                AppModel.pod_id == pod_id, AppModel.name == name
+            )
             result = await self.session.execute(stmt)
             model = result.scalar_one_or_none()
             return model.to_entity() if model else None
@@ -146,7 +150,9 @@ class AppRepository(AppRepositoryPort):
             owner_user_id_col=AppModel.user_id,
             visibility_col=AppModel.visibility,
         )
-        stmt = select(AppModel, actions).where(AppModel.pod_id == pod_id, AppModel.name == name)
+        stmt = select(AppModel, actions).where(
+            AppModel.pod_id == pod_id, AppModel.name == name
+        )
         result = await self.session.execute(stmt)
         row = result.one_or_none()
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
@@ -263,9 +269,7 @@ class AppRepository(AppRepositoryPort):
         already there.
         """
         await self.session.execute(
-            select(AppModel.id)
-            .where(AppModel.id == entity.app_id)
-            .with_for_update()
+            select(AppModel.id).where(AppModel.id == entity.app_id).with_for_update()
         )
         result = await self.session.execute(_record_release_statement(entity))
         return result.scalar_one().to_entity()
@@ -276,7 +280,9 @@ class AppRepository(AppRepositoryPort):
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def get_release_by_version(self, app_id: UUID, version: str) -> AppReleaseEntity | None:
+    async def get_release_by_version(
+        self, app_id: UUID, version: str
+    ) -> AppReleaseEntity | None:
         stmt = select(AppReleaseModel).where(
             AppReleaseModel.app_id == app_id,
             AppReleaseModel.version == version,

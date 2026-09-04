@@ -10,6 +10,7 @@ from app.modules.connectors.domain.errors import (
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionNotFoundError,
+    OperationExecutionRateLimitedError,
     OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
     OperationExecutionValidationError,
@@ -34,7 +35,9 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         self,
         composio_client_factory: ComposioClientFactory | None = None,
     ):
-        self._composio_client_factory = composio_client_factory or self._default_client_factory
+        self._composio_client_factory = (
+            composio_client_factory or self._default_client_factory
+        )
 
     def _default_client_factory(self) -> Any:
         # Shared, not built here: this gateway is constructed per request and
@@ -66,11 +69,9 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
-        del connector_id, auth_token, api_url, provider
+        del connector_id, provider
         connection_id = (
             third_party_credentials.get("connection_id")
             if isinstance(third_party_credentials, dict)
@@ -188,8 +189,22 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         (OpenWeather's "HTTP 401"), or a raised SDK exception carrying an HTTP
         status. All three land here, because the classification decides real
         behaviour -- an Unauthorized flags the account for reauth so the user is
-        prompted to reconnect, while an Infrastructure error just retries
-        forever against a connection that is never coming back.
+        prompted to reconnect, while an Infrastructure error counts toward the
+        circuit breaker and can disable the operation for everyone.
+
+        **The fallback classifies by status class, and that is the point.** This
+        ladder used to enumerate 404/401/403/400/422 and send *everything else*
+        to Infrastructure. Production found the hole: Composio answered `413
+        Upstream_PayloadTooLarge` -- an agent asked for more data than the tool
+        could return -- five times in 25 seconds. Each one was reported as
+        "provider temporarily unavailable", which invited a retry that could
+        never succeed, and the fifth opened the breaker on a provider that was
+        healthy and answering in 3.4s. Seven subsequent calls were refused.
+
+        A 4xx the provider chose to return is the caller's problem however
+        unfamiliar it is; only a 5xx, or a failure with no status at all, says
+        anything about the provider's health. Enumerating statuses one incident
+        at a time is what produced this bug, so the default now does the work.
         """
         message = f"Composio tool execution failed for '{operation_name}': {error}"
         normalized = error.lower()
@@ -205,7 +220,24 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             return OperationExecutionUnauthorizedError(message, details=details)
         if matches({"forbidden", "missing_scope"}, 403):
             return OperationExecutionAccessDeniedError(message, details=details)
-        if matches({"invalid_arguments", "validation_error", "bad_request"}, 400, 422):
+        if matches({"rate_limited", "rate_limit_exceeded", "too_many_requests"}, 429):
+            return OperationExecutionRateLimitedError(message, details=details)
+        if matches(
+            {
+                "invalid_arguments",
+                "validation_error",
+                "bad_request",
+                "payload_too_large",
+            },
+            400,
+            409,
+            413,
+            422,
+        ):
+            return OperationExecutionValidationError(message, details=details)
+        if status_code is not None and 400 <= status_code < 500:
+            # Some 4xx we have not met yet. Still the caller's, still not a
+            # reason to stop serving everybody else.
             return OperationExecutionValidationError(message, details=details)
         return OperationExecutionInfrastructureError(message, details=details)
 

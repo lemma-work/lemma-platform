@@ -18,11 +18,12 @@ from dataclasses import replace
 
 import httpx
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
@@ -32,6 +33,9 @@ from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.transport_errors import (
     RETRYABLE_STATUS_CODES,
+)
+from app.modules.agent.services.model_stream_budget import (
+    ModelStreamBudgetTransport,
 )
 from app.modules.agent.services.openai_schema_compat import (
     openai_compatible_model_profile,
@@ -103,8 +107,8 @@ async def _aclose_quietly(client: httpx.AsyncClient) -> None:
     try:
         await client.aclose()
     except Exception:  # pragma: no cover - eviction is best-effort
-        logger.debug(
-            "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+        logger.warning(
+            "agent.runtime_model_factory.provider_client_close_failed.degraded",
             exc_info=True,
         )
 
@@ -134,36 +138,60 @@ def _should_retry_status(response: httpx.Response) -> None:
 
 
 def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
+    # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
+    # returns a transport passed to it *before* it ever looks at `limits`, so a
+    # `limits=` beside a custom `transport=` is accepted and silently discarded:
+    # this pool ran on httpx's defaults (20 keepalive, 5s expiry) while the
+    # settings said 100 and 30, and `agent_model_http_max_connections` did
+    # nothing at all. Building the base transport here is what makes the setting
+    # real, and it has to be built explicitly anyway — AsyncTenacityTransport
+    # wraps `AsyncHTTPTransport()` with no arguments when handed nothing.
+    pooled = httpx.AsyncHTTPTransport(
+        limits=httpx.Limits(
+            max_connections=agent_settings.agent_model_http_max_connections,
+            max_keepalive_connections=agent_settings.agent_model_http_max_connections,
+            keepalive_expiry=30.0,
+        ),
+    )
+    retrying = AsyncTenacityTransport(
+        config=RetryConfig(
+            retry=lambda state: isinstance(
+                state.outcome.exception() if state.outcome else None,
+                (httpx.TransportError, httpx.HTTPStatusError),
+            ),
+            wait=wait_retry_after(
+                fallback_strategy=wait_exponential(multiplier=1, max=30),
+                max_wait=60,
+            ),
+            stop=stop_after_attempt(3),
+            reraise=True,
+        ),
+        wrapped=pooled,
+        validate_response=_should_retry_status,
+    )
     return httpx.AsyncClient(
         # Split timeouts: the read timeout is per-chunk, so it is the "provider
         # has gone away" threshold rather than a budget for the whole turn — a
-        # long tool-using answer streams for minutes without tripping it.
+        # long tool-using answer streams for minutes without tripping it. What
+        # it therefore cannot see is a provider that keeps sending *something*
+        # forever, which is what the stream budget outside it is for.
         timeout=httpx.Timeout(
             connect=agent_settings.agent_model_http_connect_timeout_seconds,
             read=agent_settings.agent_model_http_read_timeout_seconds,
             write=30.0,
             pool=10.0,
         ),
-        limits=httpx.Limits(
-            max_connections=agent_settings.agent_model_http_max_connections,
-            max_keepalive_connections=agent_settings.agent_model_http_max_connections,
-            keepalive_expiry=30.0,
-        ),
         headers={str(key): str(value) for key, value in headers.items()},
-        transport=AsyncTenacityTransport(
-            config=RetryConfig(
-                retry=lambda state: isinstance(
-                    state.outcome.exception() if state.outcome else None,
-                    (httpx.TransportError, httpx.HTTPStatusError),
-                ),
-                wait=wait_retry_after(
-                    fallback_strategy=wait_exponential(multiplier=1, max=30),
-                    max_wait=60,
-                ),
-                stop=stop_after_attempt(3),
-                reraise=True,
+        # Outermost, so the budget covers the response body of whichever attempt
+        # tenacity finally returns. It has to be out here regardless: tenacity
+        # retries `handle_async_request`, which is done once the headers land, so
+        # nothing inside it is still watching while the body streams.
+        transport=ModelStreamBudgetTransport(
+            retrying,
+            first_chunk_seconds=(
+                agent_settings.agent_model_stream_first_chunk_timeout_seconds
             ),
-            validate_response=_should_retry_status,
+            total_seconds=agent_settings.agent_model_stream_total_timeout_seconds,
         ),
     )
 
@@ -193,10 +221,39 @@ async def close_agent_provider_clients() -> None:
         try:
             await client.aclose()
         except Exception:  # pragma: no cover - shutdown is best-effort
-            logger.debug(
-                "agent.runtime_model_factory.provider_client_close_failed.diagnostic",
+            logger.warning(
+                "agent.runtime_model_factory.provider_client_close_failed.degraded",
                 exc_info=True,
             )
+
+
+class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
+    """An OpenAI-compatible chat model that keeps `stream_options` to the spec.
+
+    pydantic-ai's ``openai_continuous_usage_stats`` does two unrelated things:
+    it puts ``continuous_usage_stats`` in the request's ``stream_options``, and
+    it switches the streaming handler from summing each chunk's usage to
+    replacing with it. Only the second is wanted here, and the two have to be
+    separated because they are not equally portable.
+
+    The replace half is what keeps a provider that reports a running cumulative
+    total on every chunk from being re-added on top of itself; without it a
+    single turn bills a multiple of what it used. The request half is a vLLM
+    extension rather than OpenAI's -- the openai SDK's own stream-options type
+    does not carry the field -- so a strict OpenAI-compatible endpoint rejects
+    the whole request for an unknown field. Models behind one provider disagree
+    about accepting it, and this profile fronts whatever endpoint an operator
+    points it at, so sending it makes streaming fail for some of them.
+
+    Dropping it costs nothing: a provider that sends cumulative usage does so on
+    its own, and the field cannot turn that off. So the setting stays on the
+    profile for the accumulation it selects, and never reaches the wire.
+    """
+
+    def _get_stream_options(
+        self, model_settings: OpenAIChatModelSettings
+    ) -> ChatCompletionStreamOptionsParam:
+        return {"include_usage": True}
 
 
 def pydantic_ai_model_from_runtime_profile(
@@ -254,7 +311,15 @@ def pydantic_ai_model_from_runtime_profile(
             # Connection reuse, split timeouts and transport-level retries all
             # come from the shared client; the SDK's own retry layer would only
             # duplicate it.
-            http_client=get_provider_http_client(
+            #
+            # Ignored, not cast: openai 3.x annotates this against `httpx2`,
+            # while the shared client is `httpx` -- which is not a preference,
+            # it is what pydantic-ai's `AsyncTenacityTransport` (the retry layer
+            # above) is built on, and the Anthropic SDK still wants. The two are
+            # duck-compatible for everything the SDK calls, so this works; it is
+            # marked rather than hidden because the day it stops working, this
+            # line is where to look.
+            http_client=get_provider_http_client(  # type: ignore[arg-type]
                 protocol="openai",
                 base_url=base_url,
                 api_key=api_key,
@@ -262,7 +327,7 @@ def pydantic_ai_model_from_runtime_profile(
             ),
             max_retries=0,
         )
-        return OpenAIChatModel(
+        return _UsageOnlyStreamOptionsChatModel(
             model_name_value,
             provider=OpenAIProvider(openai_client=client),
             # Inline `$defs`/`$ref` in tool schemas: some OpenAI-compatible
@@ -272,9 +337,7 @@ def pydantic_ai_model_from_runtime_profile(
 
     if protocol == "ANTHROPIC_COMPATIBLE":
         base_url = config.get("base_url")
-        resolved_base_url = (
-            base_url if isinstance(base_url, str) and base_url else None
-        )
+        resolved_base_url = base_url if isinstance(base_url, str) and base_url else None
         provider = AnthropicProvider(
             api_key=api_key,
             base_url=resolved_base_url,
@@ -356,30 +419,3 @@ def usage_limits_for(model: Model, limits: UsageLimits) -> UsageLimits:
     if limits.count_tokens_before_request and not supports_token_precount(model):
         return replace(limits, count_tokens_before_request=False)
     return limits
-
-
-async def default_system_pydantic_ai_model() -> Model:
-    """Build the code-defined system default profile model."""
-    resolved = await default_system_runtime()
-    return require_pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.public_snapshot(),
-        runtime_credentials=resolved.credentials or {},
-        fallback_model_name=resolved.model_name_for_harness,
-    )
-
-
-async def default_system_runtime():
-    """Resolve the code-defined system default runtime profile."""
-    from uuid import uuid4
-
-    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-    from app.modules.agent.services.runtime_profile_service import (
-        DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-        AgentRuntimeProfileService,
-    )
-
-    return await AgentRuntimeProfileService().resolve(
-        runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
-        organization_id=None,
-        user_id=uuid4(),
-    )

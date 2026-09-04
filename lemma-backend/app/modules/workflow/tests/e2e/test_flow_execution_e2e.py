@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -21,15 +20,17 @@ from app.modules.function.domain.events import (
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.pod.infrastructure.models.pod_models import PodMember
 from app.modules.test_support.fakes import PassthroughEventInbox
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
     signup_user,
 )
+from app.modules.workflow.api.workflow_run_controller import MAX_RUN_PAGE_SIZE
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.events import handlers as wf_handlers
-from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.services.run_resume_service import RunResumeService
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
@@ -261,23 +262,24 @@ async def _get_run(client: AsyncClient, pod_id: str, run_id: str) -> dict:
 async def _wait_for_run(
     client: AsyncClient, pod_id: str, run_id: str, predicate, label: str
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + 40
-    run: dict = {}
-    while asyncio.get_running_loop().time() < deadline:
-        run = await _get_run(client, pod_id, run_id)
-        if run["status"] == "FAILED":
-            pytest.fail(f"Workflow failed while waiting for {label}: {run}")
-        if predicate(run):
-            return run
-        await asyncio.sleep(0.25)
-    # The last observed run, not just the label. A bare "timed out" says the run
-    # did not finish and nothing about where it stopped, which is the one thing
-    # worth knowing -- a run stuck in PENDING is a dispatch problem, one stuck
-    # RUNNING on a node is that node's.
-    pytest.fail(
-        f"Timed out waiting for {label}. Last status={run.get('status')!r} "
-        f"node={run.get('current_node_id')!r} error={run.get('error')!r} "
-        f"run={run}"
+    # fail_fast mirrors the original loop's own fail-fast on "FAILED" -- every
+    # caller here waits for a WAITING/RUNNING/COMPLETED shape, never FAILED
+    # itself, so stopping the instant a run turns FAILED (instead of running
+    # out the 40s clock) is exactly the original behavior. The failure string
+    # carries the node/error detail the old bespoke message did; eventually()
+    # appends the full run dict itself (`Last value: {run!r}`) on top of that.
+    return await eventually(
+        label=label,
+        probe=lambda: _get_run(client, pod_id, run_id),
+        done=predicate,
+        fail_fast=lambda run: (
+            f"status=FAILED node={run.get('current_node_id')!r} "
+            f"error={run.get('error')!r}"
+            if run.get("status") == "FAILED"
+            else None
+        ),
+        timeout_seconds=40,
+        interval_seconds=0.15,
     )
 
 
@@ -305,7 +307,7 @@ class _InlineResumeJobQueue:
     async def enqueue(self, job_name: str, **kwargs):
         self.enqueued.append((job_name, kwargs))
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = RunResumeService(WorkflowEngine(uow))
+            service = RunResumeService(build_workflow_engine(uow))
             if job_name == "resume_workflow_run_for_function":
                 await service.resume_for_function_run(
                     function_run_id=kwargs["function_run_id"],
@@ -932,7 +934,7 @@ async def test_scheduled_single_api_function_workflow_completes_inline(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         flow = await engine.flow_repo.get_by_name(UUID(pod_id), workflow["name"])
         assert flow is not None
         assert flow.user_id is not None
@@ -1235,7 +1237,7 @@ async def test_triggered_run_reads_start_namespace_only(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         flow = await engine.flow_repo.get_by_name(UUID(pod_id), workflow["name"])
         run = await engine.start_run(
             flow.id,
@@ -1614,7 +1616,9 @@ async def test_reconciliation_recovers_lost_agent_completion(
     rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(WorkflowEngine(uow)).reconcile_stale_waits()
+            acted = await RunResumeService(
+                build_workflow_engine(uow)
+            ).reconcile_stale_waits()
     finally:
         rrs.RECONCILE_AFTER = original
     assert acted == 1
@@ -1677,7 +1681,9 @@ async def test_reconciliation_recovers_lost_function_completion(
     rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(WorkflowEngine(uow)).reconcile_stale_waits()
+            acted = await RunResumeService(
+                build_workflow_engine(uow)
+            ).reconcile_stale_waits()
     finally:
         rrs.RECONCILE_AFTER = original
     assert acted == 1
@@ -1842,3 +1848,103 @@ async def test_workflow_list_and_access_respects_pod_roles(
         "workflow.read",
         "workflow.update",
     }
+
+
+@pytest.mark.asyncio
+async def test_an_assignment_on_a_restricted_workflow_still_reaches_the_inbox(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+    db_session,
+):
+    """PS-FLOW-012: list exactly the waits assigned to them, across the pod.
+
+    The queue used to be built with one `get_run(..., ctx=ctx)` per wait, and
+    that call *raises* on denial rather than returning None. So one assignment
+    on a RESTRICTED workflow the person cannot otherwise read failed the whole
+    request and emptied their approval queue -- including the assignments they
+    could see. Being asked for input is itself the grant to see what you were
+    asked about.
+    """
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org["id"], "restricted-inbox"
+    )
+    reviewer = await _add_reviewer_to_pod(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        index=0,
+    )
+    reviewer_member_id = await _pod_member_id(
+        db_session,
+        pod_id=pod_id,
+        organization_member_id=reviewer["organization_member_id"],
+    )
+
+    name = f"restricted-review-{uuid4().hex[:6]}"
+    create = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows",
+        json={"name": name, "start": {"type": "MANUAL"}, "visibility": "RESTRICTED"},
+    )
+    assert create.status_code == status.HTTP_201_CREATED, create.text
+    workflow_name = create.json()["name"]
+    graph = await authenticated_client.put(
+        f"/pods/{pod_id}/workflows/{workflow_name}/graph",
+        json={
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "approve",
+                    "type": "FORM",
+                    "label": "Approve",
+                    "config": {
+                        "assignee_pod_member_id": reviewer_member_id,
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"approved": {"type": "boolean"}},
+                            "required": ["approved"],
+                        },
+                    },
+                },
+                {"id": "end", "type": "END", "label": "Done"},
+            ],
+            "edges": [{"id": "e1", "source": "approve", "target": "end"}],
+        },
+    )
+    assert graph.status_code == status.HTTP_200_OK, graph.text
+
+    run = await _create_run(authenticated_client, pod_id, workflow_name)
+    assert run["status"] == "WAITING"
+
+    # The reviewer genuinely cannot read the workflow itself...
+    denied = await async_client.get(
+        f"/pods/{pod_id}/workflows/{workflow_name}",
+        headers={"Authorization": f"Bearer {reviewer['token']}"},
+    )
+    assert denied.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ), denied.text
+
+    # ...and still sees the thing they were personally asked to answer.
+    items = await _assigned_waits(async_client, pod_id, reviewer["token"])
+    assert [item["run"]["id"] for item in items] == [run["id"]]
+    assert items[0]["wait"]["node_id"] == "approve"
+
+
+@pytest.mark.asyncio
+async def test_the_waiting_inbox_clamps_an_absurd_limit(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Uncapped, the echoed limit told a client asking for 100000 it got it."""
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org["id"], "inbox-limit"
+    )
+    response = await authenticated_client.get(
+        f"/pods/{pod_id}/workflow-runs/waiting/assigned-to-me",
+        params={"limit": 100000},
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["limit"] == MAX_RUN_PAGE_SIZE

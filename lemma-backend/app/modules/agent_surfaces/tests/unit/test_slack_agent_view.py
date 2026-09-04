@@ -34,7 +34,7 @@ def _event(*, is_dm: bool = True) -> ParsedInboundSurfaceEvent:
 
 
 def _api_error(code: str) -> SlackApiError:
-    return SlackApiError(message=code, response=dict({"error": code}))
+    return SlackApiError(message=code, response={"error": code})
 
 
 async def test_thread_title_is_set_for_a_dm(monkeypatch):
@@ -50,9 +50,7 @@ async def test_thread_title_is_set_for_a_dm(monkeypatch):
     )
 
     assert await home.set_thread_title(event=_event(), title="Q3 pipeline") is True
-    assert calls == [
-        {"channel_id": "D1", "thread_ts": "100.0", "title": "Q3 pipeline"}
-    ]
+    assert calls == [{"channel_id": "D1", "thread_ts": "100.0", "title": "Q3 pipeline"}]
 
 
 async def test_thread_title_is_skipped_outside_a_dm_and_without_scope(monkeypatch):
@@ -66,7 +64,10 @@ async def test_thread_title_is_skipped_outside_a_dm_and_without_scope(monkeypatc
     scoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": _DM_SCOPES}
     )
-    assert await scoped_home.set_thread_title(event=_event(is_dm=False), title="x") is False
+    assert (
+        await scoped_home.set_thread_title(event=_event(is_dm=False), title="x")
+        is False
+    )
 
     unscoped_home = SlackHomeSurface(
         credentials={"access_token": "xoxb-test", "scope": "chat:write"}
@@ -140,7 +141,8 @@ async def test_suggested_prompts_need_at_least_one_usable_pair(monkeypatch):
 
     assert await home.set_suggested_prompts(event=_event(), prompts=[]) is False
     assert (
-        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")]) is False
+        await home.set_suggested_prompts(event=_event(), prompts=[("  ", "  ")])
+        is False
     )
 
 
@@ -182,10 +184,13 @@ async def test_agent_avatar_rides_along_with_the_name():
         "username": "agent3"
     }
     # Without the scope, nothing is customised at all.
-    assert slack_customized_message_kwargs({"access_token": "x"}, "a", "https://y") == {}
+    assert (
+        slack_customized_message_kwargs({"access_token": "x"}, "a", "https://y") == {}
+    )
 
 
 async def test_setup_confirmation_names_what_was_saved():
+
     from app.modules.agent_surfaces.platforms.slack.blocks import (
         channel_setup_confirmation_blocks,
     )
@@ -200,12 +205,12 @@ async def test_setup_confirmation_names_what_was_saved():
 
 async def test_home_leads_with_value_then_configuration():
     """A first-time viewer should meet the pitch, not the routing table."""
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name="Test1",
-        dm_agent_name="agent3",
-        channel_routes=[("C1", None)],
+        agent_name="triage",
+        channel_ids=["C1"],
         agents=[("agent3", "Answers ops questions")],
         apps=[("Dashboard", "https://d.test")],
         workspace_url="https://lemma.test",
@@ -225,12 +230,12 @@ async def test_home_leads_with_value_then_configuration():
 
 async def test_home_skips_a_logo_slack_cannot_fetch():
     """Slack loads the image from its own servers; localhost renders an empty box."""
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view = app_home_view(
         pod_name=None,
-        dm_agent_name=None,
-        channel_routes=[],
+        agent_name="triage",
+        channel_ids=[],
         logo_url="http://localhost:3710/logo.png",
     )
     assert view["blocks"][0]["type"] == "header"
@@ -247,7 +252,7 @@ async def test_publish_home_view_accepts_everything_the_caller_sends():
     import inspect
 
     from app.modules.agent_surfaces.platforms.slack.adapter import SlackSurfaceAdapter
-    from app.modules.agent_surfaces.platforms.slack.blocks import app_home_view
+    from app.modules.agent_surfaces.platforms.slack.home_blocks import app_home_view
 
     view_params = set(inspect.signature(app_home_view).parameters) - {"self"}
     adapter_params = set(

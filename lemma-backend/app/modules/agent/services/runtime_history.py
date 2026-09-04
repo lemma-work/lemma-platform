@@ -17,6 +17,8 @@ ratchet's size limit.
 
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -28,8 +30,23 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 
+#: Opens every message this module synthesizes. Two jobs: the model reads it as
+#: scaffolding rather than as something a person said, and the compactor can tell
+#: these apart from real user turns so it does not pin them forever.
+SYNTHETIC_NOTICE_PREFIX = "[conversation history]"
+
 #: Runs kept with every message. Older runs are elided to first and last.
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+#: The oldest runs a conversation carries at all, elided ones included.
+#:
+#: Surface conversations have always had an age and message-count window. Every
+#: other kind -- the web UI, tasks, sub-agents -- had none, so a long-lived
+#: conversation loaded *every* run it had ever had: a 400-turn one arrives as
+#: ~400 elided runs before compaction has seen a single message, and pays for
+#: the notice on each of them every turn. Elision bounds a run's size; nothing
+#: bounded how many runs there were.
+MAX_HISTORY_AGENT_RUNS = 60
 
 
 def _newest_message_time(run: AgentRun) -> datetime | None:
@@ -61,23 +78,36 @@ def _newest_message_time(run: AgentRun) -> datetime | None:
     return newest
 
 
+def _capped_run_count(runs: list[AgentRun]) -> list[AgentRun]:
+    """The newest runs, however many the conversation actually has.
+
+    Applies to every conversation, surface or not: the oldest runs are the least
+    useful and nothing else put a ceiling on how many of them there could be.
+    """
+    return runs[-MAX_HISTORY_AGENT_RUNS:]
+
+
 def apply_surface_history_window(
     runs: list[AgentRun], conversation: Conversation | None
 ) -> list[AgentRun]:
-    """For surface conversations, bound history by age + message count.
+    """Bound how much history a conversation carries.
+
+    Every conversation is capped at ``MAX_HISTORY_AGENT_RUNS`` runs. Surface
+    conversations are bounded further, by age + message count.
 
     Trims at run granularity (a tool-call and its return live in the same run,
     so whole-run trimming never splits a pair) and always keeps at least the
     most recent run. No-op for non-surface conversations or when a limit is
     disabled. Runs are assumed chronologically ordered.
     """
-    if conversation is None or not runs:
+    if not runs:
         return runs
-    metadata = conversation.metadata or {}
+    runs = _capped_run_count(runs)
+    metadata = (conversation.metadata or {}) if conversation is not None else {}
     if not metadata.get("surface_platform"):
         return runs
 
-    from app.composition.agent_surface_runtime import surface_history_limits
+    from app.modules.agent_surfaces.contracts.platforms import surface_history_limits
 
     max_messages, window_hours = surface_history_limits()
 
@@ -111,6 +141,26 @@ def apply_surface_history_window(
 
     return trimmed
 
+
+def bound_runtime_history(
+    runs: list[AgentRun], conversation: Conversation | None = None
+) -> tuple[list[AgentRun], int]:
+    """The runs the prompt will carry, and how many were dropped to get there.
+
+    Exists so the trim can happen *before* messages are fetched. The loader used
+    to attach messages to every run of the conversation and let
+    ``select_runtime_history`` discard what fell outside the window -- so a
+    conversation with hundreds of runs paid, on every turn, to read the user
+    messages plus the first and last of the runs it was about to throw away.
+
+    The dropped count comes back because it is the one thing the trimmed list no
+    longer knows about itself, and the notice announcing those runs to the model
+    is built from it.
+    """
+    bounded = apply_surface_history_window(runs, conversation)
+    return bounded, len(runs) - len(bounded)
+
+
 def runtime_full_run_ids(
     runs: list[AgentRun], conversation: Conversation | None = None
 ) -> set[UUID]:
@@ -127,15 +177,51 @@ def runtime_full_run_ids(
     return {run.id for run in trimmed[-FULL_HISTORY_AGENT_RUN_COUNT:]}
 
 
+def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
+    """Say that whole runs are missing, not just the middle of one.
+
+    `_collapsed_run` announces the work it elides; the run caps above it sliced
+    silently, so a conversation could lose three hundred runs without a word
+    while losing the middle of one said so.
+    """
+    return Message(
+        conversation_id=run.conversation_id,
+        sequence=max(0, run.messages[0].sequence - 1) if run.messages else 0,
+        agent_run_id=run.id,
+        role=MessageRole.USER,
+        kind=MessageKind.NOTIFICATION,
+        text=(
+            f"{SYNTHETIC_NOTICE_PREFIX} {dropped} earlier exchange(s) in this "
+            "conversation are older than what is carried here and are not shown."
+        ),
+        metadata={
+            "synthetic": True,
+            "summary_kind": "conversation_runs_dropped",
+            "dropped_run_count": dropped,
+        },
+    )
+
+
 def select_runtime_history(
-    runs: list[AgentRun], conversation: Conversation | None = None
+    runs: list[AgentRun],
+    conversation: Conversation | None = None,
+    *,
+    already_dropped: int = 0,
 ) -> list[Message]:
     # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
     # history reaches the model by age + count. Trim at run granularity first
     # so tool-call/tool-return pairs (which live within a run) stay intact.
+    #
+    # `already_dropped` is what a caller that trimmed before loading messages
+    # (see `bound_runtime_history`) took out. The window below is idempotent, so
+    # such a list loses nothing here and would silently lose its notice too.
+    original_count = len(runs) + already_dropped
     runs = apply_surface_history_window(runs, conversation)
+    prefix: list[Message] = []
+    if runs and len(runs) < original_count:
+        prefix = [_dropped_runs_notice(runs[0], original_count - len(runs))]
     if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
-        return [message for run in runs for message in run.ordered_messages()]
+        return prefix + [message for run in runs for message in run.ordered_messages()]
 
     recent_run_ids = {run.id for run in runs[-FULL_HISTORY_AGENT_RUN_COUNT:]}
     selected: list[Message] = []
@@ -146,29 +232,149 @@ def select_runtime_history(
         if run.id in recent_run_ids or run.message_count <= 2:
             selected.extend(messages)
             continue
+        selected.extend(_collapsed_run(run, messages))
+    return prefix + selected
 
-        # Counted from the run's real size. The loader already reduced this
-        # run to its first and last message, so len(messages) is 2 here and
-        # would report nothing was skipped.
-        skipped_count = max(0, run.message_count - 2)
-        selected.append(messages[0])
-        selected.append(
-            Message(
-                conversation_id=run.conversation_id,
-                sequence=messages[0].sequence,
-                agent_run_id=run.id,
-                role=MessageRole.SYSTEM.value,
-                kind=MessageKind.NOTIFICATION,
-                text=(
-                    "Earlier agent run summarized: "
-                    f"worked through {skipped_count} intermediate messages."
-                ),
-                metadata={
-                    "synthetic": True,
-                    "summary_kind": "agent_run_middle_elision",
-                    "elided_message_count": skipped_count,
-                },
-            )
+
+def _collapsed_run(run: AgentRun, messages: list[Message]) -> list[Message]:
+    """An old run reduced to what still matters about it.
+
+    What the person asked for, how much work it took, and what came back.
+
+    Every user message survives verbatim, however old the run. The request is
+    the one thing a later turn cannot reconstruct and cannot work without: an
+    agent that has lost it does not stop, it invents a plausible substitute from
+    whatever context remains and reports that as the thing it was asked for.
+    Everything the agent did in between collapses to a single line counting the
+    steps, which is all a later turn needs to know about work already finished.
+
+    The run's final message closes it -- that is the answer the user actually
+    saw, and the one they may ask about next. It is dropped when it is an
+    unpaired tool call, for the reason `_is_unpaired_tool_call` gives: the
+    history builder would otherwise tell the model that a side effect which
+    succeeded never happened, and instruct it to repeat it.
+    """
+    kept = [message for message in messages if message.role is MessageRole.USER]
+    kept_ids = {message.id for message in kept}
+
+    final = messages[-1]
+    include_final = final.id not in kept_ids and not _is_unpaired_tool_call(final)
+
+    # Counted from the run's real size. The loader hands us the user messages
+    # plus the run's first and last, so len(messages) would report that almost
+    # nothing was skipped.
+    skipped_count = max(0, run.message_count - len(kept) - (1 if include_final else 0))
+
+    collapsed = list(kept)
+    collapsed.append(
+        Message(
+            conversation_id=run.conversation_id,
+            # Ordered after the last thing kept and before the final answer, so
+            # the global sort by sequence puts the notice where it belongs.
+            sequence=max(
+                kept[-1].sequence if kept else messages[0].sequence,
+                final.sequence - 1,
+            ),
+            agent_run_id=run.id,
+            # User role, not system. A `SystemPromptPart` is hoisted by
+            # Anthropic to the front of the system prompt, ahead of the whole
+            # cacheable prefix -- and this text changes as runs age out, so it
+            # invalidated the breakpoint on every turn.
+            role=MessageRole.USER,
+            kind=MessageKind.NOTIFICATION,
+            text=(
+                f"{SYNTHETIC_NOTICE_PREFIX} earlier agent run summarized: "
+                f"worked through {skipped_count} intermediate messages."
+            ),
+            metadata={
+                "synthetic": True,
+                "summary_kind": "agent_run_middle_elision",
+                "elided_message_count": skipped_count,
+            },
         )
-        selected.append(messages[-1])
-    return selected
+    )
+    if include_final:
+        collapsed.append(_replayable_final(run, messages, final))
+    return collapsed
+
+
+def _replayable_final(
+    run: AgentRun, messages: list[Message], final: Message
+) -> Message:
+    """The run's last message, in a form the history builder can actually replay.
+
+    A pausing run ends on the tool return carrying what the person typed in
+    answer to `ask_user`, and that answer lives *only* there -- no user message
+    is written for it. Its matching call sits in the middle of the run, which is
+    exactly what elision drops, and `_to_pydantic_ai_messages` discards a tool
+    return whose call is missing as an orphan.
+
+    So the answer disappeared once the run was six turns back, replaced by
+    "worked through N intermediate messages". Carried as a note instead: no
+    orphan for the builder to drop, no second query, and the words survive.
+    """
+    if final.kind is not MessageKind.TOOL_RETURN:
+        return final
+    call_ids = {
+        message.tool_call_id
+        for message in messages
+        if message.kind is MessageKind.TOOL_CALL
+    }
+    if final.tool_call_id in call_ids:
+        return final
+    return Message(
+        conversation_id=run.conversation_id,
+        sequence=final.sequence,
+        agent_run_id=run.id,
+        role=MessageRole.USER,
+        kind=MessageKind.NOTIFICATION,
+        text=(
+            f"{SYNTHETIC_NOTICE_PREFIX} that run ended with the result of "
+            f"{final.tool_name or 'a tool'}: {_short_result(final)}"
+        ),
+        metadata={
+            "synthetic": True,
+            "summary_kind": "elided_run_final_tool_return",
+            "tool_name": final.tool_name,
+        },
+    )
+
+
+#: Long enough for an answer to a question, short enough not to reopen the
+#: budget elision exists to protect.
+_FINAL_RESULT_MAX_CHARS = 2_000
+
+
+def _short_result(message: Message) -> str:
+    try:
+        rendered = json.dumps(message.tool_result, default=str)
+    except TypeError, ValueError:  # pragma: no cover - defensive
+        rendered = str(message.tool_result)
+    if len(rendered) <= _FINAL_RESULT_MAX_CHARS:
+        return rendered
+    return rendered[:_FINAL_RESULT_MAX_CHARS] + " … [truncated]"
+
+
+def _is_unpaired_tool_call(message: Message) -> bool:
+    """A tool call whose result this elision is about to throw away.
+
+    Eliding a run to its first and last message is fine until the first message
+    is an assistant tool call -- which is the normal shape for a run with no
+    user message: an approval resume and a snooze wake both create a run and go
+    straight into a tool (`pause_resume.start_resume_run_if_ready`).
+
+    Keeping that call without its return is worse than dropping it. The history
+    builder pairs calls with returns, finds none, and synthesizes "This tool
+    call was interrupted before a result was recorded... Run it again if you
+    still need the result." So the model is told a send that *succeeded* never
+    happened, and instructed to repeat it -- a duplicate email, a duplicate
+    record write.
+
+    Dropping the head instead costs one line of transcript the summary notice
+    already accounts for. A pausing tool is never in this position: its return
+    is appended to the run it ended, so such a run is two messages long and is
+    exempt from elision above.
+    """
+    return (
+        message.role is MessageRole.ASSISTANT and message.kind is MessageKind.TOOL_CALL
+    )

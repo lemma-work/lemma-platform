@@ -13,6 +13,7 @@ needed."""
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 import pytest
@@ -78,7 +79,9 @@ def _external_id(platform: str, suffix: int) -> str:
     return f"1555{suffix:07d}"
 
 
-def _thread_id(platform: str, external_id: str, *, phone_number_id: str | None = None) -> str:
+def _thread_id(
+    platform: str, external_id: str, *, phone_number_id: str | None = None
+) -> str:
     if platform == "TELEGRAM":
         return external_id
     return f"{external_id}@{phone_number_id or SYSTEM_WHATSAPP_PHONE_NUMBER_ID}"
@@ -152,6 +155,16 @@ async def _two_orgs_with_system_surfaces(
     *,
     platform: str,
 ):
+    # NOTE: org_a/org_b creation stays sequential here, but the reason it was
+    # written that way is gone. It used to be that the first org created in a
+    # fresh DB triggered AuthorizationDataService.seed_permissions() as a
+    # check-then-insert with no ON CONFLICT, so two concurrent org creations
+    # both saw the table empty and the second lost to `UniqueViolationError:
+    # auth_permissions_pkey`. That was a real product race, and it has since
+    # been closed: seed_permissions() is now a single bulk upsert with
+    # on_conflict_do_nothing (app/core/authorization/service.py). Parallelising
+    # these two is therefore available if this test ever needs to be faster --
+    # it is left sequential only because nothing has re-measured it.
     org_a = E2EScenario(
         owner_client=authenticated_client,
         async_client=async_client,
@@ -192,6 +205,9 @@ async def _set_user_default_surface(
 async def _two_orgs_with_telegram_surfaces(
     authenticated_client: AsyncClient, async_client: AsyncClient, owner_user: dict
 ):
+    # Sequential by necessity, not just by habit -- see the NOTE in
+    # _two_orgs_with_system_surfaces above (concurrent org creation races on
+    # global permission seeding).
     org_a = E2EScenario(
         owner_client=authenticated_client,
         async_client=async_client,
@@ -328,7 +344,28 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     )
     tenant_id = SYSTEM_WHATSAPP_WABA_ID if platform == "WHATSAPP" else None
 
-    single_user = await org_a.create_user(f"{platform.lower()}-single")
+    # The six actors below are independent signups (create_user ==
+    # signup_user via e2e_authz.py) -- provisioning them concurrently up
+    # front is safe by the same argument as create_role_visibility_context
+    # (no shared mutable state, ASGITransport per-request isolation, fresh DB
+    # session per HTTP call). This is distinct from db_session below, which
+    # the DM-preparation calls share and must keep using one at a time.
+    (
+        single_user,
+        default_user,
+        tiebreak_user,
+        continuity_user,
+        duplicate_user,
+        non_member,
+    ) = await asyncio.gather(
+        org_a.create_user(f"{platform.lower()}-single"),
+        org_a.create_user(f"{platform.lower()}-default"),
+        org_a.create_user(f"{platform.lower()}-tiebreak"),
+        org_a.create_user(f"{platform.lower()}-continuity"),
+        org_a.create_user(f"{platform.lower()}-duplicate"),
+        org_a.create_user(f"{platform.lower()}-nonmember"),
+    )
+
     await org_a.add_user_to_pod(user=single_user, role="POD_EDITOR")
     single_external = _external_id(platform, 1)
     await _seed_platform_user(
@@ -352,7 +389,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert single_ctx.surface_id == UUID(surface_a["id"])
     assert str(single_ctx.pod_id) == org_a.pod_id
 
-    default_user = await org_a.create_user(f"{platform.lower()}-default")
     await org_a.add_user_to_pod(user=default_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=default_user, role="POD_EDITOR")
     await _set_user_default_surface(
@@ -383,7 +419,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert default_ctx.surface_id == UUID(surface_b["id"])
     assert str(default_ctx.pod_id) == org_b.pod_id
 
-    tiebreak_user = await org_a.create_user(f"{platform.lower()}-tiebreak")
     await org_a.add_user_to_pod(user=tiebreak_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=tiebreak_user, role="POD_EDITOR")
     tiebreak_external = _external_id(platform, 3)
@@ -408,7 +443,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert tiebreak_ctx.surface_id == UUID(surface_a["id"])
     assert str(tiebreak_ctx.pod_id) == org_a.pod_id
 
-    continuity_user = await org_a.create_user(f"{platform.lower()}-continuity")
     await org_a.add_user_to_pod(user=continuity_user, role="POD_EDITOR")
     await org_b.add_user_to_pod(user=continuity_user, role="POD_EDITOR")
     continuity_external = _external_id(platform, 4)
@@ -431,9 +465,7 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     )
     assert isinstance(continuity_first, SurfaceChatContext)
     opposite_surface = (
-        surface_b
-        if continuity_first.surface_id == UUID(surface_a["id"])
-        else surface_a
+        surface_b if continuity_first.surface_id == UUID(surface_a["id"]) else surface_a
     )
     # With NO default set, a follow-up message continues on the same surface and
     # conversation (continuity holds).
@@ -474,7 +506,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert continuity_third.surface_id == UUID(opposite_surface["id"])
     assert continuity_third.conversation_id != continuity_first.conversation_id
 
-    duplicate_user = await org_a.create_user(f"{platform.lower()}-duplicate")
     await org_a.add_user_to_pod(user=duplicate_user, role="POD_EDITOR")
     duplicate_external = _external_id(platform, 5)
     await _seed_platform_user(
@@ -499,7 +530,6 @@ async def test_shared_system_bot_multi_user_routing_matrix(
     assert isinstance(duplicate_first, SurfaceChatContext)
     assert duplicate_second is None
 
-    non_member = await org_a.create_user(f"{platform.lower()}-nonmember")
     non_member_external = _external_id(platform, 6)
     await _seed_platform_user(
         db_session,

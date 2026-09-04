@@ -26,6 +26,13 @@ serialised on purpose: `start-browser` runs one shared session per sandbox (one
 Xvfb display, one profile), so concurrent captures would fight over the same
 page. A whole-batch deadline bounds the pathological case where most of the list
 needs rendering.
+
+Every URL is checked against `assert_safe_url` before *either* path runs. The
+in-process fetch reaches the network from the backend, and the browser reaches
+it from inside the sandbox, so a check on only one of them would leave the other
+as a way to the metadata service. What makes the cheap path win more often is
+`impersonating_client`, which wears a real Chrome TLS fingerprint — sites decide
+during the handshake, long before they read a `User-Agent`.
 """
 
 from __future__ import annotations
@@ -35,6 +42,8 @@ import shlex
 from urllib.parse import urlparse
 
 from app.core.log.log import get_logger
+from app.core.net.impersonating_client import web_page_policy
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.web.models import (
     WebFetchPage,
@@ -48,7 +57,7 @@ from app.modules.agent.tools.web.page_extract import (
     render_document,
 )
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
-    _get_workspace_session,
+    get_workspace_session,
     workspace_runtime_context,
 )
 
@@ -75,9 +84,20 @@ _BROWSER_TIMEOUT_SECONDS = 75
 _BATCH_BUDGET_SECONDS = 240
 
 # Browser renders are the serialised, expensive path, and the batch budget is
-# the only thing bounding them. Capping them keeps a list of JS-heavy URLs from
-# spending the entire budget before the cheap pages are even reported.
-_MAX_BROWSER_RENDERS = 3
+# the only thing bounding them.
+#
+# This is deliberately the same number as `WebFetchRequest.urls`' `max_length`,
+# and `test_web_fetch_limits_agree` fails if the two ever drift: the cap is
+# only honest when the tool cannot accept more pages than it will render. It
+# used to accept ten and render three, so a caller who sent ten JS-heavy pages
+# discovered seven were skipped only after paying for the call.
+#
+# Raising it does not endanger the cheap pages the old comment worried about --
+# the http path runs to completion first, concurrently, before any render
+# starts. What bounds the pathological case is the batch deadline, which
+# reports every page it did not reach. Measured, a real render is ~5s, so five
+# of them sit an order of magnitude inside that budget.
+_MAX_BROWSER_RENDERS = 5
 
 # Enough to saturate the network wait without opening twenty sockets to twenty
 # sites at once.
@@ -119,7 +139,7 @@ def _needs_browser(formats: list[str], render: bool) -> bool:
     return render or any(fmt in {"pdf", "jpeg", "png"} for fmt in formats)
 
 
-async def _write_markdown(session, *, out_dir: str, path: str, content: str) -> None:
+async def _write_markdown(session, *, path: str, content: str) -> None:
     """Write already-cleaned markdown into the workspace.
 
     Through the runtime's file API, not a shell heredoc. The heredoc could not
@@ -132,8 +152,13 @@ async def _write_markdown(session, *, out_dir: str, path: str, content: str) -> 
 
     Streaming the bytes also removes the quoting question entirely: no shell
     parses this, so nothing on the page can terminate the document early.
+
+    The directory is created once for the batch by the caller, not here: this
+    runs under the write lock, once per page, against a directory that is the
+    same for every page in the call. Five pages meant five `mkdir` round trips
+    to create one directory — measured at ~80ms each, half of all the sandbox
+    chatter in a batch.
     """
-    await session.exec_command(cmd=f"mkdir -p {shlex.quote(out_dir)}", timeout=20)
     await session.write_file(
         path, content.encode("utf-8"), timeout=_HTTP_TIMEOUT_SECONDS
     )
@@ -170,7 +195,7 @@ async def web_fetch_internal(
         # sandbox has to be provisioned before the first capture, and that wait
         # is part of what the caller is sitting through.
         async with asyncio.timeout(_BATCH_BUDGET_SECONDS):
-            session = await _get_workspace_session(
+            session = await get_workspace_session(
                 ctx,
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
@@ -245,6 +270,39 @@ async def web_fetch_internal(
     )
 
 
+async def _reject_unsafe_urls(urls: list[str], pages: dict[str, WebFetchPage]) -> None:
+    """Record a failure for every URL we are not willing to request at all.
+
+    Runs before either path, which is the point: `save-webpage` executes inside
+    the sandbox, where an internal address is *more* reachable than it is from
+    here, not less. Guarding only the in-process fetch would have left the
+    browser as an unguarded way to the same address.
+
+    The cheap shape check runs first so a typo is answered without a DNS lookup,
+    and `assert_safe_url` — the same validator the connector paths use — does
+    the rest. Checks run concurrently: each is a resolver round trip.
+    """
+
+    async def _check(url: str) -> None:
+        malformed = _validate(url)
+        if malformed:
+            pages[url] = WebFetchPage(url=url, success=False, error=malformed)
+            return
+        try:
+            await assert_safe_url(url, policy=web_page_policy())
+        except UnsafeUrlError as exc:
+            # The reason, never the address: which internal range answered is
+            # infrastructure detail about wherever this is deployed.
+            logger.warning("agent.web_fetch.url_refused.refused", reason=exc.reason)
+            pages[url] = WebFetchPage(
+                url=url,
+                success=False,
+                error=f"That URL is not a permitted fetch target ({exc.reason}).",
+            )
+
+    await asyncio.gather(*(_check(url) for url in urls))
+
+
 async def _capture_batch(
     session,
     *,
@@ -261,15 +319,20 @@ async def _capture_batch(
     """
     needs_browser: list[str] = []
 
-    for url in urls:
-        invalid = _validate(url)
-        if invalid:
-            pages[url] = WebFetchPage(url=url, success=False, error=invalid)
+    await _reject_unsafe_urls(urls, pages)
 
     cheap = [
         url for url in urls if url not in pages and not _needs_browser(formats, render)
     ]
     if cheap:
+        # Once for the batch, before any page is written. Every page in a call
+        # shares `out_dir`, so doing this per page was the same directory
+        # created five times over five serialised round trips.
+        await session.exec_command(cmd=f"mkdir -p {shlex.quote(out_dir)}", timeout=20)
+        # Binds only if the URL cap is ever raised above it -- `WebFetchRequest`
+        # accepts five and this allows five. Kept because the cap is the thing
+        # that moves, and an unbounded gather over a longer list is how you open
+        # twenty sockets at once.
         limit = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
         # Writes share one workspace session, so they are serialised even though
         # the fetches are not.
@@ -440,9 +503,10 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
         # Most often "renders with JavaScript", sometimes a 403 at a site that
         # refuses scripted clients. Escalate rather than reporting an empty
         # article as a success.
-        logger.debug(
-            "agent.web_fetch.http_path_failed.diagnostic",
+        logger.warning(
+            "agent.web_fetch.http_path_failed.degraded",
             error_type=type(exc).__name__,
+            exc_info=True,
         )
         return None
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
@@ -470,9 +534,7 @@ async def _write_extracted(
     document = render_document(page)
     markdown_path = f"{out_dir}/{_slugify(url)}.md"
     try:
-        await _write_markdown(
-            session, out_dir=out_dir, path=markdown_path, content=document
-        )
+        await _write_markdown(session, path=markdown_path, content=document)
     except Exception:  # noqa: BLE001 - falls back to the browser path
         # Logged rather than swallowed: the caller will spend a browser render
         # recovering from this, and a recurring write failure is a workspace

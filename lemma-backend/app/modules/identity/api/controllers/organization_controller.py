@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
+from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.authorization.service import AuthorizationDataService
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import slugify
@@ -68,6 +69,7 @@ async def create_organization(
     organization = await org_service.create_organization(
         entity=entity,
         owner_user_id=user.id,
+        resolve_name_conflicts=data.resolve_name_conflicts,
     )
     await _sync_org_role_assignment(
         uow,
@@ -143,8 +145,10 @@ async def get_suggested_orgs(
     operation_id="org.slug_availability",
     summary="Check Organization Slug Availability",
     description=(
-        "Check whether an organization slug is available, and optionally "
-        "whether a candidate name is still free"
+        "Check whether an organization slug — the handle, and the only unique "
+        "one of the two — is available. `name_available` is deprecated and "
+        "always true: display names are labels, and two organizations may "
+        "share one."
     ),
     response_model=OrganizationSlugAvailabilityResponse,
 )
@@ -170,28 +174,31 @@ async def check_slug_availability(
 
 
 @router.post(
-    "/{org_id}/join",
+    "/{organization_id}/join",
     status_code=status.HTTP_200_OK,
     operation_id="org.join_auto_join",
+    dependencies=[
+        reject_delegated_workload_anywhere("join an organization on your behalf")
+    ],
     summary="Join Auto-Join Organization",
     description="Join an organization when the current user's email domain is allowed to auto-join",
     response_model=OrganizationResponse,
 )
 async def join_auto_join_organization(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     org_service: OrganizationServiceDep,
     uow: UoWDep,
 ) -> OrganizationResponse:
     """Join an organization that allows automatic joining for the user's email domain."""
     user: UserEntity = request.state.user
     organization = await org_service.join_auto_join_organization(
-        organization_id=org_id,
+        organization_id=organization_id,
         user_id=user.id,
     )
     await _sync_org_role_assignment(
         uow,
-        organization_id=org_id,
+        organization_id=organization_id,
         user_id=user.id,
         role=OrganizationRole.ORG_MEMBER,
         assigned_by_user_id=user.id,
@@ -236,7 +243,7 @@ async def list_my_invitations(
 
 
 @router.get(
-    "/{org_id}",
+    "/{organization_id}",
     status_code=status.HTTP_200_OK,
     operation_id="org.get",
     summary="Get Organization",
@@ -245,13 +252,14 @@ async def list_my_invitations(
 )
 async def get_organization(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     org_service: OrganizationServiceDep,
 ) -> OrganizationResponse:
     """Get organization details."""
     user: UserEntity = request.state.user
     organization = await org_service.get_organization(
-        org_id=org_id,
+        # The service's parameter is `org_id`; only the wire renamed.
+        org_id=organization_id,
         requester_user_id=user.id,
     )
 
@@ -259,23 +267,25 @@ async def get_organization(
 
 
 @router.patch(
-    "/{org_id}",
+    "/{organization_id}",
     status_code=status.HTTP_200_OK,
     operation_id="org.update",
+    dependencies=[reject_delegated_workload_anywhere("change organization settings")],
     summary="Update Organization",
     description="Update an organization's name or join policy (owner only)",
     response_model=OrganizationResponse,
 )
 async def update_organization(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     data: OrganizationUpdateRequest,
     org_service: OrganizationServiceDep,
 ) -> OrganizationResponse:
     """Update an organization (owner only)."""
     user: UserEntity = request.state.user
     organization = await org_service.update_organization(
-        org_id=org_id,
+        # The service's parameter is `org_id`; only the wire renamed.
+        org_id=organization_id,
         requester_user_id=user.id,
         name=data.name,
         join_policy=data.join_policy,
@@ -285,7 +295,7 @@ async def update_organization(
 
 
 @router.get(
-    "/{org_id}/members",
+    "/{organization_id}/members",
     status_code=status.HTTP_200_OK,
     operation_id="org.member.list",
     summary="List Organization Members",
@@ -294,7 +304,7 @@ async def update_organization(
 )
 async def list_members(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     org_service: OrganizationServiceDep,
     limit: int = 100,
     page_token: str | None = None,
@@ -304,7 +314,7 @@ async def list_members(
 
     user: UserEntity = request.state.user
     members, next_cursor = await org_service.list_organization_members(
-        organization_id=org_id,
+        organization_id=organization_id,
         requester_user_id=user.id,
         limit=limit,
         cursor=page_token,
@@ -318,16 +328,19 @@ async def list_members(
 
 
 @router.post(
-    "/{org_id}/invitations",
+    "/{organization_id}/invitations",
     status_code=status.HTTP_201_CREATED,
     operation_id="org.invitation.invite",
+    dependencies=[
+        reject_delegated_workload_anywhere("invite people to an organization")
+    ],
     summary="Invite Member",
     description="Invite a user to join the organization",
     response_model=OrganizationInvitationResponse,
 )
 async def invite_member(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     data: OrganizationInvitationRequest,
     org_service: OrganizationServiceDep,
 ) -> OrganizationInvitationResponse:
@@ -335,7 +348,7 @@ async def invite_member(
     user: UserEntity = request.state.user
     entity = OrganizationInvitationEntity(
         email=data.email,
-        organization_id=org_id,
+        organization_id=organization_id,
         role=data.role,
         pod_id=data.pod_id,
         pod_role=data.pod_role,
@@ -351,7 +364,7 @@ async def invite_member(
 
 
 @router.get(
-    "/{org_id}/invitations",
+    "/{organization_id}/invitations",
     status_code=status.HTTP_200_OK,
     operation_id="org.invitation.list",
     summary="List Organization Invitations",
@@ -360,7 +373,7 @@ async def invite_member(
 )
 async def list_invitations(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     org_service: OrganizationServiceDep,
     status: OrganizationInvitationStatus = OrganizationInvitationStatus.PENDING,
     limit: int = 100,
@@ -371,7 +384,7 @@ async def list_invitations(
 
     user: UserEntity = request.state.user
     invitations, next_cursor = await org_service.list_invitations(
-        organization_id=org_id,
+        organization_id=organization_id,
         requester_user_id=user.id,
         status=status,
         limit=limit,
@@ -391,6 +404,9 @@ async def list_invitations(
     "/invitations/{invitation_id}/accept",
     status_code=status.HTTP_200_OK,
     operation_id="org.invitation.accept",
+    dependencies=[
+        reject_delegated_workload_anywhere("accept an organization invitation")
+    ],
     summary="Accept Invitation",
     description="Accept an organization invitation",
     response_model=OrganizationMessageResponse,
@@ -411,11 +427,16 @@ async def accept_invitation(
         invitation_id=invitation_id,
         requester_user_id=user.id,
     )
+    # The role the membership row was written with, not ORG_MEMBER. This was
+    # hardcoded, so an invited owner or editor got a member row saying
+    # ORG_OWNER and role assignments saying ORG_MEMBER -- passing every check
+    # that reads the row and failing every check that reads the Context,
+    # including the org-owner shortcut onto the organization's pods.
     await _sync_org_role_assignment(
         uow,
         organization_id=invitation.organization_id,
         user_id=user.id,
-        role=OrganizationRole.ORG_MEMBER,
+        role=invitation.role,
         assigned_by_user_id=user.id,
     )
 
@@ -452,6 +473,9 @@ async def get_invitation(
     "/invitations/{invitation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="org.invitation.revoke",
+    dependencies=[
+        reject_delegated_workload_anywhere("revoke an organization invitation")
+    ],
     summary="Revoke Invitation",
     description="Revoke an organization invitation",
 )
@@ -469,16 +493,19 @@ async def revoke_invitation(
 
 
 @router.patch(
-    "/{org_id}/members/{member_id}/role",
+    "/{organization_id}/members/{member_id}/role",
     status_code=status.HTTP_200_OK,
     operation_id="org.member.update_role",
+    dependencies=[
+        reject_delegated_workload_anywhere("change organization member roles")
+    ],
     summary="Update Member Role",
     description="Update a member's role in the organization",
     response_model=OrganizationMemberResponse,
 )
 async def update_member_role(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     data: UpdateMemberRoleRequest,
     org_service: OrganizationServiceDep,
@@ -490,10 +517,10 @@ async def update_member_role(
         member_id=member_id,
         new_role=data.role,
         requester_user_id=user.id,
-        organization_id=org_id,
+        organization_id=organization_id,
     )
     await AuthorizationDataService(uow.session).assign_roles(
-        organization_id=org_id,
+        organization_id=organization_id,
         pod_id=None,
         principal_type="ORG_MEMBER",
         principal_id=member_id,
@@ -532,15 +559,16 @@ async def _sync_org_role_assignment(
 
 
 @router.delete(
-    "/{org_id}/members/{member_id}",
+    "/{organization_id}/members/{member_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="org.member.remove",
+    dependencies=[reject_delegated_workload_anywhere("remove organization members")],
     summary="Remove Member",
     description="Remove a member from the organization",
 )
 async def remove_member(
     request: Request,
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     org_service: OrganizationServiceDep,
     uow: UoWDep,
@@ -552,13 +580,11 @@ async def remove_member(
     # org member cascades its pod memberships away, but their (FK-less) role
     # assignments and grants do not cascade. The read is harmless if the removal
     # is subsequently denied.
-    targets = await authz.member_authorization_targets(
-        organization_member_id=member_id
-    )
+    targets = await authz.member_authorization_targets(organization_member_id=member_id)
     await org_service.remove_member(
         member_id=member_id,
         requester_user_id=user.id,
-        organization_id=org_id,
+        organization_id=organization_id,
     )
     if targets is not None:
         await authz.purge_member_authorization(targets)

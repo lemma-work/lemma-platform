@@ -21,7 +21,16 @@
       tests. These run inside the publishing job, so no separate CI dispatch is
       required — but a release commit whose CI run shows those suites as
       *skipped* is expected, not a finding.
-- [ ] Migration-first rolling sequence and worker-drain requirements are in the
-      release notes.
+- [ ] Migration-first rolling sequence is in the release notes, along with what
+      a worker restart costs. streaq stops claiming new work the moment it sees
+      SIGTERM and gives in-flight tasks `WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS`
+      (10s) to finish — which is a drain, but a short one, and it has to stay
+      under the orchestrator's own termination grace period (Kubernetes
+      defaults to 30s) or the platform SIGKILLs the worker mid-task anyway.
+      A long agent run — up to `AGENT_RUN_JOB_TIMEOUT_SECONDS`, about four
+      hours — will not finish inside it. What bounds that is the job heartbeat:
+      a killed worker stops reporting within 90 seconds and the run is recovered
+      then, rather than at the four-hour orphan cutoff. Say in the notes whether
+      a release is expected to interrupt runs, not whether it drains.
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

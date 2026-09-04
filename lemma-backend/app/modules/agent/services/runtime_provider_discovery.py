@@ -16,6 +16,9 @@ import httpx
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
+from app.modules.agent.services.context_budget import (
+    catalog_metadata_for,
+)
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -37,6 +40,11 @@ class DiscoveredModel:
 
     name: str
     supports_vision: bool = False
+    #: The model's context window, when the provider advertises one. Left None
+    #: rather than guessed: a wrong window is worse than an admitted unknown,
+    #: because compaction is sized from it and a too-large one means the run
+    #: does not compact until after the provider has rejected the request.
+    context_window: int | None = None
 
 
 def _provider_model_catalog(
@@ -57,12 +65,14 @@ def _provider_model_catalog(
     """
     explicit = explicit_vision_model_names or set()
     vision_by_name: dict[str, bool] = {}
+    window_by_name: dict[str, int | None] = {}
     order: list[str] = []
     for discovered in discovered_models:
         name = discovered.name.strip()
         if name and name not in vision_by_name:
             order.append(name)
             vision_by_name[name] = discovered.supports_vision
+            window_by_name[name] = discovered.context_window
     for model_name in fallback_model_names:
         name = model_name.strip()
         if name and name not in vision_by_name:
@@ -78,12 +88,18 @@ def _provider_model_catalog(
         capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
         if supports_vision:
             capabilities.append(RuntimeModelCapability.VISION)
+        # Recorded where the budget resolver looks for it
+        # (`services/context_budget`). Absent when the provider said nothing, so
+        # the deployment default applies rather than an invented number.
         catalog.append(
             RuntimeModelCatalogEntry(
                 name=name,
                 display_name=name,
                 provider_model_name=name,
                 capabilities=capabilities,
+                metadata=catalog_metadata_for(
+                    name, discovered_window=window_by_name.get(name)
+                ),
             )
         )
     return catalog
@@ -167,7 +183,7 @@ async def _validate_public_base_url(url: str) -> None:
             )
         except OSError as exc:
             raise ValueError(_PUBLIC_URL_ERROR) from exc
-        candidates.extend(info[4][0] for info in infos)
+        candidates.extend(str(info[4][0]) for info in infos)
     if not candidates:
         raise ValueError(_PUBLIC_URL_ERROR)
     for addr in candidates:
@@ -219,9 +235,11 @@ def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
     for item in data:
         model_name: object
         supports_vision = False
+        context_window: int | None = None
         if isinstance(item, dict):
             model_name = item.get("id") or item.get("name")
             supports_vision = _payload_advertises_image_input(item)
+            context_window = _payload_context_window(item)
         else:
             model_name = item
         if isinstance(model_name, str):
@@ -229,9 +247,52 @@ def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 models.append(
-                    DiscoveredModel(name=normalized, supports_vision=supports_vision)
+                    DiscoveredModel(
+                        name=normalized,
+                        supports_vision=supports_vision,
+                        context_window=context_window,
+                    )
                 )
     return models
+
+
+#: What the field is called across OpenAI-compatible providers. Fireworks and
+#: OpenRouter say `context_length`, vLLM says `max_model_len`, others spell it
+#: out; OpenRouter also repeats it nested under `top_provider`.
+_CONTEXT_WINDOW_KEYS = (
+    "context_length",
+    "context_window",
+    "max_context_length",
+    "max_model_len",
+)
+
+
+def _payload_context_window(item: dict) -> int | None:
+    """The model's context window from a ``/models`` entry, if it says.
+
+    Best-effort in the same spirit as `_payload_advertises_image_input`: the
+    standard OpenAI schema carries no window at all, and returning None there is
+    correct. The deployment default then applies, which is safe; a guess would
+    not be.
+    """
+    for key in _CONTEXT_WINDOW_KEYS:
+        window = _coerce_positive_int(item.get(key))
+        if window is not None:
+            return window
+    top_provider = item.get("top_provider")
+    if isinstance(top_provider, dict):
+        return _coerce_positive_int(top_provider.get("context_length"))
+    return None
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        window = int(value)
+    except TypeError, ValueError:
+        return None
+    return window if window > 0 else None
 
 
 def _payload_advertises_image_input(item: dict) -> bool:

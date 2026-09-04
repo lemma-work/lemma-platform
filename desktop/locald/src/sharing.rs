@@ -1800,6 +1800,7 @@ fn terminate_owned_child(child: &mut Child) {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::io::{Read, Write};
     use std::sync::mpsc;
@@ -2145,7 +2146,7 @@ mod tests {
             observed.extend_from_slice(&buffer[..read]);
         }
         gateway.stop();
-        server.join().unwrap();
+        crate::join_within(server, "the upstream server");
     }
 
     #[test]
@@ -2200,7 +2201,7 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.bytes().unwrap().as_ref(), payload.as_slice());
         gateway.stop();
-        server.join().unwrap();
+        crate::join_within(server, "the upstream server");
     }
 
     #[test]
@@ -2248,6 +2249,6 @@ mod tests {
         client.read_exact(&mut echoed).unwrap();
         assert_eq!(&echoed, b"hello");
         gateway.stop();
-        server.join().unwrap();
+        crate::join_within(server, "the upstream server");
     }
 }

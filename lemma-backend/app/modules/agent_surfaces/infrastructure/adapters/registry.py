@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from app.modules.agent_surfaces.domain.ports import SurfacePlatformAdapterPort
-from app.modules.agent_surfaces.platforms.gmail.adapter import GmailSurfaceAdapter
-from app.modules.agent_surfaces.platforms.outlook.adapter import OutlookSurfaceAdapter
 from app.modules.agent_surfaces.platforms.resend.adapter import ResendSurfaceAdapter
 from app.modules.agent_surfaces.platforms.slack.adapter import SlackSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
@@ -11,14 +9,14 @@ from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfac
 
 
 class SurfacePlatformAdapterRegistry:
-    def __init__(self, extra_adapters: dict[str, SurfacePlatformAdapterPort] | None = None):
+    def __init__(
+        self, extra_adapters: dict[str, SurfacePlatformAdapterPort] | None = None
+    ):
         self._adapters: dict[str, SurfacePlatformAdapterPort] = {
             "SLACK": SlackSurfaceAdapter(),
             "TEAMS": TeamsSurfaceAdapter(),
             "WHATSAPP": WhatsAppSurfaceAdapter(),
             "TELEGRAM": TelegramSurfaceAdapter(),
-            "GMAIL": GmailSurfaceAdapter(),
-            "OUTLOOK": OutlookSurfaceAdapter(),
             "RESEND": ResendSurfaceAdapter(),
         }
         if extra_adapters:

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import EmailStr, field_validator
+from pydantic import EmailStr, Field, field_validator
 
 from app.core.api.schemas import BaseSchema
 from app.modules.identity.domain.email import normalize_identity_email
@@ -21,6 +21,15 @@ class OrganizationCreateRequest(BaseSchema):
     slug: str | None = None
     email_domain: str | None = None
     join_policy: OrganizationJoinPolicy = OrganizationJoinPolicy.INVITE_ONLY
+    resolve_name_conflicts: bool = Field(
+        default=False,
+        description=(
+            "Take the next free name instead of conflicting. For a name the "
+            "user did not choose -- onboarding's derived first workspace -- "
+            "where a 409 is a dead end for someone who never typed a name. "
+            "Leave false for a name they typed, so a clash is reported."
+        ),
+    )
 
 
 class OrganizationUpdateRequest(BaseSchema):
@@ -108,15 +117,26 @@ class OrganizationListResponse(BaseSchema):
 class OrganizationSlugAvailabilityResponse(BaseSchema):
     """Organization slug availability response.
 
-    ``available`` answers only for the slug. When the caller also passes a
-    candidate name, ``name_available`` answers for the globally-unique name; a
-    create succeeds only when both are true.
+    ``available`` answers for the slug, which is the handle and is unique across
+    the deployment. It is the only field that can refuse a create.
+
+    ``name_available`` is answered whenever a candidate name is passed, and is
+    now always ``true``: display names are labels and two organizations may
+    share one (PS-ONB-014). Kept so callers that probe both fields keep one
+    response shape, and deprecated -- do not gate a create on it.
     """
 
     slug: str
     available: bool
     name: str | None = None
-    name_available: bool | None = None
+    name_available: bool | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Always true when a name is supplied: organization display names "
+            "are not unique. Gate creates on `available` instead."
+        ),
+    )
 
 
 class OrganizationMemberListResponse(BaseSchema):
@@ -150,7 +170,7 @@ class NavigationPodResponse(BaseSchema):
     columns cost nothing to return: they ride along in the query that found the
     pod, so the response grows with the number of pods and not with what is
     inside them. Apps, agents and roles are the other side of that line, and
-    live on ``/organizations/{org_id}/home``.
+    live on ``/organizations/{organization_id}/home``.
     """
 
     id: UUID
@@ -189,7 +209,10 @@ class HomeAppResponse(BaseSchema):
     id: UUID
     name: str
     description: str | None = None
-    url: str
+    # None where the deployment serves no app host -- a desktop stack shared
+    # over a tunnel serves the workspace and API on one public origin and no app
+    # host at all. See `apps.domain.entities.public_app_url`.
+    url: str | None = None
     status: str
 
 

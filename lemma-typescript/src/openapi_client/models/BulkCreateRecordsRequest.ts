@@ -7,7 +7,7 @@
  */
 export type BulkCreateRecordsRequest = {
     /**
-     * List of record payload objects to insert.
+     * List of record payload objects to insert. At most 1000 per request.
      */
     records: Array<Record<string, any>>;
     /**

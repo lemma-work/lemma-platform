@@ -133,9 +133,7 @@ async def test_resource_access_api_manages_role_and_member_grants_e2e(
     role_list = await authenticated_client.get(f"/pods/{pod_id}/roles")
     assert role_list.status_code == status.HTTP_200_OK, role_list.text
     custom_role = next(
-        role
-        for role in role_list.json()["items"]
-        if role["name"] == ctx["custom_role"]
+        role for role in role_list.json()["items"] if role["name"] == ctx["custom_role"]
     )
 
     agent_name = f"restricted_share_agent_{uuid4().hex[:8]}"
@@ -180,9 +178,10 @@ async def test_resource_access_api_manages_role_and_member_grants_e2e(
             ("agent.execute", "agent.read"),
         ),
     }
-    assert next(grant for grant in grants if grant["grantee_type"] == "ROLE")[
-        "role_name"
-    ] == ctx["custom_role"]
+    assert (
+        next(grant for grant in grants if grant["grantee_type"] == "ROLE")["role_name"]
+        == ctx["custom_role"]
+    )
     member_access = next(
         grant for grant in grants if grant["grantee_type"] == "POD_MEMBER"
     )
@@ -380,7 +379,7 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                     "resource_type": "connector",
                     "resource_name": connector_id,
                     "permission_ids": ["connector.use"],
-                }
+                },
             ]
         },
     )
@@ -420,7 +419,7 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                     "resource_type": "connector",
                     "resource_name": connector_id,
                     "permission_ids": ["connector.use"],
-                }
+                },
             ]
         },
     )
@@ -816,10 +815,10 @@ async def test_restricted_workload_resources_appear_in_lists_after_role_grant_e2
         f"/pods/{pod_id}/agents",
         headers=viewer_headers,
     )
-    assert agent_list_before.status_code == status.HTTP_200_OK, (
-        agent_list_before.text
-    )
-    assert agent_name not in {item["name"] for item in agent_list_before.json()["items"]}
+    assert agent_list_before.status_code == status.HTTP_200_OK, agent_list_before.text
+    assert agent_name not in {
+        item["name"] for item in agent_list_before.json()["items"]
+    }
 
     function_list_before = await async_client.get(
         f"/pods/{pod_id}/functions",
@@ -997,7 +996,9 @@ async def test_workload_create_permissions_do_not_imply_update_or_delete_e2e(
             "description": "Create-only role can create functions.",
         },
     )
-    assert created_function.status_code == status.HTTP_201_CREATED, created_function.text
+    assert created_function.status_code == status.HTTP_201_CREATED, (
+        created_function.text
+    )
     created_workflow = await async_client.post(
         f"/pods/{pod_id}/workflows",
         headers=creator_headers,
@@ -1080,6 +1081,72 @@ async def test_workload_create_permissions_do_not_imply_update_or_delete_e2e(
     )
 
 
+async def test_agent_create_without_folder_write_defers_the_memory_grant_e2e(
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+):
+    """Creating an agent must not require the permissions its toolsets imply.
+
+    A new agent starts with MEMORY, and MEMORY derives a `/memory` folder grant
+    — which means provisioning a pod folder now happens inside every create. A
+    role that can build agents but not write pod files got the folder's 403 as
+    the answer to its create, so `agent.create` silently stopped being enough to
+    create an agent. The agent is saved instead, still declaring MEMORY, and the
+    grant lands the next time someone who can write files edits it.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Deferred Memory")
+
+    role_response = await authenticated_client.post(
+        f"/pods/{pod_id}/roles",
+        json={
+            "name": "agent_builders",
+            "permission_ids": ["pod.read", "agent.create"],
+        },
+    )
+    assert role_response.status_code == status.HTTP_201_CREATED, role_response.text
+
+    builder = await signup_user(async_client, "memory-no-folder-write")
+    builder_org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=builder,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=builder_org_member["id"],
+        role="POD_VIEWER",
+        roles=["POD_VIEWER", "AGENT_BUILDERS"],
+    )
+
+    name = f"builder_agent_{uuid4().hex[:8]}"
+    created = await async_client.post(
+        f"/pods/{pod_id}/agents",
+        headers=auth_headers(builder),
+        json={"name": name, "instruction": "Remember what matters."},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    assert "MEMORY" in created.json()["toolsets"], created.text
+
+    grants = await authenticated_client.get(f"/pods/{pod_id}/agents/{name}/permissions")
+    assert grants.status_code == status.HTTP_200_OK, grants.text
+    assert "/memory" not in {
+        grant["resource_name"] for grant in grants.json()["grants"]
+    }, "the folder could not be provisioned, so there is nothing to grant on yet"
+
+    # The owner can write files, so their edit is what completes it.
+    updated = await authenticated_client.patch(
+        f"/pods/{pod_id}/agents/{name}",
+        json={"description": "Edited by someone who can write files."},
+    )
+    assert updated.status_code == status.HTTP_200_OK, updated.text
+    grants = await authenticated_client.get(f"/pods/{pod_id}/agents/{name}/permissions")
+    assert grants.status_code == status.HTTP_200_OK, grants.text
+    assert "/memory" in {grant["resource_name"] for grant in grants.json()["grants"]}
+
+
 async def _create_pod(authenticated_client, fixed_test_org, prefix: str) -> str:
     pod_response = await authenticated_client.post(
         "/pods",
@@ -1097,7 +1164,9 @@ async def test_grant_unknown_resource_names_report_every_missing_name_e2e(
     authenticated_client,
     fixed_test_org,
 ):
-    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Unknown Names Pod")
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Unknown Names Pod"
+    )
 
     agent_response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
@@ -1235,12 +1304,16 @@ async def test_agent_delete_removes_grants_in_both_directions_e2e(
     from uuid import UUID as _UUID
 
     rows = (
-        await db_session.execute(
-            sa_select(ResourcePermissionGrantModel).where(
-                ResourcePermissionGrantModel.pod_id == _UUID(pod_id),
+        (
+            await db_session.execute(
+                sa_select(ResourcePermissionGrantModel).where(
+                    ResourcePermissionGrantModel.pod_id == _UUID(pod_id),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     leftover = [
         row
         for row in rows
@@ -1291,13 +1364,16 @@ async def test_agent_update_preserves_workload_capability_grants_e2e(
         f"/pods/{pod_id}/agents/caller_agent/permissions"
     )
     assert permissions.status_code == status.HTTP_200_OK, permissions.text
-    assert permissions.json()["grants"] == [
-        {
-            "resource_type": "agent",
-            "resource_name": "callee_agent",
-            "permission_ids": ["agent.execute"],
-        }
-    ]
+    # As a set of tuples, not the response list: `/memory` is derived from the
+    # MEMORY toolset every new agent starts with, and two grants have no
+    # guaranteed order between them.
+    assert {
+        (grant["resource_type"], grant["resource_name"], tuple(grant["permission_ids"]))
+        for grant in permissions.json()["grants"]
+    } == {
+        ("agent", "callee_agent", ("agent.execute",)),
+        ("folder", "/memory", ("folder.write",)),
+    }
 
 
 async def test_resource_access_unknown_name_returns_404_e2e(
@@ -1325,7 +1401,9 @@ async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
     functions could not rewire the ones it had just built, and the denial named
     `agent.delete` at someone who was only editing. Deleting is still gated.
     """
-    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Editor Rewire Pod")
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Editor Rewire Pod"
+    )
 
     agent_response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
@@ -1389,8 +1467,12 @@ async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
         headers=editor_headers,
     )
     assert agent_grants.status_code == status.HTTP_200_OK, agent_grants.text
+    # `/memory` survives a replace it was not named in: the memory grant is
+    # re-derived from the toolsets on every write, which is what keeps the
+    # capability from quietly losing its permission on an unrelated edit.
     assert {grant["resource_name"] for grant in agent_grants.json()["grants"]} == {
-        table_name
+        table_name,
+        "/memory",
     }
 
     function_grants = await async_client.put(

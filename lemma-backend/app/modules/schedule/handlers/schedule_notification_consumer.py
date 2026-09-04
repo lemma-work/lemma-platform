@@ -9,12 +9,10 @@ own subscriber without touching the breaker.
 
 from __future__ import annotations
 
-from typing import cast
 from uuid import UUID
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -47,9 +45,7 @@ logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
-    return SessionUnitOfWorkFactory(
-        cast(async_sessionmaker[AsyncSession], async_session_maker)
-    )
+    return SessionUnitOfWorkFactory(async_session_maker)
 
 
 def render_schedule_paused_email(
@@ -130,16 +126,17 @@ async def on_schedule_deactivated(
         return
 
     async def send_notification() -> None:
-        from app.composition.identity_notifications import resolve_user_email
         from app.core.email.email_sender import EmailSender
+        from app.modules.identity.contracts.profiles import user_profile
         from app.modules.schedule.repositories.schedule_repository import (
             ScheduleRepository,
         )
 
         parsed = ScheduleDeactivated.model_validate(event)
         async with uow_factory() as uow:
-            email = await resolve_user_email(uow, parsed.user_id)
+            owner = await user_profile(uow.session, parsed.user_id)
             schedule = await ScheduleRepository(uow=uow).get(parsed.schedule_id)
+        email = owner.email if owner else None
         if email is None:
             logger.debug(
                 "schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic",

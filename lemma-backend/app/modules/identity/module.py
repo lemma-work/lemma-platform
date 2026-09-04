@@ -22,8 +22,8 @@ def _routers():
     )
 
     # Navigation first: its ``/navigation`` is a literal path that would
-    # otherwise be captured by ``/{org_id}`` in the organization router, which
-    # FastAPI matches in registration order.
+    # otherwise be captured by ``/{organization_id}`` in the organization
+    # router, which FastAPI matches in registration order.
     return [
         user,
         organization_navigation,

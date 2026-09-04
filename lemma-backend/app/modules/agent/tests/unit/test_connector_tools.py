@@ -184,3 +184,68 @@ def test_search_limits_stay_bounded(limit):
     """An unbounded limit turns one tool call into an unbounded response."""
     with pytest.raises(ValueError):
         SearchConnectorOperationsRequest(limit=limit)
+
+
+async def test_the_provider_call_happens_after_the_database_scope_closes(monkeypatch):
+    """No pooled connection is held across the call out to the provider.
+
+    The REST path has split resolve from execute since it was written, and says
+    why in a long comment. The agent path -- the hottest connector path there
+    is -- ran both inside one `connector_services` scope, so a session
+    autobegun by the first SELECT stayed checked out for the whole provider
+    call: up to sixty seconds for MCP. Ten agents against an unresponsive
+    server exhausted a pool of ten, wedging requests that had nothing to do
+    with connectors.
+
+    Asserted as an order of events rather than by counting connections,
+    because that is the property: the scope must be *closed* before the call
+    starts. A test that only checked "execute was called" passed throughout.
+    """
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def recording_services(deps):  # noqa: ANN001 - test stub
+        del deps
+        events.append("resolve-scope-open")
+        try:
+            yield SimpleNamespace(
+                ctx=None,
+                operations=SimpleNamespace(
+                    get_operation_details_for_auth_config=AsyncMock(
+                        return_value=SimpleNamespace(input_schema=None)
+                    ),
+                    resolve_execution_for_auth_config=AsyncMock(
+                        return_value=SimpleNamespace()
+                    ),
+                ),
+            )
+        finally:
+            events.append("resolve-scope-closed")
+
+    @asynccontextmanager
+    async def recording_execution():
+        events.append("execute-scope-open")
+        try:
+
+            async def _execute(resolved):  # noqa: ANN001 - test stub
+                del resolved
+                events.append("provider-call")
+                return {"ok": True}
+
+            yield SimpleNamespace(execute_resolved=_execute)
+        finally:
+            events.append("execute-scope-closed")
+
+    monkeypatch.setattr(adapter, "connector_services", recording_services)
+    monkeypatch.setattr(adapter, "connector_execution_only", recording_execution)
+
+    await adapter.run_connector_operation(
+        _run_ctx(),
+        RunConnectorOperationRequest(
+            auth_config="some-install", operation="do_thing", arguments={}
+        ),
+    )
+
+    assert events.index("resolve-scope-closed") < events.index("provider-call"), (
+        f"the provider was called with the resolve scope still open: {events}"
+    )

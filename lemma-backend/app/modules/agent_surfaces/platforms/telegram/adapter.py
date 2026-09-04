@@ -39,6 +39,58 @@ _CONTACT_REQUEST_MARKUP = {
 }
 
 
+def _tap_origin(
+    payload: dict[str, Any], callback_query: dict[str, Any]
+) -> dict[str, Any]:
+    """Where the tap came from, and where an answer to it goes."""
+    message = callback_query.get("message") or {}
+    chat = message.get("chat") or {}
+    from_user = callback_query.get("from") or {}
+    chat_id = str(chat.get("id") or "").strip() or None
+    thread_id = message.get("message_thread_id")
+    return {
+        "platform": "TELEGRAM",
+        "external_channel_id": chat_id,
+        "external_thread_id": str(thread_id) if thread_id is not None else chat_id,
+        "external_user_id": str(from_user.get("id") or "").strip() or None,
+        "reply_target": {"chat_id": chat_id} if chat_id else {},
+        "dedup_id": str(callback_query.get("id") or "").strip() or None,
+        "raw_payload": payload,
+    }
+
+
+def _interaction_from_token(
+    stored: dict[str, Any] | None, origin: dict[str, Any]
+) -> ParsedSurfaceInteraction:
+    """What the stored token says the tap meant.
+
+    Anything unreadable -- no token, no callback id, an ask_user answer with no
+    header -- comes back as ``expired``, so the message path (a typed reply)
+    takes over rather than the tap being silently dropped.
+    """
+    if not stored:
+        return ParsedSurfaceInteraction(interaction_state="expired", **origin)
+    action = str(stored.get("action") or "").strip()
+    if action:
+        return ParsedSurfaceInteraction(action=action, **origin)
+    callback_id = str(stored.get("callback_id") or "").strip()
+    if not callback_id:
+        return ParsedSurfaceInteraction(interaction_state="expired", **origin)
+
+    origin = {**origin, "callback_id": callback_id}
+    decision = str(stored.get("decision") or "").strip()
+    if decision:
+        return ParsedSurfaceInteraction(approval_decision=decision, **origin)
+    value = stored.get("value")
+    if value == _OTHER_CALLBACK_VALUE:
+        return ParsedSurfaceInteraction(interaction_state="other", **origin)
+    if not str(stored.get("header") or "").strip():
+        return ParsedSurfaceInteraction(interaction_state="expired", **origin)
+    return ParsedSurfaceInteraction(
+        values={str(stored.get("header") or "").strip(): value}, **origin
+    )
+
+
 class TelegramSurfaceAdapter(BaseSurfaceAdapter):
     platform = "TELEGRAM"
 
@@ -67,21 +119,22 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             event, message, metadata
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await TelegramPlatformService(credentials).send_display_resource(
+    ) -> bool:
+        await TelegramPlatformService(credentials)._render_resource(
             event,
             render_plan,
             metadata,
         )
+        return True
 
-    async def send_questions(
+    async def _render_choices(
         self,
         *,
         credentials: dict[str, Any],
@@ -89,11 +142,11 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         question_plan: SurfaceQuestionRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await TelegramPlatformService(credentials).send_questions(
+        return await TelegramPlatformService(credentials)._render_choices(
             event, question_plan, metadata
         )
 
-    async def send_approval(
+    async def _render_decision(
         self,
         *,
         credentials: dict[str, Any],
@@ -101,7 +154,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         approval_plan: SurfaceApprovalRenderPlan,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        return await TelegramPlatformService(credentials).send_approval(
+        return await TelegramPlatformService(credentials)._render_decision(
             event, approval_plan, metadata
         )
 
@@ -123,57 +176,10 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         if not isinstance(callback_query, dict):
             return None
         token = str(callback_query.get("data") or "").strip()
-        message = callback_query.get("message") or {}
-        chat = message.get("chat") or {}
-        from_user = callback_query.get("from") or {}
-        chat_id = str(chat.get("id") or "").strip() or None
-        thread_id = message.get("message_thread_id")
-        common_kwargs: dict[str, Any] = {
-            "platform": "TELEGRAM",
-            "external_channel_id": chat_id,
-            "external_thread_id": (
-                str(thread_id) if thread_id is not None else chat_id
-            ),
-            "external_user_id": str(from_user.get("id") or "").strip() or None,
-            "reply_target": {"chat_id": chat_id} if chat_id else {},
-            "dedup_id": str(callback_query.get("id") or "").strip() or None,
-            "raw_payload": payload,
-        }
-        stored = await get_callback_token(token)
-        if not stored:
-            return ParsedSurfaceInteraction(
-                interaction_state="expired",
-                **common_kwargs,
-            )
-        action = str(stored.get("action") or "").strip()
-        if action:
-            return ParsedSurfaceInteraction(
-                action=action,
-                **common_kwargs,
-            )
-        callback_id = str(stored.get("callback_id") or "").strip()
-        if not callback_id:
-            return ParsedSurfaceInteraction(
-                interaction_state="expired",
-                **common_kwargs,
-            )
-        common_kwargs["callback_id"] = callback_id
-        decision = str(stored.get("decision") or "").strip()
-        header = str(stored.get("header") or "").strip()
-        if decision:
-            return ParsedSurfaceInteraction(approval_decision=decision, **common_kwargs)
-        value = stored.get("value")
-        if value == _OTHER_CALLBACK_VALUE:
-            return ParsedSurfaceInteraction(
-                interaction_state="other",
-                **common_kwargs,
-            )
-        if not header:
-            return ParsedSurfaceInteraction(
-                interaction_state="expired",
-                **common_kwargs,
-            )
-        return ParsedSurfaceInteraction(values={header: value}, **common_kwargs)
+        return _interaction_from_token(
+            await get_callback_token(token),
+            _tap_origin(payload, callback_query),
+        )
 
     async def acknowledge_interaction(
         self,
@@ -266,7 +272,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             )
         ]
 
-    async def send_file_attachment(
+    async def _render_file(
         self,
         *,
         credentials: dict[str, Any],
@@ -284,7 +290,7 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
             caption=caption,
         )
 
-    async def send_voice_note(
+    async def _render_voice(
         self,
         *,
         credentials: dict[str, Any],

@@ -14,12 +14,14 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.common import text_or_none
+from app.modules.agent_surfaces.platforms.email_identity import (
+    email_sender_authentication,
     email_thread_root,
-    inbound_email_text,
     normalize_email_address,
     parse_email_identity,
 )
+from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     header_map,
     normalize_attachments,
@@ -74,6 +76,9 @@ def merge_received_email(
             "external_thread_id": thread["thread_id"],
             "external_message_id": thread["message_id"],
             "sender_display_name": identity.display_name,
+            "sender_authentication": email_sender_authentication(
+                received.get("headers"), identity.email
+            ),
             "reply_target": reply_target,
             "metadata": metadata,
         }
@@ -139,9 +144,12 @@ class ResendInboundParser:
         if not sender or not destination:
             return None
 
-        message_id = str(payload.get("message_id") or "").strip() or None
-        in_reply_to = str(payload.get("in_reply_to") or "").strip() or None
-        references = [str(r).strip() for r in (payload.get("references") or []) if str(r).strip()]
+        raw_headers = payload.get("headers")
+        message_id = text_or_none(payload.get("message_id"))
+        in_reply_to = text_or_none(payload.get("in_reply_to"))
+        references = [
+            str(r).strip() for r in (payload.get("references") or []) if str(r).strip()
+        ]
         thread_root = email_thread_root(
             references=references,
             in_reply_to=in_reply_to,
@@ -149,7 +157,7 @@ class ResendInboundParser:
             sender=sender,
         )
 
-        subject = str(payload.get("subject") or "").strip() or None
+        subject = text_or_none(payload.get("subject"))
         message_text = inbound_email_text(
             text=payload.get("text"),
             html=payload.get("html"),
@@ -169,6 +177,17 @@ class ResendInboundParser:
             sender_external_user_id=sender,
             sender_email=sender,
             sender_display_name=identity.display_name,
+            # Only when this payload actually carries headers. The `email.received`
+            # webhook carries none, so on that path this stays None and
+            # `merge_received_email` fills it in after the body fetch. Anything
+            # that *does* arrive with headers -- the polling receiver, a
+            # replayed payload -- gets its verdict here rather than never,
+            # which is what left those paths unauthenticated entirely.
+            sender_authentication=(
+                email_sender_authentication(raw_headers, sender)
+                if raw_headers
+                else None
+            ),
             message_text=message_text,
             is_dm=True,
             should_start_conversation=True,
@@ -191,7 +210,7 @@ class ResendInboundParser:
                 # The handle the enrichment step needs to fetch the body. The
                 # webhook carries no content, so without this the agent sees an
                 # empty message.
-                "email_id": str(payload.get("email_id") or "").strip() or None,
+                "email_id": text_or_none(payload.get("email_id")),
                 "attachments": payload.get("attachments") or [],
             },
         )

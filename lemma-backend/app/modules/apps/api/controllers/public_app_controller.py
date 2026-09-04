@@ -10,9 +10,11 @@ either via that host rewrite or directly from clients that set the header.
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
+from app.modules.apps.api.asset_not_found_page import render_asset_not_found_page
 from app.modules.apps.api.asset_response import app_asset_response
 from app.modules.apps.api.dependencies import AppUseCasesDep
 from app.modules.apps.api.host_routing import split_release_label
+from app.modules.apps.domain.errors import AppAssetNotFoundError
 
 router = APIRouter(
     prefix="/public/apps",
@@ -21,6 +23,33 @@ router = APIRouter(
 )
 
 _SLUG_HEADER = "X-App-Public-Slug"
+
+
+def _is_navigation(request: Request) -> bool:
+    """Whether a person is looking at this response, or code is reading it.
+
+    A fetch for a missing bundle asset still gets the JSON error it has always
+    got; only a browser following a link is shown a page. `Accept` is the
+    signal every navigation sends and no asset fetch does.
+    """
+    return "text/html" in request.headers.get("accept", "")
+
+
+def _asset_not_found_response(
+    request: Request, error: AppAssetNotFoundError
+) -> Response:
+    """A dead end a person can act on, for the requests that have a person."""
+    return Response(
+        content=render_asset_not_found_page(
+            asset_path=error.asset_path,
+            pod_id=error.pod_id,
+        ),
+        status_code=404,
+        media_type="text/html; charset=utf-8",
+        # The page names one pod file path; nothing should keep it, and a
+        # search engine indexing an app's broken links helps nobody.
+        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"},
+    )
 
 
 def _get_slug(request: Request) -> tuple[str, str | None]:
@@ -79,10 +108,15 @@ async def get_app_asset_by_slug(
     use_cases: AppUseCasesDep,
 ) -> Response:
     slug, release_ref = _get_slug(request)
-    asset = await use_cases.serve_public_asset(
-        slug=slug,
-        asset_path=asset_path or None,
-        request_etag=request.headers.get("if-none-match"),
-        release_ref=release_ref,
-    )
+    try:
+        asset = await use_cases.serve_public_asset(
+            slug=slug,
+            release_ref=release_ref,
+            asset_path=asset_path or None,
+            request_etag=request.headers.get("if-none-match"),
+        )
+    except AppAssetNotFoundError as error:
+        if not _is_navigation(request):
+            raise
+        return _asset_not_found_response(request, error)
     return app_asset_response(asset)

@@ -2,8 +2,11 @@
 
 Dependency inversion: a billing/plan provider *implements* usage's port and
 registers a factory here at startup (see the billing module's lifespan hooks).
-When nothing is registered — e.g. an open-source build with no billing module —
-usage remains unlimited while still recording metering data.
+When nothing is registered, a deployment that has stated limits in settings
+gets the configuration-backed port
+(:mod:`app.modules.usage.infrastructure.configured_usage_limit_port`) — so
+spend limits are configurable without shipping a billing module. When neither
+is present, usage remains unlimited while still recording metering data.
 
 This is a single, typed extension point for one port, NOT a generic capability
 registry: usage owns the contract; the provider plugs in.
@@ -30,4 +33,10 @@ def configure_usage_limit_provider(factory: Optional[UsageLimitPortFactory]) -> 
 
 def build_usage_limit_port(uow: object) -> Optional[UsageLimitPort]:
     """Resolve the limit port for this unit of work, or None when unconfigured."""
-    return _factory(uow) if _factory is not None else None
+    if _factory is not None:
+        return _factory(uow)
+    from app.modules.usage.infrastructure.configured_usage_limit_port import (
+        configured_usage_limit_port,
+    )
+
+    return configured_usage_limit_port(uow)

@@ -10,7 +10,7 @@ from app.core.authorization.context import ResourceVisibility
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
-from app.modules.datastore.services.table_context import TableContext
+from app.modules.datastore.services.table_context import TableContext, TableHydration
 
 logger = get_logger(__name__)
 
@@ -24,7 +24,6 @@ class DatastoreAuthorization:
 
     def __init__(self, authorization_service: object):
         self.authorization_service = authorization_service
-
 
     async def _release_application_connection(self) -> None:
         """Give the application connection back once the check is done.
@@ -96,6 +95,7 @@ class DatastoreAuthorization:
         table_id: UUID,
         table_name: str,
         ctx: Context | None = None,
+        hydration: TableHydration | None = None,
     ) -> None:
         await self._require_table_permission(
             user_id=user_id,
@@ -103,6 +103,7 @@ class DatastoreAuthorization:
             table_id=table_id,
             table_name=table_name,
             ctx=ctx,
+            hydration=hydration,
             permission_id=Permissions.DATASTORE_TABLE_READ,
             fallback_action=Permissions.DATASTORE_TABLE_READ,
         )
@@ -115,6 +116,7 @@ class DatastoreAuthorization:
         table_id: UUID,
         table_name: str,
         ctx: Context | None = None,
+        hydration: TableHydration | None = None,
     ) -> None:
         await self._require_table_permission(
             user_id=user_id,
@@ -122,6 +124,7 @@ class DatastoreAuthorization:
             table_id=table_id,
             table_name=table_name,
             ctx=ctx,
+            hydration=hydration,
             permission_id=Permissions.DATASTORE_TABLE_UPDATE,
             fallback_action=Permissions.DATASTORE_TABLE_UPDATE,
         )
@@ -134,6 +137,7 @@ class DatastoreAuthorization:
         table_id: UUID,
         table_name: str,
         ctx: Context | None = None,
+        hydration: TableHydration | None = None,
     ) -> None:
         await self._require_table_permission(
             user_id=user_id,
@@ -141,6 +145,7 @@ class DatastoreAuthorization:
             table_id=table_id,
             table_name=table_name,
             ctx=ctx,
+            hydration=hydration,
             permission_id=Permissions.DATASTORE_TABLE_DELETE,
             fallback_action=Permissions.DATASTORE_TABLE_DELETE,
         )
@@ -181,6 +186,7 @@ class DatastoreAuthorization:
         pod_id: UUID,
         table_id: UUID,
         ctx: Context | None = None,
+        hydration: TableHydration | None = None,
     ) -> bool:
         """Whether the caller administers a table (can delete it).
 
@@ -188,9 +194,18 @@ class DatastoreAuthorization:
         rows, everyone else is scoped to their own. Mirrors the check in
         ``should_enforce_record_user_scope``.
         """
+        resource = (
+            ResourceRef.hydrated_table(
+                pod_id,
+                table_id,
+                visibility=hydration.visibility,
+                owner_user_id=hydration.owner_user_id,
+            )
+            if hydration is not None
+            else ResourceRef.table(pod_id, table_id)
+        )
         return await self._context(ctx).can(
-            Permissions.DATASTORE_TABLE_DELETE,
-            ResourceRef.table(pod_id, table_id),
+            Permissions.DATASTORE_TABLE_DELETE, resource
         )
 
     async def should_enforce_record_user_scope(
@@ -367,7 +382,7 @@ class DatastoreAuthorization:
                     )
         except Exception:
             logger.debug(
-                'datastore.authorization.authorization_check_document_admin_user.diagnostic',
+                "datastore.authorization.authorization_check_document_admin_user.diagnostic",
                 user_id=user_id,
                 pod_id=pod_id,
                 exc_info=True,
@@ -385,13 +400,22 @@ class DatastoreAuthorization:
         ctx: Context | None,
         permission_id: str,
         fallback_action: str,
+        hydration: TableHydration | None = None,
     ) -> None:
-        if ctx is not None:
-            await ctx.require(permission_id, ResourceRef.table(pod_id, table_id))
-            return
-        await self._context().require(
-            fallback_action, ResourceRef.table(pod_id, table_id)
+        resource = (
+            ResourceRef.hydrated_table(
+                pod_id,
+                table_id,
+                visibility=hydration.visibility,
+                owner_user_id=hydration.owner_user_id,
+            )
+            if hydration is not None
+            else ResourceRef.table(pod_id, table_id)
         )
+        if ctx is not None:
+            await ctx.require(permission_id, resource)
+            return
+        await self._context().require(fallback_action, resource)
         await self._release_application_connection()
 
     async def _require_document_action(

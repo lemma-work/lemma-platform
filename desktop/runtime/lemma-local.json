@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.7.0",
+  "version": "0.7.2",
   "artifact_source": "ci-build-check",
   "host_packs": {
     "aarch64-apple-darwin": {
@@ -11,7 +11,7 @@
       "format": "zip",
       "platform": "macos",
       "architecture": "aarch64",
-      "runtime_version": "0.7.0"
+      "runtime_version": "0.7.2"
     },
     "x86_64-pc-windows-msvc": {
       "url": "https://downloads.example.invalid/lemma-host-pack.zip",
@@ -21,7 +21,7 @@
       "format": "zip",
       "platform": "windows",
       "architecture": "x86_64",
-      "runtime_version": "0.7.0"
+      "runtime_version": "0.7.2"
     }
   },
   "guest_runtimes": {
@@ -33,7 +33,7 @@
       "format": "zip",
       "platform": "linux",
       "architecture": "aarch64",
-      "runtime_version": "0.7.0"
+      "runtime_version": "0.7.2"
     },
     "windows-x86_64": {
       "url": "https://downloads.example.invalid/lemma-guest-runtime.zip",
@@ -43,7 +43,7 @@
       "format": "zip",
       "platform": "linux",
       "architecture": "x86_64",
-      "runtime_version": "0.7.0"
+      "runtime_version": "0.7.2"
     }
   }
 }

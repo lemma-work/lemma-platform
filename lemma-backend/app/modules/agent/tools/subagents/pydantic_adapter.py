@@ -15,6 +15,8 @@ from uuid import UUID
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
+from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
@@ -58,7 +60,7 @@ async def spawn_subagent(
             input_data=request.input,
         )
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
     return _handle_payload(handle)
 
 
@@ -92,14 +94,19 @@ async def interact_subagent(
                     "success": False,
                     "error": "run_id is required when action='await'.",
                 }
+            # A child run's whole output, which carries its own tool results.
+            awaited = await _service().await_run(
+                ctx.deps,
+                conversation_id=conversation_id,
+                run_id=UUID(request.run_id),
+                timeout_seconds=request.timeout_seconds,
+            )
             return {
                 "success": True,
-                **await _service().await_run(
-                    ctx.deps,
-                    conversation_id=conversation_id,
-                    run_id=UUID(request.run_id),
-                    timeout_seconds=request.timeout_seconds,
-                ),
+                **{
+                    key: bounded_tool_payload(value, what="sub-agent output")
+                    for key, value in awaited.items()
+                },
             }
         # action == "stop"
         return {
@@ -107,7 +114,7 @@ async def interact_subagent(
             **await _service().stop(ctx.deps, conversation_id=conversation_id),
         }
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
 
 
 async def query_subagents(
@@ -133,9 +140,13 @@ async def query_subagents(
                 after_sequence=request.after_sequence,
                 limit=request.limit,
             )
+            # A child run's transcript, its own large tool results included.
             return {
                 "success": True,
-                "messages": [message_to_payload(message) for message in messages],
+                "messages": bounded_tool_payload(
+                    [message_to_payload(message) for message in messages],
+                    what="sub-agent transcript",
+                ),
             }
         # mode == "list"
         children = await _service().list_children(
@@ -145,7 +156,7 @@ async def query_subagents(
         )
         return {"success": True, "children": children}
     except SubAgentError as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "error": safe_error_text(exc)}
 
 
 subagents_toolset = FunctionToolset[BaseAgentContext](

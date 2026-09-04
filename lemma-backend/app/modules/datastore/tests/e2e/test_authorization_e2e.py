@@ -23,6 +23,7 @@ from app.modules.test_support.e2e_authz import create_role_visibility_context
 
 pytestmark = pytest.mark.e2e
 
+
 def _table_names(listing: dict) -> set[str]:
     """Table names in a list response. System-managed ``reserved_*`` tables are
     filtered out by the list API itself, so no exclusion is needed here."""
@@ -84,9 +85,7 @@ class TestDatastoreAuthorizationBoundaries:
             expected_status=status.HTTP_403_FORBIDDEN,
         )
         hidden_root_files = await operator_api.list_files(directory_path="/")
-        assert folder["id"] not in {
-            item["id"] for item in hidden_root_files["items"]
-        }
+        assert folder["id"] not in {item["id"] for item in hidden_root_files["items"]}
         hidden_search = await operator_api.search_files(
             "grant only datastore search marker"
         )
@@ -276,7 +275,7 @@ class TestDatastoreAuthorizationBoundaries:
         custom_table_items = {item["name"]: item for item in custom_tables["items"]}
         assert set(custom_table_items[table_names["default"]]["allowed_actions"]) == {
             "datastore.record.read",
-            "datastore.table.read"
+            "datastore.table.read",
         }
         assert set(custom_table_items[table_names["custom"]]["allowed_actions"]) == {
             "datastore.table.read"
@@ -398,9 +397,7 @@ class TestDatastoreAuthorizationBoundaries:
             "folder.write",
         }
         editor_get_restricted_file = await editor_api.get_file(editor_file["path"])
-        assert set(editor_get_restricted_file["allowed_actions"]) == {
-            "folder.read"
-        }
+        assert set(editor_get_restricted_file["allowed_actions"]) == {"folder.read"}
 
         custom_files = await custom_api.list_files(
             directory_path="/shared",
@@ -417,9 +414,7 @@ class TestDatastoreAuthorizationBoundaries:
             "folder.read"
         }
         custom_get_restricted_file = await custom_api.get_file(custom_file["path"])
-        assert set(custom_get_restricted_file["allowed_actions"]) == {
-            "folder.read"
-        }
+        assert set(custom_get_restricted_file["allowed_actions"]) == {"folder.read"}
 
         for file_entity in (default_file, editor_file, custom_file):
             await index_file(index_datastore_file, file_entity)
@@ -570,3 +565,88 @@ class TestDatastoreAuthorizationBoundaries:
             f"/pods/{pod_api.pod_id}/datastore/tables/owned_notes/records/{editor_row['id']}",
         )
         assert delete_other.status_code == status.HTTP_404_NOT_FOUND
+
+
+class TestAdHocQueryAuthorizesTheRelationPostgresReads:
+    """A table-level grant must govern the table the database actually reads.
+
+    PostgreSQL folds an unquoted identifier to lower case, so ``SELECT * FROM
+    Users`` reads ``users``. Table names may carry upper case and are created
+    quoted, so one pod can hold both — and the authorizer used to check the
+    name as typed. `PS-DATA-014` / `PS-DATA-020`: a query returns the rows the
+    caller is entitled to and no others.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_grant_on_the_capitalised_table_does_not_read_the_lower_case_one(
+        self,
+        pod_api: DatastoreApi,
+        async_client: AsyncClient,
+        member_users,
+    ):
+        viewer_api = DatastoreApi(async_client, pod_api.pod_id, member_users["viewer"])
+        secret = f"restricted-{uuid4().hex}"
+
+        # Rows are shared (enable_rls=False) in both tables, so nothing but the
+        # table-level check stands between the viewer and the restricted rows.
+        await pod_api.create_table(
+            {
+                "name": "users",
+                "visibility": "RESTRICTED",
+                "enable_rls": False,
+                "columns": [{"name": "note", "type": "TEXT", "required": True}],
+            }
+        )
+        await pod_api.create_table(
+            {
+                "name": "Users",
+                "visibility": "POD",
+                "enable_rls": False,
+                "columns": [{"name": "note", "type": "TEXT", "required": True}],
+            }
+        )
+        await pod_api.create_record("users", {"note": secret})
+        await pod_api.create_record("Users", {"note": "readable by the pod"})
+
+        # Authorized against `Users`, which the viewer may read; executed by
+        # PostgreSQL against `users`, which they may not.
+        response = await viewer_api.request(
+            "POST",
+            f"/pods/{pod_api.pod_id}/datastore/query",
+            json={"query": "SELECT note FROM Users"},
+        )
+
+        assert secret not in response.text, (
+            "an unquoted table name was authorized as written and read "
+            "case-folded, so a grant on 'Users' served the rows of the "
+            f"RESTRICTED 'users': {response.text[:400]}"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN, (
+            "the query resolves to the RESTRICTED 'users', which the viewer "
+            f"may not read, so it must be refused: {response.status_code} "
+            f"{response.text[:400]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_quoted_spelling_still_reads_the_table_it_names(
+        self,
+        pod_api: DatastoreApi,
+        async_client: AsyncClient,
+        member_users,
+    ):
+        """Folding must not take away the readable table the caller did name."""
+        viewer_api = DatastoreApi(async_client, pod_api.pod_id, member_users["viewer"])
+
+        await pod_api.create_table(
+            {
+                "name": "Users",
+                "visibility": "POD",
+                "enable_rls": False,
+                "columns": [{"name": "note", "type": "TEXT", "required": True}],
+            }
+        )
+        await pod_api.create_record("Users", {"note": "readable by the pod"})
+
+        result = await viewer_api.query('SELECT note FROM "Users"')
+
+        assert [row["note"] for row in result["items"]] == ["readable by the pod"]

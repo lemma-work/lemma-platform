@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
-from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.image_payload import downscale_for_vision
 from app.modules.agent.tools.vision_delegation import describe_single_image
 from app.modules.agent.tools.file_access import (
     read_pod_file_bytes,
     read_workspace_file_bytes,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.agent.tools.tool_errors import approval_error_result
+from app.modules.agent.tools.tool_errors import (
+    approval_error_result,
+    safe_described_error,
+    safe_error_text,
+)
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -30,20 +33,21 @@ from app.modules.agent.tools.workspace_cli.models import (
     WriteStdinRequest,
 )
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
-    ensure_github_credentials,
     looks_like_git_command,
 )
 from app.modules.agent.tools.workspace_cli.github_project import (
-    ensure_project_checkout,
+    prepare_project_directory,
 )
 from app.modules.agent.tools.workspace_cli.helper import (
-    CHARACTER_LIMIT_STDOUT,
-    normalize_terminal_output,
-    tail_truncate,
+    render_terminal_result,
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.composition.agent_workspace import (
+from app.modules.workspace.session_support import retry_advice
+from app.modules.agent.tools.workspace_cli.process_visibility import (
+    visible_processes,
+)
+from app.modules.workspace.contracts.tooling import (
     get_workspace_tool_runtime,
 )
 from pydantic_ai import ToolReturn, BinaryContent
@@ -89,9 +93,9 @@ def _workspace_tool_failure(
     process_id: str | None = None,
 ) -> ExecCommandResult:
     logger.debug(
-        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
-        exc_info=True,
+        exc_info=exc,
     )
     return ExecCommandResult(
         success=False,
@@ -102,9 +106,7 @@ def _workspace_tool_failure(
         process_id=process_id,
         error=(
             f"Workspace {operation} failed before the tool could complete: "
-            f"{describe_exception(exc)}. "
-            "Treat this as a recoverable tool failure and retry if the operation "
-            "is still needed."
+            f"{safe_described_error(exc)}." + retry_advice(exc)
         ),
     )
 
@@ -113,9 +115,9 @@ def _python_workspace_tool_failure(
     exc: Exception, *, operation: str
 ) -> PythonExecutionResult:
     logger.debug(
-        'agent.workspace_cli.workspace_cli_s_s.diagnostic',
+        "agent.workspace_cli.workspace_cli_s_s.diagnostic",
         operation=operation,
-        exc_info=True,
+        exc_info=exc,
     )
     return PythonExecutionResult(
         success=False,
@@ -126,23 +128,23 @@ def _python_workspace_tool_failure(
             "ename": "WorkspaceToolError",
             "evalue": (
                 f"Workspace {operation} failed before Python execution completed: "
-                f"{describe_exception(exc)}. "
-                "Treat this as a recoverable tool failure and retry if the operation "
-                "is still needed."
+                f"{safe_described_error(exc)}." + retry_advice(exc)
             ),
             "traceback": [],
         },
     )
 
 
-async def _get_workspace_session(
+async def get_workspace_session(
     ctx: BaseAgentContext,
     *,
     session_id: str | None,
     close_on_exit: bool,
+    runtime=None,
 ):
     runtime_context = workspace_runtime_context(ctx)
-    runtime = get_workspace_tool_runtime()
+    if runtime is None:
+        runtime = get_workspace_tool_runtime()
     return await runtime.get_session(
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
@@ -181,21 +183,6 @@ def _with_notice(text: str | None, *, notice: str | None) -> str | None:
     return f"{notice}\n{text or ''}"
 
 
-def _render_terminal_result(
-    result: dict[str, Any], *, tty: bool
-) -> tuple[str | None, str | None]:
-    """Make raw PTY output readable, keeping the end rather than the start."""
-
-    stdout = result.get("stdout")
-    stderr = result.get("stderr")
-    if not tty:
-        return stdout, stderr
-    return (
-        tail_truncate(normalize_terminal_output(stdout or ""), CHARACTER_LIMIT_STDOUT),
-        tail_truncate(normalize_terminal_output(stderr or ""), CHARACTER_LIMIT_STDOUT),
-    )
-
-
 async def _process_control_tool(
     ctx: BaseAgentContext,
     *,
@@ -219,7 +206,7 @@ async def _process_control_tool(
             await runtime.resolve_session_for_process(process_id)
             or runtime_context.default_shell_session_id
         )
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=resolved_session_id,
             close_on_exit=False,
@@ -266,39 +253,42 @@ async def resize_terminal_internal(
 async def exec_command_internal(
     ctx: BaseAgentContext,
     request: ExecCommandRequest,
+    *,
+    runtime=None,
+    prepare_project=None,
 ) -> ExecCommandResult:
+    # The workspace runtime and the project-preparation step are arguments so a
+    # test drives this function's own composition -- which session it opens,
+    # and the `wanted=` decision below -- rather than replacing those names
+    # inside this module and asserting against the replacement. Both default to
+    # None and are resolved here rather than in the signature: a default
+    # argument binds at import, which would make a double installed on either
+    # module-level name unreachable without failing the test that installed it.
     try:
-        runtime = get_workspace_tool_runtime()
+        if runtime is None:
+            runtime = get_workspace_tool_runtime()
+        if prepare_project is None:
+            prepare_project = prepare_project_directory
         runtime_context = workspace_runtime_context(ctx)
 
         with run_phase("tool.workspace.session"):
-            workspace_session = await _get_workspace_session(
+            workspace_session = await get_workspace_session(
                 ctx,
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
+                runtime=runtime,
             )
-        project_notice: str | None = None
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
             # not just git-looking ones: the clone that puts the project on disk
             # has to happen before whatever the agent actually asked for, even
             # when that is `ls`.
-            if ctx.workspace_repo is not None or looks_like_git_command(request.cmd):
-                try:
-                    with run_phase("tool.workspace.credentials"):
-                        await ensure_github_credentials(ctx, workspace_session)
-                        project_notice = await ensure_project_checkout(
-                            ctx, workspace_session
-                        )
-                except Exception:
-                    # A broken credential bridge (DB/Redis hiccup, sandbox
-                    # write failure) should not block the command itself --
-                    # it just runs without credentials and fails with git's
-                    # own native auth error, same as with no bridge at all.
-                    logger.debug(
-                        'agent.workspace_cli.github_credential_bridge_failed.diagnostic',
-                        exc_info=True,
-                    )
+            project_notice = await prepare_project(
+                ctx,
+                workspace_session,
+                wanted=ctx.workspace_repo is not None
+                or looks_like_git_command(request.cmd),
+            )
             if request.tty:
                 effective_yield_time_ms = request.yield_time_ms
                 effective_timeout = _DEFAULT_EXEC_TIMEOUT_S
@@ -331,7 +321,7 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
-        stdout, stderr = _render_terminal_result(result, tty=request.tty)
+        stdout, stderr = render_terminal_result(result, tty=request.tty)
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )
@@ -363,7 +353,7 @@ async def write_stdin_internal(
             await runtime.resolve_session_for_process(request.process_id)
             or runtime_context.default_shell_session_id
         )
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=resolved_session_id,
             close_on_exit=False,
@@ -385,7 +375,7 @@ async def write_stdin_internal(
             )
         # write_stdin only ever targets an interactive process, so its output is
         # terminal output and is rendered as such.
-        stdout, stderr = _render_terminal_result(result, tty=True)
+        stdout, stderr = render_terminal_result(result, tty=True)
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,
@@ -428,50 +418,34 @@ async def list_processes_internal(
     try:
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=runtime_context.default_shell_session_id,
             close_on_exit=False,
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
-        # One sandbox serves every conversation belonging to a user, so this
-        # list spans all of them. Show only what this conversation may drive:
-        # its own processes, plus any that no conversation currently owns.
-        # Rebinding indiscriminately would let a parent agent take over the
-        # processes its own sub-agents started, since a sub-agent shares the
-        # sandbox but has its own session.
-        session_id = workspace_session.session_id
-        visible: list[dict[str, Any]] = []
-        for process in processes:
-            process_id = str(process["process_id"])
-            owner = await runtime.resolve_session_for_process(process_id)
-            if owner is None:
-                # Unowned: its binding expired, or it was started outside the
-                # tool path. Claiming it here is how an agent recovers a
-                # process it can otherwise no longer address.
-                if not process.get("completed") and session_id:
-                    await runtime.bind_process_to_session(
-                        process_id=process_id,
-                        session_id=session_id,
-                    )
-                visible.append(process)
-            elif owner == session_id:
-                visible.append(process)
+        visible = await visible_processes(
+            processes,
+            runtime=runtime,
+            session_id=workspace_session.session_id,
+            own_cwd=runtime_context.initial_cwd,
+        )
         return ListProcessesResult(
             success=True,
             processes=[ProcessInfo.model_validate(process) for process in visible],
         )
     except Exception as exc:
-        logger.debug(
-            'agent.workspace_cli.workspace_cli_list_processes_s.diagnostic', exc_info=True
+        logger.warning(
+            "agent.workspace_cli.workspace_cli_list_processes_s.degraded",
+            exc_info=True,
         )
         return ListProcessesResult(
             success=False,
             processes=[],
             error=(
                 f"Workspace list_processes failed before the tool could complete: "
-                f"{describe_exception(exc)}. Treat this as a recoverable tool "
+                f"{safe_described_error(exc)}. Treat this as a recoverable tool "
                 "failure and retry if the operation is still needed."
             ),
         )
@@ -479,18 +453,22 @@ async def list_processes_internal(
 
 async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonRequest):
     try:
-        workspace_session = await _get_workspace_session(
+        workspace_session = await get_workspace_session(
             ctx,
             session_id=workspace_runtime_context(ctx).default_python_session_id,
             close_on_exit=False,
         )
         async with workspace_session:
+            project_notice = await prepare_project_directory(
+                ctx, workspace_session, wanted=ctx.workspace_repo is not None
+            )
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds
             )
         trimmed = trim_python_result(result)
         if workspace_session.workspace_recreated:
             trimmed.stdout = _with_recreation_notice(trimmed.stdout, recreated=True)
+        trimmed.stdout = _with_notice(trimmed.stdout, notice=project_notice)
         return trimmed
     except Exception as exc:
         return _python_workspace_tool_failure(exc, operation="execute_python")
@@ -533,15 +511,15 @@ async def view_image_internal(
             exc, tool_name="view_image", args=request.model_dump()
         )
     except Exception as exc:
-        return ExecCommandResult(success=False, error=str(exc))
+        return ExecCommandResult(success=False, error=safe_error_text(exc))
 
     media_type = detected_mime or mimetypes.guess_type(file_path)[0]
     if not media_type or not media_type.startswith("image/"):
         if media_type == "application/pdf" or file_path.lower().endswith(".pdf"):
             hint = (
                 "This is a PDF, not an image. Use `pod_view_document_pages` to see "
-                "pages (layout, tables, figures), or `pod_read_file` with "
-                "format='markdown' to read the text."
+                "pages (layout, tables, figures), or `pod_read_file` to read "
+                "the text."
             )
         else:
             hint = (
@@ -557,14 +535,19 @@ async def view_image_internal(
             source=source,
         )
 
-    if len(content) > MAX_VIEW_IMAGE_BYTES:
+    # Sized for the model before it is measured against the limit. A phone
+    # photo is several megabytes of pixels the model shrinks on arrival and
+    # never looks at — so refusing it and telling the agent to go and compress
+    # it was work nobody needed to do, on an image we were about to shrink
+    # ourselves. What is left after this is what a limit should be judging.
+    payload, payload_media_type = downscale_for_vision(content, media_type)
+    if len(payload) > MAX_VIEW_IMAGE_BYTES:
         return ViewImageResponse(
             success=False,
             error=(
-                f"Image is {len(content) // 1024} KB, over the "
-                f"{MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MB limit. Downscale or "
-                "compress it first (e.g. with `execute_python` in the workspace) "
-                "before viewing."
+                f"Image is {len(payload) // 1024} KB even after downscaling, "
+                f"over the {MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MB limit. "
+                "Crop it or split it up before viewing."
             ),
             file_path=file_path,
             media_type=media_type,
@@ -578,10 +561,12 @@ async def view_image_internal(
     if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
         AgentVisionMode.DIRECT
     ):
+        # The delegate is a vision model too, and pays the same way for pixels
+        # past its own ceiling.
         return await describe_single_image(
             ctx,
-            data=content,
-            media_type=media_type,
+            data=payload,
+            media_type=payload_media_type,
             file_path=file_path,
             source=source,
             instructions=request.instructions,
@@ -597,160 +582,6 @@ async def view_image_internal(
             size_bytes=len(content),
         ),
         content=[
-            BinaryContent(data=content, media_type=media_type),
+            BinaryContent(data=payload, media_type=payload_media_type),
         ],
     )
-
-
-async def exec_command(
-    ctx: BaseAgentContext,
-    request: ExecCommandRequest,
-) -> ExecCommandResult:
-    """
-    Run a shell command in the private conversation workspace.
-
-    Use this for repo inspection, builds, tests, file edits, and Lemma CLI operations.
-    The workspace injects Lemma environment variables for the current user/pod, so
-    `lemma ...` CLI commands may be used for pod operations.
-    Do not use raw localhost probes to diagnose host Lemma API/Auth availability:
-    `localhost` is the workspace container, not the host backend.
-    The workspace is a sandbox: files created here are not directly visible to the
-    user. Upload final deliverables to pod files under `/me/...` with `lemma files
-    upload` before presenting or referencing them as user-accessible files.
-
-    Modes:
-    - Default (`tty=false`, no `timeout_seconds`): waits up to 30 s for the command to
-      complete. Commands finishing within 30 s return `completed: true` with full output.
-      Commands still running after 30 s return `completed: false` + `process_id` — use
-      `write_stdin` to poll or `terminate_process` to stop.
-    - Blocking (`timeout_seconds=N`): waits up to N seconds (max 300). Use this for
-      commands known to take longer than 30 s (e.g. large data fetches, slow builds).
-      Always returns `completed: true` or kills the process on timeout.
-    - Interactive (`tty=true`): starts a real TTY terminal process and returns
-      `process_id` immediately for follow-up with `write_stdin`.
-
-    Lemma connector operations tip: pass the payload with `--data`; the default
-    output is compact and complete (long bodies fold — add `--full` to expand).
-    Use `--output json` only to pipe/save, e.g.:
-      `lemma connectors operations execute <auth-config> GMAIL_FETCH_EMAILS --data '{}'`
-
-    Interactive workflow (for long-running servers like `npm run dev`):
-    1) Start: `{"cmd":"npm run dev","tty":true,"yield_time_ms":3000}`
-    2) Poll:  `{"process_id":"...","chars":"","yield_time_ms":1000}`
-    3) Input: `{"process_id":"...","chars":"q\\n"}`
-    4) Stop:  `terminate_process` with the same `process_id`
-
-    Use `list_processes` before starting another long-running server or when you
-    need to find a process started earlier.
-
-    Editing files via CLI example:
-    - Overwrite file:
-      `{"cmd":"cat > src/config.json <<'EOF'\\n{\\\"mode\\\":\\\"dev\\\"}\\nEOF"}`
-    - Append line:
-      `{"cmd":"echo 'export DEBUG=1' >> .env.local"}`
-    """
-    return await exec_command_internal(ctx, request)
-
-
-async def write_stdin(
-    ctx: BaseAgentContext,
-    request: WriteStdinRequest,
-) -> ExecCommandResult:
-    """
-    Send input to an existing interactive terminal session and read incremental output.
-
-    Use only with a `process_id` returned by `exec_command` for an unfinished command.
-    Typical uses:
-    - Poll logs without typing anything: `chars=""`
-    - Respond to prompts / hotkeys: `chars="y\\n"` or `chars="q\\n"`
-    - Run another command in the same shell: `chars="npm test\\n"`
-    """
-    return await write_stdin_internal(ctx, request)
-
-
-async def resize_terminal(
-    ctx: BaseAgentContext,
-    request: ResizeTerminalRequest,
-) -> ExecCommandResult:
-    """
-    Resize an interactive terminal so its program re-renders at a new size.
-
-    Use when a `tty` program's output is wrapping badly or a full-screen UI is
-    clipped — for example a wide table, `htop`, or a pager. Follow with
-    `write_stdin` (`chars=""`) to read the redrawn screen.
-    """
-    return await resize_terminal_internal(ctx, request)
-
-
-async def terminate_process(
-    ctx: BaseAgentContext,
-    request: TerminateProcessRequest,
-) -> ExecCommandResult:
-    """
-    Stop a running workspace process by `process_id`.
-
-    Use this for long-running servers, REPLs, watchers, or commands that were
-    started accidentally and need to be cleaned up before continuing.
-    """
-    return await terminate_process_internal(ctx, request)
-
-
-async def list_processes(
-    ctx: BaseAgentContext,
-    request: ListProcessesRequest,
-) -> ListProcessesResult:
-    """
-    List tracked shell processes in the current conversation workspace.
-
-    Use this to inspect dev servers, REPLs, or other long-running commands before
-    polling them with `write_stdin`, stopping them with `terminate_process`, or
-    starting another server.
-    """
-    return await list_processes_internal(ctx, request)
-
-
-async def execute_python(
-    ctx: BaseAgentContext,
-    request: ExecutePythonRequest,
-) -> Any:
-    """
-    Execute Python code in the shared conversation-scoped IPython kernel.
-
-    Use this for structured data analysis, transformations, parsing, and calculations
-    that are awkward in pure shell commands. Put the entire code snippet in
-    `request.code`. The kernel state persists across calls in the same conversation session.
-    Variables, imports, and in-memory objects from earlier executions remain available
-    for later executions, so use it for stepwise analysis when helpful.
-    Include a short `request.comment` to show the user-facing intent.
-
-    The kernel runs in your conversation working directory, so write to relative
-    paths (e.g. `plt.savefig('chart.png')`, `open('data/out.csv', 'w')`) to keep
-    files there — avoid `/tmp`. Common data packages (numpy, pandas, matplotlib,
-    pillow, openpyxl) are pre-installed; for anything else, install it first with
-    `exec_command` (`pip install <package>` — plain pip, not uv), then import it
-    here.
-    """
-    return await execute_python_internal(ctx, request)
-
-
-async def view_image(
-    ctx: BaseAgentContext,
-    request: ViewImageRequest,
-) -> Any:
-    """
-    Load an image file and return it as binary content so you can see it.
-
-    Use this for screenshots, photos, generated images, charts, or any other
-    image the agent should inspect. Reads from EITHER store — set exactly one of:
-    - `workspace_file_path`: an image in the conversation workspace sandbox, e.g.
-      `images/output.png` (relative) or `/workspace/...` — for artifacts you just
-      produced.
-    - `pod_file_path`: an image in the pod datastore, e.g. `/me/photo.jpg` — for
-      user-uploaded or ingested images. Find paths with `pod_list_files` or
-      `pod_search_files`.
-
-    Only image files are supported. For a PDF, use `pod_view_document_pages` to
-    see pages or `pod_read_file` (format='markdown') to read text. Very large
-    images are rejected — downscale them first.
-    """
-    return await view_image_internal(ctx, request)

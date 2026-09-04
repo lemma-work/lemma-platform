@@ -9,25 +9,29 @@ pod tools then enforce per-resource grants.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, Tool
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
+from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from app.core.authorization.delegation import (
     WorkloadPrincipalType,
+    is_pod_default_agent,
     parse_delegation_claims,
 )
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.services.mcp_content import image_contents, text_content
-from app.modules.agent.domain.value_objects import to_json_value
+from app.modules.agent.services.mcp_content import (
+    tool_call_error,
+    tool_call_result,
+)
+from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
@@ -37,7 +41,6 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.tool_errors import (
-    format_tool_error,
     is_control_flow_exception,
 )
 
@@ -88,11 +91,12 @@ class PodMCPService:
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.debug(
-                'agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic', exc_info=True
+            logger.warning(
+                "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded",
+                exc_info=True,
             )
-            return self._mcp_error_result(tool_name, exc)
-        return self._mcp_result(result)
+            return tool_call_error(tool_name, exc)
+        return tool_call_result(result)
 
     async def _require_context(self, *, pod_id: UUID, token: str) -> BaseAgentContext:
         ctx = await self._context_from_token(pod_id=pod_id, token=token)
@@ -112,7 +116,19 @@ class PodMCPService:
                 anti_csrf_check=False,
                 session_required=True,
             )
+        except SuperTokensSessionError:
+            # The token is not valid: expected traffic, and the denial below is
+            # the whole answer.
+            return None
         except Exception:
+            # The auth backend could not answer. Same denial — a caller holding
+            # a good token must not be let through because SuperTokens is down —
+            # but this is an outage, not a bad token, and catching both as one
+            # made the two indistinguishable from outside.
+            logger.error(
+                "agent.pod_mcp_service.session_lookup.failed",
+                exc_info=True,
+            )
             return None
         if session is None:
             return None
@@ -140,26 +156,19 @@ class PodMCPService:
             workload_type="agent" if workload_id is not None else None,
             workload_id=workload_id,
             agent_name=agent_name,
-        )
-
-    def _mcp_result(self, result: object) -> CallToolResult:
-        # See `conversation_mcp_service._mcp_result`: images ride alongside the
-        # text so a vision-capable remote harness actually receives them.
-        images = image_contents(result)
-        payload = to_json_value(result)
-        if isinstance(payload, dict):
-            return CallToolResult(
-                content=[text_content(payload), *images],
-                structuredContent=payload,
-            )
-        return CallToolResult(content=[text_content(payload), *images])
-
-    def _mcp_error_result(self, name: str, exc: Exception) -> CallToolResult:
-        payload = format_tool_error(name, exc)
-        return CallToolResult(
-            isError=True,
-            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
-            structuredContent=payload,
+            is_pod_default_agent=is_pod_default_agent(workload_id, pod_id=pod_id),
+            # There is no run here, and so no runtime profile to ask -- this
+            # bridge serves an MCP client holding a pod token, not a Lemma agent
+            # run. DIRECT rather than the UNAVAILABLE default, because MCP has a
+            # first-class image content type and `_mcp_result` already attaches
+            # images: the client decides what to do with them, and one that
+            # cannot read them still gets the same JSON answer beside them.
+            #
+            # Left as the default, every image tool told every MCP client that
+            # its model could not read images -- including the ones that can --
+            # and `_mcp_result`'s image handling could never fire, because no
+            # image was ever produced to attach.
+            vision_mode=AgentVisionMode.DIRECT,
         )
 
 

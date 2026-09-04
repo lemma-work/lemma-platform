@@ -20,7 +20,7 @@ Pass payloads with `--data '<json>'` or `--file <path.json>`. Target a pod with 
 
 ## Pod files
 
-Paths: `/me/...` is the user's private tree; everything else is pod-shared under top-level folders like `/knowledge`. **There is no `/pod` prefix** — a path is shared unless it is under `/me`. Put user-facing deliverables in `/me/<topic>/...` and present the pod path, never the sandbox path.
+Paths: `/me/...` is the user's private tree; everything else is pod-shared under top-level folders like `/knowledge` and `/memory`. **There is no `/pod` prefix** — a path is shared unless it is under `/me`. Put user-facing deliverables in `/me/<topic>/...` and present the pod path, never the sandbox path.
 
 ```bash
 lemma files ls /me; lemma files tree /knowledge
@@ -36,9 +36,11 @@ lemma files children /knowledge/policy.pdf          # list derived artifacts
 lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg   # rendered page image
 ```
 
-Search first (results carry page numbers), then `cat --pages N`. When layout, tables, charts, or scans matter, fetch the page image and view it.
+Search first (results carry page numbers), then `cat --pages N`. When layout, tables, charts, or scans matter, look at the page image rather than its text.
 
-LiteParse is the fallback for files the pod has **not** indexed — web downloads, files your code generated, or a document whose conversion is missing. It re-runs OCR and is far slower than `files cat`, so never use it on a document that already has markdown. Scope large files to the pages you need:
+`view_image` reads either store — set `pod_file_path` (e.g. a page image at `/knowledge/policy.pdf/pages/page_0003.jpg`) or `workspace_file_path`, exactly one, never both. Point it straight at a pod path; downloading to the sandbox first is wasted work. Use `pod_view_document_pages` to page through a document, `view_image` for one image you can already name.
+
+LiteParse is the fallback for files the pod has **not** indexed — web downloads, files your code generated, or a document whose conversion is missing. It re-runs OCR and is far slower than `files cat`. Scope large files to the pages you need:
 
 ```bash
 lit parse input.pdf --target-pages "1-5,10" --format json -o out.json
@@ -51,27 +53,27 @@ Installs, builds and test suites routinely outlive a single `exec_command` call,
 
 ```
 exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
-manage_process(action="input", process_id="<id>", chars="")   # repeat until completed: true
+manage_process(action="input", process_id="<id>")   # repeat until completed: true
 ```
 
 Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.
 
-Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
+Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it — it shows what is still running here plus anything you started, not the whole workspace's history. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
 
 ## Sandbox
 
-The workspace is private to this conversation. Work in your working directory (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
+The workspace is the user's, not this conversation's: other sessions may be working in it at the same time, each in its own working directory. Work in yours (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
 
 `execute_python` and `exec_command` share one interpreter and run in your working directory, so relative paths land there. Python state — imports, variables, objects — persists across calls; use that for stepwise analysis instead of repeating setup.
 
 ## Toolchains
 
-**JavaScript and TypeScript — prefer `pnpm`.** Its store lives on the workspace volume, so it hard-links packages instead of copying them and keeps them for your next conversation: `pnpm install` after the first one is close to instant, and several projects sharing a dependency store it once. `pnpm dlx` is the one-shot runner. `npm`, `npx` and `node` are all installed too — use them when a project has a `package-lock.json`, or when a tool insists on npm — but reach for `pnpm` by default.
+**JavaScript and TypeScript — prefer `pnpm`.** Its store is on the workspace volume, so packages are hard-linked and survive into your next conversation: repeat installs are close to instant. `pnpm dlx` is the one-shot runner. `npm`/`npx`/`node` are there for a project with a `package-lock.json` or a tool that insists.
 
 **Python — two cases, and they use different tools.**
 
-*Adding a package to the interpreter you already have* (the one `execute_python` uses): `pip install <package>`. Not `uv pip install`, which targets a system environment you cannot write to and fails with a permission error. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there. These installs last for the conversation.
+*Adding a package to the interpreter `execute_python` uses*: `pip install` or `uv pip install` — either works, and the install lasts the conversation. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there.
 
-*Building a Python project* — anything with a `pyproject.toml`, or that needs its own pinned dependencies: use `uv`. `uv venv` then `uv pip install`, or `uv sync` for a project with a lockfile. Its cache is on the workspace volume too, so repeat installs are fast. Run the project's code with that venv's interpreter rather than `execute_python`, which is bound to the shared one.
+*Building a Python project* — anything with a `pyproject.toml` or its own pinned dependencies: use `uv` (`uv venv` + `uv pip install`, or `uv sync` with a lockfile), and run it with that venv's interpreter. `execute_python` is bound to the shared one.
 
 SDK source is readable at `/sdk/lemma-python` and `/sdk/lemma-typescript` when you need an exact signature or response shape.

@@ -5,13 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import (
-    DEFAULT_BASE_URL,
     DEFAULT_CONFIG_PATH,
+    ENV_SERVER_NAME,
+    build_env_server_config,
     get_access_token_from_config,
     get_server_config,
     load_config,
     normalize_server_config,
+    resolve_base_url,
     resolve_verify_ssl,
+    should_use_env_server,
 )
 from .errors import LemmaConfigError
 
@@ -39,21 +42,52 @@ def load_settings(
     server: str | None = None,
     config_path: Path | None = None,
 ) -> LemmaSettings:
-    path = config_path or DEFAULT_CONFIG_PATH
-    root, selected_server = normalize_server_config(
-        load_config(path),
-        selected_server=server,
-    )
-    config = get_server_config(root, selected_server)
-    defaults = config.get("defaults") if isinstance(config.get("defaults"), dict) else {}
+    """Resolve where to dial and what to send, the way the CLI does.
 
-    resolved_base_url = (
-        base_url
-        or os.getenv("LEMMA_BASE_URL")
-        or config.get("base_url")
-        or DEFAULT_BASE_URL
+    The server is chosen first, and the endpoint and the credential then both
+    come from it, so the two can never be crossed:
+
+    * ``server=`` (or ``LEMMA_SERVER``) names a server in ``~/.lemma/config.json``;
+    * with no server named, ``LEMMA_TOKEN`` selects the synthetic ``env`` server,
+      whose endpoints are ``LEMMA_BASE_URL`` and ``LEMMA_AUTH_URL`` and otherwise
+      the public defaults;
+    * with neither, the config file's active server is used.
+
+    ``base_url=`` and ``token=`` always win over whichever server was chosen.
+    ``LEMMA_BASE_URL`` is read only for the ``env`` server -- a named server
+    carries its own endpoint, and letting the environment redirect it is how a
+    token reaches a host nobody asked for.
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+    requested_server = server or os.getenv("LEMMA_SERVER")
+
+    # The same rule the CLI applies in `build_state`: a token that came from the
+    # environment is paired with environment endpoints, never with whatever
+    # server ~/.lemma/config.json happens to have selected. Resolving the two
+    # independently is how a cloud token ends up dialed at a self-hosted or
+    # scratch server the caller never named.
+    use_env_server = should_use_env_server(requested_server)
+    if use_env_server:
+        selected_server = ENV_SERVER_NAME
+        config = build_env_server_config()
+    else:
+        root, selected_server = normalize_server_config(
+            load_config(path),
+            selected_server=requested_server,
+        )
+        config = get_server_config(root, selected_server)
+    defaults = (
+        config.get("defaults") if isinstance(config.get("defaults"), dict) else {}
     )
-    resolved_token = token or os.getenv("LEMMA_TOKEN") or get_access_token_from_config(config)
+
+    try:
+        resolved_base_url = resolve_base_url(base_url, config, use_env=use_env_server)
+    except ValueError as exc:
+        # A selected server with no reachable endpoint (Desktop's local server
+        # while the runtime is down). Say so instead of quietly dialing the
+        # public default with a credential minted for somewhere else.
+        raise LemmaConfigError(str(exc)) from exc
+    resolved_token = token or get_access_token_from_config(config)
     if not resolved_token:
         raise LemmaConfigError(
             "Missing Lemma token. Pass token=..., set LEMMA_TOKEN, or run `lemma auth login`."

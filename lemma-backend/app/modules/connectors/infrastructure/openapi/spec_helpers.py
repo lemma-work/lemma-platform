@@ -119,14 +119,24 @@ def pick_content_schema(
     preferred_types: list[str] | None = None,
 ) -> tuple[str, dict[str, Any], str | None]:
     if not content:
-        return "application/json", {"type": "object", "additionalProperties": True}, None
+        return (
+            "application/json",
+            {"type": "object", "additionalProperties": True},
+            None,
+        )
     preferred = preferred_types or ["application/json", "*/*"]
     for content_type in preferred:
         if content_type in content:
             item = resolve_once(spec, content[content_type])
             raw_schema = item.get("schema") or {}
-            schema_ref = raw_schema.get("$ref") if isinstance(raw_schema, dict) else None
-            return content_type, normalize_schema(deep_resolve_refs(spec, raw_schema)), schema_ref
+            schema_ref = (
+                raw_schema.get("$ref") if isinstance(raw_schema, dict) else None
+            )
+            return (
+                content_type,
+                normalize_schema(deep_resolve_refs(spec, raw_schema)),
+                schema_ref,
+            )
     first_type, first_value = next(iter(content.items()))
     item = resolve_once(spec, first_value)
     raw_schema = item.get("schema") or {}
@@ -168,16 +178,22 @@ def prefers_binary_response(
     marker = f"{operation_id} {path}".lower()
     keyword_match = any(
         token in marker
-        for token in ("download", "export", "thumbnail", "avatar", "image", "tarball", "zipball")
+        for token in (
+            "download",
+            "export",
+            "thumbnail",
+            "avatar",
+            "image",
+            "tarball",
+            "zipball",
+        )
     )
     if not content:
         return keyword_match
     media_types = {str(item).split(";", 1)[0].strip().lower() for item in content}
     has_binary_media = any(
         media_type in {"*/*", "application/octet-stream"}
-        or media_type.startswith("image/")
-        or media_type.startswith("audio/")
-        or media_type.startswith("video/")
+        or media_type.startswith(("image/", "audio/", "video/"))
         for media_type in media_types
     )
     return keyword_match and has_binary_media

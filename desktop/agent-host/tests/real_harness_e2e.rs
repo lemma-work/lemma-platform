@@ -116,6 +116,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                             context: BTreeMap::new(),
                             mcp: Value::Null,
                             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
+                            system_prompt_delivery: None,
                         },
                         scratch_directory: paths
                             .root
@@ -218,6 +219,7 @@ async fn one_turn(
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                    system_prompt_delivery: None,
                 },
                 // The caller's directory, not one invented here. A provider
                 // is entitled to refuse to load a session into a different cwd
@@ -389,6 +391,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
+                system_prompt_delivery: None,
             },
             scratch_directory: scratch.path().to_path_buf(),
             mcp_server: None,
@@ -751,6 +754,7 @@ async fn poll(
                 "authorization": "Bearer unused-real-control-e2e-secret",
             }),
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
+            system_prompt_delivery: None,
         })
         .unwrap();
         vec![json!({
@@ -814,10 +818,10 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
         events: Arc::new(Mutex::new(Vec::new())),
     };
     let app = Router::new()
-        .route("/agent-host/pairings:complete", post(pairing))
+        .route("/agent-host/pairings/complete", post(pairing))
         .route("/agent-host/harnesses", put(publish))
         .route("/agent-host/poll", post(poll))
-        .route("/agent-host/events:append", post(append_events))
+        .route("/agent-host/events/append", post(append_events))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -1002,6 +1006,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                         context: BTreeMap::new(),
                         mcp: Value::Null,
                         run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                        system_prompt_delivery: None,
                     },
                     scratch_directory: scratch.clone(),
                     mcp_server: None,
@@ -1121,5 +1126,127 @@ async fn a_real_agent_answers_from_history_carried_in_the_prompt() {
              {answer:?}"
         );
         println!("{agent}: answered from prompt-carried history");
+    }
+}
+
+/// Parking, with a real commercial agent on the other end.
+///
+/// The hermetic suite proves the bridge waits and rewrites the frame. Only a
+/// real provider can prove the part that matters to a person: that an agent
+/// handed a parked tool result *stays in its turn* while someone decides, and
+/// then uses their answer — rather than treating the slow tool as a failure,
+/// giving up, or answering from its own head.
+///
+/// The stand-in withholds the decision for two polls, so the agent genuinely
+/// waits rather than being handed an answer that happened to be ready.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_waits_inside_its_turn_for_a_parked_tool() {
+    for agent in configured_agents() {
+        let endpoint = support::LemmaMcpEndpoint::start(support::McpTransport::StatelessJson).await;
+        let (_directory, control) = paired_real_run(
+            &agent,
+            concat!(
+                "Call the Lemma MCP tool named lemma_park with no arguments. ",
+                "It may take a while to answer; wait for it. Do not use any ",
+                "other tool and do not write files. When it returns, reply ",
+                "with exactly the value it gives for the key 'Pick one'."
+            ),
+            endpoint.run_configuration(),
+            support::PermissionAnswer::AllowOnce,
+            Duration::from_secs(300),
+        )
+        .await;
+
+        let call = endpoint
+            .requests()
+            .into_iter()
+            .find(|record| record.method == "tools/call")
+            .unwrap_or_else(|| panic!("{agent} never called the parked tool"));
+        assert_eq!(call.params["name"], support::PARK_TOOL);
+        // The bridge really held the response open rather than handing the
+        // placeholder straight to the agent.
+        assert!(
+            endpoint.interaction_polls() > 2,
+            "{agent}'s bridge did not wait: {} poll(s)",
+            endpoint.interaction_polls()
+        );
+        // And the agent used the person's answer, which it could only have
+        // received as that tool's return.
+        assert!(
+            control.assistant_text().contains("Blue"),
+            "{agent} did not use the parked answer: {:?}",
+            control.assistant_text()
+        );
+        println!("{agent}: LEMMA_REAL_PARKED_TOOL_OK");
+    }
+}
+
+/// Waking up, with a real agent on the other end.
+///
+/// A woken run adds no user message, so Lemma prompts it with the return it
+/// synthesized for the `snooze` call it resolved — rendered exactly as
+/// `remote_payload._render_history` writes it. The hermetic tests prove that
+/// return is chosen and rendered. Only a real provider can prove the part that
+/// decides whether the feature works: that an agent resuming its own session
+/// reads a tool result arriving as a fresh prompt as *its own call returning*,
+/// and carries on with what it was doing — rather than treating it as a new
+/// request, apologising for a tool it does not remember calling, or starting
+/// the task over.
+///
+/// The subject is the tell, and it appears only in the first turn. An answer
+/// that names it came from the resumed session; the wake prompt says nothing
+/// about what the agent was waiting for.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let conversation_id = Uuid::new_v4();
+        let workspace = conversation_workspace(&paths, &agent, conversation_id);
+        let (session_id, _) = one_turn(
+            &manifest,
+            &workspace,
+            &agent,
+            conversation_id,
+            "You are waiting for the Fenwick deployment to finish. It is not \
+             ready yet, so you called the snooze tool to sleep. Reply with \
+             only: sleeping.",
+            None,
+        )
+        .await;
+
+        // Exactly the shape `_render_history` produces for the return the wake
+        // writes, prompted into the session the agent slept in. Deliberately
+        // says nothing about the subject: everything the agent knows about what
+        // it was doing has to come from the session it is resuming.
+        let (resumed_session_id, answer) = one_turn(
+            &manifest,
+            &workspace,
+            &agent,
+            conversation_id,
+            "TOOL:\nTool result snooze(lemma-mcp-1):\n{\n  \"success\": true,\n  \
+             \"woke_because\": \"TIMER\",\n  \"slept_seconds\": 600,\n  \
+             \"note_to_self\": \"name what you were waiting for, in one \
+             sentence\",\n  \"message\": \"Your time elapsed. That is all this \
+             means - check whatever you were waiting for before acting as \
+             though it happened.\"\n}",
+            Some(session_id.clone()),
+        )
+        .await;
+
+        assert_eq!(
+            resumed_session_id, session_id,
+            "{agent} woke in a different session than the one it slept in"
+        );
+        assert!(
+            answer.to_lowercase().contains("fenwick"),
+            "{agent} did not carry on from where it slept; it answered {answer:?}"
+        );
+        println!("{agent}: LEMMA_REAL_WAKE_OK -> {answer:?}");
     }
 }

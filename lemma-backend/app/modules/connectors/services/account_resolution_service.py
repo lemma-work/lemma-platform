@@ -6,28 +6,34 @@ Resolution rule:
   early-return below handles it.
 - **Default pod agent**: mirrors the invoking user, so it resolves to the
   user's own account for the connector.
-- **Named workload with a pinned (shared) account id**: authority comes from
-  the workload's grants alone — ``connector.use`` on the connector plus
-  ``connector_account.use`` on the pinned account — and is therefore
-  invoker-independent. This is what makes a shared-sender setup (e.g. one
-  team Gmail account pinned on a function) work for every pod member.
+- **Named workload with a pinned (shared) account id**: the workload needs
+  ``connector.use`` on the connector plus ``connector_account.use`` on the
+  pinned account. This is the shared-mailbox pattern — one team account an
+  agent operates on behalf of the pod — and it works for every member who may
+  run the agent, which is the point of it. The pod is the trust boundary: an
+  agent visible inside it, configured with an account, uses that account
+  whoever set the run going.
 
-Connector-account *visibility* is derived (RESTRICTED iff any grant row
-exists); for human actors that still means "non-owners need a user-level
-grant". For workloads the derived visibility is inert: the grant-first
-evaluation in ``_authorize_delegated_workload`` consults the workload's own
-grants for every visibility.
+  A workload's authority is still its grants intersected with the invoking
+  person's (PS-ACCESS-020, ``core/authorization/workload_authority.py``). What
+  makes both true at once is that the invoker half asks whether *they* may use
+  the account, and a grant to an agent is a workload capability grant that does
+  not restrict people from the resource — see ``HUMAN_GRANTEE_TYPES``. So a
+  member holding ``connector_account.use`` passes; a POD_VIEWER, who holds no
+  such permission at all, still does not.
+
+Connector-account *visibility* is derived: RESTRICTED once a **human** sharing
+grant exists on it, POD-visible otherwise. Workload grants are deliberately not
+counted, or pinning an account on an agent would be the very act that hid the
+account from the people the agent runs for. Visibility is not what keeps a
+person out of a colleague's account either — ``_get_owned_account`` refuses a
+non-delegated caller another person's account outright, whatever it says.
 """
 
 from uuid import UUID
 
 from app.core.authorization.context import ActorType, Context, ResourceRef
 from app.core.authorization.current import get_current_context
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-    WorkloadPrincipalType,
-)
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.grants import connector_resource_id
 from app.modules.connectors.domain.account import AccountEntity
@@ -35,7 +41,10 @@ from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorAccessDeniedError,
 )
-from app.modules.connectors.domain.ports import AccountRepositoryPort
+from app.modules.connectors.domain.ports import (
+    AccountRepositoryPort,
+    OrganizationAccessPort,
+)
 
 
 class AccountResolutionService:
@@ -45,10 +54,41 @@ class AccountResolutionService:
         account_repository: AccountRepositoryPort,
         authz_read_port: object | None = None,
         authorization_service: object | None = None,
+        organization_access: OrganizationAccessPort | None = None,
     ):
         self.account_repo = account_repository
         self.authz_read_port = authz_read_port
         self.authorization_service = authorization_service
+        self.organization_access = organization_access
+
+    async def _assert_owner_is_still_a_member(
+        self, account: AccountEntity, organization_id: UUID | None
+    ) -> None:
+        """Refuse an account whose owner has left the organization.
+
+        Removing a member deletes the `organization_members` row and nothing
+        else -- the account, and the provider credential inside it, stay
+        exactly where they were. An agent or schedule pinned to that account
+        with `connector_account.use` therefore went on acting as the departed
+        person at the provider, reading their mail and writing under their
+        name, indefinitely. Nobody could clean it up either: they can no longer
+        reach their own account, and there is no org-wide account listing for
+        an admin to find it in.
+
+        Checked at resolution rather than at removal because this is the moment
+        that matters and the only one that cannot be skipped -- a credential
+        left behind by some other path is refused here too.
+        """
+        if self.organization_access is None or organization_id is None:
+            return
+        still_a_member = await self.organization_access.user_has_organization_role(
+            account.user_id, organization_id
+        )
+        if not still_a_member:
+            raise AccountResolutionError(
+                "The person who connected this account is no longer a member of "
+                "this organization."
+            )
 
     @staticmethod
     def _context_org_id(auth_ctx: Context | None) -> UUID | None:
@@ -203,6 +243,9 @@ class AccountResolutionService:
                     pod_account_id=requested_account.id,
                 ),
             )
+            await self._assert_owner_is_still_a_member(
+                requested_account, organization_id
+            )
             return requested_account
 
         return await self._get_owned_account(
@@ -214,12 +257,18 @@ class AccountResolutionService:
 
     @staticmethod
     def _is_default_pod_agent_delegation(ctx: Context) -> bool:
-        actor_type, _, actor_id = ctx.actor_id.partition(":")
+        """Whether this context is the pod's assistant acting as its user.
+
+        ``is_user_equivalent`` is set in exactly one place -- the branch of
+        ``build_delegated_workload_context`` that the assistant takes -- so
+        reading it is the same answer the context was built from. Re-deriving
+        it here from ``actor_id`` meant parsing a string into a type and an id
+        and re-comparing both, which is how this came to disagree with the
+        builder in two independent ways at once.
+        """
         return (
             ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and actor_type == WorkloadPrincipalType.AGENT.value
-            and actor_id == str(DEFAULT_POD_AGENT_ID)
-            and ctx.delegation_actor_name in {None, DEFAULT_POD_AGENT_NAME}
+            and ctx.is_user_equivalent
         )
 
     async def _require_delegated_access(
@@ -231,12 +280,17 @@ class AccountResolutionService:
         try:
             await auth_actor.require(action, resource)
         except Exception as exc:
+            # The two halves of the intersection fail for opposite reasons and
+            # are fixed in opposite places -- grant the workload, or raise the
+            # access of the person running it -- so say which one gave way
+            # rather than sending everyone to look at the workload's grants.
+            reason_code = str(getattr(exc, "code", "ACCESS_DENIED"))
             raise ConnectorAccessDeniedError(
-                "Delegated workload is not authorized",
-                details={
-                    "reason_code": getattr(exc, "code", "ACCESS_DENIED"),
-                    "action": str(action),
-                },
+                "The person running this workload is not allowed to use this "
+                "connector account themselves"
+                if reason_code == "DELEGATION_EXCEEDS_INVOKER"
+                else "Delegated workload is not authorized",
+                details={"reason_code": reason_code, "action": str(action)},
             ) from exc
 
     async def resolve_account(

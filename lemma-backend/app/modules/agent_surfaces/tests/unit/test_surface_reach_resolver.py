@@ -45,17 +45,13 @@ class FakeCredentialResolver:
         return self.credentials
 
 
-class FakeAccountRepository:
-    def __init__(self, display_name: str | None = "Support Bot Account"):
-        self._display_name = display_name
+def _account_named(display_name: str | None = "Support Bot Account"):
+    """Connectors' account read, as the resolver is handed it."""
 
-    async def get(self, account_id):
-        return SimpleNamespace(display_name=self._display_name)
+    async def _find(account_id):
+        return SimpleNamespace(display_name=display_name)
 
-
-class FakeConnectorService:
-    def __init__(self, display_name: str | None = "Support Bot Account"):
-        self.account_repository = FakeAccountRepository(display_name)
+    return _find
 
 
 class FakeSurfaceRepository:
@@ -86,7 +82,7 @@ async def test_slack_handle_resolved_and_persisted(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=cred,
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
 
@@ -106,7 +102,7 @@ async def test_telegram_handle_prefixes_at_and_persists(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver({"bot_token": "123:abc"}),
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
 
@@ -120,9 +116,7 @@ async def test_teams_handle_from_graph(monkeypatch):
         # Simulate a successful graph servicePrincipal lookup at the seam.
         return "Lemma Teams Bot"
 
-    monkeypatch.setattr(
-        SurfaceReachResolver, "_teams_handle", fake_teams_handle
-    )
+    monkeypatch.setattr(SurfaceReachResolver, "_teams_handle", fake_teams_handle)
     surface = _surface(
         surface_type=SurfacePlatform.TEAMS,
         surface_identity_id=None,
@@ -133,7 +127,7 @@ async def test_teams_handle_from_graph(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
 
@@ -147,12 +141,8 @@ async def test_teams_handle_config_fallback(monkeypatch):
         return None
 
     monkeypatch.setattr(surface_reach_resolver, "get_graph_token", fake_token)
-    monkeypatch.setattr(
-        surface_settings, "microsoft_bot_app_id", "app-123"
-    )
-    monkeypatch.setattr(
-        surface_settings, "microsoft_bot_app_name", "Lemma (config)"
-    )
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "app-123")
+    monkeypatch.setattr(surface_settings, "microsoft_bot_app_name", "Lemma (config)")
     surface = _surface(
         surface_type=SurfacePlatform.TEAMS,
         surface_identity_id=None,
@@ -163,7 +153,7 @@ async def test_teams_handle_config_fallback(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
 
@@ -171,7 +161,7 @@ async def test_teams_handle_config_fallback(monkeypatch):
     assert surface.surface_identity_username == "Lemma (config)"
 
 
-async def test_whatsapp_handle_resolves_display_phone_and_persists():
+async def test_whatsapp_handle_resolves_display_phone_and_persists(monkeypatch):
     surface = _surface(
         surface_type=SurfacePlatform.WHATSAPP,
         surface_identity_id=None,
@@ -187,7 +177,7 @@ async def test_whatsapp_handle_resolves_display_phone_and_persists():
                 "display_phone_number": "+1 555 0100",
             }
         ),
-        connector_service=FakeConnectorService("WhatsApp Account Label"),
+        find_account=_account_named("WhatsApp Account Label"),
         surface_repository=repo,
     )
 
@@ -196,16 +186,16 @@ async def test_whatsapp_handle_resolves_display_phone_and_persists():
     assert repo.updated == [surface]
 
 
-async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailable():
-    surface = _surface(
-        surface_type=SurfacePlatform.WHATSAPP, surface_identity_id=None
-    )
+async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailable(
+    monkeypatch,
+):
+    surface = _surface(surface_type=SurfacePlatform.WHATSAPP, surface_identity_id=None)
     repo = FakeSurfaceRepository()
 
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("WhatsApp +1 555"),
+        find_account=_account_named("WhatsApp +1 555"),
         surface_repository=repo,
     )
 
@@ -214,41 +204,7 @@ async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailab
     assert repo.updated == []
 
 
-async def test_gmail_falls_back_to_account_display_name():
-    surface = _surface(
-        surface_type=SurfacePlatform.GMAIL,
-        surface_identity_id=None,
-        surface_identity_email="bot@example.com",
-    )
-    repo = FakeSurfaceRepository()
-
-    reach = await SurfaceReachResolver().resolve(
-        surface,
-        credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Gmail Mailbox"),
-        surface_repository=repo,
-    )
-
-    assert reach.handle == "Gmail Mailbox"
-    assert repo.updated == []
-
-
-async def test_outlook_falls_back_to_account_display_name():
-    surface = _surface(
-        surface_type=SurfacePlatform.OUTLOOK, surface_identity_id=None
-    )
-
-    reach = await SurfaceReachResolver().resolve(
-        surface,
-        credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Outlook Mailbox"),
-        surface_repository=FakeSurfaceRepository(),
-    )
-
-    assert reach.handle == "Outlook Mailbox"
-
-
-async def test_resend_falls_back_to_surface_email():
+async def test_resend_falls_back_to_surface_email(monkeypatch):
     surface = _surface(
         surface_type=SurfacePlatform.RESEND,
         account_id=None,
@@ -259,7 +215,7 @@ async def test_resend_falls_back_to_surface_email():
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=FakeSurfaceRepository(),
     )
 
@@ -290,7 +246,7 @@ async def test_lazy_write_through_second_read_makes_no_call(monkeypatch):
     first = await resolver.resolve(
         surface,
         credential_resolver=cred,
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
     assert first.handle == "lemma-bot"
@@ -303,7 +259,7 @@ async def test_lazy_write_through_second_read_makes_no_call(monkeypatch):
     second = await resolver.resolve(
         surface,
         credential_resolver=cred,
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=repo,
     )
     assert second.handle == "lemma-bot"
@@ -328,7 +284,7 @@ async def test_platform_failure_falls_back_to_account_display_name(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Fallback Account"),
+        find_account=_account_named("Fallback Account"),
         surface_repository=repo,
     )
 
@@ -351,7 +307,7 @@ async def test_no_handle_when_everything_missing(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=None,
+        find_account=None,
         surface_repository=FakeSurfaceRepository(),
     )
 
@@ -379,7 +335,7 @@ async def test_reach_email_matches_surface_identity_email(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService(),
+        find_account=_account_named(),
         surface_repository=FakeSurfaceRepository(),
     )
 
@@ -391,9 +347,7 @@ async def test_live_handle_timeout_falls_back(monkeypatch):
     # account fallback (and persists nothing).
     import asyncio
 
-    monkeypatch.setattr(
-        surface_reach_resolver, "_LIVE_HANDLE_TIMEOUT_SECONDS", 0.01
-    )
+    monkeypatch.setattr(surface_reach_resolver, "_LIVE_HANDLE_TIMEOUT_SECONDS", 0.01)
 
     async def slow_name(self, user_id):
         await asyncio.sleep(0.5)
@@ -406,7 +360,7 @@ async def test_live_handle_timeout_falls_back(monkeypatch):
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=FakeCredentialResolver(),
-        connector_service=FakeConnectorService("Fallback Account"),
+        find_account=_account_named("Fallback Account"),
         surface_repository=repo,
     )
 

@@ -8,32 +8,18 @@ job, and that is what the budget tests pin.
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
 from uuid import uuid4
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.core.config import settings
 
 import pytest
 from fastapi import status
-from sqlalchemy import event
 
-from app.core.infrastructure.db.session import get_engine
+from app.modules.test_support.query_counting import counted_queries
 from app.modules.test_support.e2e_authz import signup_user
 
 pytestmark = [pytest.mark.e2e]
-
-
-@contextmanager
-def counted_queries():
-    statements: list[str] = []
-    engine = get_engine().sync_engine
-
-    def before(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", before)
-    try:
-        yield statements
-    finally:
-        event.remove(engine, "before_cursor_execute", before)
 
 
 async def _create_org(client, name: str) -> str:
@@ -129,7 +115,9 @@ async def test_navigation_query_count_is_flat_across_organizations(
     authenticated_client, fixed_test_org
 ):
     """Two organizations or six, the sidebar costs the same — the whole point."""
-    await _create_pod(authenticated_client, fixed_test_org["id"], f"p-{uuid4().hex[:6]}")
+    await _create_pod(
+        authenticated_client, fixed_test_org["id"], f"p-{uuid4().hex[:6]}"
+    )
     with counted_queries() as small:
         first = await authenticated_client.get("/organizations/navigation")
     assert first.status_code == status.HTTP_200_OK
@@ -150,8 +138,20 @@ async def test_navigation_query_count_is_flat_across_organizations(
 
 
 async def test_home_returns_pods_with_their_apps_agents_and_roles(
-    authenticated_client, fixed_test_org
+    authenticated_client, fixed_test_org, monkeypatch
 ):
+    """Both halves of the app-URL contract, because one of them is a real state.
+
+    An install with no app base domain reports no URL for an app. That is not a
+    misconfiguration to assert away: a desktop stack shared over a tunnel serves
+    the workspace and the API on one public origin and serves no app host at
+    all, and reporting a URL anyway handed the visitor a link their own browser
+    resolved against their own machine. The `testing` environment leaves the
+    domain unset on purpose, so this is the state the suite runs in by default.
+
+    Asserting only the populated half is what let this test read a URL that was
+    never there; asserting only the empty half would let the address rot.
+    """
     org_id = fixed_test_org["id"]
     pod_name = f"home-{uuid4().hex[:6]}"
     pod_id = await _create_pod(authenticated_client, org_id, pod_name)
@@ -166,12 +166,40 @@ async def test_home_returns_pods_with_their_apps_agents_and_roles(
     assert body["role"] == "ORG_OWNER"
     pod = next(item for item in body["pods"] if item["id"] == pod_id)
     assert pod["name"] == pod_name
-    assert len(pod["agents"]) == 1
-    assert pod["agents"][0]["description"].endswith("desc")
+    # Two: the one just made, and the pod's own assistant, which has had a real
+    # agent row since it stopped being synthesised from the absence of one.
+    made, assistant = sorted(
+        pod["agents"], key=lambda agent: agent["name"] == DEFAULT_POD_AGENT_NAME
+    )
+    assert made["description"].endswith("desc")
+    assert assistant["name"] == DEFAULT_POD_AGENT_NAME
     assert len(pod["apps"]) == 1
-    # The URL is the app's real serving address, not just its slug.
-    assert pod["apps"][0]["url"].startswith(("http://", "https://"))
-    assert "." in pod["apps"][0]["url"]
+    assert pod["apps"][0]["url"] is None, (
+        "this install serves no app host, so there is no address to report; "
+        f"got {pod['apps'][0]['url']!r}"
+    )
+
+    # And with a domain to serve them under, the real serving address -- not
+    # just the slug, and on the host apps are actually reachable at.
+    #
+    # No cache-busting needed, and that is the point: the cached listing is
+    # keyed by the app host it was built under, so changing the host is a miss
+    # rather than a thirty-second window of URLs pointing at the wrong machine.
+    monkeypatch.setattr(settings, "app_base_domain", "apps.example.test")
+    served = await authenticated_client.get(f"/organizations/{org_id}/home")
+    assert served.status_code == status.HTTP_200_OK, served.text
+    pod = next(item for item in served.json()["pods"] if item["id"] == pod_id)
+    url = pod["apps"][0]["url"]
+    assert url.startswith(("http://", "https://")), (
+        f"the app URL carries no scheme: {url!r}"
+    )
+    assert url.endswith(".apps.example.test"), (
+        f"the app URL is not on the host apps are served from: {url!r}"
+    )
+    # A slug in front of the domain, not the bare domain: the point of the
+    # field is to address one app, and `https://apps.example.test` addresses
+    # none of them.
+    assert url.split("://", 1)[1].removesuffix(".apps.example.test")
 
 
 async def test_home_query_count_does_not_grow_with_pods(
@@ -179,7 +207,9 @@ async def test_home_query_count_does_not_grow_with_pods(
 ):
     """The endpoint that replaces per-pod fetching must not do per-pod fetching."""
     org_id = fixed_test_org["id"]
-    first_pod = await _create_pod(authenticated_client, org_id, f"one-{uuid4().hex[:6]}")
+    first_pod = await _create_pod(
+        authenticated_client, org_id, f"one-{uuid4().hex[:6]}"
+    )
     await _create_agent(authenticated_client, first_pod, f"a{uuid4().hex[:6]}")
 
     # A cache hit would measure nothing, so both samples must miss: caching is
@@ -260,8 +290,12 @@ async def test_a_member_sees_only_the_pods_they_joined(
     see only the one they were added to, in both endpoints.
     """
     org_id = fixed_test_org["id"]
-    joined = await _create_pod(authenticated_client, org_id, f"joined-{uuid4().hex[:6]}")
-    hidden = await _create_pod(authenticated_client, org_id, f"hidden-{uuid4().hex[:6]}")
+    joined = await _create_pod(
+        authenticated_client, org_id, f"joined-{uuid4().hex[:6]}"
+    )
+    hidden = await _create_pod(
+        authenticated_client, org_id, f"hidden-{uuid4().hex[:6]}"
+    )
 
     token, org_member_id = await _join_org_as_member(
         authenticated_client, async_client, org_id
@@ -274,7 +308,9 @@ async def test_a_member_sees_only_the_pods_they_joined(
 
     member_auth = {"Authorization": f"Bearer {token}"}
 
-    navigation = await async_client.get("/organizations/navigation", headers=member_auth)
+    navigation = await async_client.get(
+        "/organizations/navigation", headers=member_auth
+    )
     assert navigation.status_code == status.HTTP_200_OK, navigation.text
     organization = next(
         item for item in navigation.json()["items"] if item["id"] == org_id
@@ -330,7 +366,9 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
     org_ids = [fixed_test_org["id"]]
     for index in range(4):
         org_ids.append(
-            await _create_org(authenticated_client, f"Scale Org {index}-{uuid4().hex[:6]}")
+            await _create_org(
+                authenticated_client, f"Scale Org {index}-{uuid4().hex[:6]}"
+            )
         )
 
     pods_by_org: dict[str, list[str]] = {}
@@ -386,7 +424,7 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
         response = await authenticated_client.get("/organizations")
         assert response.status_code == status.HTTP_200_OK, response.text
         for org_id in org_ids:
-            response = await authenticated_client.get(f"/pods/organization/{org_id}")
+            response = await authenticated_client.get(f"/organizations/{org_id}/pods")
             assert response.status_code == status.HTTP_200_OK, response.text
         return response
 
@@ -401,7 +439,8 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
     home_pods = home.json()["pods"]
     assert len(home_pods) == 4
     assert all(len(pod["apps"]) == 2 for pod in home_pods)
-    assert all(len(pod["agents"]) == 2 for pod in home_pods)
+    # Two seeded above, plus the pod's own assistant, which is a real row now.
+    assert all(len(pod["agents"]) == 3 for pod in home_pods)
 
     with capsys.disabled():
         print(
@@ -409,7 +448,7 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
             f"\n  {'route':44} {'cold':>9} {'p50':>9} {'p95':>9}"
             f"\n  {'GET /organizations/navigation':44} {navigation_cold:7.1f}ms {navigation_p50:7.1f}ms {navigation_p95:7.1f}ms"
             f"\n  {'GET /organizations/{id}/home':44} {home_cold:7.1f}ms {home_p50:7.1f}ms {home_p95:7.1f}ms"
-            f"\n  {'was: /organizations + 5x /pods/organization':44} {'':9} {legacy_p50:7.1f}ms {legacy_p95:7.1f}ms"
+            f"\n  {'was: /organizations + 5x .../pods':44} {'':9} {legacy_p50:7.1f}ms {legacy_p95:7.1f}ms"
             f"\n  → the sidebar costs {legacy_p50 / navigation_p50:.1f}x less than the fan-out it replaces"
             f"\n  → home's p50 is a cache hit; {home_cold:.1f}ms is what building it costs"
         )

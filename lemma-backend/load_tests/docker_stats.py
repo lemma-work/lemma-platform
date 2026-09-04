@@ -64,7 +64,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
-    print(f"Sampling docker stats every {args.interval}s -> {args.output} (Ctrl+C to stop)")
+    print(
+        f"Sampling docker stats every {args.interval}s -> {args.output} (Ctrl+C to stop)"
+    )
     with open(args.output, "w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["timestamp", "name", "cpu_perc", "mem_usage", "mem_perc"])

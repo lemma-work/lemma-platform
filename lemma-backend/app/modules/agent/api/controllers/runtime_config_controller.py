@@ -25,7 +25,7 @@ from app.modules.agent.api.schemas import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -47,16 +47,21 @@ router = APIRouter(tags=["agent_runtime"])
 
 async def _ensure_org_member(
     *,
-    org_id: UUID,
+    organization_id: UUID,
     user: CurrentUser,
     uow: UoWDep,
 ) -> None:
-    from app.composition.identity_notifications import user_is_organization_member
+    from app.modules.identity.contracts.organizations import organization_member_role
 
-    if not await user_is_organization_member(
-        uow,
-        user_id=user.id,
-        organization_id=org_id,
+    # Any role at all is enough here: this endpoint reads the organization's
+    # runtime configuration, which every member can see. The policy is named
+    # where it applies rather than compiled into the read, so a second caller
+    # wanting a narrower rule does not have to publish a second query.
+    if (
+        await organization_member_role(
+            uow, user_id=user.id, organization_id=organization_id
+        )
+        is None
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -64,9 +69,7 @@ async def _ensure_org_member(
         )
 
 
-def _profile_response(
-    profile, availability=None
-) -> AgentRuntimeProfileResponse:
+def _profile_response(profile, availability=None) -> AgentRuntimeProfileResponse:
     """Serialize one profile, merging in its derived availability.
 
     availability is not on the domain entity - it is read from the harness and
@@ -78,10 +81,26 @@ def _profile_response(
     return AgentRuntimeProfileResponse.model_validate(data)
 
 
+def _is_own_machine_profile(data: CreateAgentRuntimeProfileRequest) -> bool:
+    """Is this create request nothing but the caller registering their own machine?
+
+    A PERSONAL Agent Host profile shares nothing: ``create_agent_host_profile``
+    proves through ``require_ready_harness`` that the harness runs on a computer
+    this caller paired, and a personal profile is selectable only by its owner.
+    Every other create writes shared configuration - an org-wide provider
+    credential, or a machine opened to the whole organization - and takes the
+    org edit gate instead.
+    """
+    return (
+        isinstance(data, CreateAgentHostRuntimeProfileRequest)
+        and data.scope is RuntimeProfileScope.PERSONAL
+    )
+
+
 async def _require_profile_editor(
     *,
     profile,
-    org_id: UUID,
+    organization_id: UUID,
     user: CurrentUser,
     ctx: OrgContextDep,
 ) -> None:
@@ -94,14 +113,14 @@ async def _require_profile_editor(
     """
     if profile.scope is RuntimeProfileScope.PERSONAL and profile.user_id == user.id:
         return
-    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
+    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(organization_id))
 
 
 async def _load_profile_or_404(
     service: AgentRuntimeProfileService,
     *,
     profile_id: str,
-    org_id: UUID,
+    organization_id: UUID,
     user: CurrentUser,
 ):
     if service.repository is None:
@@ -111,7 +130,7 @@ async def _load_profile_or_404(
         )
     profile = await service.repository.get_visible_by_id(
         profile_id=profile_id,
-        organization_id=org_id,
+        organization_id=organization_id,
         user_id=user.id,
         # An archived profile must still be addressable, or it could never be
         # restored or renamed out of a name collision.
@@ -136,23 +155,23 @@ def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
 
 
 @router.get(
-    "/organizations/{org_id}/agent-runtime/profiles",
+    "/organizations/{organization_id}/agent-runtime/profiles",
     response_model=AgentRuntimeProfileListResponse,
     operation_id="agent.runtime.profiles.list",
     summary="List Available Agent Runtime Profiles",
 )
 async def list_available_runtime_profiles(
-    org_id: UUID,
+    organization_id: UUID,
     user: CurrentUser,
     uow: UoWDep,
     include_disabled: bool = False,
 ) -> AgentRuntimeProfileListResponse:
-    await _ensure_org_member(org_id=org_id, user=user, uow=uow)
+    await _ensure_org_member(organization_id=organization_id, user=user, uow=uow)
     service = _runtime_profile_service(uow)
     # Archived profiles are excluded by default: this listing is also the chat
     # model catalog, and a retired model must not stay pickable.
     entries = await service.list_profiles_with_availability(
-        organization_id=org_id,
+        organization_id=organization_id,
         user_id=user.id,
         include_disabled=include_disabled,
     )
@@ -167,14 +186,14 @@ async def list_available_runtime_profiles(
 
 
 @router.post(
-    "/organizations/{org_id}/agent-runtime/profiles",
+    "/organizations/{organization_id}/agent-runtime/profiles",
     response_model=AgentRuntimeProfileResponse,
     status_code=status.HTTP_201_CREATED,
     operation_id="agent.runtime.profiles.create",
     summary="Create Agent Runtime Profile",
 )
 async def create_runtime_profile(
-    org_id: UUID,
+    organization_id: UUID,
     data: CreateAgentRuntimeProfileRequest,
     user: CurrentUser,
     uow: UoWDep,
@@ -183,12 +202,20 @@ async def create_runtime_profile(
     # Creating an ORGANIZATION-scoped runtime profile registers an org-wide model
     # provider (a caller-controlled base_url/api_key) usable by every member's
     # agent runs, so it must require org editor/owner — not mere membership.
-    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
+    # Registering your own paired computer is the one create that shares
+    # nothing, and gating it here meant a member could see the models page from
+    # their pod without being able to add the machine sitting in front of them.
+    if _is_own_machine_profile(data):
+        await _ensure_org_member(organization_id=organization_id, user=user, uow=uow)
+    else:
+        await ctx.require(
+            Permissions.ORG_UPDATE, ResourceRef.organization(organization_id)
+        )
     service = _runtime_profile_service(uow)
     try:
         if isinstance(data, CreateAgentHostRuntimeProfileRequest):
             profile = await service.create_agent_host_profile(
-                organization_id=org_id,
+                organization_id=organization_id,
                 user_id=user.id,
                 harness_id=data.harness_id,
                 name=data.name,
@@ -199,7 +226,7 @@ async def create_runtime_profile(
             )
         elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
             profile = await service.create_openai_compatible_profile(
-                organization_id=org_id,
+                organization_id=organization_id,
                 name=data.name,
                 base_url=data.base_url,
                 api_key=data.api_key,
@@ -211,7 +238,7 @@ async def create_runtime_profile(
             )
         elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
             profile = await service.create_anthropic_compatible_profile(
-                organization_id=org_id,
+                organization_id=organization_id,
                 name=data.name,
                 api_key=data.api_key,
                 base_url=data.base_url,
@@ -237,13 +264,13 @@ async def create_runtime_profile(
 
 
 @router.get(
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
     response_model=AgentRuntimeProfileDetailResponse,
     operation_id="agent.runtime.profiles.get",
     summary="Get Agent Runtime Profile",
 )
 async def get_runtime_profile(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     user: CurrentUser,
     uow: UoWDep,
@@ -253,9 +280,11 @@ async def get_runtime_profile(
     # harness profile this returns another member's machine's configuration.
     service = _runtime_profile_service(uow)
     profile = await _load_profile_or_404(
-        service, profile_id=profile_id, org_id=org_id, user=user
+        service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(profile=profile, org_id=org_id, user=user, ctx=ctx)
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
 
     harness = None
     host_status = None
@@ -280,13 +309,13 @@ async def get_runtime_profile(
 
 
 @router.patch(
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
     response_model=AgentRuntimeProfileResponse,
     operation_id="agent.runtime.profiles.update",
     summary="Update Agent Runtime Profile",
 )
 async def update_runtime_profile(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     data: UpdateAgentRuntimeProfileRequest,
     user: CurrentUser,
@@ -295,9 +324,11 @@ async def update_runtime_profile(
 ) -> AgentRuntimeProfileResponse:
     service = _runtime_profile_service(uow)
     profile = await _load_profile_or_404(
-        service, profile_id=profile_id, org_id=org_id, user=user
+        service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(profile=profile, org_id=org_id, user=user, ctx=ctx)
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
     editor = AgentRuntimeProfileEditor(service)
 
     # Only fields the caller actually sent are forwarded. Everything else stays
@@ -306,11 +337,11 @@ async def update_runtime_profile(
     # stored API key.
     supplied = data.model_fields_set - {"source", "refresh_models"}
     changes = {field: getattr(data, field) for field in supplied}
-    common = dict(
-        profile_id=profile_id,
-        organization_id=org_id,
-        user_id=user.id,
-    )
+    common = {
+        "profile_id": profile_id,
+        "organization_id": organization_id,
+        "user_id": user.id,
+    }
     try:
         if isinstance(data, UpdateAgentHostRuntimeProfileRequest):
             updated = await editor.update_agent_host_profile(**common, **changes)
@@ -338,13 +369,13 @@ async def update_runtime_profile(
 
 
 @router.delete(
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="agent.runtime.profiles.archive",
     summary="Archive Agent Runtime Profile",
 )
 async def archive_runtime_profile(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     user: CurrentUser,
     uow: UoWDep,
@@ -355,13 +386,15 @@ async def archive_runtime_profile(
     # break dispatch idempotency for an in-flight run.
     service = _runtime_profile_service(uow)
     profile = await _load_profile_or_404(
-        service, profile_id=profile_id, org_id=org_id, user=user
+        service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(profile=profile, org_id=org_id, user=user, ctx=ctx)
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
     try:
         await AgentRuntimeProfileEditor(service).archive_profile(
             profile_id=profile_id,
-            organization_id=org_id,
+            organization_id=organization_id,
             user_id=user.id,
         )
     except ValueError as exc:
@@ -369,17 +402,17 @@ async def archive_runtime_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    return None
+    return
 
 
 @router.post(
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore",
     response_model=AgentRuntimeProfileResponse,
     operation_id="agent.runtime.profiles.restore",
     summary="Restore Agent Runtime Profile",
 )
 async def restore_runtime_profile(
-    org_id: UUID,
+    organization_id: UUID,
     profile_id: str,
     user: CurrentUser,
     uow: UoWDep,
@@ -387,13 +420,15 @@ async def restore_runtime_profile(
 ) -> AgentRuntimeProfileResponse:
     service = _runtime_profile_service(uow)
     profile = await _load_profile_or_404(
-        service, profile_id=profile_id, org_id=org_id, user=user
+        service, profile_id=profile_id, organization_id=organization_id, user=user
     )
-    await _require_profile_editor(profile=profile, org_id=org_id, user=user, ctx=ctx)
+    await _require_profile_editor(
+        profile=profile, organization_id=organization_id, user=user, ctx=ctx
+    )
     try:
         restored = await AgentRuntimeProfileEditor(service).restore_profile(
             profile_id=profile_id,
-            organization_id=org_id,
+            organization_id=organization_id,
             user_id=user.id,
         )
     except ValueError as exc:

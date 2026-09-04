@@ -7,12 +7,6 @@ from app.modules.agent.contracts import Conversation
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.gmail.tools import (
-    build_gmail_surface_toolset,
-)
-from app.modules.agent_surfaces.platforms.outlook.tools import (
-    build_outlook_surface_toolset,
-)
 from app.modules.agent_surfaces.platforms.slack.tools import (
     build_slack_surface_toolset,
 )
@@ -25,9 +19,6 @@ from app.modules.agent_surfaces.platforms.telegram.tools import (
 from app.modules.agent_surfaces.platforms.whatsapp.tools import (
     build_whatsapp_surface_toolset,
 )
-from app.modules.agent_surfaces.platforms.resend.tools import (
-    build_resend_surface_toolset,
-)
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
@@ -39,16 +30,15 @@ from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
     native_credentials,
 )
-from app.composition.surface_connectors import get_connector_service
 
+# Email is absent on purpose. Its surfaces used to carry a reply tool, and
+# nothing else -- so with the reply moved to the run observer there is no
+# platform toolset left to build. See `progress_observer`.
 _TOOLSET_BUILDERS = {
     "SLACK": build_slack_surface_toolset,
     "TEAMS": build_teams_surface_toolset,
     "WHATSAPP": build_whatsapp_surface_toolset,
     "TELEGRAM": build_telegram_surface_toolset,
-    "GMAIL": build_gmail_surface_toolset,
-    "OUTLOOK": build_outlook_surface_toolset,
-    "RESEND": build_resend_surface_toolset,
 }
 
 
@@ -85,14 +75,9 @@ class SurfacePlatformToolFactory:
                 # Resend's ``from_address`` lives on the surface row, and the
                 # shortcut used to drop it, so every reply tool call failed with
                 # "Resend send requires api_key, from_address and a recipient".
-                credentials = native_credentials(
-                    surface.surface_type, surface=surface
-                )
+                credentials = native_credentials(surface.surface_type, surface=surface)
             else:
-                resolver = SurfaceCredentialResolver(
-                    session=uow.session,
-                    connector_service=get_connector_service(uow),
-                )
+                resolver = SurfaceCredentialResolver(uow=uow)
                 credentials = await resolver.for_surface(surface, force_refresh=True)
             if not credentials:
                 return []

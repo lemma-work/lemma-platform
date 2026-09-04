@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useQueries } from '@tanstack/react-query';
 
 import {
     HOME_WORKSPACE_TAB,
@@ -14,6 +15,7 @@ import {
     getPodWorkspaceTabsStorageKey,
     parseWorkspaceTabs,
     promoteNewConversationTab,
+    workspaceTabConversationQueryKey,
     routeWorkspaceTab,
     serializeWorkspaceTabs,
     syncAppWorkspaceTabs,
@@ -21,6 +23,8 @@ import {
     upsertWorkspaceTab,
     type PodWorkspaceTab,
 } from '@/lib/pods/workspace-tabs';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { getConversationStatusView } from '@/lib/utils/conversations';
 import type { Conversation } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
 
@@ -31,6 +35,8 @@ interface UsePodWorkspaceTabsOptions {
     currentHref: string;
     routeTitle: string;
     appSlug: string | null;
+    /** Used only to give the ephemeral focused-app tab its real title/icon —
+     *  never to pin anything. */
     pages: AppPageRef[];
     appsLoaded: boolean;
     conversations: Conversation[];
@@ -44,6 +50,13 @@ interface PodWorkspaceTabsStore {
 
 const SERVER_TABS: PodWorkspaceTab[] = [HOME_WORKSPACE_TAB];
 const podWorkspaceTabStores = new Map<string, PodWorkspaceTabsStore>();
+const UNLISTED_CONVERSATION_POLL_MS = 4000;
+
+function isUnsettledConversation(value: unknown) {
+    const status = (value as { status?: unknown } | undefined)?.status;
+    const view = getConversationStatusView(status);
+    return view.isActive || view.isAwaiting;
+}
 
 function getPodWorkspaceTabsStore(podId: string) {
     const existing = podWorkspaceTabStores.get(podId);
@@ -109,10 +122,67 @@ export function usePodWorkspaceTabs({
     }, [store]);
     const getSnapshot = useCallback(() => store.tabs, [store]);
     const tabs = useSyncExternalStore(subscribe, getSnapshot, () => SERVER_TABS);
-    const activeTabId = getActiveWorkspaceTabId(podId, pathname, appSlug);
+    // A presented widget is identified by its tool call, which lives in the
+    // query rather than the path, so the active-tab lookup needs both halves.
+    const currentSearchParams = useMemo(
+        () => new URLSearchParams(currentHref.split('?')[1] || ''),
+        [currentHref],
+    );
+    const activeTabId = getActiveWorkspaceTabId(podId, pathname, appSlug, currentSearchParams);
     const wasNewConversationRouteRef = useRef(false);
     const newConversationBaselineRef = useRef<string | null>(null);
     const lastConversationOutsideNewRef = useRef<string | null>(openedConversationId);
+    const promotedConversationFromNewRef = useRef<string | null>(null);
+
+    // Child (sub-agent) conversations are deliberately absent from a pod's
+    // conversation list, so a tab opened on one has nothing to name itself
+    // with: it settles on "Untitled conversation" with no status dot and stays
+    // that way — for exactly the conversations a reader most wants to watch
+    // from the strip. Whatever the list cannot account for is fetched alone.
+    //
+    // Computed against the list rather than against the merged result below,
+    // so resolving an id never removes the query that resolved it.
+    const unlistedConversationIds = useMemo(() => {
+        if (!enabled) return [];
+        const wanted = new Set<string>();
+        tabs.forEach((tab) => {
+            if (tab.kind === 'conversation' && tab.resourceId !== 'new') wanted.add(tab.resourceId);
+        });
+        // The active conversation is known a render before its tab is written,
+        // so asking for it here starts the fetch with the navigation rather
+        // than one render behind it.
+        if (activeTabId?.startsWith('conversation:')) {
+            wanted.add(activeTabId.slice('conversation:'.length));
+        }
+        const listed = new Set(conversations.map((conversation) => conversation.id));
+        return [...wanted].filter((id) => Boolean(id) && !listed.has(id));
+    }, [activeTabId, conversations, enabled, tabs]);
+
+    const unlistedConversationQueries = useQueries({
+        queries: unlistedConversationIds.map((conversationId) => ({
+            queryKey: workspaceTabConversationQueryKey(podId, conversationId),
+            queryFn: () => getLemmaClient(podId).conversations.get(conversationId),
+            // A sub-agent is usually still working when its tab is opened, and
+            // the tab's dot is the only place that says so. Poll while it runs;
+            // stop dead when it settles.
+            refetchInterval: (query: { state: { data?: unknown } }) => (
+                isUnsettledConversation(query.state.data) ? UNLISTED_CONVERSATION_POLL_MS : false
+            ),
+            // A conversation that was deleted, or that this viewer cannot read,
+            // will not appear on a retry — and the tab keeps its stored title.
+            retry: false,
+            staleTime: UNLISTED_CONVERSATION_POLL_MS,
+        })),
+    });
+
+    // One list for every effect below: whether a conversation arrived in the
+    // pod's list or had to be fetched is not their business.
+    const resolvedConversations = useMemo(() => {
+        const fetched = unlistedConversationQueries
+            .map((query) => query.data as Conversation | undefined)
+            .filter((conversation): conversation is Conversation => typeof conversation?.id === 'string');
+        return fetched.length > 0 ? [...conversations, ...fetched] : conversations;
+    }, [conversations, unlistedConversationQueries]);
 
     // The URL remains canonical. Visiting a route section or conversation opens
     // it in the pod's working set; navigation within a section updates that tab.
@@ -121,6 +191,16 @@ export function usePodWorkspaceTabs({
         if (!activeTabId || activeTabId === HOME_WORKSPACE_TAB.id) return;
 
         if (activeTabId === NEW_WORKSPACE_TAB.id) {
+            // The first message turns this visit into a real conversation, and
+            // the effect below replaces the temporary tab with it in place —
+            // while the route is still /new, because the id arrives before the
+            // navigation that carries it does. Writing the temporary tab back
+            // here would take that promotion away, the effect below would make
+            // it again, and the two would trade the same tab for as long as the
+            // route lagged the id. Neither write changes what the strip shows,
+            // so the only visible result was React counting the updates and
+            // stopping the whole surface with "Maximum update depth exceeded".
+            if (promotedConversationFromNewRef.current === openedConversationId) return;
             updatePodWorkspaceTabs(
                 podId,
                 (current) => upsertWorkspaceTab(current, NEW_WORKSPACE_TAB),
@@ -128,16 +208,11 @@ export function usePodWorkspaceTabs({
             return;
         }
 
-        if (activeTabId.startsWith('app:')) {
-            const activeApp = pages.find((candidate) => candidate.slug === appSlug);
-            if (activeApp) {
-                updatePodWorkspaceTabs(
-                    podId,
-                    (current) => upsertWorkspaceTab(current, appWorkspaceTab(activeApp)),
-                );
-            }
-            return;
-        }
+        // App tabs are ephemeral: the focused app's tab is derived for display
+        // below, and never written into the working set. Falling through to
+        // the conversation branch here used to be impossible when every app
+        // route pinned a tab — with pinning gone the guard is load-bearing.
+        if (activeTabId.startsWith('app:')) return;
 
         if (activeTabId.startsWith('route:')) {
             const routeKey = activeTabId.slice('route:'.length);
@@ -154,7 +229,7 @@ export function usePodWorkspaceTabs({
         }
 
         const conversationId = activeTabId.slice('conversation:'.length);
-        const conversation = conversations.find((candidate) => candidate.id === conversationId);
+        const conversation = resolvedConversations.find((candidate) => candidate.id === conversationId);
         updatePodWorkspaceTabs(podId, (current) => {
             const existing = current.find((tab) => tab.id === activeTabId);
             const nextTab = conversationWorkspaceTab(conversationId, conversation);
@@ -164,7 +239,7 @@ export function usePodWorkspaceTabs({
             }
             return upsertWorkspaceTab(current, nextTab);
         });
-    }, [activeTabId, appSlug, conversations, currentHref, enabled, pages, podId, routeTitle]);
+    }, [activeTabId, currentHref, enabled, openedConversationId, podId, resolvedConversations, routeTitle]);
 
     // A new conversation starts without an id. Capture the conversation that was
     // active before entering /new; when a different id appears while that route is
@@ -175,6 +250,7 @@ export function usePodWorkspaceTabs({
         if (!isNewConversationRoute) {
             wasNewConversationRouteRef.current = false;
             newConversationBaselineRef.current = null;
+            promotedConversationFromNewRef.current = null;
             lastConversationOutsideNewRef.current = openedConversationId;
             return;
         }
@@ -188,16 +264,17 @@ export function usePodWorkspaceTabs({
             openedConversationId
             && openedConversationId !== newConversationBaselineRef.current
         ) {
-            const conversation = conversations.find(
+            const conversation = resolvedConversations.find(
                 (candidate) => candidate.id === openedConversationId,
             );
+            promotedConversationFromNewRef.current = openedConversationId;
             updatePodWorkspaceTabs(podId, (current) => promoteNewConversationTab(
                 current,
                 openedConversationId,
                 conversation,
             ));
         }
-    }, [activeTabId, conversations, enabled, openedConversationId, podId]);
+    }, [activeTabId, enabled, openedConversationId, podId, resolvedConversations]);
 
     useEffect(() => {
         if (!enabled) return;
@@ -205,15 +282,32 @@ export function usePodWorkspaceTabs({
         updatePodWorkspaceTabs(
             podId,
             (current) => syncWorkspaceTabMetadata(
-                syncAppWorkspaceTabs(current, pages),
-                conversations,
+                // Clears any app tabs pinned before the rail existed; apps are
+                // never kept, so this no longer needs the pages list.
+                syncAppWorkspaceTabs(current),
+                resolvedConversations,
             ),
         );
-    }, [appsLoaded, conversations, enabled, pages, podId]);
+    }, [appsLoaded, enabled, podId, resolvedConversations]);
 
     const closeTab = useCallback((tabId: string) => {
         updatePodWorkspaceTabs(podId, (current) => closeWorkspaceTab(current, tabId));
     }, [podId]);
+
+    // The strip still marks the app you are looking at: while the viewer is
+    // focused, its tab is appended for display only. Nothing writes it to the
+    // store, so it is gone the moment you navigate anywhere else — a tab you
+    // cannot keep, for a thing the rail already keeps.
+    const displayTabs = useMemo(() => {
+        if (!activeTabId?.startsWith('app:')) return tabs;
+        if (tabs.some((tab) => tab.id === activeTabId)) return tabs;
+
+        const activeApp = pages.find((candidate) => candidate.slug === appSlug);
+        return [...tabs, appWorkspaceTab(activeApp ?? {
+            slug: appSlug ?? '',
+            title: formatWorkspaceAppTitle(appSlug),
+        })];
+    }, [activeTabId, appSlug, pages, tabs]);
 
     const openAppSlugs = useMemo(
         () => {
@@ -227,7 +321,7 @@ export function usePodWorkspaceTabs({
     );
 
     return {
-        tabs,
+        tabs: displayTabs,
         activeTabId,
         closeTab,
         openAppSlugs,

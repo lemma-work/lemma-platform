@@ -40,6 +40,28 @@ class AgentSettings(BaseSettings):
         default=60,
         description="TTL for cached rendered agent runtime-context briefs; zero disables caching.",
     )
+    agent_memory_index_max_chars: int = Field(
+        default=2000,
+        description=(
+            "Per-scope cap on the AGENTS.md text spliced into the runtime "
+            "brief; the rest is truncated at a line boundary with a marker."
+        ),
+    )
+    agent_memory_section_max_chars: int = Field(
+        default=6000,
+        description=(
+            "Cap on the whole rendered memory section of the runtime brief, "
+            "spent narrowest-scope-first."
+        ),
+    )
+    agent_memory_brief_cache_ttl_seconds: int = Field(
+        default=60,
+        description=(
+            "TTL for the cached memory section of the runtime brief; zero "
+            "disables caching. Writes invalidate it, so this is only the "
+            "backstop for an invalidation that never arrived."
+        ),
+    )
     function_run_poll_interval_seconds: float = Field(
         default=0.5,
         description="Interval an agent tool waits between function-run status polls.",
@@ -65,6 +87,24 @@ class AgentSettings(BaseSettings):
             "usually the better choice."
         ),
     )
+    agent_model_context_windows: str = Field(
+        default="",
+        description=(
+            "Per-model context windows an operator declares, as comma-separated "
+            "`name=tokens` pairs (e.g. 'claude-sonnet-4=200000,kimi-k3=131072'). "
+            "Used where a provider's /models payload does not advertise one, "
+            "which is most of them. Unlisted models use the default below."
+        ),
+    )
+    agent_default_context_window_tokens: int = Field(
+        default=128_000,
+        description=(
+            "Context window assumed for a model whose catalog entry does not "
+            "declare one. Compaction triggers at 80% of the window and the hard "
+            "ceiling sits at 92%, so this is what an agent may actually work "
+            "within. Per-model `metadata.context_window` overrides it."
+        ),
+    )
 
     # Model-request resilience. A provider that drops the SSE stream mid-response
     # used to fail the whole conversation run; the harness now resumes from the
@@ -87,6 +127,26 @@ class AgentSettings(BaseSettings):
             "Per-chunk read timeout for provider HTTP calls. This is the 'the "
             "provider has gone away' threshold, not a budget for the whole turn: "
             "httpx resets it on every chunk of a streamed response."
+        ),
+    )
+    agent_model_stream_first_chunk_timeout_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a provider may take to send the first chunk of a response "
+            "body before the request is abandoned and retried. Unlike the "
+            "per-chunk read timeout above, a provider cannot reset this one, so "
+            "it is what catches a request that was accepted and never started. "
+            "0 disables it."
+        ),
+    )
+    agent_model_stream_total_timeout_seconds: float = Field(
+        default=300.0,
+        description=(
+            "Ceiling on one whole model exchange, first byte to last. The only "
+            "bound that catches a provider trickling a token a second: the "
+            "per-chunk timeout never fires while chunks keep arriving. Generous "
+            "on purpose, because a long answer streaming steadily has to be "
+            "allowed to finish. 0 disables it."
         ),
     )
     agent_model_http_max_connections: int = Field(
@@ -117,6 +177,45 @@ class AgentSettings(BaseSettings):
     deepgram_api_key: Optional[str] = Field(
         default=None,
         description="Deepgram API key for the speech toolset (listen/say).",
+    )
+    speech_stt_language: str = Field(
+        default="multi",
+        description=(
+            "Default language for transcription when the caller names none. "
+            "'multi' uses Nova-3 multilingual code-switching, which reads a "
+            "voice note that mixes languages (Hinglish, Spanglish) word by "
+            "word instead of forcing the whole file into one language. 'auto' "
+            "uses Deepgram's whole-file language detection, which reaches more "
+            "languages but commits to a single one. A BCP-47 code pins it."
+        ),
+    )
+    speech_tts_voice: str = Field(
+        default="aura-2-thalia-en",
+        description=(
+            "Default Aura-2 voice. Used when neither the caller nor the "
+            "spoken language selects one."
+        ),
+    )
+    speech_tts_bitrate: int = Field(
+        default=48000,
+        description=(
+            "Bitrate (bits/sec) for compressed TTS output. Deepgram's own "
+            "default for Opus is 12000, which is what a native voice note is "
+            "encoded at on WhatsApp and Telegram, and it sounds like it."
+        ),
+    )
+
+    # Web research
+    web_fetch_impersonate_browser: bool = Field(
+        default=True,
+        description=(
+            "Read pages for `web_fetch` through a client that replays a real "
+            "Chrome TLS fingerprint. On, because sites fingerprint the handshake "
+            "before reading User-Agent, and a refusal costs a browser render in "
+            "the sandbox. Turn it off to fall back to the plain HTTP client "
+            "without redeploying — the SSRF guard applies either way. Env: "
+            "``WEB_FETCH_IMPERSONATE_BROWSER``."
+        ),
     )
 
 

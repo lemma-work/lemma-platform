@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
 import logging
 import time
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from anyio import TASK_STATUS_IGNORED
+from anyio.abc import TaskStatus
 from faststream.redis import RedisBroker
 from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
@@ -32,20 +32,30 @@ from app.core.infrastructure.db.session import (
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.events.consumer_groups import (
+    consumer_group_reconcile_loop,
+    ensure_consumer_groups_once,
+)
 from app.core.infrastructure.events.message_bus import (
     close_message_bus,
     get_message_bus,
 )
 from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+from app.core.infrastructure.events.quarantine import StreamQuarantineMiddleware
 from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
+from app.core.infrastructure.jobs.job_liveness import (
+    register_job_liveness_middleware,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
     get_streaq_job_queue,
-    job_context_key,
+    load_job_observability_context,
 )
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
@@ -72,6 +82,7 @@ tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
 job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
+
 
 class Lane(StrEnum):
     """Which queue a task runs on.
@@ -100,6 +111,11 @@ _SECONDARY_LANE_STARTUP_TIMEOUT_SECONDS = 120.0
 #: never name a queue and a task can be re-laned in exactly one place.
 TASK_LANES: dict[str, Lane] = {}
 
+#: Whether ``ensure_task_lanes_registered`` has run to completion. A separate
+#: flag rather than a truthiness test on ``TASK_LANES``, which answers a
+#: different question -- see that function.
+_lanes_registered = False
+
 _primary_lane_context: AppWorkerContext | None = None
 _primary_lane_ready = asyncio.Event()
 
@@ -127,36 +143,6 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
         await asyncio.Event().wait()  # until the lane's task group unwinds
 
     worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
-
-
-def _install_task_dump_handler() -> None:
-    """Print every pending coroutine's stack on SIGQUIT.
-
-    A worker that stops responding to SIGTERM shows nothing useful in a thread
-    dump: `faulthandler` reports the event loop sitting in `select()`, which is
-    what an idle loop always looks like. The question is always *which awaited
-    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
-    free — neither streaq nor anything else here uses it.
-    """
-    import signal
-
-    def _dump(*_args: object) -> None:
-        for task in asyncio.all_tasks():
-            frames = "".join(
-                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
-                if getattr(task.get_coro(), "cr_frame", None)
-                else []
-            )
-            logger.warning(
-                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
-                task_name=task.get_name(),
-                frames=frames[-2000:],
-            )
-
-    try:
-        asyncio.get_running_loop().add_signal_handler(signal.SIGQUIT, _dump)
-    except (NotImplementedError, RuntimeError):  # pragma: no cover - platform
-        pass
 
 
 async def _stop_secondary_lanes() -> None:
@@ -206,15 +192,19 @@ def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -
     enqueued only from the API, so all three were silently doing nothing.
 
     Registration is import-for-side-effect and touches no I/O, so the publisher
-    can do it on demand. Skipped when the table is already populated: the worker
-    registers at import scope and must not register a second time.
+    can do it on demand. Skipped once it has finished, so the worker -- which
+    registers at import scope -- does not do it a second time. The flag records
+    exactly that: the guard used to be `if TASK_LANES:`, "somebody registered
+    something", which any import reaching a single task ahead of this call
+    turned into "skip every module" -- reproducing the bug above.
 
     ``modules`` is the composed module list — lemma-cloud installs more than
     OSS, and a cloud-only task missing from this table lands back on the exact
     bug above. Callers with no module list (the lazy fallback on the enqueue
     path) get the OSS set.
     """
-    if TASK_LANES:
+    global _lanes_registered
+    if _lanes_registered:
         return
     # Deferred: the registry imports the modules that import this one.
     from app.core.registry.assembly import import_module_tasks
@@ -224,6 +214,7 @@ def ensure_task_lanes_registered(modules: Sequence[LemmaModule] | None = None) -
     from app.core.infrastructure.events import tasks as _core_tasks  # noqa: F401
 
     import_module_tasks(OSS_MODULES if modules is None else modules)
+    _lanes_registered = True
 
 
 def lane_for_task(task_name: str) -> Lane:
@@ -251,13 +242,21 @@ _SHUTDOWN_STEP_TIMEOUT_SECONDS = 5.0
 JOB_TIMEOUT_SECONDS = 1800
 # An agent run is the one task whose ceiling is not ours to pick freely: it
 # advertises a deadline to something outside this process (an Agent Host on a
-# user's machine) and hands it a credential that expires. If the task dies
-# first, Lemma reports the run failed while the remote agent keeps executing
-# tools for it. This must therefore stay strictly above the Agent Host run
-# window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, 50 min) with enough margin
-# for the harness to cancel the host run and finalize, and strictly below the
-# one-hour validity of the MCP credential minted at dispatch.
-AGENT_RUN_JOB_TIMEOUT_SECONDS = 3300
+# user's machine). If the task dies first, Lemma reports the run failed while
+# the remote agent keeps executing tools for it. This must therefore stay above
+# the Agent Host run window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS) with
+# enough margin for the harness to cancel the host run and finalize.
+#
+# It used to also have to stay under the one-hour validity of the MCP
+# credential minted at dispatch. That stopped being true when the harness
+# started refreshing that credential mid-run, and the note saying otherwise
+# outlived the constraint it described -- long enough to hold every run to
+# fifty minutes for a reason that no longer applied.
+#
+# A task this long occupies an interactive-lane slot for its whole life. That
+# is affordable at the default concurrency of 50 and is the real thing to watch
+# if these runs ever become common.
+AGENT_RUN_JOB_TIMEOUT_SECONDS = 14700
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
@@ -271,6 +270,11 @@ broker = RedisBroker(
     # it at INFO and let the supplied WARNING logger drop those records while
     # still forwarding explicitly actionable warning/error calls.
     log_level=logging.INFO,
+    # A message that can never be processed must be given up on, not redelivered
+    # until the end of the deployment. Registered on the broker rather than per
+    # handler because the failure it exists for happens during decoding, before
+    # any handler body runs.
+    middlewares=(StreamQuarantineMiddleware,),
 )
 
 
@@ -315,12 +319,8 @@ class AppWorkerContext:
         return build_function_use_cases(self.uow_factory)
 
     def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
-        from app.modules.agent.api.dependencies import get_conversation_service
         from app.modules.agent_surfaces.api.dependencies import (
             surface_repository_factory,
-        )
-        from app.modules.connectors.api.dependencies import (
-            get_connector_service,
         )
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
@@ -336,8 +336,6 @@ class AppWorkerContext:
             uow=uow,
             surface_repository=surface_repository_factory(uow),
             conversation_link_repository=SurfaceConversationLinkRepository(uow),
-            conversation_service=get_conversation_service(uow),
-            connector_service=get_connector_service(uow),
             pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         )
 
@@ -348,18 +346,17 @@ class AppWorkerContext:
         external I/O (platform APIs, file ingest, voice transcription) that must
         NOT hold a pooled DB connection. The service resolves credentials and
         writes the inbound message in separate short UoWs from this factory.
+
+        The factory is the whole of it now. It used to carry a second one for
+        the conversation service, because that service is bound to a session and
+        the short-scoped one is not the session it was built with; the
+        conversation operations take the unit of work per call.
         """
-        from app.modules.agent.api.dependencies import get_conversation_service
-        from app.modules.connectors.api.dependencies import get_connector_service
         from app.modules.agent_surfaces.services.ingress_service import (
             AgentSurfaceIngressService,
         )
 
-        return AgentSurfaceIngressService(
-            uow_factory=self.uow_factory,
-            conversation_service_factory=get_conversation_service,
-            connector_service_factory=get_connector_service,
-        )
+        return AgentSurfaceIngressService(uow_factory=self.uow_factory)
 
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
@@ -383,60 +380,15 @@ async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> N
             timeout_seconds=_SHUTDOWN_STEP_TIMEOUT_SECONDS,
         )
     except Exception:  # pragma: no cover
-        logger.debug(
-            "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic", step=name
+        # The step raised rather than stalled. Swallowed so the remaining
+        # closers still run -- that is the whole point of this helper -- but
+        # not silently: a closer that has been failing at every shutdown is
+        # exactly the kind of thing that goes unnoticed for months.
+        logger.warning(
+            "infrastructure.streaq_runtime.worker_shutdown_step_failed.degraded",
+            step=name,
+            exc_info=True,
         )
-
-
-async def _ensure_consumer_groups_once() -> None:
-    """Create every registered Redis consumer group once, before broker start.
-
-    Closes the broker-start race where a subscriber polls a not-yet-created
-    group, gets NOGROUP, and stops permanently. Idempotent (BUSYGROUP is a
-    no-op) and never raises — group plumbing must not block worker startup.
-    """
-    from app.core.infrastructure.events.stream_subscriber import (
-        ensure_consumer_groups,
-        registered_stream_groups,
-    )
-
-    # FastStream and streaq speak raw bytes, so this shares the
-    # decode_responses=False pool rather than the application one.
-    client = get_redis(decode_responses=False, blocking=True)
-    try:
-        len(registered_stream_groups())
-        await ensure_consumer_groups(client, warn_on_create=False)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug(
-            "infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic"
-        )
-
-
-async def _consumer_group_reconcile_loop() -> None:
-    """Periodically re-ensure Redis consumer groups exist.
-
-    Self-heals the FastStream supervisor retry-storm: if a consumer group is lost
-    (flush / failover / eviction / trim), the subscriber's consume loop spins on
-    NOGROUP forever. Recreating the group lets the next retry succeed and the
-    subscriber resume — no manual restart. Cheap (one Redis connection, a handful
-    of idempotent XGROUP CREATE calls per tick).
-    """
-    from app.core.infrastructure.events.config import event_transport_settings
-    from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
-
-    interval = event_transport_settings.consumer_group_reconcile_interval_seconds
-    client = get_redis(decode_responses=False, blocking=True)
-    try:
-        while True:
-            try:
-                await ensure_consumer_groups(client)
-            except Exception:  # pragma: no cover - defensive
-                logger.debug(
-                    "infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic"
-                )
-            await asyncio.sleep(interval)
-    finally:
-        await client.aclose()
 
 
 # Low-rate structured heartbeat for remote absence detection. At 5 min this is
@@ -466,8 +418,10 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.analytics.bootstrap import start_analytics, stop_analytics
     from app.core.concurrency.offload import configure_thread_pool
     from app.core.net.http_client import close_shared_http_client
+    from app.core.net.impersonating_client import close_impersonating_client
     from app.core.observability.connection_scope import (
         start_connection_scope_monitor_from_settings,
+        stop_connection_scope_monitor,
     )
 
     configure_thread_pool()
@@ -493,10 +447,11 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,
-    # and any subscriber that polls before its group exists gets NOGROUP and
-    # stops permanently — the reconcile loop cannot revive a stopped subscriber.
-    # Pre-creating closes that race so every subscriber attaches to a live group.
-    await _ensure_consumer_groups_once()
+    # and any subscriber that polls before its group exists gets NOGROUP, which
+    # kills its consume task and costs a supervisor restart per attempt until
+    # the group is back. Pre-creating closes that race so every subscriber
+    # attaches to a live group instead of spinning through it.
+    await ensure_consumer_groups_once()
     await broker.start()
     await channel_service.connect()
     job_queue = get_streaq_job_queue()
@@ -518,7 +473,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
 
     if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
         reconcile_task = create_background_task(
-            _consumer_group_reconcile_loop(), name="consumer-group-reconcile"
+            consumer_group_reconcile_loop(), name="consumer-group-reconcile"
         )
 
     # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
@@ -532,6 +487,16 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             heartbeat_path=settings.worker_heartbeat_path or None,
         ),
         name="worker-loop-lag-watchdog",
+    )
+    # The same signal, somewhere the API can read it. The heartbeat file above
+    # only answers for a probe on this filesystem, which in every topology but
+    # the single-process desktop build is not where `/health/ready` is served --
+    # so the API answered 200 with the worker dead. Runs on this loop, so a
+    # wedged worker stops refreshing it exactly as it stops writing the file.
+    from app.core.observability.worker_liveness import worker_liveness_loop
+
+    liveness_task = create_background_task(
+        worker_liveness_loop(get_redis()), name="worker-liveness"
     )
     # Resident-memory floor. The worker is the longer-lived of the two processes
     # and the one whose growth has nowhere to surface, having no HTTP endpoint
@@ -621,6 +586,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         for background_task in (
             reconcile_task,
             watchdog_task,
+            liveness_task,
             memory_task,
             heartbeat_task,
             stream_snapshot_task,
@@ -631,20 +597,44 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
                 background_task.cancel()
                 try:
                     await background_task
-                except BaseException:
+                except asyncio.CancelledError:
+                    # The expected path: we cancelled it on the line above.
                     pass
+                except Exception:
+                    # Anything else is that task failing on its own way out.
+                    # Still swallowed — the loop must reach every remaining
+                    # task, which is the whole point of the ordering above —
+                    # but a bare `pass` is how a background task that has been
+                    # dying at every shutdown for months goes unnoticed.
+                    # `Exception`, not `BaseException`: KeyboardInterrupt and
+                    # SystemExit are the process being told to stop, and a
+                    # shutdown loop is the last place that should be ignored.
+                    logger.warning(
+                        "infrastructure.streaq_runtime.background_task_shutdown.degraded",
+                        task=background_task.get_name(),
+                        exc_info=True,
+                    )
         await _safe_shutdown_step("broker.stop", broker.stop)
         # After the broker, because the analytics consumer is what produces
         # these events -- draining a buffer that has stopped growing is the only
         # way the drain terminates. Before the HTTP client, which the sink posts
         # through.
         await _safe_shutdown_step("stop_analytics", stop_analytics)
+        await _safe_shutdown_step("close_shared_http_client", close_shared_http_client)
+        # `web_fetch` runs in the worker, so this is the session that would
+        # otherwise leak a libcurl handle per worker process.
         await _safe_shutdown_step(
-            "close_shared_http_client", close_shared_http_client
+            "close_impersonating_client", close_impersonating_client
         )
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
+        # Symmetric with `start_connection_scope_monitor_from_settings` above.
+        # Nothing stopped it, which does not matter to a process that is about
+        # to exit -- and matters a great deal to a test that runs this lifespan
+        # in-process, because the monitor is a module singleton that then
+        # outlives the test and attaches to the next suite's engines.
+        stop_connection_scope_monitor()
         await _safe_shutdown_step("close_redis_clients", close_redis_clients)
         await _safe_shutdown_step("close_engine", close_engine)
         await _safe_shutdown_step(
@@ -767,12 +757,22 @@ def enabled_lanes() -> list[Lane]:
     return seen
 
 
-async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
+async def run_worker_lanes(
+    lanes: Sequence[Lane] | None = None,
+    *,
+    task_status: TaskStatus[None] = TASK_STATUS_IGNORED,
+) -> None:
     """Run the selected lanes concurrently in this process.
 
     Each lane is an independent streaq Worker on its own Redis queue with its own
     concurrency budget, which is the whole point: a burst of bulk ingestion can
     no longer occupy the slots that agent runs and surface messages need.
+
+    `task_status` is reported by the primary lane only, so an embedded caller can
+    `await task_group.start(...)` and have a worker that cannot reach Redis fail
+    its host's startup rather than dying quietly in the background. The secondary
+    lanes need no handshake of their own: `secondary_lane_lifespan` already waits
+    on the primary before touching anything shared.
     """
     selected = list(lanes) if lanes is not None else enabled_lanes()
     if _PRIMARY_LANE not in selected:
@@ -785,10 +785,14 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
         "worker.lanes.starting",
         lanes=",".join(lane.value for lane in selected),
     )
-    _install_task_dump_handler()
+    install_task_dump_handler()
+    # Before any lane consumes: a cron removed from the code stops firing only
+    # when its schedule is removed from Redis too.
+    for lane in selected:
+        await prune_orphaned_crons_safely(LANE_WORKERS[lane], redis=get_redis())
     primary, *secondary = selected
     if not secondary:
-        await LANE_WORKERS[primary].run_async()
+        await LANE_WORKERS[primary].run_async(task_status=task_status)
         return
 
     # The primary lane owns signal handling and the shared lifespan, so its
@@ -812,28 +816,12 @@ async def run_worker_lanes(lanes: Sequence[Lane] | None = None) -> None:
         for lane in secondary
     )
     try:
-        await LANE_WORKERS[primary].run_async()
+        await LANE_WORKERS[primary].run_async(task_status=task_status)
     finally:
         # Normally already done, from inside the primary's lifespan teardown.
         # Repeated here for the paths that never reach it — a primary that
         # fails during startup still has to take the other lanes with it.
         await _stop_secondary_lanes()
-
-
-async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
-    """Best-effort read of the rolling-deployment-compatible sidecar."""
-    try:
-        raw = await redis.get(job_context_key(job_id))
-        parsed = json.loads(raw) if raw else {}
-        if not isinstance(parsed, dict):
-            return {}
-        return {
-            str(key): str(value)
-            for key, value in parsed.items()
-            if isinstance(key, str) and isinstance(value, str | int)
-        }
-    except Exception:
-        return {}
 
 
 def _register_observability_middleware(
@@ -852,9 +840,7 @@ def _register_observability_middleware(
 
         async def run(*args, **kwargs):
             task = registered.context
-            inherited = await load_job_observability_context(
-                worker.redis, task.task_id
-            )
+            inherited = await load_job_observability_context(worker.redis, task.task_id)
             token = otel_context.attach(extract(inherited))
             started_at = time.perf_counter()
             outcome = "succeeded"
@@ -868,12 +854,15 @@ def _register_observability_middleware(
                         "lemma.attempt": task.tries,
                     },
                 ) as span:
-                    with bind_job_context(
-                        job_id=task.task_id,
-                        task_name=task.fn_name,
-                        attempt=task.tries,
-                        inherited=inherited,
-                    ), origin_scope(origin_from_payload(inherited)):
+                    with (
+                        bind_job_context(
+                            job_id=task.task_id,
+                            task_name=task.fn_name,
+                            attempt=task.tries,
+                            inherited=inherited,
+                        ),
+                        origin_scope(origin_from_payload(inherited)),
+                    ):
                         try:
                             result = await call_next(*args, **kwargs)
                             span.set_attribute("lemma.outcome", outcome)
@@ -920,10 +909,11 @@ def _register_observability_middleware(
     registered = worker.middleware(observability_context_middleware)
 
 
-# Every lane gets the same observability wrapper — a job must be traced the same
-# way regardless of which queue carried it.
+# Every lane gets the same two wrappers — a job must be traced the same way, and
+# must report the same liveness, regardless of which queue carried it.
 for _lane_worker in LANE_WORKERS.values():
     _register_observability_middleware(_lane_worker)
+    register_job_liveness_middleware(_lane_worker)
 
 
 def _register_lane(name: str | None, lane: Lane) -> None:

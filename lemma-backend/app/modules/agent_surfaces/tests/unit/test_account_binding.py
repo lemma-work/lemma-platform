@@ -129,7 +129,11 @@ async def test_whatsapp_binding_allows_built_in_credentials_without_account():
     account_port = _make_account_port(None)
     resolver = SurfaceAccountBindingResolver(account_port)
 
-    assert await resolver.resolve_binding(SurfacePlatform.WHATSAPP) == (None, None, None)
+    assert await resolver.resolve_binding(SurfacePlatform.WHATSAPP) == (
+        None,
+        None,
+        None,
+    )
     account_port.get_account.assert_not_awaited()
 
 
@@ -137,5 +141,9 @@ async def test_telegram_binding_allows_built_in_credentials_without_account():
     account_port = _make_account_port(None)
     resolver = SurfaceAccountBindingResolver(account_port)
 
-    assert await resolver.resolve_binding(SurfacePlatform.TELEGRAM) == (None, None, None)
+    assert await resolver.resolve_binding(SurfacePlatform.TELEGRAM) == (
+        None,
+        None,
+        None,
+    )
     account_port.get_account.assert_not_awaited()

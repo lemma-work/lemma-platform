@@ -132,6 +132,9 @@ def _record_frame(
         "record_id": event.get("record_id"),
         "operation": event.get("operation"),
         "payload": event.get("payload") or {},
+        # An oversized row body is dropped upstream rather than shipped. Say so,
+        # so a client reads the record instead of trusting an empty payload.
+        "payload_truncated": bool(event.get("payload_truncated")),
         "occurred_at": event.get("occurred_at"),
         "stream_id": event.get("_stream_id"),
     }
@@ -203,7 +206,7 @@ async def datastore_changes_ws(
         return
     except Exception:
         logger.debug(
-            'datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic',
+            "datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic",
             exc_info=True,
         )
         await websocket.close(
@@ -241,7 +244,7 @@ async def datastore_changes_ws(
         return
     except Exception:
         logger.debug(
-            'datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic',
+            "datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic",
             pod_id=str(pod_id),
             user_id=str(user_id),
             exc_info=True,

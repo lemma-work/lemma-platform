@@ -20,6 +20,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     ProviderCreateSpec,
+    ProviderFailed,
     ProviderGone,
     ProviderRejected,
 )
@@ -28,9 +29,11 @@ from app.modules.workspace.providers.e2b import (
     E2BSandboxProvider,
 )
 from app.modules.workspace.providers.e2b_common import (
+    DEFAULT_METADATA_NAMESPACE,
     META_EPOCH,
     META_PROFILE_DIGEST,
     META_SANDBOX_ID,
+    META_TEMPLATE,
 )
 from app.modules.workspace.testing.fake_e2b import (
     AuthenticationException,
@@ -47,6 +50,20 @@ def _deadline() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=30)
 
 
+def _expiring_deadline() -> datetime:
+    """A deadline for the tests that assert on giving up.
+
+    `wait_ready` now spends the caller's whole budget polling, so a test of
+    the never-answers path spends it too -- in real seconds. The 30s
+    `_deadline` made one of these the slowest test in the unit suite at 20s
+    (its poll capped at `ensure_serving`'s old default), and honouring the
+    deadline would have made it 30. What these two assert is the shape of
+    the giving-up, not how long a caller is willing to wait for it, so they
+    ask for the shortest budget that still gets a poll.
+    """
+    return datetime.now(timezone.utc) + timedelta(milliseconds=50)
+
+
 @pytest.fixture
 def world() -> FakeE2B:
     return FakeE2B()
@@ -59,6 +76,11 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
             api_key="test-key",
             workspace_template="lemma-workspace",
             function_template="lemma-function",
+            # Stated, because the config no longer supplies one. The META_*
+            # constants this module asserts against are built from this same
+            # value, so the pair has to be named together or the assertions
+            # would be checking the fixture against itself.
+            metadata_namespace=DEFAULT_METADATA_NAMESPACE,
         )
     )
     # Only the SDK is substituted. The query type comes through the SDK itself,
@@ -70,16 +92,16 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
 
 
 def _spec(sandbox_id, *, epoch: int = 1, **overrides) -> ProviderCreateSpec:
-    defaults = dict(
-        sandbox_id=sandbox_id,
-        kind=SandboxKind.WORKSPACE,
-        epoch=epoch,
-        name=naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
-        image="",
-        profile_name="workspace",
-        profile_digest="sha256:" + "a" * 64,
-        deadline_at=_deadline(),
-    )
+    defaults = {
+        "sandbox_id": sandbox_id,
+        "kind": SandboxKind.WORKSPACE,
+        "epoch": epoch,
+        "name": naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
+        "image": "",
+        "profile_name": "workspace",
+        "profile_digest": "sha256:" + "a" * 64,
+        "deadline_at": _deadline(),
+    }
     defaults.update(overrides)
     return ProviderCreateSpec(**defaults)  # type: ignore[arg-type]
 
@@ -228,8 +250,7 @@ async def test_storage_is_the_sandbox_not_a_volume(
 
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
     with pytest.raises(ProviderRejected):
         await provider.ensure_volume(
@@ -278,6 +299,7 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
         },
     )
 
@@ -289,13 +311,116 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert world.killed == []
 
 
-async def test_a_sandbox_from_an_older_template_build_is_destroyed(
+async def test_a_workspace_on_a_different_template_is_replaced(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Here the sandbox is the disk, so there is no replacing the compute and
-    keeping the files. Resuming it would leave the workspace on the old
-    template, speaking a protocol the backend no longer speaks; the caller is
-    told the disk is new through `storage_adopted`."""
+    """Publishing a template has to reach the workspaces that already exist.
+
+    It did not. Adoption compared only `profile_digest`, a hand-maintained
+    environment variable sitting at its default, so a workspace stayed on
+    whatever template it was first created on for as long as it lived. Measured
+    against the real account: 249 sandboxes spread over four older templates and
+    zero on the configured one, through four releases that were each meant to
+    fix the workspaces that were failing.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["on-last-months-template"] = FakeSandboxInfo(
+        sandbox_id="on-last-months-template",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace-but-older",
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["on-last-months-template"]
+    assert instance.provider_id != "on-last-months-template"
+    assert instance.storage_adopted is False
+    assert world.created[0]["template"] == "lemma-workspace"
+
+
+async def test_a_workspace_with_no_recorded_template_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Unstamped means "created before anything recorded this", which means at
+    least one template behind by construction. Reading the absence as "fine" is
+    the shape of the original bug: the fleet's staleness was invisible because
+    nothing wrote down what any of it was running."""
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["unstamped"] = FakeSandboxInfo(
+        sandbox_id="unstamped",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["unstamped"]
+    assert instance.storage_adopted is False
+
+
+async def test_a_created_sandbox_records_the_template_it_was_built_from(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Without the stamp there is nothing to compare on the next ensure, so the
+    fence would silently never fire again."""
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["metadata"][META_TEMPLATE] == "lemma-workspace"
+
+
+async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Drift is tolerated for workspaces, because here the sandbox is the disk.
+
+    This branch used to kill the sandbox to adopt the new digest -- and the
+    digest comes from `WORKSPACE_PROFILE_DIGEST`, an environment variable. So
+    editing one env var and deploying wiped every workspace in the fleet on the
+    first ensure after rollout, with nothing to restore from. `Sandbox fabric`
+    README section 6 already stated the intent: "While a workspace owns a disk
+    it keeps running the profile it was created with, no generation fence is
+    raised, and nothing is replaced." The accepted cost, stated there too, is
+    that a workspace may run an N-1 template until it is next created from
+    scratch.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    world.sandboxes["older-build"] = FakeSandboxInfo(
+        sandbox_id="older-build",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: "sha256:" + "b" * 64,
+            # On the configured template, so this isolates the digest rule from
+            # the template fence, which does replace.
+            META_TEMPLATE: "lemma-workspace",
+        },
+    )
+
+    instance = await provider.create(_spec(sandbox_id))
+
+    assert world.killed == [], "a workspace's files must survive a digest bump"
+    assert instance.provider_id == "older-build", "and it keeps serving them"
+
+
+async def test_a_function_from_an_older_template_build_is_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Functions own no durable disk, so adopting a new digest costs a restart."""
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
     sandbox_id = uuid4()
@@ -308,7 +433,7 @@ async def test_a_sandbox_from_an_older_template_build_is_destroyed(
         },
     )
 
-    instance = await provider.create(_spec(sandbox_id))
+    instance = await provider.create(_spec(sandbox_id, kind=SandboxKind.FUNCTION))
 
     assert world.killed == ["older-build"]
     assert instance.provider_id != "older-build"
@@ -329,11 +454,12 @@ async def test_a_running_match_is_preferred_over_a_paused_duplicate(
         world.sandboxes[name] = FakeSandboxInfo(
             sandbox_id=name,
             state=state,
-            # Both carry the current profile digest, so the reuse fence is
-            # satisfied and this exercises the ordering rule on its own.
+            # Both satisfy the reuse fences -- current profile digest, current
+            # template -- so this exercises the ordering rule on its own.
             metadata={
                 META_SANDBOX_ID: str(sandbox_id),
                 META_PROFILE_DIGEST: spec.profile_digest,
+                META_TEMPLATE: "lemma-workspace",
             },
         )
 
@@ -659,10 +785,397 @@ async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
     """The E2B account may be shared with something else entirely."""
     sandbox_id = uuid4()
     await provider.create(_spec(sandbox_id))
-    world.sandboxes["someone-else"] = type(
-        next(iter(world.sandboxes.values()))
-    )(sandbox_id="someone-else", metadata={"team": "other"})
+    world.sandboxes["someone-else"] = type(next(iter(world.sandboxes.values())))(
+        sandbox_id="someone-else", metadata={"team": "other"}
+    )
 
     objects = await provider.list_objects(deadline_at=_deadline())
 
     assert {obj.sandbox_id for obj in objects} == {sandbox_id}
+
+
+async def test_a_pause_discards_memory(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The SDK default is `keep_memory=True`, and this call used to pass nothing.
+
+    So every workspace pause preserved resident memory while both architecture
+    documents said the opposite -- "running processes and interpreter state do
+    not [persist], and callers must not treat them as recoverable" -- and
+    auto-resume was already disabled here, which E2B only requires *because* of
+    filesystem-only snapshots. The design was built around a property the one
+    call that decides it never asked for.
+
+    That is what made a leaked browser invisible: a memory-preserving pause
+    snapshots whatever is running and restores it into the next conversation,
+    so a headed Chrome came back at 63 processes and 2123 MB without ever being
+    started again. The disk is the only thing a workspace promises to keep.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.paused == [instance.provider_id]
+    assert world.pause_kept_memory == [False], (
+        "a workspace pause is filesystem-only; see lifecycle-state-model.md"
+    )
+
+
+async def test_a_function_sandbox_pause_keeps_memory(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Functions must resume with their runtime; workspaces must not.
+
+    This used to assert the opposite, on the reasoning that both kinds should
+    pause the same way. Measured against the real service, filesystem-only is
+    what produced the P0: a resumed function sandbox came back with zero runtime
+    processes and answered 502, because nothing re-runs the image CMD on resume.
+    A workspace has a user session worth dropping; a function has only the
+    runtime a cold start would rebuild.
+    """
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
+
+    assert world.pause_kept_memory == [True]
+
+
+async def test_an_object_named_by_its_e2b_id_is_actually_destroyed(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The sweep names objects the way E2B reports them, and must still kill them.
+
+    `list_objects` names every object by its E2B sandbox id, because that is
+    what E2B returns. `inspect` only understands container names -- it parses
+    one back into a metadata query -- so `destroy(obj.name)` parsed to nothing,
+    read that as "already gone", and returned having killed nothing. The orphan
+    sweep therefore logged eighteen reclaims every five minutes for hours
+    against the same eighteen ids while the account's count never moved: not
+    because paused sandboxes resist being killed, but because the destroy was a
+    no-op for exactly the objects the sweep discovers.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    objects = await provider.list_objects(deadline_at=_deadline())
+    assert [obj.name for obj in objects] == [instance.provider_id], (
+        "the sweep sees E2B ids, not container names"
+    )
+
+    await provider.destroy(objects[0].name, deadline_at=_deadline())
+
+    assert world.killed == [instance.provider_id]
+
+
+async def test_a_container_name_that_resolves_to_nothing_is_left_alone(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Parsing to an identity with no sandbox behind it really is already gone."""
+    await provider.destroy(
+        naming.container_name(uuid4(), SandboxKind.WORKSPACE, 1),
+        deadline_at=_deadline(),
+    )
+
+    assert world.killed == []
+
+
+# ---------------------------------------------------------------------------
+# The lease: what E2B does when a sandbox's timeout runs out
+# ---------------------------------------------------------------------------
+
+
+async def test_a_created_sandbox_pauses_on_timeout_rather_than_being_killed(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The default is `kill`, and here killing the sandbox deletes the disk.
+
+    This call passed no lifecycle at all, so every workspace was created already
+    scheduled for deletion thirty minutes out. Nothing recorded it and nothing
+    told the user; the only reason it was not a daily event is that the idle
+    sweep usually paused the sandbox first, which stops the clock. A five-minute
+    cron was all that stood between a long session and losing every file.
+    """
+    await provider.create(_spec(uuid4()))
+
+    lifecycle = world.created[0]["lifecycle"]
+    assert lifecycle is not None, "no lifecycle means E2B kills it on timeout"
+    assert lifecycle["on_timeout"]["action"] == "pause"
+
+
+async def test_the_timeout_pause_keeps_only_the_filesystem(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A memory-preserving snapshot restores whatever was running.
+
+    That is how a browser which had exhausted the sandbox became permanent: the
+    pause captured the exhaustion and every later resume restored it, so the
+    sandbox could never recover on its own. `release` already pauses this way and
+    the timeout has to agree with it, or the fleet gets both behaviours depending
+    on which one happened to fire.
+    """
+    await provider.create(_spec(uuid4()))
+
+    assert world.created[0]["lifecycle"]["on_timeout"]["keep_memory"] is False
+
+
+async def test_resuming_a_sandbox_re_arms_its_lease(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Connecting is what extends the lease, and it must say by how much.
+
+    The SDK's rule is that the timeout updates "only if the new timeout is longer
+    than the existing one" -- so passing nothing is not "leave it alone", it is
+    "five minutes", the SDK's default. A workspace resumed after days came back
+    with a five-minute lease, and every process inside it died together when it
+    elapsed. From outside that looks like three tool calls returning 502 at the
+    same instant, minutes into a turn that was working.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id)
+    world.sandboxes["paused"] = FakeSandboxInfo(
+        sandbox_id="paused",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-workspace",
+        },
+    )
+    instance = await provider.create(spec)
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.connect_timeouts, "wait_ready never connected"
+    assert all(timeout is not None for timeout in world.connect_timeouts), (
+        "a connect with no timeout hands the sandbox a five-minute lease"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Listings, which are paginated and which this module used to read once
+# ---------------------------------------------------------------------------
+
+
+async def test_the_sweep_sees_every_page_of_the_account(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Orphan reclamation reads a listing that is filtered only by kind.
+
+    So unlike adoption -- whose query names one sandbox id and comes back with
+    one result -- this one matches the whole fleet, and reading `next_items()`
+    once meant the sweep only ever considered the first page of it. Everything
+    past that was invisible: never reclaimed, and billed for as long as it
+    existed. The account this was found in held 249 sandboxes.
+    """
+    made = [uuid4() for _ in range(world.list_page_size * 2 + 1)]
+    for sandbox_id in made:
+        await provider.create(_spec(sandbox_id))
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == set(made)
+
+
+async def test_the_sweep_lists_function_sandboxes_too(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """ "Every sandbox carrying this platform's metadata" has to mean every kind.
+
+    The query was hardcoded to workspaces, so a function sandbox the control
+    plane had forgotten was invisible to orphan reclamation and billed forever
+    -- which is the single thing that sweep exists to stop.
+    """
+    workspace_id = uuid4()
+    function_id = uuid4()
+    await provider.create(_spec(workspace_id))
+    await provider.create(
+        _spec(
+            function_id,
+            kind=SandboxKind.FUNCTION,
+            name=naming.container_name(function_id, SandboxKind.FUNCTION, 1),
+        )
+    )
+
+    objects = await provider.list_objects(deadline_at=_deadline())
+
+    assert {obj.sandbox_id for obj in objects} == {workspace_id, function_id}
+
+
+async def test_a_sandbox_whose_runtime_died_is_not_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Readiness must ask the runtime, not the VM.
+
+    This is the 2026-08-16 P0 in miniature. A function sandbox whose runtime
+    process had died still reported `running`, so `wait_ready` passed, adoption
+    accepted it, and every dispatch got 502 for 100 minutes. Measured against
+    the real service: healthy answers 404 (route absent, port listening), dead
+    answers 502.
+    """
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+    world.runtime_status = 502
+
+    with pytest.raises(ProviderFailed) as failure:
+        await provider.wait_ready(
+            instance, kind=SandboxKind.FUNCTION, deadline_at=_expiring_deadline()
+        )
+
+    assert "502" in str(failure.value)
+    # The VM is still up -- that is the whole trap.
+    assert world.sandboxes[instance.provider_id].state == "running"
+
+
+async def test_a_serving_sandbox_is_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """404 from the runtime port means serving, and must not read as failure."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline()
+    )
+
+
+async def test_a_workspace_is_ready_when_its_agent_answers(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """Workspace readiness is a command through the agent, not a port probe.
+
+    The workspace template starts no listener on the profile port, so E2B's
+    edge answers 502 for it forever -- the port probe that catches a dead
+    function runtime failed every healthy workspace's first ensure.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert "true" in world.commands
+
+
+async def test_a_workspace_whose_agent_died_is_not_ready(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    instance = await provider.create(_spec(uuid4()))
+    world.agent_answers = False
+
+    with pytest.raises(ProviderFailed):
+        await provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_expiring_deadline()
+        )
+
+
+async def test_python_and_the_shell_are_given_the_same_directory(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    """One conversation, one directory -- whichever tool the agent reaches for.
+
+    `start_process` was told the conversation's cwd and `execute_python` was
+    told nothing, so the interpreter started in whatever the image defaults to.
+    The two tools reported different answers for `pwd`, and a file written by
+    relative path in one was invisible to the other: the exact failure an agent
+    reads as "my files disappeared".
+    """
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
+    from sandbox_runtime.protocol import ExecutePythonRequest
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+
+    cwd = "/workspace/c/2026-08-21/0d8y15k6"
+    instance = await provider.create(_spec(uuid4()))
+    world.command_cwds.clear()
+
+    await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="pwd",
+            argv=None,
+            cwd=cwd,
+            environment=(),
+            tty=None,
+            output_limit_bytes=1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+    await provider.execute_python(
+        instance,
+        # The reference production actually hands this provider, not a
+        # stand-in shaped to whatever the assertion needs.
+        LocalPythonSessionRef(session_id=uuid4(), cwd=cwd),
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code="import os\nprint(os.getcwd())",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+
+    # The interpreter is run by a shell command of its own, so every command
+    # this provider started -- the shell's and the runner's alike -- must name
+    # the one directory. Writing the file and the runner does not count: those
+    # go to absolute paths under /tmp.
+    assert world.command_cwds, "no command reached the sandbox"
+    assert set(world.command_cwds) == {cwd}, world.command_cwds
+
+
+async def test_execute_python_is_visible_to_the_idle_sweep(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    """A long `execute_python` had no protection from being reclaimed.
+
+    The idle sweep decides what to release from the provider's process index,
+    and `execute_python` never wrote to it -- so a ten-minute analysis was
+    invisible to the busy check while it ran. The comment on its own timeout
+    argued the opposite, reasoning that the sweeper "will not release a sandbox
+    with live processes": true of `exec_command`, never true of this call.
+    """
+    from sandbox_runtime.protocol import ExecutePythonRequest, ProcessState
+
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+
+    cwd = "/workspace/c/2026-08-30/rkil98cd"
+    instance = await provider.create(_spec(uuid4()))
+    operation_id = uuid4()
+
+    await provider.execute_python(
+        instance,
+        LocalPythonSessionRef(session_id=uuid4(), cwd=cwd),
+        ExecutePythonRequest(
+            operation_id=operation_id,
+            code="print(1)",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+
+    tracked = str(operation_id)
+    assert tracked in buffer.pids, "execute_python never entered the process index"
+    assert buffer.directories[tracked] == cwd
+    assert buffer.deadlines[tracked] > 0
+    # And it does not stay busy once it has returned.
+    state, _exit_code = buffer.states[tracked]
+    assert state in {ProcessState.SUCCEEDED, ProcessState.FAILED}

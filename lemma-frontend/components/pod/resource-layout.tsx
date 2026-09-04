@@ -105,6 +105,8 @@ export type ResourceHeaderProps = {
     tabs?: ReactNode;
     actions?: ReactNode;
     fullscreen?: boolean;
+    /** Drop the bar rather than draw it empty. See `PodTopbarState`. */
+    hideContextBar?: boolean;
 };
 
 /**
@@ -125,6 +127,7 @@ export function ResourceHeader({
     tabs,
     actions,
     fullscreen,
+    hideContextBar,
 }: ResourceHeaderProps) {
     const topbar = usePodTopbar();
     // State, not a ref: this is read during render to build the bar payload, and
@@ -146,6 +149,7 @@ export function ResourceHeader({
             tabs,
             actions,
             fullscreen,
+            hideContextBar,
             claim,
         });
 
@@ -153,7 +157,7 @@ export function ResourceHeader({
         // header before the leaving one tears down, and clearing unconditionally
         // would wipe chrome that already belongs to the new page.
         return () => topbar?.setTopbar((current) => (current.claim === claim ? {} : current));
-    }, [actions, backHref, backLabel, claim, eyebrow, fullscreen, icon, meta, switcher, tabTitle, tabs, title, titleOwner, topbar]);
+    }, [actions, backHref, backLabel, claim, eyebrow, fullscreen, hideContextBar, icon, meta, switcher, tabTitle, tabs, title, titleOwner, topbar]);
 
     return null;
 }

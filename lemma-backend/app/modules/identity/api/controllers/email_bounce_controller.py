@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -15,6 +13,10 @@ from pydantic import BaseModel, EmailStr, ValidationError
 from sqlalchemy import func, select
 from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
 
+from app.core.webhooks.signatures import (
+    svix_signature_matches,
+    timestamp_within_skew,
+)
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.email import normalize_identity_email
@@ -81,31 +83,23 @@ def verify_resend_webhook_signature(
     secret: str,
     now: int | None = None,
 ) -> None:
-    """Validate a Resend/Svix webhook against the unmodified request body."""
-    try:
-        timestamp_value = int(timestamp)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=401, detail="Invalid webhook signature"
-        ) from exc
-    if abs((now if now is not None else int(time.time())) - timestamp_value) > 300:
-        raise HTTPException(status_code=401, detail="Webhook timestamp expired")
+    """Validate a Resend/Svix webhook against the unmodified request body.
 
-    encoded_secret = secret.removeprefix("whsec_")
-    try:
-        signing_key = base64.b64decode(encoded_secret, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(
-            status_code=401, detail="Invalid webhook signature"
-        ) from exc
-    signed_payload = f"{message_id}.{timestamp}.".encode() + body
-    expected = base64.b64encode(
-        hmac.new(signing_key, signed_payload, hashlib.sha256).digest()
-    ).decode()
-    candidates = (
-        item.removeprefix("v1,") for item in signature.split() if item.startswith("v1,")
-    )
-    if not any(hmac.compare_digest(expected, candidate) for candidate in candidates):
+    The scheme itself is `app.core.webhooks.signatures`, shared with the surface
+    webhook verifier -- this endpoint had a second copy of it, with its own
+    replay window and its own idea of what a malformed secret means. What stays
+    here is the failure this endpoint raises.
+    """
+    if not timestamp_within_skew(timestamp, now=now):
+        # Split from the match below so an expired-but-authentic delivery still
+        # says so; the two have always been different messages here.
+        detail = (
+            "Invalid webhook signature"
+            if not str(timestamp).lstrip("-").isdigit()
+            else "Webhook timestamp expired"
+        )
+        raise HTTPException(status_code=401, detail=detail)
+    if not svix_signature_matches(signature, message_id, timestamp, body, [secret]):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
 

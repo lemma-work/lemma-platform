@@ -90,7 +90,6 @@ class AppService:
                 "pod and won't show up in your `apps list`. Choose a different slug."
             )
 
-
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Storage phase: read the asset bytes — delegated to the repo-free
         ``AppStoragePhase`` (holds no DB connection)."""
@@ -183,6 +182,7 @@ class AppService:
         The widget and the app share one source artifact at two lifecycle stages:
         the stored fragment is preserved, wrapped as a standalone document (no
         embed bridge or conversation padding), and deployed as the app's bundle.
+        A no-build app's html is its own source, so it is stored as both archives.
         """
         for issue in lint_app_html(artifact.content):
             logger.debug(
@@ -393,9 +393,7 @@ class AppService:
             # docstring calls this phase "DB only", which it was not.
             async with connection_released(getattr(self.repository, "session", None)):
                 await run_blocking(load_app_dist_bundle, dist_archive_bytes)
-                version = await run_blocking(
-                    upload_source_sha256, dist_archive_bytes
-                )
+                version = await run_blocking(upload_source_sha256, dist_archive_bytes)
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
@@ -570,11 +568,14 @@ class AppService:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
         # No session reaches this route -- the ingress serves it to anonymous
         # browsers by host -- so only an app published to everyone belongs here.
-        # Apps default to POD, which made the default "exposed to anyone who
-        # guesses the slug". An unrecognized stored value is not PUBLIC either.
-        # Report it as missing rather than forbidden: a 403 would confirm the
-        # slug exists to a caller who only guessed it.
-        if normalize_resource_visibility(app.visibility) is not ResourceVisibility.PUBLIC:
+        # Apps default to PUBLIC (see the note on ``AppModel.visibility``), so
+        # this is the whole of what keeps a POD app off its public host; an
+        # unrecognized stored value is not PUBLIC either. Report it as missing
+        # rather than forbidden: a 403 confirms the slug to a caller who guessed.
+        if (
+            normalize_resource_visibility(app.visibility)
+            is not ResourceVisibility.PUBLIC
+        ):
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
         release = None
         public_url = self._asset_resolver.public_url(app)

@@ -39,10 +39,13 @@ from app.modules.workflow.execution.form_submission import (
     validate_form_inputs,
 )
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
-from app.composition.workflow_agent import AgentControlAdapter
-from app.composition.workflow_function import FunctionControlAdapter
-from app.composition.workflow_notifications import WorkflowNotificationAdapter
-from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.workflow.domain.ports import (
+    AgentPort,
+    FunctionPort,
+    SchedulePort,
+    WorkflowNotificationPort,
+)
+from app.modules.workflow.execution.wait_failure import fail_run_for_wait
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
     stop_underlying_work_for_wait,
@@ -59,25 +62,31 @@ logger = get_logger(__name__)
 
 
 class WorkflowEngine:
+    """Advances runs. Every collaborator arrives already bound.
+
+    The four adapters have no defaults on purpose: resolving them here made the
+    deepest file in this module choose which agent, function, scheduler and
+    notifier the application runs on. `build_workflow_engine` decides instead.
+    """
+
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        agent_adapter=None,
-        function_adapter=None,
-        schedule_adapter=None,
-        notification_adapter=None,
+        *,
+        agent_adapter: AgentPort,
+        function_adapter: FunctionPort,
+        schedule_adapter: SchedulePort,
+        notification_adapter: WorkflowNotificationPort,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
         self.run_repo = SqlAlchemyWorkflowRunRepository(uow)
         self.wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
 
-        self.agent_adapter = agent_adapter or AgentControlAdapter(uow)
-        self.function_adapter = function_adapter or FunctionControlAdapter(uow)
-        self.schedule_adapter = schedule_adapter or ScheduleControlAdapter(uow)
-        self.notification_adapter = notification_adapter or WorkflowNotificationAdapter(
-            uow
-        )
+        self.agent_adapter = agent_adapter
+        self.function_adapter = function_adapter
+        self.schedule_adapter = schedule_adapter
+        self.notification_adapter = notification_adapter
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(
@@ -203,9 +212,7 @@ class WorkflowEngine:
                 )
                 if existing is not None:
                     return existing
-            raise WorkflowConflictError(
-                "Workflow run identity already exists"
-            ) from exc
+            raise WorkflowConflictError("Workflow run identity already exists") from exc
 
         result = await self._stepper(ctx).advance(run, flow)
 
@@ -356,24 +363,18 @@ class WorkflowEngine:
         if wait is None:
             logger.debug("workflow.fail.stale_event", wait_type=wait_type.value)
             return None
-        run = await self.run_repo.get_for_update(wait.run_id)
-        if run is None or run.status not in (
-            WorkflowRunStatus.WAITING,
-            WorkflowRunStatus.RUNNING,
-        ):
-            return None
+        return await fail_run_for_wait(self, wait, error=error, output=output)
 
-        normalized = normalize_node_output(output)
-        wait.fail(normalized or {"error": error})
-        await self.wait_repo.update(wait)
-        if normalized:
-            run.record_node_output(wait.node_id, {**normalized, "error": error})
-        run.fail(error, node_id=wait.node_id)
-        run = await self.run_repo.update(run)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        return run
+    async def fail_for_wait(
+        self, wait: WorkflowRunWaitEntity, *, error: str
+    ) -> WorkflowRunEntity | None:
+        """Fail the run this wait belongs to, for a caller already holding it.
+
+        The reconciliation sweep expires waits it has already read, and a HUMAN
+        wait has no external ref for `fail_internal` to find it by. No node
+        output: expiry is the absence of one.
+        """
+        return await fail_run_for_wait(self, wait, error=error)
 
     async def cancel_run(
         self,
@@ -596,4 +597,3 @@ class WorkflowEngine:
             scheduled_at=request.scheduled_at,
             payload=payload,
         )
-

@@ -52,14 +52,34 @@ class PromptCachingCapability(AbstractCapability[object]):
 
     def get_model_settings(self) -> dict[str, object]:
         if self._protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
-            # Marks a cache breakpoint after the last static instruction block —
-            # for us, the block ending in the runtime context brief.
-            return {"anthropic_cache_instructions": _ANTHROPIC_CACHE_TTL}
+            return {
+                # Marks a cache breakpoint after the last static instruction
+                # block — for us, the block ending in the task list.
+                "anthropic_cache_instructions": _ANTHROPIC_CACHE_TTL,
+                # And one after the tool definitions. Anthropic's cache is a
+                # prefix over [tools, system, messages], so a changed tool array
+                # invalidates every breakpoint behind it — and the tool array
+                # *does* change mid-run: `search_tools` reveals deferred tools on
+                # demand, which is the whole point of deferring them. Without
+                # this, the first search costs a full re-read of the system
+                # prompt for the rest of the run.
+                "anthropic_cache_tool_definitions": _ANTHROPIC_CACHE_TTL,
+            }
         affinity = self._conversation_id
         return {
             # OpenAI `user` field — used by compatible providers for sticky
-            # replica routing so the cached prefix is hit across turns.
+            # replica routing so the cached prefix is hit across turns. The only
+            # affinity lever in the baseline Chat Completions schema, and so the
+            # only one this protocol can send: OPENAI_COMPATIBLE says what the
+            # wire format is, not who answers on it.
+            #
+            # `prompt_cache_key` does the same job marginally better and is
+            # deliberately absent. It is a recent OpenAI-only addition, and a
+            # strict shim rejects an unknown field rather than ignoring it —
+            # Google's answers `400 Unknown name "prompt_cache_key"`, failing
+            # every turn of every Gemini run. Nothing real is lost: caching
+            # applies automatically to prefixes over 1024 tokens, keyed or not.
+            # A provider known to accept it adds it in the subclass registered
+            # through `configure_caching_capability()`.
             "openai_user": affinity,
-            # OpenAI prompt-cache key; honored by OpenAI and compatible providers.
-            "openai_prompt_cache_key": affinity,
         }

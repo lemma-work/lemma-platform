@@ -9,6 +9,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent_surfaces.services.progress_waiting import (
+    ProgressWaitingMixin,
+)
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.agent.contracts import Conversation
@@ -27,16 +30,24 @@ from app.modules.agent_surfaces.platforms.rendering import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent_surfaces.services.progress_display import (
+    ProgressDisplayMixin,
+)
+from app.modules.agent_surfaces.services.pending_envelope import (
+    discard_display_paths,
+)
+from app.modules.agent_surfaces.services.progress_plan import (
+    SurfacePlan,
+    plan_from_event,
+)
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
     _assistant_text_from_event,
     _assistant_text_was_all_reasoning,
-    _email_reply_tool_called,
     _is_agent_host_permission_event,
     _is_final_answer_event,
     _is_tool_activity_event,
     _join_text,
-    _progress_text_from_event,
     _safe_run_error_text,
     _surface_platform,
 )
@@ -46,30 +57,20 @@ logger = get_logger(__name__)
 _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.TELEGRAM.value: 4.0,
     SurfacePlatform.TEAMS.value: 10.0,
+    # WhatsApp couples mark-as-read and the typing bubble into one call, which
+    # the ingress path already makes once when it picks the message up. The
+    # bubble expires after ~25s, so on anything longer than a quick answer it
+    # went dark and stayed dark — dead in exactly the runs where it was the only
+    # sign of life. Refreshed inside that window it costs no conversation
+    # message and no attention, unlike the posted updates that back it up.
+    SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
-# Slack/Telegram/Teams render progress as a live, edited message (streaming):
-# Slack via chat.update, Telegram via editMessageText, Teams via PUT activity.
-# WhatsApp has no message-edit API, so it gets no per-step progress (the inbound
-# reaction indicator signals work) and email gets a single composed reply.
-_TEXT_PROGRESS_PLATFORMS: set[str] = set()
-# Slack is deliberately absent: it streams the answer token by token, and a
-# step chunk appended into that same stream lands *inside* the sentence being
-# written — splitting it mid-word. The streamed text is the progress indicator,
-# so a separate step timeline is both redundant and destructive.
-_STREAM_PROGRESS_PLATFORMS = {
-    SurfacePlatform.TELEGRAM.value,
-    SurfacePlatform.TEAMS.value,
-}
-_MIN_TEXT_PROGRESS_INTERVAL_SECONDS = 2.0
-# Token flush policy: batch deltas so a fast model does not spend the Slack
-# rate limit one word at a time, while staying frequent enough to read as live.
-_TOKEN_FLUSH_CHARS = 280
-_TOKEN_FLUSH_INTERVAL_SECONDS = 0.8
-_MAX_PROGRESS_TEXT_LENGTH = 120
-# Email recipients should get one composed reply, not a stream of chat
-# messages. Agents reply via the platform reply tools; the observer only
-# falls back to emailing the final assistant text if no reply was sent.
+# Email recipients get one composed reply, not a stream of chat messages, and
+# the observer is the only thing that sends it. There used to be a reply tool
+# the agent called instead, with this path as its fallback -- two senders
+# reading two different stores for the same threading headers, and a silent new
+# conversation whenever they drifted.
 #
 # Derived from the platform-capability registry (not hand-maintained) so a
 # newly added email platform is automatically covered here too — a hardcoded
@@ -79,22 +80,28 @@ _MAX_PROGRESS_TEXT_LENGTH = 120
 _EMAIL_PLATFORMS = {
     caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
 }
-_EMAIL_REPLY_TOOL_NAMES = {
-    caps.reply_tool for caps in PLATFORM_CAPABILITIES.values() if caps.reply_tool
-}
 
 
-class SurfaceAgentRunProgressObserver(TokenStreamMixin):
+class SurfaceAgentRunProgressObserver(
+    ProgressWaitingMixin, ProgressDisplayMixin, TokenStreamMixin
+):
     """Reflect agent run progress through platform-native surface indicators.
 
     A surface conversation should receive exactly one content message per run:
     the agent's final answer. The agent's intermediate narration, reasoning
     (``ThinkingContent``) and tool activity (``ToolCallContent`` /
     ``ToolReturnContent``) must never be delivered as chat messages — they only
-    drive progress indicators (typing for Telegram/Teams, a status string for
-    Slack). To achieve this the observer buffers assistant text during the run
-    and delivers the final answer once on ``on_run_finished``, resetting the
-    buffer whenever a tool runs so only the post-final-tool text survives.
+    drive progress indicators. To achieve this the observer buffers assistant
+    text during the run and delivers the final answer once on
+    ``on_run_finished``, resetting the buffer whenever a tool runs so only the
+    post-final-tool text survives.
+
+    What "progress indicator" means is the platform's ``ProgressStyle``: Slack
+    streams the answer as it is written, Telegram and Teams keep one live message
+    and rewrite it, WhatsApp can only post a new message and so is rationed to a
+    plan that has moved, and email shows nothing before the reply. The one thing
+    they share is what they show — the agent's ``write_todos`` checklist, which
+    is the only account of a long run the person ever gets.
     """
 
     def __init__(
@@ -116,11 +123,6 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         self._buffered_text: str | None = None
         self._reset_text_on_next = False
         self._final_delivered = False
-        # Set when the agent calls an email reply tool. Display resources are
-        # delivered by the display_resource tool itself (chat) or shared via the
-        # email reply tool's attachments (email), so the observer no longer
-        # handles display_resource at all — it only buffers text + progress.
-        self._email_reply_tool_called = False
         self._run_errored = False
         self._run_error_text: str | None = None
         self._error_delivered = False
@@ -143,6 +145,16 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         # written. See ``_deliver_final_answer``.
         self._answer_was_all_reasoning = False
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
+        # The agent's checklist, as of the last ``write_todos`` return, plus the
+        # snapshot that was last actually shown. Kept apart so a plan rewritten
+        # with the same contents does not spend an update.
+        self._plan: SurfacePlan | None = None
+        self._shown_plan_signature: tuple[tuple[str, bool], ...] | None = None
+        # Rationing for platforms that can only post a *new* message.
+        self._run_started_at = time.monotonic()
+        self._posted_updates = 0
+        self._last_post_at = 0.0
+        self._heartbeat_posted = False
 
     async def on_run_started(
         self,
@@ -150,6 +162,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         ctx: ConversationContext,
     ) -> None:
         del ctx
+        self._run_started_at = time.monotonic()
         platform = _surface_platform(conversation)
         if platform is None:
             return
@@ -230,135 +243,11 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         # next assistant text starts a fresh (final) answer block.
         if _is_tool_activity_event(event):
             self._reset_text_on_next = True
-            if _email_reply_tool_called(event):
-                self._email_reply_tool_called = True
+            plan = plan_from_event(event)
+            if plan is not None:
+                self._plan = plan
 
         await self._maybe_send_text_progress(event, platform, conversation.id)
-
-    async def _handle_waiting_event(
-        self,
-        event: AgentEvent,
-        conversation: Conversation,
-        *,
-        ends_run: bool = True,
-    ) -> None:
-        """Render a paused ``ask_user`` or ``request_approval`` on the surface.
-
-        The run pauses with a WAITING event before terminating. We deliver any
-        buffered narration first (so the lead-in to the question still reaches the
-        user), mark the final answer delivered so ``on_run_finished`` doesn't
-        re-send it, then render the questions / approval prompt.
-
-        ``ends_run`` is False for an Agent Host permission pause, which happens
-        inside a run that keeps going; see the reset at the end.
-        """
-        data = event.data if isinstance(event.data, dict) else {}
-        kind = data.get("kind")
-        if kind not in ("ask_user", "request_approval"):
-            return
-        tool_call_id = str(data.get("tool_call_id") or "")
-        rendered_key: tuple[str, str] | None = None
-        if tool_call_id:
-            rendered_key = (str(kind), tool_call_id)
-            if rendered_key in self._rendered_waiting_tool_calls:
-                return
-            self._rendered_waiting_tool_calls.add(rendered_key)
-        await self._clear_progress(conversation.id)
-        # Deliver buffered narration (the lead-in to the question) exactly once.
-        if not self._final_delivered:
-            self._final_delivered = True
-            if not self._run_errored:
-                message = (self._final_answer_text or self._buffered_text or "").strip()
-                if message:
-                    try:
-                        await self._send_agent_message(
-                            conversation_id=conversation.id,
-                            message=message,
-                        )
-                    except Exception:
-                        logger.debug(
-                            'agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic'
-                        )
-        async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            try:
-                if kind == "ask_user":
-                    delivered = await service.send_questions_for_conversation(
-                        conversation_id=conversation.id,
-                        tool_call_id=tool_call_id or None,
-                    )
-                else:
-                    delivered = await service.send_approval_prompt_for_conversation(
-                        conversation_id=conversation.id,
-                        tool_call_id=tool_call_id or None,
-                    )
-                if not delivered:
-                    # Nothing reached the user (the send method logs the precise
-                    # reason). Drop the rendered-key so a later WAITING event for
-                    # this same tool call can retry instead of being deduped away,
-                    # and surface it loudly — a stuck WAITING run must never be
-                    # silent (this is the swallow class that hid the ask_user bug).
-                    if rendered_key is not None:
-                        self._rendered_waiting_tool_calls.discard(rendered_key)
-                    logger.debug(
-                        'agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic',
-                        tool_call_id=tool_call_id,
-                    )
-            except Exception:
-                if rendered_key is not None:
-                    self._rendered_waiting_tool_calls.discard(rendered_key)
-        if not ends_run:
-            # Nothing about this run's final answer is settled yet: the narration
-            # above was the lead-in to the prompt, and the real answer only comes
-            # after the decision. Unlatch delivery so on_run_finished still sends
-            # it, and drop what was already delivered so it is not repeated.
-            self._final_delivered = False
-            self._final_answer_text = None
-            self._buffered_text = None
-
-    async def _maybe_send_text_progress(
-        self,
-        event: AgentEvent,
-        platform: str | None,
-        conversation_id,
-    ) -> None:
-        """Reflect thinking/tool activity as a status string where supported.
-
-        Telegram/Teams show a typing indicator (refreshed by the loop started in
-        on_run_started); Slack is the only platform that renders a status text.
-        """
-        streams = platform in _STREAM_PROGRESS_PLATFORMS
-        if platform not in _TEXT_PROGRESS_PLATFORMS and not streams:
-            return
-        progress_text = _progress_text_from_event(event)
-        if not progress_text:
-            return
-        now = time.monotonic()
-        if (
-            progress_text == self._last_text_progress
-            or now - self._last_text_progress_at < _MIN_TEXT_PROGRESS_INTERVAL_SECONDS
-        ):
-            return
-        self._last_text_progress = progress_text
-        self._last_text_progress_at = now
-        if streams:
-            await self._stream_progress(conversation_id, progress_text)
-        else:
-            await self._send_indicator(
-                conversation_id=conversation_id,
-                metadata={"progress_text": progress_text},
-            )
-
-    async def _stream_progress(self, conversation_id, progress_text: str) -> None:
-        async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            handle = await service.send_progress_update_for_conversation(
-                conversation_id=conversation_id,
-                progress_text=progress_text,
-                progress_handle=self._progress_handle,
-            )
-        if handle is not None:
-            self._progress_handle = handle
 
     async def _finish_stream_with_answer(self, conversation: Conversation) -> bool:
         """Close a live stream with the final answer, so they are one message.
@@ -399,7 +288,7 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                 )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_finish_stream_conversation.diagnostic"
             )
             return False
         if not delivered:
@@ -438,6 +327,9 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         if not await self._finish_stream_with_answer(conversation):
             await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
+        # Anything display_resource held for a single reply belongs to this run.
+        # Left behind, it would attach itself to whatever reply came next.
+        discard_display_paths(conversation.id)
 
     async def on_run_failed(
         self,
@@ -461,23 +353,30 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
                 pass
         await self._clear_progress(conversation.id)
         await self._deliver_run_error(conversation)
+        # Same reason as `on_run_finished`: what `display_resource` held belongs
+        # to this run. A run that died still held it, and the entry outlived the
+        # run -- attaching itself to whatever reply came next, or to nothing at
+        # all while the process kept the bytes.
+        discard_display_paths(conversation.id)
 
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
 
-        Email surfaces only fall back to sending the buffered text when the
-        agent did not already reply via a reply tool. Chat surfaces always send
-        the final buffered answer. Nothing is sent if the run errored or there
-        is no usable text.
+        Every surface, the same way: the buffered answer goes out when the run
+        stops. Email used to be the exception, deferring to a reply tool the
+        agent had to remember to call -- and this path, which ran whenever the
+        agent forgot, was never a lesser implementation of it. It threads
+        correctly, renders markdown to HTML and keeps the thread's subject,
+        which is the whole of what the tool did.
+
+        Nothing is sent if the run errored (the error is delivered instead) or
+        if there is no usable text.
         """
         if self._final_delivered:
             return
         self._final_delivered = True
         if self._run_errored:
             await self._deliver_run_error(conversation)
-            return
-        platform = _surface_platform(conversation)
-        if platform in _EMAIL_PLATFORMS and self._email_reply_tool_called:
             return
         message = (self._final_answer_text or self._buffered_text or "").strip()
         if not message and self._answer_was_all_reasoning:
@@ -499,14 +398,19 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             )
         except Exception:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic'
+                "agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic"
             )
 
     async def _deliver_run_error(self, conversation: Conversation) -> None:
+        """Say that the run failed, on every surface including email.
+
+        Email used to be skipped here, so a failed run on an email surface said
+        nothing at all -- the person's message simply vanished, and nothing
+        distinguished that from never having been read. Now the run stopping is
+        the run stopping, whatever stopped it, and the one reply carries the
+        failure.
+        """
         if self._error_delivered:
-            return
-        if _surface_platform(conversation) in _EMAIL_PLATFORMS:
-            self._error_delivered = True
             return
         try:
             await self._send_agent_message(
@@ -533,14 +437,23 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
         try:
             while time.monotonic() - started_at < _MAX_TYPING_REFRESH_SECONDS:
                 await asyncio.sleep(interval)
-                sent = await self._send_indicator(conversation_id=conversation_id)
+                # Flagged as a refresh so an adapter can tell a keep-alive from
+                # the opening acknowledgement. WhatsApp needs the distinction:
+                # its acknowledgement falls back to posting a reaction when the
+                # read/typing call is refused, and a fallback that fires on every
+                # tick would be an API call every twenty seconds for the whole
+                # run.
+                sent = await self._send_indicator(
+                    conversation_id=conversation_id,
+                    metadata={"is_refresh": True},
+                )
                 if not sent:
                     return
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.debug(
-                'agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic',
+                "agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic",
                 conversation_id=conversation_id,
             )
 
@@ -573,5 +486,3 @@ class SurfaceAgentRunProgressObserver(TokenStreamMixin):
             if metadata:
                 kwargs["metadata"] = metadata
             return await service.send_agent_message_for_conversation(**kwargs)
-
-

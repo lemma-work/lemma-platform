@@ -1,152 +1,129 @@
 'use client';
 
-import { use, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { use } from 'react';
 import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
-import { ArrowUp } from '@/components/ui/icons';
 
-import { Nothing, WiringRow } from '@/components/pod/wiring-row';
-import { LemmaMark } from '@/components/brand/logo';
-import { RecentConversations } from '@/components/pod/recent-conversations';
+import { AgentHome } from '@/components/agents/agent-home';
+import { TriggersRow } from '@/components/triggers/triggers-row';
 import {
     ResourceHeader,
     ResourceDetailShell,
     ResourceDetailViewport,
-    ResourceHeroTitle,
 } from '@/components/pod/resource-layout';
-import { AgentSurfacesRow } from '@/components/surfaces/agent-surfaces-row';
-import { Button } from '@/components/ui/button';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { DEFAULT_RESPONDER_DESCRIPTION, DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 
-// The "Pod Assistant" is a virtual, frontend-only agent: it has no row of its
-// own. It stands in for the pod's default responder — the agent that answers on
-// any surface not assigned to a specific agent. Its surfaces are exactly the
-// surfaces with no explicit responder (`uses_default_agent`).
+// Lem is a virtual, frontend-only agent: it has no row of its own. It stands in
+// for the pod's default responder — the agent that answers on any surface not
+// assigned to a specific agent. Its surfaces are exactly the surfaces with no
+// explicit responder (`uses_default_agent`).
+//
+// The name is display copy and lives in one constant; the wire still calls this
+// `pod_default` / `POD_DEFAULT`, and nothing here should spell it out inline.
 //
 // It is built from the same parts as an agent's page and should keep matching
 // it: an identity card that states what it is and how it is reached, then the
 // work. What it does not have is real — no instructions to edit, no tool set of
-// its own, no trigger that can name it, and nothing to share — so it has fewer
-// rows rather than empty ones.
+// its own, and nothing to share — so it has fewer rows rather than empty ones.
+//
+// Triggers used to be on that list, on the grounds that a trigger names its
+// target and Lem has no name. It does have one: `POD_DEFAULT`, the same
+// selector the conversation API has always taken. What was actually missing was
+// somewhere to say what Lem should *do* when a trigger fires — a named agent is
+// its own instruction and Lem's is empty — and a trigger now carries that
+// sentence itself.
 export default function PodAssistantPage({
     params,
 }: {
     params: Promise<{ id: string }>;
 }) {
     const { id: podId } = use(params);
-    const router = useRouter();
     const podAccess = usePodAccess(podId);
     const canUseSurfaces = podAccess.canAccessRoute('surfaces');
-    const canReadConversations = podAccess.can('conversation.read');
+
+    const canUseSchedules = podAccess.canAny(['schedule.read', 'schedule.create']);
+    const canCreateSchedule = podAccess.can('schedule.create');
+    const canUpdateSchedule = podAccess.can('schedule.update');
+    const canDeleteSchedule = podAccess.can('schedule.delete');
 
     // Pod-wide automation, grouped client-side — shares one cache entry with the
-    // schedules page and agent detail pages instead of a per-view fetch. No
-    // schedules: the default assistant isn't a named target a trigger can wake.
-    const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
+    // schedules page and agent detail pages instead of a per-view fetch.
+    const automation = usePodAutomation(podId, {
+        schedules: canUseSchedules,
+        surfaces: canUseSurfaces,
+    });
     const defaultSurfaces = automation.defaultSurfaces;
+    // The wire selector, not the display name: `agent_name` on these rows is
+    // `POD_DEFAULT`, which is what the API echoes for a target with no row.
+    const schedules = automation.schedulesForAgent(POD_DEFAULT_AGENT_SELECTOR);
     const { data: conversationsPage } = useScopedConversations(
         { podId, agentName: POD_DEFAULT_AGENT_SELECTOR },
-        { limit: 4, enabled: canReadConversations },
+        { limit: 10, enabled: podAccess.can('conversation.read') },
     );
     const recentConversations = conversationsPage?.items ?? [];
 
-    const [message, setMessage] = useState('');
-
-    // Hand off to the pod's new-conversation flow with no `?agent=` — the pod
-    // default assistant answers, carrying the first message so it sends on arrival.
-    const startConversation = () => {
-        const text = message.trim();
-        const params = new URLSearchParams();
-        if (text) params.set('assistantMessage', text);
-        const query = params.toString();
-        router.push(`/pod/${podId}/conversations/new${query ? `?${query}` : ''}`);
-    };
-
     return (
         <ResourceDetailShell>
+            {/* Same call as the agent pages: the tab strip above already names
+                this, so the bar drops the title and the back link. `tab` rather
+                than nothing, so a compact viewport with no strip takes the name
+                back instead of leaving the page unnamed. */}
             <ResourceHeader
-                title="Pod Assistant"
-                titleOwner="page"
-                backHref={`/pod/${podId}/ai`}
-                backLabel="Agents"
+                title={DEFAULT_RESPONDER_NAME}
+                titleOwner="tab"
+                // Nothing left for the bar to hold, so it goes rather than
+                // drawing an empty strip — the same call pod home makes.
+                hideContextBar
                 fullscreen={false}
             />
 
+            {/* The same home the agent pages get. This was a stack of read-only
+                cards — identity, wiring, a textarea that navigated away, and four
+                recent conversations at the bottom — every one of them describing
+                the assistant on a page where you could not talk to it. Then it
+                was a live transcript, which had the opposite problem: sending
+                consumed the page. Sending now opens the conversation as its own
+                tab and this stays the assistant's home. */}
             <ResourceDetailViewport>
-                <div className="resource-page-scroll">
-                    <div className="resource-page-column">
-                        <section className="resource-card">
-                            <header className="agent-identity">
-                                <span className="agent-identity-avatar" aria-hidden>
-                                    <LemmaMark size="sm" />
-                                </span>
-                                <div className="agent-identity-body">
-                                    <div className="agent-identity-titles">
-                                        <ResourceHeroTitle className="agent-identity-name">Pod Assistant</ResourceHeroTitle>
-                                    </div>
-                                    <p className="agent-identity-description-static">
-                                        This pod&rsquo;s most capable agent. Ask it to add a table, build a workflow, spin up a
-                                        new agent, connect a surface, or read and change your data, and it acts on the pod directly.
-                                    </p>
-                                </div>
-                            </header>
+                <div className="resource-page-scroll agent-home-scroll">
+                    <AgentHome
+                        podId={podId}
+                        agentName={DEFAULT_RESPONDER_NAME}
+                        description={DEFAULT_RESPONDER_DESCRIPTION}
+                        surfaces={canUseSurfaces ? defaultSurfaces : []}
+                        conversations={recentConversations}
+                        isAssistant
+                    />
 
-                            {canUseSurfaces ? (
-                                <div className="agent-wiring">
-                                    <WiringRow label="Reached by">
-                                        <div className="agent-wiring-chips">
-                                            {defaultSurfaces.length === 0 ? <Nothing>Only you, here.</Nothing> : null}
-                                            <AgentSurfacesRow
-                                                podId={podId}
-                                                agentName={null}
-                                                surfaces={defaultSurfaces}
-                                                label={null}
-                                            />
-                                        </div>
-                                    </WiringRow>
-                                </div>
-                            ) : null}
+                    {/* The one wiring row Lem has. It is here rather than on a
+                        schedules page for the same reason it is on an agent's
+                        page: the thing being woken up is the context that makes
+                        "what should start this?" answerable, and Lem's page is
+                        the only place that context exists. `POD_DEFAULT` is
+                        what the API takes; the modal shows the name.
+
+                        `AgentHome` is deliberately not given the schedules as
+                        well. It would draw its own read-only "Runs on its own"
+                        list from them, which on an agent's page is fine because
+                        the home and the editable rows are alternate modes of
+                        one screen — Configure swaps between them. Lem has no
+                        Configure mode, so both would render at once and the
+                        same triggers would be listed twice, once uneditably. */}
+                    {canUseSchedules ? (
+                        <section className="agent-wiring">
+                            <TriggersRow
+                                podId={podId}
+                                target={{ kind: 'agent', name: POD_DEFAULT_AGENT_SELECTOR }}
+                                schedules={schedules}
+                                canCreate={canCreateSchedule}
+                                canUpdate={canUpdateSchedule}
+                                canDelete={canDeleteSchedule}
+                                emptyText="You ask it to."
+                            />
                         </section>
-
-                        <section className="resource-card">
-                            <p className="resource-card-eyebrow">Ask it something</p>
-                            <div className="form-field-control p-2.5">
-                                <textarea
-                                    value={message}
-                                    onChange={(event) => setMessage(event.target.value)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter' && !event.shiftKey) {
-                                            event.preventDefault();
-                                            startConversation();
-                                        }
-                                    }}
-                                    placeholder="Message the pod assistant…"
-                                    rows={3}
-                                    className="inline-edit-field min-h-20 w-full resize-none px-2.5 py-2 text-sm leading-6"
-                                />
-                                <div className="flex items-center justify-between gap-3 px-1.5 pb-1">
-                                    <span className="truncate text-xs text-[var(--text-tertiary)]">
-                                        Enter to send · Shift + Enter for a new line
-                                    </span>
-                                    <Button variant="primary"
-                                        type="button"
-                                        size="icon"
-                                        className="h-8 w-8 shrink-0 rounded-full"
-                                        onClick={startConversation}
-                                        aria-label="Start conversation"
-                                    >
-                                        <ArrowUp className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            </div>
-
-                            {/* Brings its own top margin, which is why it is not in a
-                                `space-y` stack. */}
-                            <RecentConversations podId={podId} conversations={recentConversations} agentName={null} />
-                        </section>
-                    </div>
+                    ) : null}
                 </div>
             </ResourceDetailViewport>
         </ResourceDetailShell>

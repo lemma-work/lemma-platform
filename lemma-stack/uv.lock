@@ -31,7 +31,7 @@ wheels = [
 
 [[package]]
 name = "lemma-stack"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },
@@ -57,7 +57,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.4.0" },
-    { name = "ruff", specifier = ">=0.9.0" },
+    { name = "ruff", specifier = ">=0.14.8,<0.16" },
 ]
 
 [[package]]

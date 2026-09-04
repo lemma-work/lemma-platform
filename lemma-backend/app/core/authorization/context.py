@@ -132,6 +132,40 @@ class ResourceRef:
         )
 
     @classmethod
+    def hydrated_table(
+        cls,
+        pod_id: UUID,
+        table_id: UUID,
+        *,
+        visibility: "ResourceVisibility | str | None",
+        owner_user_id: UUID | None,
+    ) -> "ResourceRef":
+        """A table reference that authorization will not re-read.
+
+        ``_hydrate_resource`` returns early once ``visibility`` is set, so a
+        caller holding the row it just selected can hand both fields over
+        instead of paying a second read of the same row to authorize it.
+
+        Separate from ``table`` and with both arguments required, because they
+        must travel together: hydration fills them as a pair, and setting only
+        the visibility would leave ``owner_user_id`` None and silently deny the
+        table's own owner. ``owner_user_id`` may legitimately *be* None — an
+        unowned table — which is why this cannot be inferred from the values.
+        """
+        resolved = (
+            normalize_resource_visibility(visibility)
+            if isinstance(visibility, str)
+            else visibility
+        )
+        return cls(
+            resource_type=ResourceType.DATASTORE_TABLE,
+            resource_id=table_id,
+            pod_id=pod_id,
+            visibility=resolved or ResourceVisibility.POD,
+            owner_user_id=owner_user_id,
+        )
+
+    @classmethod
     def app(cls, pod_id: UUID, app_id: UUID) -> "ResourceRef":
         return cls(resource_type=ResourceType.APP, resource_id=app_id, pod_id=pod_id)
 
@@ -232,6 +266,15 @@ def _denial_message(permission_id: str, decision: "AuthorizationDecision") -> st
     if decision.resource_name:
         target += f" '{decision.resource_name}'"
     message = f"Missing permission {permission_id}{target}"
+    if decision.reason_code == "DELEGATION_EXCEEDS_INVOKER":
+        # The workload is granted this; the person it is acting for is not. Say
+        # so, because the usual fix — grant the workload more — is the one thing
+        # that cannot work here.
+        return (
+            f"{message} — the person this run acts for does not have it, and a "
+            f"workload never exceeds its invoker. Give that person the "
+            f"permission, or run this as someone who already has it."
+        )
     if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
         spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
         if spec and decision.resource_name:
@@ -278,6 +321,17 @@ class Context:
     principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     grant_principal_sets: tuple[frozenset[PrincipalRef], ...] = ()
     workload_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
+    #: The invoking person's OWN principals and role names, kept unmerged.
+    #:
+    #: ``principal_refs`` and ``role_names`` above are the union of the person's
+    #: and the workload's, which is the right input for "may either of these
+    #: reach it". The intersection rule (PS-ACCESS-020 — a workload gets the
+    #: person's access ∩ its own grants, never the union) needs the person's
+    #: half on its own, and ``permission_ids`` is already exactly that. Empty on
+    #: every non-delegated context, and on a delegated one that means "this
+    #: person holds no grants", never "skip the check".
+    invoker_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
+    invoker_role_names: frozenset[str] = field(default_factory=frozenset)
     delegated_by_user_id: UUID | None = None
     delegation_session_id: str | None = None
     delegation_scope: frozenset[str] = field(default_factory=frozenset)
@@ -289,9 +343,16 @@ class Context:
     # pod allow) treat it as the user it is acting for — without widening
     # real (grant-backed) agent/function workloads, which leave it False.
     is_user_equivalent: bool = False
-    _decision_cache: dict[tuple[str, ResourceType | None, UUID | None], AuthorizationDecision] = field(
-        default_factory=dict
-    )
+    #: Whether the pod this context is scoped to has been deleted.
+    #:
+    #: A deleted pod is soft-deleted: its rows, its memberships and its role
+    #: snapshots all survive, which is why authorization on its own goes on
+    #: saying yes. Carrying the fact here is what lets one check refuse every
+    #: pod-scoped route without any of them paying a ``Pod`` read.
+    pod_is_deleted: bool = False
+    _decision_cache: dict[
+        tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
+    ] = field(default_factory=dict)
     #: permission_id -> session-approval answer, for this request only.
     #:
     #: The lookup is a Redis GET, and it runs while FastAPI holds the request's

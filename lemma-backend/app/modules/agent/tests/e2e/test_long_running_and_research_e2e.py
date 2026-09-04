@@ -15,12 +15,15 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import time
+from dataclasses import dataclass
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from aiohttp import web
 from fastapi import status
 
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
@@ -34,8 +37,61 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import (
     list_processes_internal,
     write_stdin_internal,
 )
+from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e, pytest.mark.anyio]
+# asyncio, not anyio, like the other 139 e2e files. Neither of these two files
+# uses anyio for anything -- no anyio API, no trio, no task groups -- but the
+# marker made pytest-anyio run each test in its own fresh event loop while every
+# fixture around them runs in the session loop pytest.ini configures. That is
+# invisible until something is held across the boundary: a pooled Postgres
+# connection opened during fixture setup and reused in the test body dies with
+# "got Future attached to a different loop".
+
+
+@dataclass
+class _FetchablePage:
+    """One page of HTML on loopback, so the good URL in the batch is local."""
+
+    url: str = ""
+    _runner: "web.AppRunner | None" = None
+
+    async def start(self) -> None:
+        app = web.Application()
+        app.router.add_get("/", self._page)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await site.start()
+        sockets = site._server.sockets if site._server else []  # noqa: SLF001
+        assert sockets
+        self.url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}/"
+
+    async def stop(self) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
+
+    async def _page(self, request: web.Request) -> web.Response:
+        del request
+        # Comfortably over `_THIN_CONTENT_CHARS` (120). Below it, extraction is
+        # read as degenerate and the fetch is retried through the browser --
+        # which is a real behaviour worth keeping, and would make the
+        # `fetched_with == "http"` assertion below silently untrue. The
+        # in-tree comment notes example.com extracts to 167 clean characters;
+        # this is deliberately in the same range.
+        return web.Response(
+            text=(
+                "<html><body><h1>A fetchable page</h1>"
+                "<p>This page exists so the plain HTTP fetch path has something "
+                "local to read. It carries enough ordinary prose to clear the "
+                "thin-content floor, so extraction succeeds on the first pass "
+                "and no browser render is spent re-reading a page that was "
+                "already read correctly.</p></body></html>"
+            ),
+            content_type="text/html",
+        )
+
+
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 # Long enough that it cannot finish inside one default wait window, short enough
 # that the suite stays usable.
@@ -54,12 +110,18 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     pod = response.json()
+    # The pod's own assistant, as `run_context_builder` builds it: addressed by
+    # its `agents` row id, which is its pod's. These tests are about the
+    # workspace and research tools, and the assistant is the agent a person
+    # actually reaches them through.
     ctx = BaseAgentContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
         conversation_id=uuid4(),
-        agent_name="long_running_e2e",
+        workload_id=UUID(pod["id"]),
+        agent_name=DEFAULT_POD_AGENT_NAME,
+        is_pod_default_agent=True,
     )
 
     # Provision the container before the tests that assert on timing. Starting
@@ -71,18 +133,22 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     # do. Running after the rest of the suite, the first attempt can also hit a
     # pooled connection to a sandbox that has since been released
     # (RemoteProtocolError), which is the same retryable class.
-    warmup = None
-    for _attempt in range(3):
-        warmup = await exec_command_internal(
+    async def _attempt_warmup():
+        return await exec_command_internal(
             ctx,
             ExecCommandRequest(
                 comment="warm the sandbox", cmd="true", timeout_seconds=180
             ),
         )
-        if warmup.success:
-            return ctx
-        await asyncio.sleep(2)
-    raise AssertionError(f"sandbox never became ready: {warmup and warmup.error}")
+
+    await eventually(
+        label="sandbox warmup",
+        probe=_attempt_warmup,
+        done=lambda warmup: warmup.success,
+        timeout_seconds=30.0,
+        interval_seconds=2.0,
+    )
+    return ctx
 
 
 async def _poll_until_complete(ctx, process_id: str, *, budget_seconds: int):
@@ -209,9 +275,9 @@ async def test_a_long_process_survives_across_separate_tool_calls(
     assert process_id
 
     listed = await list_processes_internal(ctx, None)
-    assert any(
-        item.process_id == process_id for item in listed.processes
-    ), f"the running process should be discoverable: {listed}"
+    assert any(item.process_id == process_id for item in listed.processes), (
+        f"the running process should be discoverable: {listed}"
+    )
 
     final, output = await _poll_until_complete(ctx, process_id, budget_seconds=90)
     assert final.completed is True
@@ -256,9 +322,7 @@ async def test_an_expired_process_is_reaped_instead_of_pinning_the_sandbox(
     while time.monotonic() < deadline:
         result = await write_stdin_internal(
             ctx,
-            WriteStdinRequest(
-                process_id=process_id, chars="", yield_time_ms=2000
-            ),
+            WriteStdinRequest(process_id=process_id, chars="", yield_time_ms=2000),
         )
         if result.completed:
             assert result.error or result.exit_code is not None
@@ -346,7 +410,10 @@ async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
 
     async def fake_fetch(url: str) -> ExtractedPage:
         return ExtractedPage(
-            url=url, title="Ravichandran Ashwin", markdown=body, content_type="text/html"
+            url=url,
+            title="Ravichandran Ashwin",
+            markdown=body,
+            content_type="text/html",
         )
 
     monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
@@ -381,6 +448,162 @@ async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
     assert len(counts) == 3, sizes.stdout
     assert all(count > 128 * 1024 for count in counts), counts
     assert len(result.model_dump_json()) < 8000, "the response must stay bounded"
+
+
+async def test_web_fetch_forces_the_browser_and_captures_a_rendered_page(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """`render=True` forces the browser path, exercised against a real page.
+
+    The http path (above) is the default and is fast; `render` exists for
+    pages that only exist after JavaScript runs, or when the caller wants a
+    PDF/screenshot. `_capture_with_browser`/`_finish`'s success branch, the
+    real `save-webpage` script, and the real Agent Browser session inside the
+    sandbox all run for real here — nothing about the browser path was
+    exercised by any other test, which only drove the cheap http path.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(
+            urls=["https://example.com/"],
+            render=True,
+            out_dir="research",
+            comment="force the browser render path",
+        ),
+    )
+
+    assert result.success, result
+    page = result.pages[0]
+    assert page.success, page.error
+    assert page.fetched_with == "browser", "render=True must skip the http path"
+    assert page.files["markdown"].startswith("research/")
+    assert page.preview and "Example Domain" in page.preview
+    assert page.title
+
+    # The file really is on disk in the workspace, rendered by the browser.
+    listing = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="confirm the rendered capture landed",
+            cmd=f"cat {page.files['markdown']}",
+            timeout_seconds=30,
+        ),
+    )
+    assert listing.exit_code == 0, listing
+    assert "Example Domain" in (listing.stdout or "")
+
+
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
+async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    monkeypatch,
+):
+    """`_validate` and `assert_safe_url` run for every URL before either fetch
+    path starts, and a bad URL in the batch must not sink the good ones.
+
+    The good URL is served from this process. It used to be
+    `https://example.com/`, which put a live internet fetch inside a *required*
+    check — `@pytest.mark.fast_workspace` suppresses the `workspace` marker, so
+    this runs in the merge-gating `agent` shard, and `timeout(300)` meant a
+    slow DNS answer burned five minutes of it.
+
+    Reaching a loopback address needs the self-hosting hatch, and turning it on
+    makes the test say more rather than less: `_is_disallowed_address` keeps
+    link-local denied even with `allow_private` set, precisely because
+    169.254.169.254 is the cloud metadata service and never a fetch target. So
+    the metadata assertion below is now also a statement that opening the hatch
+    for your own subnet does not open it for your instance credentials.
+    """
+    del configure_workspace_api_url
+    from app.core.config import settings
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
+    served = _FetchablePage()
+    await served.start()
+    try:
+        ctx = await _agent_context(
+            authenticated_client, fixed_test_org, fixed_test_user
+        )
+
+        result = await web_fetch_internal(
+            ctx,
+            WebFetchRequest(
+                urls=[
+                    "ftp://example.com/file",
+                    "https://",
+                    "http://169.254.169.254/latest/meta-data",
+                    served.url,
+                ],
+                comment="mixed malformed, unsafe, and valid URLs",
+            ),
+        )
+    finally:
+        await served.stop()
+
+    assert result.success, "one good URL among the bad ones must still succeed"
+    by_url = {page.url: page for page in result.pages}
+    assert "Only http(s) URLs" in (by_url["ftp://example.com/file"].error or "")
+    assert "no host" in (by_url["https://"].error or "")
+    assert "not a permitted fetch target" in (
+        by_url["http://169.254.169.254/latest/meta-data"].error or ""
+    ), "the metadata service must stay refused even with private targets allowed"
+    assert by_url[served.url].success
+    assert by_url[served.url].fetched_with == "http"
+
+
+@pytest.mark.fast_workspace
+@pytest.mark.timeout(300)
+async def test_web_fetch_reports_a_clear_error_when_the_workspace_is_unreachable(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+    monkeypatch,
+):
+    """A sandbox that cannot be reached must not look like "no pages found".
+
+    Exercises the `except Exception` branch around acquiring the workspace
+    session: everything below it in `_capture_batch` is already proven by the
+    tests above, so only the acquisition failure needs injecting here.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.tools.web import web_fetch as web_fetch_module
+    from app.modules.agent.tools.web.models import WebFetchRequest
+    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    async def fake_get_session(*_args, **_kwargs):
+        raise RuntimeError("sandbox connection refused")
+
+    monkeypatch.setattr(web_fetch_module, "get_workspace_session", fake_get_session)
+
+    result = await web_fetch_internal(
+        ctx,
+        WebFetchRequest(urls=["https://example.com/"], comment="workspace is down"),
+    )
+
+    assert result.success is False
+    assert result.pages[0].success is False
+    assert "Could not reach the workspace" in (result.pages[0].error or "")
+    assert "Retry if the pages are still needed" in (result.pages[0].error or "")
+    assert result.message == "No pages could be captured."
 
 
 async def _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user):
@@ -421,9 +644,7 @@ async def test_pdf_pages_render_to_real_images_for_a_vision_model(
     from app.modules.agent.tools.pod.pydantic_adapter import pod_view_document_pages
     from pydantic_ai import BinaryContent, ToolReturn
 
-    ctx, path = await _pdf_in_pod(
-        authenticated_client, fixed_test_org, fixed_test_user
-    )
+    ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
 
     result = await pod_view_document_pages(
@@ -461,9 +682,7 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
     from pydantic_ai import ToolReturn
 
-    ctx, path = await _pdf_in_pod(
-        authenticated_client, fixed_test_org, fixed_test_user
-    )
+    ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DELEGATED
 
     seen: dict[str, object] = {}
@@ -496,6 +715,60 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     assert "pipeline" in result["descriptions"][0]["description"].lower()
     assert seen["jpeg_prefixes"] == [b"\xff\xd8"], "delegate got real JPEG bytes"
     assert path in str(seen["labels"][0])
+
+
+async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspace_file(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """DIRECT mode: `view_image` hands the model the rendered bytes inline.
+
+    `test_scripted_todo_and_workspace_tools_stream_and_persist_real_results`
+    (hermetic journeys) already drives `view_image` end to end, but that run's
+    mock runtime profile carries no vision capability, so it only ever
+    exercises the DELEGATED/unavailable branch. This is the DIRECT branch:
+    the same shape of coverage `test_pdf_pages_render_to_real_images_for_a_
+    vision_model` proves for `pod_view_document_pages`, but for a workspace
+    file read straight off the real sandbox disk.
+    """
+    del configure_workspace_api_url
+    from app.modules.agent.domain.vision import AgentVisionMode
+    from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
+    from app.modules.agent.tools.workspace_cli.workspace_cli import (
+        view_image_internal,
+    )
+    from pydantic_ai import BinaryContent, ToolReturn
+
+    ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
+    ctx.vision_mode = AgentVisionMode.DIRECT
+
+    written = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            comment="create a real image on the sandbox disk",
+            cmd=(
+                'python3 -c "import base64,pathlib; '
+                "pathlib.Path('pixel.png').write_bytes(base64.b64decode("
+                "'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII='))\""
+            ),
+            timeout_seconds=30,
+        ),
+    )
+    assert written.exit_code == 0, written
+
+    result = await view_image_internal(
+        ctx, ViewImageRequest(workspace_file_path="pixel.png")
+    )
+
+    assert isinstance(result, ToolReturn), result
+    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert images, "a DIRECT-mode vision model must receive the rendered bytes"
+    assert images[0].media_type == "image/png"
+    assert result.return_value.success is True
+    assert result.return_value.source == "workspace"
+    assert result.return_value.file_path == "pixel.png"
 
 
 async def test_compaction_bounds_a_history_built_from_real_tool_output(
@@ -536,7 +809,7 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
             comment="generate build-log-shaped output",
             cmd=(
                 "for i in $(seq 1 400); do "
-                "echo \"npm WARN deprecated pkg-$i@1.0.$i: no longer maintained\"; "
+                'echo "npm WARN deprecated pkg-$i@1.0.$i: no longer maintained"; '
                 "done"
             ),
             timeout_seconds=60,
@@ -576,7 +849,9 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         )
 
     raw_size = count_model_message_tokens(history)
-    assert raw_size > 110_000, f"history not large enough to exercise the guard: {raw_size}"
+    assert raw_size > 110_000, (
+        f"history not large enough to exercise the guard: {raw_size}"
+    )
 
     ceiling = 40_000
     processors = build_history_processors(
@@ -589,9 +864,19 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         ),
         summarization_model=None,
     )
-    guard = processors[-1]
-
-    compacted = await guard(history)
+    # Applied the way a run applies them: every processor, in order.
+    #
+    # This used to reach for `processors[-1]` and call it "the guard". That was
+    # true when it was written and stopped being true when a processor was
+    # appended after the ceiling guard to fix the leading message's role -- so
+    # the test called *that* one, which never trims, measured the history
+    # unchanged at 204,518 tokens, and reported a compaction failure that was
+    # nothing of the sort. Production was never affected; it runs the whole
+    # chain. Running the whole chain here too means the test cannot be wrong
+    # about the order again.
+    compacted: list[object] = list(history)
+    for processor in processors:
+        compacted = await processor(compacted)
 
     assert count_model_message_tokens(compacted) <= ceiling
     assert compacted[-1] is history[-1], "the most recent turn must survive"

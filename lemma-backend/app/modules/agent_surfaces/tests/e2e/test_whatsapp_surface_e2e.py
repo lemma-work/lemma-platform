@@ -8,7 +8,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfacePlatformWebhookIngress,
+)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_agent_surface,
@@ -97,18 +99,14 @@ async def test_whatsapp_built_in_dm_surface_handles_payload_and_replies(
     # Issue 1: the agent marks the inbound message read (blue ticks) and shows a
     # typing bubble the moment it picks the message up — one combined call.
     read_indicators = [
-        message
-        for message in whatsapp_messages
-        if message.get("status") == "read"
+        message for message in whatsapp_messages if message.get("status") == "read"
     ]
     assert read_indicators, "expected a mark-read + typing indicator"
     assert read_indicators[0]["message_id"] == "wamid-e2e-001"
     assert read_indicators[0]["typing_indicator"] == {"type": "text"}
 
     final_messages = [
-        message
-        for message in whatsapp_messages
-        if message.get("type") == "text"
+        message for message in whatsapp_messages if message.get("type") == "text"
     ]
     assert final_messages
     assert "E2E agent reply [WHATSAPP]" in final_messages[-1]["text"]["body"]

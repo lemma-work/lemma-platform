@@ -22,6 +22,7 @@ def build_asset_response(
     etag: str | None,
     is_entrypoint: bool,
     not_modified: bool = False,
+    extra_headers: dict[str, str] | None = None,
 ) -> Response:
     """Build a cache-correct response for a served asset.
 
@@ -30,13 +31,13 @@ def build_asset_response(
     - Other assets are content-hashed by the bundler, so they are immutable.
     """
     cache_control = (
-        "public, no-cache"
-        if is_entrypoint
-        else "public, max-age=31536000, immutable"
+        "public, no-cache" if is_entrypoint else "public, max-age=31536000, immutable"
     )
     headers = {"Cache-Control": cache_control}
     if etag:
         headers["ETag"] = etag
+    if extra_headers:
+        headers.update(extra_headers)
 
     if not_modified:
         return Response(status_code=304, headers=headers)

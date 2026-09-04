@@ -24,7 +24,7 @@ build was removed, and ``dist_root_path`` keeps its value as a record of where
 the bytes were.
 
 Revision ID: 0021_app_release_history
-Revises: 0020_schedule_run_last_inspected
+Revises: 0029_github_app_reauth
 """
 
 from alembic import op
@@ -32,17 +32,21 @@ import sqlalchemy as sa
 
 
 revision = "0021_app_release_history"
-down_revision = "0020_schedule_run_last_inspected"
+down_revision = "0029_github_app_reauth"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("app_releases", sa.Column("release_number", sa.Integer(), nullable=True))
+    op.add_column(
+        "app_releases", sa.Column("release_number", sa.Integer(), nullable=True)
+    )
     op.add_column(
         "app_releases", sa.Column("source_archive_path", sa.String(), nullable=True)
     )
-    op.add_column("app_releases", sa.Column("source_digest", sa.String(), nullable=True))
+    op.add_column(
+        "app_releases", sa.Column("source_digest", sa.String(), nullable=True)
+    )
     op.add_column("app_releases", sa.Column("created_by", sa.UUID(), nullable=True))
     op.add_column("app_releases", sa.Column("label", sa.String(), nullable=True))
     op.add_column(

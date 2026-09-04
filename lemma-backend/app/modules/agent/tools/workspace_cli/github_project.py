@@ -19,16 +19,25 @@ Two rules shape what this does and does not do:
 
 Like the credential bridge next door, the work is marker-guarded in Redis so a
 session running twenty commands pays for this once.
+
+``prepare_project_directory`` at the bottom is the entry point both workspace
+tools use, so the shell and the interpreter cannot drift into disagreeing about
+what is in the directory they share.
 """
 
 from __future__ import annotations
 
 import shlex
+from collections.abc import Awaitable, Callable
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
+from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
+    ensure_github_credentials,
+)
 
 logger = get_logger(__name__)
 
@@ -90,7 +99,7 @@ async def ensure_project_checkout(
 
     await redis.set(marker_key, "failed", ex=_FAILED_TTL_SECONDS)
     logger.debug(
-        'agent.workspace_cli.github_project_clone_failed.diagnostic',
+        "agent.workspace_cli.github_project_clone_failed.diagnostic",
         repo=repo.full_name,
         exit_code=result.get("exit_code"),
     )
@@ -102,3 +111,52 @@ async def ensure_project_checkout(
         f"{repo.cwd}, so this directory is empty for a reason. "
         f"{detail}".strip()
     )
+
+
+async def prepare_project_directory(
+    ctx: BaseAgentContext,
+    workspace_session,
+    *,
+    wanted: bool,
+    ensure_credentials: Callable[..., Awaitable[None]] | None = None,
+    ensure_checkout: Callable[..., Awaitable[str | None]] | None = None,
+) -> str | None:
+    """Put the conversation's project on disk before either tool looks for it.
+
+    Shared by the shell and the interpreter deliberately. The two run in the
+    same directory, so they have to find the same thing in it: only
+    `exec_command` used to clone, and an agent whose first call was
+    `execute_python` opened a project and found an empty folder with nothing
+    said about why. Returns a notice to show once, or None.
+
+    A broken bridge (DB/Redis hiccup, a sandbox write failure) is logged and
+    swallowed rather than blocking the work: the command or the code runs
+    uncredentialed and fails with git's own native error, exactly as it would
+    with no bridge at all.
+
+    The two steps are arguments so that swallow can be exercised for real: a
+    test replaces only the failing step and the exception still travels out of
+    it, through the handler below, and back to the tool that called this.
+
+    Defaulted to ``None`` and resolved here rather than in the signature, so
+    the two names still resolve at call time: a default argument binds at
+    import, which would silently make a double installed on this module's
+    ``ensure_github_credentials`` unreachable — and leave the test that
+    installed it passing.
+    """
+    if not wanted:
+        return None
+    if ensure_credentials is None:
+        ensure_credentials = ensure_github_credentials
+    if ensure_checkout is None:
+        ensure_checkout = ensure_project_checkout
+    try:
+        with run_phase("tool.workspace.credentials"):
+            await ensure_credentials(ctx, workspace_session)
+            return await ensure_checkout(ctx, workspace_session)
+    except Exception:
+        logger.warning(
+            "agent.workspace_cli.github_credential_bridge_failed.degraded",
+            exc_info=True,
+        )
+        return None

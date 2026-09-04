@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from app.core.infrastructure.events.config import event_transport_settings
+from app.core.infrastructure.events.quarantine import dead_letter_stream
 from app.core.infrastructure.events.stream_subscriber import registered_stream_groups
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -43,10 +44,20 @@ def _streaq_lane_queues() -> set[str]:
 
 
 def observable_streams() -> set[str]:
-    """Static names only: never emit tenant or dynamic Redis key names."""
-    return {
+    """Static names only: never emit tenant or dynamic Redis key names.
+
+    Dead-letter streams are included because they were the one place bytes could
+    accumulate entirely unwatched: no consumer group, no dashboard row, and a
+    64KB-per-entry body. `{stream}:dead` is derived from a registered name, so
+    it is as static as the stream it quarantines.
+    """
+    streams = {
         *(stream for stream, _group in registered_stream_groups()),
         *event_transport_settings.redis_stream_maxlen_overrides,
+    }
+    return {
+        *streams,
+        *(dead_letter_stream(stream) for stream in streams),
         *_streaq_lane_queues(),
     }
 
@@ -95,9 +106,7 @@ async def _snapshot_stream(
 ) -> int:
     """Report this stream's groups, returning how many were worth reporting."""
     is_streaq = stream.startswith("streaq:") and ":queues:" in stream
-    maxlen = (
-        None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
-    )
+    maxlen = None if is_streaq else event_transport_settings.stream_maxlen_for(stream)
     # Report the delayed set belonging to THIS lane's queue, not always the
     # interactive one, or a deferred bulk backlog would be attributed to the
     # wrong lane.
@@ -201,7 +210,14 @@ async def _snapshot_stream(
         caught_up = pending == 0 and _last_delivered_id(group) == stream_last_id
         consumers = int(_value(group, "consumers", 0) or 0)
         if not _worth_reporting(
-            length=stream_length,
+            # Deliberately not `length`. A stream retains its entries up to
+            # maxlen, so any stream ever written to has a non-zero length for
+            # the rest of its life -- and passing it here meant every healthy,
+            # fully caught-up group reported on every cycle. That is what made
+            # these records the bulk of a worker's log and buried everything
+            # else. Whether a *reader* is behind is what `caught_up`, `pending`
+            # and `reported_lag` already say. Length still counts below, in the
+            # no-group branch, where nothing is reading and a pile-up is real.
             delayed=delayed,
             caught_up=caught_up,
             pending=pending,

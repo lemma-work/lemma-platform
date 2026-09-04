@@ -12,6 +12,7 @@ import pytest
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
+    SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
@@ -27,9 +28,11 @@ pytestmark = pytest.mark.asyncio
 
 
 def _surface(pod_id, platform=SurfacePlatform.WHATSAPP, *, created_offset=0):
+    """A surface on the deployment's shared bot/number (the default)."""
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=pod_id,
+        agent_id=pod_id,
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
@@ -39,26 +42,35 @@ def _surface(pod_id, platform=SurfacePlatform.WHATSAPP, *, created_offset=0):
     )
 
 
+def _own_bot_surface(pod_id, platform=SurfacePlatform.TELEGRAM, *, created_offset=0):
+    """A surface on a bot the pod brought itself — its own handle, its own address."""
+    surface = _surface(pod_id, platform, created_offset=created_offset)
+    surface.account_id = uuid4()
+    surface.credential_mode = SurfaceCredentialMode.CUSTOM
+    return surface
+
+
 def _service(*, pod_ids, surfaces_by_pod, preferences=None, get_surface=None):
     async def _list_by_pod(pod_id, **_kwargs):
         return list(surfaces_by_pod.get(pod_id, [])), None
 
     surfaces = SimpleNamespace(
         list_by_pod=AsyncMock(side_effect=_list_by_pod),
-        get=AsyncMock(side_effect=lambda sid: get_surface(sid) if get_surface else None),
+        get=AsyncMock(
+            side_effect=lambda sid: get_surface(sid) if get_surface else None
+        ),
     )
     membership = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=list(pod_ids)),
     )
-    user = SimpleNamespace(preferences=preferences)
     users = SimpleNamespace(
-        get=AsyncMock(return_value=user),
+        preferences=AsyncMock(return_value=preferences or UserPreferences()),
         set_preferences=AsyncMock(),
     )
     service = UserSurfacesService(
         surface_repository=surfaces,
         pod_membership_port=membership,
-        user_repository=users,
+        user_directory=users,
     )
     return service, users
 
@@ -86,6 +98,50 @@ async def test_list_groups_by_platform_and_flags_conflict():
     tg = by_platform[SurfacePlatform.TELEGRAM]
     assert tg.conflict is False
     assert tg.default_surface_id is None
+
+
+async def test_own_bot_surfaces_never_conflict():
+    """Connecting your own Telegram bot in eleven pods is eleven addresses.
+
+    Each bot answers on its own token, so a message can only ever land on the
+    bot it was sent to — asking which pod should hear it invents a choice and
+    implies the message might go somewhere else."""
+    pods = [uuid4() for _ in range(3)]
+    surfaces = {
+        pod: [_own_bot_surface(pod, created_offset=index)]
+        for index, pod in enumerate(pods)
+    }
+    service, _ = _service(
+        pod_ids=pods,
+        surfaces_by_pod=surfaces,
+        preferences=UserPreferences(),
+    )
+
+    groups = await service.list_user_surfaces(uuid4())
+    telegram = next(g for g in groups if g.platform is SurfacePlatform.TELEGRAM)
+
+    assert len(telegram.surfaces) == 3
+    assert telegram.contended == set()
+    assert telegram.conflict is False
+
+
+async def test_conflict_covers_only_the_shared_bot_surfaces():
+    """A mix: the shared bot in two pods, plus a pod running its own bot."""
+    shared_a, shared_b, own = uuid4(), uuid4(), uuid4()
+    tg_a = _surface(shared_a, SurfacePlatform.TELEGRAM, created_offset=1)
+    tg_b = _surface(shared_b, SurfacePlatform.TELEGRAM, created_offset=2)
+    tg_own = _own_bot_surface(own, created_offset=3)
+    service, _ = _service(
+        pod_ids=[shared_a, shared_b, own],
+        surfaces_by_pod={shared_a: [tg_a], shared_b: [tg_b], own: [tg_own]},
+        preferences=UserPreferences(),
+    )
+
+    groups = await service.list_user_surfaces(uuid4())
+    telegram = next(g for g in groups if g.platform is SurfacePlatform.TELEGRAM)
+
+    assert telegram.conflict is True
+    assert telegram.contended == {tg_a.id, tg_b.id}
 
 
 async def test_set_default_writes_preference_for_in_pod_surface():

@@ -83,9 +83,7 @@ async def test_the_sweep_drains_past_the_first_page():
         seen.append(app_id)
         return 1
 
-    outcome = await _sweep(
-        _Factory(session), page_size=2, prune_one=prune_one
-    )
+    outcome = await _sweep(_Factory(session), page_size=2, prune_one=prune_one)
 
     assert seen == candidates
     assert outcome.examined == 5

@@ -25,23 +25,56 @@ const AccountOnboarding = dynamic(
 
 type RootPageMode = 'redirect' | 'home';
 
-export function RootPageSwitch({ mode = 'redirect' }: { mode?: RootPageMode }) {
+export function RootPageSwitch({
+    mode = 'redirect',
+    hasSessionCookie = false,
+}: {
+    mode?: RootPageMode;
+    /**
+     * Did this request arrive holding a session cookie? Read on the server by
+     * `hasSessionCookie()`, and a hint about which placeholder to paint — never
+     * a claim that the visitor is signed in. See the branch below.
+     */
+    hasSessionCookie?: boolean;
+}) {
     const { isAuthenticated, isLoading } = useLemmaAuth();
+
+    // A local installation is not selling anything. The marketing page never
+    // renders there, in any auth state, for any visitor — not the desktop
+    // webview, not a phone on the same Wi-Fi, not someone holding a public
+    // link. Everywhere else, it is also what a hosted visitor sees the moment
+    // this resolves to "not signed in" — so it renders here too, while that
+    // is still in flight. The auth check is a network round trip, which makes
+    // this both the server render and what a crawler with no JavaScript sees:
+    // real marketing copy, never a blank loading shell.
+    //
+    // Unless the request carried a session cookie. Rendering the pitch during
+    // that round trip means someone who is already signed in watches a page of
+    // marketing load and then throw itself away — a second of the wrong app,
+    // on every visit to the root. The cookie is the one thing the server knows
+    // about them before the check resolves, and it is enough to paint the
+    // loader instead. A crawler carries no cookies, so the SSR'd marketing page
+    // it reads is unchanged, and so is the first paint for a real signed-out
+    // visitor. If the cookie turns out to be stale the check says so and the
+    // landing page renders a moment later, which is the same place a visitor
+    // with no cookie at all lands.
+    if (!isLocalDeployment() && !isAuthenticated) {
+        return isLoading && hasSessionCookie ? <PageLoader /> : <LandingPage />;
+    }
 
     if (isLoading) {
         return <PageLoader />;
     }
 
     if (!isAuthenticated) {
-        // A local installation is not selling anything. The marketing page
-        // never renders there, in any auth state, for any visitor — not the
-        // desktop webview, not a phone on the same Wi-Fi, not someone holding a
-        // public link. They all get the account portal instead.
-        return isLocalDeployment() ? <LocalAuthRedirect /> : <LandingPage />;
+        return <LocalAuthRedirect />;
     }
 
     return (
-        <AccountOnboarding preflightFallback={<PageLoader />}>
+        <AccountOnboarding
+            preflightFallback={<PageLoader />}
+            requireFirstPod={mode !== 'home'}
+        >
             {mode === 'home' ? <DashboardHomePage /> : <AuthenticatedRootRedirect />}
         </AccountOnboarding>
     );
@@ -88,7 +121,14 @@ function AuthenticatedRootRedirect() {
         const firstPod = podsData?.items?.[0];
         if (firstPod) {
             router.replace(`/pod/${firstPod.id}`);
+            return;
         }
+
+        // No pod this account can open. Someone who joined an organization as a
+        // plain member has exactly this shape — they can read the org and
+        // nothing in it — and this used to return the loader forever, which is
+        // a dead end wearing a spinner. Home can at least say where they are.
+        router.replace('/home');
     }, [isLoading, podsData?.items, router, shouldFetchPods]);
 
     return <PageLoader />;

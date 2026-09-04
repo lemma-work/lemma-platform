@@ -15,9 +15,10 @@ The three workload flavours under test:
 
 * **named agent / function** — ``is_default_pod_agent=False``. Zero ambient
   access: every resource needs an explicit workload grant (grantee AGENT/FUNCTION).
-* **default pod agent** ("user-resolved") — ``workload_id=DEFAULT_POD_AGENT_ID``,
-  name ``pod_default``. Acts user-equivalent within the pod, mirroring the
-  invoking user's pod permissions; needs NO per-resource workload grant.
+* **default pod agent** ("user-resolved") — ``workload_id`` is the assistant's
+  ``agents`` row id, which is its pod's, paired with the name ``pod_default``.
+  Acts user-equivalent within the pod, mirroring the invoking user's pod
+  permissions; needs NO per-resource workload grant.
 """
 
 from __future__ import annotations
@@ -27,10 +28,7 @@ from uuid import UUID, uuid4
 from fastapi import status
 from httpx import ASGITransport, AsyncClient
 
-from app.core.authorization.delegation import (
-    DEFAULT_POD_AGENT_ID,
-    DEFAULT_POD_AGENT_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
@@ -178,13 +176,14 @@ async def mint_default_pod_agent_client(
 ) -> AsyncClient:
     """An httpx client for the DEFAULT POD AGENT (user-resolved mode).
 
-    The middleware recognises ``workload_id == DEFAULT_POD_AGENT_ID`` +
-    name ``pod_default`` and builds a user-equivalent, pod-clamped context.
+    ``workload_id`` is the assistant's ``agents`` row id, which *is* its pod's
+    -- what the mint site stamps. The middleware pairs that with the name
+    ``pod_default`` and builds a user-equivalent, pod-clamped context.
     """
     token = await mint_workload_token(
         user_id=user_id,
         workload_type=AGENT,
-        workload_id=str(DEFAULT_POD_AGENT_ID),
+        workload_id=pod_id,
         pod_id=pod_id,
         workload_name=DEFAULT_POD_AGENT_NAME,
     )
@@ -268,7 +267,9 @@ async def seed_account(
         AccountRepository,
     )
 
-    repo = AccountRepository(SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher())
+    repo = AccountRepository(
+        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
+    )
     entity = AccountEntity(
         user_id=UUID(user_id),
         organization_id=UUID(organization_id),
@@ -289,12 +290,10 @@ def build_account_resolution_service(db_session):
     from app.modules.connectors.services.account_resolution_service import (
         AccountResolutionService,
     )
-    from app.modules.pod.services.authorization_factory import (
-        create_authorization_service,
-    )
+    from app.core.authorization.factory import create_authorization_data_service
 
     uow = SqlAlchemyUnitOfWork(db_session)
     return AccountResolutionService(
         account_repository=AccountRepository(uow, encryption=get_secret_cipher()),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
     )

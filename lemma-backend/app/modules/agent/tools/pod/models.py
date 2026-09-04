@@ -12,7 +12,13 @@ from app.modules.agent.domain.value_objects import JsonObject
 
 class RecordFilter(BaseModel):
     column: str
-    op: str = Field(default="eq", description="eq, ne, gt, gte, lt, lte, like, in.")
+    op: str = Field(
+        default="eq",
+        description=(
+            "eq, ne, gt, gte, lt, lte, like, ilike, in. Use `in` with a list "
+            "value for multi-value membership."
+        ),
+    )
     # Explicit scalar/list union (not bare `Any`): a bare Any field serializes to
     # a typeless `{"default": null}` JSON-schema node that strict providers
     # (e.g. Fireworks) reject with "could not understand the instance".
@@ -35,7 +41,9 @@ class PodTablesRequest(BaseModel):
             "describe just that table."
         ),
     )
-    limit: int = Field(default=100, ge=1, le=500, description="Max tables when listing.")
+    limit: int = Field(
+        default=100, ge=1, le=500, description="Max tables when listing."
+    )
 
 
 class PodGetRecordsRequest(BaseModel):
@@ -70,7 +78,7 @@ class PodWriteRecordRequest(BaseModel):
     data: JsonObject | str | None = Field(
         default=None,
         description=(
-            "Column -> value mapping, e.g. {\"title\": \"Q3 report\", \"amount\": 42}, "
+            'Column -> value mapping, e.g. {"title": "Q3 report", "amount": 42}, '
             "or a JSON-encoded string of it. Required and non-empty for 'create' "
             "and 'update'."
         ),
@@ -96,7 +104,7 @@ class PodWriteRecordRequest(BaseModel):
             parsed = json.loads(text)
         except (ValueError, TypeError) as exc:
             raise ValueError(
-                '`data` was a string but not valid JSON; pass a JSON object like '
+                "`data` was a string but not valid JSON; pass a JSON object like "
                 '{"title": "Q3 report"} (or a JSON-encoded string of it).'
             ) from exc
         if not isinstance(parsed, dict):
@@ -137,7 +145,10 @@ class PodListFilesRequest(BaseModel):
         default=100, ge=1, le=500, description="Max entries when not recursive."
     )
     files_per_directory: int = Field(
-        default=20, ge=1, le=200, description="Sample files per directory when recursive."
+        default=20,
+        ge=1,
+        le=200,
+        description="Sample files per directory when recursive.",
     )
 
 
@@ -153,7 +164,9 @@ class PodWriteFileRequest(BaseModel):
     overwrite: bool = Field(
         default=True, description="If false, reject the write when the file exists."
     )
-    description: str | None = Field(default=None, description="Optional file description.")
+    description: str | None = Field(
+        default=None, description="Optional file description."
+    )
 
 
 class PodReadFileRequest(BaseModel):
@@ -164,20 +177,15 @@ class PodReadFileRequest(BaseModel):
             "as-is; a relative path resolves against `/me/c/{date}/{slug}`."
         ),
     )
-    format: Literal["text", "markdown"] = Field(
-        default="text",
-        description=(
-            "'markdown' returns converted document text (PDF, DOCX) and supports "
-            "a page range; use `pod_view_document_pages` to see pages as images."
-        ),
-    )
     page_start: int | None = Field(
-        default=None, ge=1, description="markdown only: first page (1-based)."
+        default=None,
+        ge=1,
+        description="Documents only: first page (1-based). Ignored for text files.",
     )
     page_end: int | None = Field(
         default=None,
         ge=1,
-        description="markdown only: last page, inclusive. Defaults to page_start.",
+        description="Documents only: last page, inclusive. Defaults to page_start.",
     )
     max_chars: int = Field(default=50000, ge=1, le=400000)
 

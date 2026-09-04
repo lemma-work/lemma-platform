@@ -13,16 +13,22 @@ checked against anything.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorValidationError,
     UnsupportedAuthProviderError,
+)
+from app.modules.connectors.services.install_service_seam import (
+    InstallServiceSeam,
 )
 
 logger = get_logger(__name__)
@@ -36,9 +42,7 @@ def _registry():
     return build_kind_registry(composio_gateway=None, package_gateway=None)
 
 
-def resolve_install_kind(
-    connector: ConnectorEntity, kind: str | None
-) -> ConnectorKind:
+def resolve_install_kind(connector: ConnectorEntity, kind: str | None) -> ConnectorKind:
     """Pick which of a connector's kinds this install uses.
 
     Most connectors offer exactly one, so asking the caller to name it would be
@@ -99,22 +103,62 @@ async def validate_install_config(
     )
 
 
+class DiscoveryStatus(StrEnum):
+    """Which of the three things a discovery attempt actually did.
+
+    All three used to be the integer ``0``, and the refresh endpoint rendered
+    them identically as HTTP 200 ``{"operation_count": 0}``. An admin whose MCP
+    server was down at install time clicked refresh -- the documented recovery
+    path -- and could not tell "this connector advertises no operations" from
+    "your server refused me again".
+    """
+
+    OK = "ok"
+    NOT_APPLICABLE = "not_applicable"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class DiscoveryOutcome:
+    """What a discovery attempt did, and why, when it did nothing."""
+
+    status: DiscoveryStatus
+    operation_count: int = 0
+    #: The domain error's code when the attempt failed, or the reason it was
+    #: never made. Machine-readable; the human sentence is the caller's job.
+    reason: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.status is DiscoveryStatus.FAILED
+
+
+_NOT_APPLICABLE_NO_STORE = DiscoveryOutcome(
+    DiscoveryStatus.NOT_APPLICABLE, reason="operations_are_not_stored_here"
+)
+_NOT_APPLICABLE_NO_DISCOVERY = DiscoveryOutcome(
+    DiscoveryStatus.NOT_APPLICABLE, reason="kind_has_no_discovery"
+)
+
+
 async def discover_install_operations(
     auth_config: AuthConfigEntity,
     connector: ConnectorEntity,
     *,
     repository: Any,
     uow: Any,
-) -> int:
+    credentials: dict[str, Any] | None = None,
+) -> DiscoveryOutcome:
     """Populate an install's operations, if its kind discovers them.
 
     Runs after the install is committed, so a discovery failure leaves a usable
     (if empty) install rather than rolling back the connection the user just
-    made. Failures are logged, never raised -- the operator's recovery path is
-    the refresh endpoint, which is why that exists.
+    made. Failures are reported in the return value and never raised -- the
+    operator's recovery path is the refresh endpoint, which is why that exists,
+    and which has to be able to say whether it worked.
     """
     if repository is None:
-        return 0
+        return _NOT_APPLICABLE_NO_STORE
 
     from app.modules.connectors.domain.kinds import ResolvedInstall
     from app.modules.connectors.services.discovery.base import assign_unique_names
@@ -122,7 +166,7 @@ async def discover_install_operations(
 
     registry = _registry()
     if registry.get(auth_config.kind).discoverer is None:
-        return 0
+        return _NOT_APPLICABLE_NO_DISCOVERY
 
     install = ResolvedInstall(
         connector_id=auth_config.connector_id,
@@ -133,15 +177,19 @@ async def discover_install_operations(
         config_source=auth_config.config_source,
         spec=connector.spec_for(auth_config.kind),
     )
+    # Discovery is an HTTP call to a server the tenant named, and resolving the
+    # credential above was the last database work: hand the connection back
+    # rather than hold it for the round trip. See `docs/development.md`.
+    await uow.commit()
     try:
-        found = await KindDispatcher(registry).discover(install, None)
+        found = await KindDispatcher(registry).discover(install, credentials)
     except ConnectorDomainError as exc:
         logger.warning(
             "connectors.connector_service.auth_config_operation_discovery.failed",
             auth_config_id=auth_config.id,
             error_type=type(exc).__name__,
         )
-        return 0
+        return DiscoveryOutcome(DiscoveryStatus.FAILED, reason=exc.code)
 
     # Names are disambiguated before storage: two tools whose names normalize
     # alike would otherwise collide on the unique index and abort the whole
@@ -164,17 +212,24 @@ async def discover_install_operations(
         ],
     )
     await uow.commit()
-    return len(found)
+    return DiscoveryOutcome(DiscoveryStatus.OK, operation_count=len(found))
 
 
 async def refresh_install_operations(
-    service: Any, *, user_id: UUID, organization_id: UUID, auth_config_name: str
-) -> int:
+    service: InstallServiceSeam,
+    *,
+    user_id: UUID,
+    organization_id: UUID,
+    auth_config_name: str,
+) -> DiscoveryOutcome:
     """Re-run discovery for an existing install.
 
     The recovery path. Without it, a discovery that failed when the install was
     created could only be fixed by deleting the install -- and accounts cascade
-    from it, so that would disconnect every user who had connected.
+    from it, so that would disconnect every user who had connected. It returns
+    the outcome rather than a count so the endpoint can say which of the three
+    things happened; reporting a refused server as `0` made the recovery path
+    claim success on the failure it exists to recover from.
     """
     auth_config = await service.get_auth_config_by_name(
         user_id=user_id,
@@ -187,4 +242,74 @@ async def refresh_install_operations(
         connector,
         repository=service.auth_config_operation_repository,
         uow=service.uow,
+        credentials=await discovery_credentials(service, auth_config),
+    )
+
+
+async def discovery_credentials(
+    service: InstallServiceSeam, auth_config: AuthConfigEntity
+) -> dict[str, Any] | None:
+    """A connected account's credentials, for an install that keeps none itself.
+
+    Most installs carry whatever discovery needs in their own config -- an MCP
+    server's ``bearer_token``, a database URL. An install authorized by OAuth
+    carries nothing: the token belongs to the account, so discovering with the
+    install alone reaches the server unauthenticated and is refused. That is
+    what a real OAuth-protected MCP server did, answering 401 to a tool listing
+    and leaving the install with zero operations.
+
+    Any connected account will do. The tool list is a property of the server,
+    not of who is asking, so this is not a choice between different answers --
+    it is a choice of which valid token to ask with.
+    """
+    accounts = await service.account_repository.list_by_auth_config(auth_config.id)
+    for account in accounts:
+        if account.status is not AccountStatus.CONNECTED or not account.credentials:
+            continue
+        try:
+            credentials = await service.get_account_credentials(
+                account.id, account.user_id, auth_config.organization_id
+            )
+        except ConnectorDomainError as exc:
+            # One unusable account should not stop discovery from trying the
+            # next: a revoked token here is ordinary, not exceptional.
+            logger.info(
+                "connectors.connector_service.discovery_credentials.skipped",
+                auth_config_id=auth_config.id,
+                error_type=type(exc).__name__,
+            )
+            continue
+        return credentials.model_dump(exclude_none=True)
+    return None
+
+
+async def discover_operations_for_new_account(
+    service: InstallServiceSeam, auth_config: AuthConfigEntity
+) -> None:
+    """Fill in an OAuth install's operations once somebody has connected.
+
+    An install whose credential lives on the account cannot be discovered when
+    it is created -- there is no account yet -- so it is committed with zero
+    operations and the first connection is the earliest moment discovery can
+    succeed. Without this the install stays empty until an operator finds the
+    refresh endpoint, which is not something a person connecting an MCP server
+    should have to know about.
+
+    Only when the install has none. The tool list belongs to the server, so
+    re-running it for the second and later people to connect would re-ask the
+    same question and answer it the same way.
+    """
+    repository = getattr(service, "auth_config_operation_repository", None)
+    if repository is None:
+        return
+    existing = await repository.list_by_auth_config(auth_config.id, limit=1)
+    if existing:
+        return
+    connector = await service.get_connector(auth_config.connector_id)
+    await discover_install_operations(
+        auth_config,
+        connector,
+        repository=repository,
+        uow=service.uow,
+        credentials=await discovery_credentials(service, auth_config),
     )

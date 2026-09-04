@@ -45,8 +45,9 @@ def _test_now() -> datetime:
     return datetime.now(timezone.utc) + _CLOCK_SKEW
 
 
-
-async def _insert_schedule(session, *, cron: str | None, due_at: datetime, pod_id, user_id):
+async def _insert_schedule(
+    session, *, cron: str | None, due_at: datetime, pod_id, user_id
+):
     config = {"cron": cron} if cron else {"scheduled_at": due_at.isoformat()}
     schedule = Schedule(
         id=uuid4(),
@@ -98,8 +99,11 @@ async def test_two_concurrent_claimers_never_take_the_same_occurrence(
     pod_id, user_id = pod_and_user
     now = _test_now()
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=now - timedelta(seconds=1),
-        pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=now - timedelta(seconds=1),
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     holds_the_lock = asyncio.Event()
@@ -129,7 +133,9 @@ async def test_two_concurrent_claimers_never_take_the_same_occurrence(
 
     first, second = await asyncio.gather(first_claimer(), second_claimer())
 
-    winners = [c for batch in (first, second) for c in batch if c.schedule_id == schedule_id]
+    winners = [
+        c for batch in (first, second) for c in batch if c.schedule_id == schedule_id
+    ]
     assert len(winners) == 1, (
         f"{len(winners)} replicas claimed the same occurrence; "
         "FOR UPDATE SKIP LOCKED is not holding"
@@ -147,8 +153,11 @@ async def test_the_cursor_advances_so_the_same_occurrence_is_not_reclaimed(
     pod_id, user_id = pod_and_user
     now = _test_now()
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=now - timedelta(seconds=1),
-        pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=now - timedelta(seconds=1),
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     async with db_manager.session_factory() as session:
@@ -170,7 +179,11 @@ async def test_a_one_shot_is_retired_by_the_claim_that_fires_it(
     now = _test_now()
     due = now - timedelta(seconds=1)
     schedule_id = await _insert_schedule(
-        db_session, cron=None, due_at=due, pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron=None,
+        due_at=due,
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     async def claim_once() -> list:
@@ -204,7 +217,11 @@ async def test_the_claimed_fire_time_is_the_occurrence_not_the_poll_time(
     pod_id, user_id = pod_and_user
     due = _test_now() - timedelta(minutes=7)
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=due, pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=due,
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     async with db_manager.session_factory() as session:
@@ -225,8 +242,11 @@ async def test_a_schedule_that_is_not_due_is_left_alone(
     pod_id, user_id = pod_and_user
     now = _test_now()
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=now + timedelta(minutes=10),
-        pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=now + timedelta(minutes=10),
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     async with db_manager.session_factory() as session:
@@ -362,8 +382,11 @@ async def test_a_deactivated_schedule_is_never_claimed(
     pod_id, user_id = pod_and_user
     now = _test_now()
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=now - timedelta(minutes=1),
-        pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=now - timedelta(minutes=1),
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     row = await db_session.get(Schedule, schedule_id)
@@ -407,7 +430,11 @@ async def test_a_failed_stage_leaves_the_schedule_due_instead_of_losing_it(
     now = _test_now()
     due = now - timedelta(seconds=1)
     schedule_id = await _insert_schedule(
-        db_session, cron="*/5 * * * *", due_at=due, pod_id=pod_id, user_id=user_id,
+        db_session,
+        cron="*/5 * * * *",
+        due_at=due,
+        pod_id=pod_id,
+        user_id=user_id,
     )
 
     class _FailingEmitter:

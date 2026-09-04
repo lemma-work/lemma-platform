@@ -91,10 +91,7 @@ def _serialize_record_clauses(
 ) -> list[str] | None:
     if clauses is None:
         return None
-    return [
-        json.dumps(clause, separators=(",", ":"))
-        for clause in clauses
-    ]
+    return [json.dumps(clause, separators=(",", ":")) for clause in clauses]
 
 
 class PodTables(BoundResource):
@@ -129,7 +126,9 @@ class PodTables(BoundResource):
     def update(self, name: str, request: UpdateTableRequest) -> TableDetailResponse:
         return self._call(table_update, self._pod_uuid(), name, body=request)
 
-    def update_from_dict(self, name: str, payload: dict[str, Any]) -> TableDetailResponse:
+    def update_from_dict(
+        self, name: str, payload: dict[str, Any]
+    ) -> TableDetailResponse:
         return self.update(name, UpdateTableRequest.from_dict(payload))
 
     def delete(self, name: str) -> None:
@@ -153,6 +152,13 @@ class PodRecords(BoundResource):
         sort: list[RecordSortClause] | None = None,
         page_token: str | None = None,
     ) -> RecordListResponse:
+        """One page of a table's rows.
+
+        A table with more matching rows than ``limit`` is truncated, and the
+        response's ``next_page_token`` is the only way to see the rest -- with
+        a default of 20, a caller that must be complete (a report, an export, a
+        migration) silently sees a prefix. See :meth:`list_all`.
+        """
         serialized_filter = _serialize_record_clauses(filter)
         serialized_sort = _serialize_record_clauses(sort)
         return self._call(
@@ -165,6 +171,37 @@ class PodRecords(BoundResource):
             sort=serialized_sort if serialized_sort is not None else UNSET,
             page_token=page_token if page_token is not None else UNSET,
         )
+
+    def list_all(
+        self,
+        table: str,
+        *,
+        page_size: int = 500,
+        filter: list[RecordFilterClause] | None = None,
+        sort: list[RecordSortClause] | None = None,
+    ) -> list[RecordData]:
+        """Every matching row, paged to exhaustion.
+
+        "Read a table" and "read all of a table" are different operations, and
+        the difference is invisible at the call site -- which is why the same
+        helper exists on files. Anything that has to be complete wants this one.
+        The filter and sort are re-sent with every page, so the walk cannot
+        widen halfway through.
+        """
+        rows: list[RecordData] = []
+        token: str | None = None
+        while True:
+            page = self.list(
+                table,
+                limit=page_size,
+                filter=filter,
+                sort=sort,
+                page_token=token,
+            )
+            rows.extend(_as_record(item) for item in page.items)
+            token = page.next_page_token
+            if not isinstance(token, str) or not token:
+                return rows
 
     def create(self, table: str, data: RecordData) -> RecordData:
         """Create one record; returns the bare record object (no ``{data}`` envelope).
@@ -190,9 +227,7 @@ class PodRecords(BoundResource):
         On an RLS table a non-admin only sees their own rows; another user's row
         (or a missing id) returns 404.
         """
-        return _as_record(
-            self._call(record_get, self._pod_uuid(), table, record_id)
-        )
+        return _as_record(self._call(record_get, self._pod_uuid(), table, record_id))
 
     def update(self, table: str, record_id: str, data: RecordData) -> RecordData:
         """Update one record; returns the bare updated record (no ``{data}`` envelope).
@@ -269,7 +304,10 @@ class PodQueries(BoundResource):
     def run(self, query: str) -> DatastoreQueryResponse:
         """Run a read-only SQL query over the pod's tables.
 
-        Returns a response whose ``.to_dict()`` is ``{"items": [...], "total": N}``.
+        Returns a response whose ``.to_dict()`` is
+        ``{"items": [...], "total": N, "truncated": bool}``. ``total`` counts the
+        rows returned, not the rows matched: the query is capped, and
+        ``truncated`` says whether that cap was reached.
         A single SELECT only — no writes. Joins, aggregates, and subqueries across
         tables are allowed, including RLS tables, whose rows are scoped to the
         caller unless they administer the table.
@@ -292,6 +330,14 @@ class Table:
     def list(self, **kwargs: Any) -> RecordListResponse:
         return self._records.list(self.name, **kwargs)
 
+    def list_all(self, **kwargs: Any) -> list[RecordData]:
+        """Every matching row, paged to exhaustion.
+
+        See :meth:`PodRecords.list_all` -- a table handle needs the complete
+        read as much as the records facade does.
+        """
+        return self._records.list_all(self.name, **kwargs)
+
     def create(self, data: RecordData) -> RecordData:
         return self._records.create(self.name, data)
 
@@ -305,3 +351,28 @@ class Table:
 
     def delete(self, record_id: str) -> None:
         self._records.delete(self.name, record_id)
+
+    # The batch trio exists on this facade and not only on ``PodRecords``
+    # because a caller holding a table handle would otherwise have no batch
+    # path at all, and the shortest way to write N rows would be a loop of
+    # ``create`` -- N round trips from wherever the code runs back to the API.
+    # Inside a function sandbox that is the dominant cost of the whole call:
+    # a 200-row batch is one round trip against 200.
+
+    def bulk_create(self, records: list[RecordData], *, upsert: bool = False) -> int:
+        """Create many records in one round trip; returns the count affected.
+
+        See :meth:`PodRecords.bulk_create` for the ``upsert`` semantics.
+        """
+        return self._records.bulk_create(self.name, records, upsert=upsert)
+
+    def bulk_update(self, records: list[dict[str, Any]]) -> int:
+        """Update many records in one round trip; returns the count updated.
+
+        Each item must include this table's primary-key value.
+        """
+        return self._records.bulk_update(self.name, records)
+
+    def bulk_delete(self, record_ids: list[str]) -> int:
+        """Delete many records by primary-key value; returns the count deleted."""
+        return self._records.bulk_delete(self.name, record_ids)

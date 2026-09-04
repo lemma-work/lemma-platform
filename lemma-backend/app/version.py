@@ -1,8 +1,8 @@
 """Single source of truth for the public API (OpenAPI) version.
 
 This value is surfaced as the FastAPI ``version`` on every app variant
-(``app.app:create_app``, ``standalone_app``, ``app.scheduler``) and therefore
-as ``info.version`` in ``GET /openapi.json``. The generated ``lemma-sdk``
+(``app.app:create_app``, ``standalone_app``) and therefore as
+``info.version`` in ``GET /openapi.json``. The generated ``lemma-sdk``
 records the version it was built against (``lemma_sdk._spec_info``), and the
 ``lemma`` CLI (``lemma --version`` / ``lemma doctor``) compares the two to flag
 client/server skew.
@@ -29,4 +29,4 @@ Use a normal MAJOR.MINOR.PATCH string.
 
 from __future__ import annotations
 
-API_VERSION = "0.7.0"
+API_VERSION = "0.7.2"

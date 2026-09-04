@@ -3,12 +3,14 @@
 import Link from 'next/link';
 import { ExternalLink } from '@/components/ui/icons';
 
+import { CreateSlackAppButton } from '@/components/connectors/create-slack-app-button';
 import { SchemaFields } from '@/components/connectors/schema-fields';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { credentialSchema, type CatalogSurface } from '@/lib/surfaces/catalog';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { Account } from '@/lib/types';
+import { isPodDefaultAgentName } from '@/lib/utils/agents';
 import { cn } from '@/lib/utils';
 
 export type CredentialValues = Record<string, unknown>;
@@ -31,6 +33,7 @@ export function SurfaceConnectStep({
     credentials,
     onCredentialsChange,
     podId,
+    agentName,
 }: {
     definition: SurfacePlatformDefinition;
     catalog: CatalogSurface | null;
@@ -40,9 +43,17 @@ export function SurfaceConnectStep({
     credentials: CredentialValues;
     onCredentialsChange: (values: CredentialValues) => void;
     podId: string;
+    /** The agent this surface will answer as; `null` = the pod assistant. */
+    agentName?: string | null;
 }) {
     const schema = credentialSchema(catalog);
     const journey = definition.journey;
+    // The row name, not a label: a surface bound to the pod's own agent reports
+    // `agent_name: "pod_default"`, and this value is both shown as prose and
+    // sent as the name of the Slack app the person is about to create. `null`
+    // is what the copy below already means by "the pod's own bot", so the one
+    // identifier resolves to it rather than reaching a workspace.
+    const named = agentName && !isPodDefaultAgentName(agentName) ? agentName : null;
 
     if (journey && schema) {
         return (
@@ -127,17 +138,54 @@ export function SurfaceConnectStep({
                         Signing in to {definition.label} happens once for the whole organization.
                         Do that first, then come back here.
                     </p>
-                    {definition.platform === 'SLACK' ? (
-                        <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
-                            Want Lemma to show up under your own name in Slack? You can set
-                            that up there too.
-                        </p>
-                    ) : null}
                     <Button asChild className="mt-3" size="sm" variant="secondary">
                         <Link href={`/pod/${podId}/connectors`}>Open connectors</Link>
                     </Button>
                 </div>
             )}
+
+            {/* Running your own Slack app is a second route to the same place,
+                not a footnote on the first — and it starts here, because making
+                the app is what produces the credentials connectors then asks
+                for.
+
+                Outside the empty state, deliberately. It used to render only
+                when the org had *no* Slack account, which made "give this agent
+                its own bot" reachable exactly once: the second agent found a
+                picker where the offer had been, and no way to make a bot at
+                all. One Slack app is one bot user, so every agent that wants
+                its own needs this offer, not just the first. */}
+            {definition.platform === 'SLACK' ? (
+                <div className="border-t border-[var(--border-subtle)] pt-3">
+                    <p className="mb-2 text-xs leading-5 text-[var(--text-secondary)]">
+                        {named
+                            ? `Or give ${named} a bot of its own — your workspace, your app, answering as ${named} and nobody else.`
+                            : 'Or run Lemma under your own name in Slack — your workspace, your app, your bot’s name and icon.'}
+                    </p>
+                    <CreateSlackAppButton
+                        agentName={named}
+                        label={named ? `Make ${named}’s Slack app` : undefined}
+                    />
+                    {/* The step after the button, which it cannot take for you:
+                        Slack has no API that hands a third party another app's
+                        client id, secret or signing secret, so somebody has to
+                        carry those three values back. Saying so here is the
+                        difference between a button that starts something and a
+                        button that appears to do nothing — making the app in
+                        Slack changes nothing on this screen, and without this
+                        line the only visible outcome is a new browser tab. */}
+                    <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
+                        Made it already?{' '}
+                        <Link
+                            href={`/pod/${podId}/connectors?install=slack`}
+                            className="lemma-quiet-text-button custom-focus-ring font-medium text-[var(--text-secondary)] underline-offset-2 hover:underline"
+                        >
+                            Paste its three credentials
+                        </Link>{' '}
+                        to finish connecting it, then pick it above.
+                    </p>
+                </div>
+            ) : null}
         </div>
     );
 }

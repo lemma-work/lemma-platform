@@ -115,15 +115,21 @@ WorkflowStartInput = Annotated[
 
 
 class ScheduledWorkflowStartConfigOutput(ScheduledWorkflowStartConfig):
-    model_config = ConfigDict(from_attributes=True, title="ScheduledWorkflowStartConfigOutput")
+    model_config = ConfigDict(
+        from_attributes=True, title="ScheduledWorkflowStartConfigOutput"
+    )
 
 
 class EventWorkflowStartConfigOutput(EventWorkflowStartConfig):
-    model_config = ConfigDict(from_attributes=True, title="EventWorkflowStartConfigOutput")
+    model_config = ConfigDict(
+        from_attributes=True, title="EventWorkflowStartConfigOutput"
+    )
 
 
 class DataStoreWorkflowStartConfigOutput(DataStoreWorkflowStartConfig):
-    model_config = ConfigDict(from_attributes=True, title="DataStoreWorkflowStartConfigOutput")
+    model_config = ConfigDict(
+        from_attributes=True, title="DataStoreWorkflowStartConfigOutput"
+    )
 
 
 class ManualWorkflowStartOutput(BaseModel):
@@ -210,7 +216,9 @@ def workflow_start_input_to_domain(
     if isinstance(start, ScheduledWorkflowStartInput):
         return WorkflowStart(
             type=WorkflowStartType.SCHEDULED,
-            config=ScheduledWorkflowStartConfig.model_validate(start.config.model_dump()),
+            config=ScheduledWorkflowStartConfig.model_validate(
+                start.config.model_dump()
+            ),
         )
 
     if isinstance(start, EventWorkflowStartInput):
@@ -466,9 +474,7 @@ class WorkflowListResponse(BaseModel):
 
 class WorkflowRunSummaryResponse(BaseModel):
     id: UUID
-    workflow_id: UUID = Field(
-        validation_alias=AliasChoices("workflow_id", "flow_id")
-    )
+    workflow_id: UUID = Field(validation_alias=AliasChoices("workflow_id", "flow_id"))
     pod_id: UUID
     user_id: UUID
     start_type: str = "MANUAL"
@@ -501,9 +507,7 @@ class StepRecordResponse(BaseModel):
 class WorkflowRunWaitResponse(BaseModel):
     id: UUID
     run_id: UUID
-    workflow_id: UUID = Field(
-        validation_alias=AliasChoices("workflow_id", "flow_id")
-    )
+    workflow_id: UUID = Field(validation_alias=AliasChoices("workflow_id", "flow_id"))
     pod_id: UUID
     node_id: str
     wait_type: WorkflowRunWaitType

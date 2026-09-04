@@ -84,7 +84,7 @@ agent's reads to it. `--method` is `HYBRID` (default), `VECTOR` (semantic), or
 A processed document exposes hidden child artifacts at `<file-path>/<artifact>`:
 
 - `…/handbook.pdf/document.md` — page-marked markdown (`<!-- PAGE n -->`; `--pages` slices it)
-- `…/handbook.pdf/images/image_0.png` — extracted figures, referenced inline
+- `…/handbook.pdf/image_0.png` — extracted figures, referenced inline (no `images/` subfolder; only pages get one)
 - `…/handbook.pdf/pages/page_0001.jpg` — rendered page images (1-based)
 
 ```bash
@@ -113,7 +113,7 @@ cap — both bounds are clamped server-side. Folders have no URL.
 
 ## Tables + Files pattern
 
-Never store a document body in a record. Store the **path** + structured state:
+Never store a document body in a record — a value over 256KB, or a record over 1MB, is refused. Store the **path** + structured state:
 
 ```json
 [

@@ -20,7 +20,9 @@ from typing import Any
 from uuid import UUID
 
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import MessageDraft
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     SurfaceMode,
@@ -51,11 +53,11 @@ class NotificationEgress:
         self,
         *,
         egress: SurfaceNotificationEgressPort,
-        conversation_service,
+        uow,
         conversation_link_repository,
     ) -> None:
         self.egress = egress
-        self.conversation_service = conversation_service
+        self.uow = uow
         self.links = conversation_link_repository
 
     async def send(
@@ -65,6 +67,8 @@ class NotificationEgress:
         conversation_id: UUID,
         notification: NotificationEntity,
         message: str,
+        agent_name: str | None = None,
+        actor_display_name: str | None = None,
     ) -> bool:
         """Hand the message to the platform.
 
@@ -74,8 +78,22 @@ class NotificationEgress:
         whose ``can_cold_open`` says so, which is why a chat channel never
         reaches the second branch — it would have had no candidate without a
         link in the first place.
+
+        Both names travel in the metadata because email puts them in the ``From``
+        display name, where an inbox list will actually show them — the body
+        header from ``attribute()`` is not visible until the message is opened,
+        and it carries only the actor. A chat platform takes the agent name as
+        its bot's username and avatar, and ignores the actor.
         """
-        metadata = {"notification_id": str(notification.id)}
+        metadata: dict[str, Any] = {"notification_id": str(notification.id)}
+        # Set only when known. ``_egress_metadata_with_agent_name`` fills
+        # ``agent_display_name`` from the surface with ``setdefault``, and an
+        # explicit None here is a present key — it would win, and every chat
+        # bot would lose the name and icon it replies under.
+        if agent_name:
+            metadata["agent_display_name"] = agent_name
+        if actor_display_name:
+            metadata["actor_display_name"] = actor_display_name
         if channel.link is not None:
             return await self.egress.send_agent_message_for_conversation(
                 conversation_id=conversation_id,
@@ -191,8 +209,8 @@ class NotificationEgress:
             # Cold-open email: no prior thread exists by definition.
             return await self.open_conversation(channel, notification=notification)
 
-        conversation = await self.conversation_service.conversation_repository.get_conversation(
-            channel.link.conversation_id
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, channel.link.conversation_id
         )
         if conversation is not None:
             touched = conversation.updated_at
@@ -238,20 +256,19 @@ class NotificationEgress:
         what makes the recipient's agent able to answer "yes" six hours later
         against a question it can actually see.
         """
-        await self.conversation_service.conversation_repository.append_message(
+        await agent_conversations.append_notification_message(
+            self.uow,
             conversation_id=conversation_id,
-            agent_run_id=None,
-            draft=MessageDraft.of_notification(
-                message,
-                metadata={"notification_id": str(notification.id)},
-            ),
+            message=message,
+            notification_id=notification.id,
         )
 
     async def open_conversation(
         self, channel: DeliveryChannel, *, notification: NotificationEntity
     ) -> UUID | None:
         surface = channel.surface
-        conversation = await self.conversation_service.create_conversation(
+        conversation = await agent_conversations.open_surface_conversation(
+            self.uow,
             pod_id=notification.pod_id,
             agent_name=await self.egress.agent_name_for_surface(surface),
             user_id=notification.recipient_user_id,
@@ -268,7 +285,7 @@ class NotificationEgress:
             },
             require_execute_grant=False,
         )
-        return conversation.id if conversation else None
+        return conversation.id
 
 
 __all__ = ["NotificationEgress"]

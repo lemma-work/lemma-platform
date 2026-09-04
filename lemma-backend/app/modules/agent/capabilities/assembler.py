@@ -25,7 +25,6 @@ from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
 
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.capabilities.current_time import CurrentTimeCapability
 from app.modules.agent.capabilities.deferred_hint import (
@@ -35,13 +34,16 @@ from app.modules.agent.capabilities.deferred_hint import (
 from app.modules.agent.capabilities.instructed_toolset import (
     InstructedToolsetCapability,
 )
+from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
+from app.modules.agent.capabilities.pending_user_messages import (
+    PendingUserMessagesCapability,
+)
 from app.modules.agent.capabilities.open_notifications import (
     build_open_notifications_capability,
 )
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
-from app.modules.agent.capabilities.web_search import WebSearchCapability
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
@@ -49,6 +51,8 @@ from app.modules.agent.domain.prompts import (
     load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_web_search_prompt,
+    load_user_interaction_prompt,
     load_workspace_cli_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -56,13 +60,16 @@ from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.graceful_toolset import GracefulToolset
 from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
+from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+    user_interaction_toolset,
+)
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
-from app.composition.agent_surface_runtime import platform_is_known
+from app.modules.agent_surfaces.contracts.platforms import platform_is_known
 
 logger = get_logger(__name__)
 
@@ -79,15 +86,18 @@ def configure_caching_capability(cls: type[PromptCachingCapability]) -> None:
     global _caching_capability_cls
     _caching_capability_cls = cls
 
+
 _EXTRA_TOOLSET_IDS = frozenset(id(obj) for obj in EXTRA_TOOLSET_OBJECTS)
 
 # Toolsets whose usage guidance is part of their contract. Workspace CLI is
 # matched by predicate rather than identity, so it is handled separately in
 # ``_instructions_for``.
 _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
+    (web_search_toolset, "web_search", load_web_search_prompt),
     (skills_toolset, "skills", load_skills_prompt),
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
+    (user_interaction_toolset, "user_interaction", load_user_interaction_prompt),
 )
 
 
@@ -155,13 +165,11 @@ def _visible_capability(toolset: object) -> object:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
-    (web search and todo have bespoke ones; the rest use the generic
-    ``InstructedToolsetCapability``); everything else is a plain toolset
-    capability. Every wrapped toolset is made graceful first so a tool failure
-    never crashes the run.
+    (todo has a bespoke one, because its instructions depend on the
+    conversation; the rest use the generic ``InstructedToolsetCapability``);
+    everything else is a plain toolset capability. Every wrapped toolset is made
+    graceful first so a tool failure never crashes the run.
     """
-    if toolset is web_search_toolset:
-        return WebSearchCapability()
     if getattr(toolset, "id", None) == TODO_TOOLSET_ID:
         return TodoCapability(_graceful(toolset))
     guidance = _instructions_for(toolset)
@@ -189,31 +197,28 @@ def _deferred_capability(toolset: object) -> object:
     if guidance is None:
         return ToolsetCapability(deferred)
     name, loader = guidance
-    return InstructedToolsetCapability(
-        deferred, name=name, instructions_loader=loader
-    )
+    return InstructedToolsetCapability(deferred, name=name, instructions_loader=loader)
 
 
 async def build_lemma_harness_tooling(
     *,
-    uow_factory: UnitOfWorkFactory,
-    agent: Agent,
     ctx: AgentContext,
     full_toolsets: list[object],
-    agent_run_id: object,
-    model_name: str,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
 ) -> list[object]:
-    """Return the full capability list for the in-process LEMMA harness."""
+    """Return the full capability list for the in-process LEMMA harness.
+
+    It used to take an agent, a unit of work and a run id as well, and discard
+    all four on the first line of the body. Tool selection -- todo included --
+    moved to `RunToolAssembler`, so `full_toolsets` already reflects the agent's
+    toolsets. A parameter nobody reads is a claim about what this depends on,
+    and it was a false one; every caller had to keep supplying them.
+    """
     with run_phase("capabilities") as span:
         capabilities = await _build_lemma_harness_tooling(
-            uow_factory=uow_factory,
-            agent=agent,
             ctx=ctx,
             full_toolsets=full_toolsets,
-            agent_run_id=agent_run_id,
-            model_name=model_name,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
         )
@@ -223,18 +228,11 @@ async def build_lemma_harness_tooling(
 
 async def _build_lemma_harness_tooling(
     *,
-    uow_factory: UnitOfWorkFactory,
-    agent: Agent,
     ctx: AgentContext,
     full_toolsets: list[object],
-    agent_run_id: object,
-    model_name: str,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
 ) -> list[object]:
-    # agent/uow_factory/run-id reserved: tool selection (incl. todo) now happens in
-    # RunToolAssembler, so full_toolsets already reflects the agent's toolsets.
-    _ = (agent, uow_factory, agent_run_id, model_name)
     core, extra = _partition_core_extra(
         full_toolsets, is_pod_default=ctx.is_pod_default_agent
     )
@@ -243,6 +241,20 @@ async def _build_lemma_harness_tooling(
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     capabilities: list[object] = [_visible_capability(obj) for obj in core]
     capabilities.append(CurrentTimeCapability())
+
+    # Anything the person says while this run is working is steered into it
+    # rather than left for a run nobody starts. Appended first among the
+    # non-toolset capabilities because it contributes no instructions and so
+    # cannot disturb the cached prompt prefix below.
+    agent_run_id = getattr(ctx, "agent_run_id", None)
+    if agent_run_id is not None:
+        capabilities.append(PendingUserMessagesCapability(agent_run_id=agent_run_id))
+
+    # Memory carries no toolset, so nothing above can have contributed its
+    # contract; append it here from the flag the run-context builder resolved.
+    # Stable per run, so it rides in the cached prefix with the fragments above.
+    if getattr(ctx, "memory_enabled", False):
+        capabilities.append(MemoryCapability())
 
     # When the run is on a third-party surface, append standing per-platform
     # guidance (delivery/forms/formatting/channel-context). Stable per
@@ -260,9 +272,24 @@ async def _build_lemma_harness_tooling(
     # Appended AFTER the caching-sensitive fragments above and rebuilt each run
     # on purpose: unlike per-platform guidance, this changes the moment somebody
     # answers, and a cached copy would have the agent chasing a closed question.
-    open_notifications = await build_open_notifications_capability(
-        ctx.conversation_id
-    )
+    if extra:
+        # Tool search reveals the deferred extra tools on demand (provider-native
+        # on Anthropic/OpenAI, a local search_tools function on Fireworks).
+        capabilities.append(ToolSearch())
+        capabilities.extend(_deferred_capability(obj) for obj in extra)
+        # ...and a static hint so the model knows those tools exist to search for.
+        # Ahead of open notifications: this is the largest stable block here and
+        # `deferred_hint` sorts its tool names specifically to keep it
+        # byte-identical between runs. Behind volatile text it would be re-read
+        # every time somebody answered a question.
+        hint = build_deferred_tools_hint(extra)
+        if hint:
+            capabilities.append(DeferredToolsHintCapability(hint))
+
+    # Last of the instruction-bearing capabilities, because it is the only one
+    # that changes the moment somebody answers. Everything above it stays in the
+    # cached prefix when it does.
+    open_notifications = await build_open_notifications_capability(ctx.conversation_id)
     if open_notifications is not None:
         capabilities.append(open_notifications)
 
@@ -272,15 +299,5 @@ async def _build_lemma_harness_tooling(
                 conversation_id=ctx.conversation_id, protocol=protocol
             )
         )
-
-    if extra:
-        # Tool search reveals the deferred extra tools on demand (provider-native
-        # on Anthropic/OpenAI, a local search_tools function on Fireworks).
-        capabilities.append(ToolSearch())
-        capabilities.extend(_deferred_capability(obj) for obj in extra)
-        # ...and a static hint so the model knows those tools exist to search for.
-        hint = build_deferred_tools_hint(extra)
-        if hint:
-            capabilities.append(DeferredToolsHintCapability(hint))
 
     return capabilities

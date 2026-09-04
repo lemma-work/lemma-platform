@@ -151,10 +151,13 @@ async def test_discover_operations_uses_repository_search_for_queries():
     # Answer on the arguments rather than on call order: the point of this test
     # is that a query reaches the repository's search, not the sequence the
     # service happens to read the total and the page in.
-    async def _list_by_connector(_connector_id, *, search_query=None, limit=None):
+    async def _list_by_connector(
+        _connector_id, *, search_query=None, limit=None, kind=None
+    ):
         return [_send()] if search_query else [_send(), _list()]
 
     operation_repository.list_by_connector.side_effect = _list_by_connector
+    operation_repository.count_by_connector.return_value = 2
 
     service = ConnectorOperationService(
         connector_repository=connector_repository,
@@ -172,11 +175,14 @@ async def test_discover_operations_uses_repository_search_for_queries():
     assert response.returned_count == 1
     assert response.items[0].name == "messages_send"
     calls = operation_repository.list_by_connector.await_args_list
-    # The page is read first, and the unfiltered total second.
     assert calls[0].args == ("gmail",)
     assert calls[0].kwargs == {"search_query": "send an email", "limit": 1}
-    assert calls[1].args == ("gmail",)
-    assert calls[1].kwargs == {"search_query": None, "limit": None}
+    # Exactly one listing. "Showing 1 of 2" is answered by a count query, not
+    # by reading every row a second time and taking its length -- which is what
+    # made one agent search across an org up to a hundred full table reads.
+    assert len(calls) == 1
+    assert response.total_operations == 2
+    operation_repository.count_by_connector.assert_awaited_once_with("gmail", kind=None)
 
 
 async def test_get_operation_details_batch_returns_all_when_names_omitted():
@@ -224,6 +230,82 @@ async def test_get_operation_details_batch_returns_all_when_names_omitted():
         "channels_list",
         "messages_post",
     ]
+
+
+async def test_an_unnamed_details_batch_is_capped_and_says_so():
+    """Each detail carries the operation's whole input and output schema, so
+    "every operation" on a connector the size of Jira is tens of megabytes of
+    JSON assembled in memory -- and the request schema documented that as the
+    intended usage. `total_operations` is what tells the caller it was capped;
+    without it the cap would be a silent truncation."""
+    operation_repository = AsyncMock()
+    operation_repository.list_by_connector.return_value = [
+        ConnectorOperationEntity(
+            id=f"slack:op_{index}",
+            connector_id="slack",
+            name=f"op_{index}",
+            provider_operation_name=f"op_{index}",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+        for index in range(5)
+    ]
+
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=ConnectorEntity(
+                    id="slack",
+                    auth_provider=AuthProvider.LEMMA,
+                )
+            )
+        ),
+        operation_repository=operation_repository,
+        operation_gateway=AsyncMock(),
+        account_resolution_service=AsyncMock(),
+    )
+
+    response = await service.get_operation_details_batch("slack", limit=2)
+
+    assert response.returned_count == 2
+    assert response.total_operations == 5
+
+
+async def test_naming_operations_still_returns_exactly_those():
+    """The cap applies only to the unnamed case: a caller who names 300
+    operations asked for 300, and the request schema bounds that list itself."""
+    operation_repository = AsyncMock()
+    operation_repository.list_by_connector.return_value = [
+        ConnectorOperationEntity(
+            id=f"slack:op_{index}",
+            connector_id="slack",
+            name=f"op_{index}",
+            provider_operation_name=f"op_{index}",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+        for index in range(5)
+    ]
+
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=ConnectorEntity(
+                    id="slack",
+                    auth_provider=AuthProvider.LEMMA,
+                )
+            )
+        ),
+        operation_repository=operation_repository,
+        operation_gateway=AsyncMock(),
+        account_resolution_service=AsyncMock(),
+    )
+
+    response = await service.get_operation_details_batch(
+        "slack", operation_names=["op_0", "op_3", "op_4"], limit=1
+    )
+
+    assert [item.name for item in response.items] == ["op_0", "op_3", "op_4"]
 
 
 async def test_get_operation_details_batch_matches_names_case_insensitively():
@@ -467,7 +549,12 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
     assert exc_info.value.details == {
         "error_type": "_HttpFailure",
         "upstream_status": 404,
+        # What the provider said. A status alone cannot tell a caller which of
+        # the several things a 404 might mean actually happened.
+        "upstream_message": "GitHub said: Not Found for /repos/acme/crm",
     }
+    # The top-level message stays fixed and ours; the provider's words travel in
+    # the details, where they are scrubbed of anything secret-shaped.
     assert "acme/crm" not in str(exc_info.value)
 
 

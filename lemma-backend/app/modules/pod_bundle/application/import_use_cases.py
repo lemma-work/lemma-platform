@@ -417,7 +417,7 @@ class ImportUseCases:
                 await self._staging.delete_archive("pod-imports", import_id)
             except ObjectStoreError:
                 logger.debug(
-                    'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic',
+                    "pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic",
                     import_id=str(import_id),
                 )
 

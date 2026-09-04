@@ -363,9 +363,7 @@ class FileWriter(FileTransactionWriter):
         if content is None:
             return False
         file_entity.size_bytes = upload_source_size(content)
-        file_entity.content_sha256 = await run_blocking(
-            upload_source_sha256, content
-        )
+        file_entity.content_sha256 = await run_blocking(upload_source_sha256, content)
         return True
 
     @staticmethod

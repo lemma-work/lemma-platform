@@ -63,7 +63,7 @@ class SurfaceProgressMixin:
                 )
         except Exception:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic',
+                "agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic",
                 conversation_id=conversation_id,
             )
             return progress_handle
@@ -96,7 +96,7 @@ class SurfaceProgressMixin:
                 )
         except SQLAlchemyError:
             logger.debug(
-                'agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic',
+                "agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic",
                 conversation_id=conversation_id,
             )
             return StreamAppendResult(handle=progress_handle, appended=False)
@@ -139,7 +139,7 @@ class SurfaceProgressMixin:
                 )
             except SQLAlchemyError:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_progress_finish_conversation_s.diagnostic',
+                    "agent_surfaces.ingress_service.surface_progress_finish_conversation_s.diagnostic",
                     conversation_id=conversation_id,
                 )
                 return False
@@ -166,6 +166,6 @@ class SurfaceProgressMixin:
                 )
             except Exception:
                 logger.debug(
-                    'agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic',
+                    "agent_surfaces.ingress_service.surface_progress_clear_conversation_s.diagnostic",
                     conversation_id=conversation_id,
                 )

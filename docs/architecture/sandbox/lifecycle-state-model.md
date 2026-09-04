@@ -162,6 +162,13 @@ old directory.
   allocation — see [Sandbox fabric](README.md) §6.
 - A workspace pause is filesystem-only. Files persist; running processes and
   interpreter state do not, and callers must not treat them as recoverable.
+  This is `keep_memory=False` on the provider's pause, and it has to be passed
+  explicitly: the E2B SDK defaults to `True`. It was not passed for some time,
+  and the gap was invisible precisely because this document said otherwise --
+  every workspace pause preserved resident memory, so a headed browser started
+  by one conversation was snapshotted and restored into the next, reaching 63
+  Chrome processes and 2123 MB on a 2048 MB sandbox without ever being started
+  again. Reading this page told you it could not happen.
 - Permanent deletion and recoverable compute release are separate operations.
 
 ## Provider evidence behind the model

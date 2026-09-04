@@ -3,14 +3,14 @@
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
+import { ArrowRight, Check, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { resolvePodDefaultRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
@@ -41,13 +41,15 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodJoinRequests } from '@/lib/hooks/use-pod-join-requests';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
+import { podModelsHref } from '@/lib/navigation/pod-settings';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import { PodHomePresence } from '@/components/pod/pod-home-presence';
 import { Composer } from '@/components/shared/composer';
+import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ConversationAgentPicker } from '@/components/conversations/conversation-agent-picker';
 import { ResourceCover } from '@/components/shared/resource-identity';
 import { cn } from '@/lib/utils';
-import { formatAgentName } from '@/lib/utils/agents';
+import { formatAgentName, isPodDefaultAgentName } from '@/lib/utils/agents';
 import { humanizeName } from '@/lib/utils/display-name';
 import { isConversationRunningStatus, normalizeConversationStatus } from '@/lib/utils/conversations';
 import { describeScheduleConfig, getScheduleTargetKind, getScheduleTargetName } from '@/lib/utils/schedules';
@@ -159,9 +161,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
 
     const isLaunchingComposer = launchAnimation !== null;
     const isBlankingHome = isLaunchingComposer || isRouteHandoff;
-    const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
-    const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
+    // Only what *this* composer is doing. The assistant is one instance for the
+    // whole pod, so gating on its shared streaming state let a conversation
+    // running anywhere freeze the one control whose entire job is to start a
+    // different one.
+    const isBusy = isSending || isBlankingHome || assistant.isUploadingFiles;
+    const podDefaultRuntime = resolvePodDefaultRuntime(pod?.config, runtimeCatalog);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const isLoadingHomeState =
         isLoadingHomeAgents ||
@@ -171,14 +176,14 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         isLoadingHomeConversations;
     const podHomeResourceSignals = useMemo<PodHomeResourceSignals>(() => ({
         appCount: homeAppPages.length,
-        agentCount: homeAgentsData?.items?.length || 0,
+        agentCount: (homeAgentsData?.items ?? []).filter((agent) => !isPodDefaultAgentName(agent.name)).length,
         workflowCount: homeFlows.length,
         surfaceCount: homeSurfaces.length,
         activeSurfaceCount: homeSurfaces.filter((surface) => String(surface.status || '').toUpperCase() === 'ACTIVE').length,
         scheduleCount: 0,
         conversationCount: homeConversations.length,
         hasUsedWorkflow: false,
-    }), [homeAgentsData?.items?.length, homeAppPages.length, homeConversations.length, homeFlows.length, homeSurfaces]);
+    }), [homeAgentsData?.items, homeAppPages.length, homeConversations.length, homeFlows.length, homeSurfaces]);
     const starterMode = resolvePodHomeStarterMode(podHomeResourceSignals);
     const showStarterHome = podAccess.isBuilder && !isLoadingHomeState && starterMode === 'fresh';
 
@@ -344,7 +349,12 @@ function PodBlankChatHome({ podId }: { podId: string }) {
         startComposerLaunchAnimation(message);
         setIsSending(true);
         try {
-            assistant.clearMessages();
+            // Not `clearMessages()`: it resets the shared session, and the reset
+            // calls `stop()` — a real `stopRun` against whatever conversation was
+            // still open. So sending from home killed a turn that was still
+            // running, and cleared the files just attached to this one.
+            // `forceNewConversation` closes the open conversation first, which
+            // detaches from it without stopping it, and keeps the attachments.
             await assistant.sendMessage(message, {
                 forceNewConversation: true,
                 instructions: launchInstructionsRef.current || undefined,
@@ -399,7 +409,23 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                     times and buried the one field that takes any answer. */}
                 <div className={cn('w-full max-w-3xl', showStarterHome && 'mt-6')}>
                     {showStarterHome ? null : (
-                        <p className="pod-home-eyebrow mb-3.5">{pod?.name || 'This pod'}</p>
+                        <div className="mb-3.5 flex flex-col items-center gap-2.5">
+                            {/* The pod's own mark, big enough to breathe — the same
+                                seeded team identity the sidebar switcher carries,
+                                here at the size where its motion turns on. Home is
+                                the pod's front door; the name was a caption without
+                                the face. */}
+                            <ResourceIcon
+                                iconUrl={pod?.icon_url}
+                                alt={`${pod?.name || 'This pod'} icon`}
+                                label={pod?.name || 'This pod'}
+                                identityKind="team"
+                                identitySeed={podId}
+                                identitySize={44}
+                                className="h-11 w-11 rounded-xl"
+                            />
+                            <p className="pod-home-eyebrow">{pod?.name || 'This pod'}</p>
+                        </div>
                     )}
                     {assistant.pendingFiles.length > 0 ? (
                         <div className="mb-3 flex flex-wrap justify-center gap-2">
@@ -479,9 +505,10 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                                         onChange={handleCommandRuntimeChange}
                                         disabled={!canWriteConversations}
                                         compact
+                                        ariaLabel="Conversation model"
                                         triggerLabelClassName="hidden sm:block"
                                         scopeHint="Just for this chat"
-                                        manageHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+                                        manageHref={podModelsHref(podId)}
                                     />
                                     {canWriteConversations ? (
                                         <ProjectPicker
@@ -888,7 +915,7 @@ function PodAgentWorkflowKanban({
     }));
     const starterMode = resolvePodHomeStarterMode({
         ...baseResourceSignals,
-        agentCount: agents.length,
+        agentCount: agents.filter((agent) => !isPodDefaultAgentName(agent.name)).length,
         workflowCount: workflows.length,
         scheduleCount: schedules.length,
         conversationCount: conversations.length,
@@ -916,7 +943,13 @@ function PodAgentWorkflowKanban({
                             <h2 className="pod-home-work-title">Activity</h2>
                             <div className="pod-home-work-live-pill">
                                 {movingItems.length > 0 ? (
-                                    <span className="pod-home-work-live-dot" />
+                                    /* The chat status pill's ping halo: running
+                                       work breathes in action violet, matching
+                                       the live rows inside the panel. */
+                                    <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
+                                        <span className="absolute inset-0 animate-ping rounded-full bg-[var(--action-primary)] opacity-30" />
+                                        <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--action-primary)]" />
+                                    </span>
                                 ) : null}
                                 <span>
                                     {unattendedAsks.length > 0
@@ -1066,13 +1099,6 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                         {expanded ? 'Hide ideas' : 'Show ideas'}
                         {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </Button>
-                    <Link
-                        href={`/pod/${podId}/recipes`}
-                        className="custom-focus-ring inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-xs text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
-                    >
-                        Browse all
-                        <ArrowRight className="h-3.5 w-3.5" />
-                    </Link>
                     <Button
                         type="button"
                         variant="quiet"
@@ -1105,14 +1131,32 @@ function KanbanCard({ item }: { item: KanbanItem }) {
             href={item.href}
             className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-[color:color-mix(in_srgb,var(--surface-2)_50%,transparent)]"
         >
-            <span
-                className={cn(
-                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                    item.statusTone === 'live' && 'lemma-live-pulse',
-                    kanbanDotClass(item.statusTone),
-                )}
-                aria-hidden="true"
-            />
+            {item.statusTone === 'success' ? (
+                /* A finished outcome wears the chat's settled check — green is
+                   the colour of "this worked" everywhere else in the product,
+                   and a plain dot was spending that moment on a bullet. */
+                <span
+                    className="pod-home-outcome-check flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+                    aria-hidden="true"
+                >
+                    <Check className="h-3 w-3" strokeWidth={2.4} />
+                </span>
+            ) : item.statusTone === 'live' ? (
+                /* Work in flight gets the chat status pill's ping halo — violet,
+                   because live means acting, and violet carries action. */
+                <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--action-primary)] opacity-30" />
+                    <span className="relative h-1.5 w-1.5 rounded-full bg-[var(--action-primary)]" />
+                </span>
+            ) : (
+                <span
+                    className={cn(
+                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                        kanbanDotClass(item.statusTone),
+                    )}
+                    aria-hidden="true"
+                />
+            )}
             <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
                 {item.title}
             </span>

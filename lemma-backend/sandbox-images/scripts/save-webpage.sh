@@ -86,9 +86,51 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# A capture gets its own tab, and gives it back.
+#
+# Every captured page used to land in the one shared tab and stay there. The
+# session is deliberately long-lived -- one browser, one Xvfb display, one
+# profile per sandbox -- so nothing ever reclaimed what a capture rendered, and
+# Chrome keeps a process per site-instance. A workspace measured after a normal
+# research session held 63 Chrome processes at 2123 MB RSS on a sandbox with
+# 2048 MB total: `MemAvailable` was 14 MB, kswapd0 burned a third of the only
+# vCPU, and every unrelated tool call in that sandbox degraded with it --
+# `python -c pass` took over 12 seconds and `lemma --version` never returned at
+# all. The agent saw `exit_code: 124` and no explanation.
+#
+# So the tab is closed on the way out, via trap: `set -e` means any capture
+# step can abort the script, and the failing captures are exactly the expensive
+# pages worth reclaiming. `--no-open` reuses whatever page the caller already
+# has open -- that tab belongs to them, so this must not touch it.
+CAPTURE_TAB=""
+close_capture_tab() {
+  if [[ -n "$CAPTURE_TAB" ]]; then
+    agent-browser tab close "$CAPTURE_TAB" >/dev/null 2>&1 || true
+    CAPTURE_TAB=""
+  fi
+}
+trap close_capture_tab EXIT
+
 if [[ "$OPEN_PAGE" == "1" ]]; then
-  start-browser "$URL" >/dev/null
-  agent-browser wait --load networkidle >/dev/null 2>&1 || agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
+  # Brings up the daemon, Xvfb and the dashboard if they are not up yet,
+  # without navigating the caller's active tab.
+  start-browser >/dev/null
+  CAPTURE_TAB="lemma-capture-$$"
+  agent-browser tab new --label "$CAPTURE_TAB" "$URL" >/dev/null
+  # Bounded, because networkidle is a condition an ad-funded page never
+  # reaches: something is always polling. Measured on the two news sites a user
+  # actually asked for, the unbounded wait cost 32.6s and 40.0s per capture and
+  # produced byte-for-byte the same markdown as a 5s cap did in 10.3s and
+  # 32.7s. A tool call fetching two such pages renders them one at a time, so
+  # that difference is most of the minute and a half the caller waits.
+  #
+  # The cap is not a page-load timeout: whatever has loaded by then is what
+  # gets captured, and the fallback wait below still gives a slow page its
+  # settle time. Pages that do go idle are unaffected -- they reach it in well
+  # under the cap and this returns immediately.
+  timeout "${NETWORKIDLE_TIMEOUT_S:-5}" \
+    agent-browser wait --load networkidle >/dev/null 2>&1 \
+    || agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
 fi
 
 PAGE_URL="$(agent-browser get url)"

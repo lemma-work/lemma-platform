@@ -45,16 +45,16 @@ def _provider(engine: FakeDockerEngine, **overrides) -> DockerSandboxProvider:
 
 
 def _spec(sandbox_id, *, epoch: int = 1, **overrides) -> ProviderCreateSpec:
-    defaults = dict(
-        sandbox_id=sandbox_id,
-        kind=SandboxKind.WORKSPACE,
-        epoch=epoch,
-        name=naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
-        image=PINNED_IMAGE,
-        profile_name="workspace-python-v1",
-        profile_digest="sha256:" + "a" * 64,
-        deadline_at=_deadline(),
-    )
+    defaults = {
+        "sandbox_id": sandbox_id,
+        "kind": SandboxKind.WORKSPACE,
+        "epoch": epoch,
+        "name": naming.container_name(sandbox_id, SandboxKind.WORKSPACE, epoch),
+        "image": PINNED_IMAGE,
+        "profile_name": "workspace-python-v1",
+        "profile_digest": "sha256:" + "a" * 64,
+        "deadline_at": _deadline(),
+    }
     defaults.update(overrides)
     return ProviderCreateSpec(**defaults)  # type: ignore[arg-type]
 
@@ -142,7 +142,9 @@ async def test_a_lost_create_response_is_recovered_by_looking(monkeypatch) -> No
         from app.modules.workspace.testing.fake_docker_engine import FakeContainer
 
         engine.containers[name] = FakeContainer(
-            container_id="raced", name=name, image=request.image,
+            container_id="raced",
+            name=name,
+            image=request.image,
             labels=dict(request.labels),
         )
         from app.modules.workspace.providers.docker_engine import DockerEngineError
@@ -226,7 +228,9 @@ async def test_a_container_from_an_older_profile_build_is_replaced() -> None:
     assert new.volume_name == old.volume_name, "the files must not go with it"
 
 
-async def test_an_operation_against_a_destroyed_container_is_definitively_gone() -> None:
+async def test_an_operation_against_a_destroyed_container_is_definitively_gone() -> (
+    None
+):
     """The fence firing must not look like a transient error, or a caller
     would retry forever instead of re-ensuring."""
     from app.modules.workspace.providers.base import ProviderGone
@@ -238,9 +242,7 @@ async def test_an_operation_against_a_destroyed_container_is_definitively_gone()
     await provider.destroy(instance.name, deadline_at=_deadline())
 
     with pytest.raises(ProviderGone):
-        await provider._runtime_client(
-            instance.provider_id, deadline_at=_deadline()
-        )
+        await provider._runtime_client(instance.provider_id, deadline_at=_deadline())
 
 
 async def test_the_sweep_ignores_containers_that_are_not_ours() -> None:
@@ -248,7 +250,7 @@ async def test_the_sweep_ignores_containers_that_are_not_ours() -> None:
     from app.modules.workspace.testing.fake_docker_engine import FakeContainer
 
     engine.containers["postgres"] = FakeContainer(
-        container_id="pg", name="postgres", image="postgres:16", labels={}
+        container_id="pg", name="postgres", image="postgres:18", labels={}
     )
 
     assert await _provider(engine).list_objects(deadline_at=_deadline()) == ()
@@ -316,7 +318,7 @@ async def test_release_stops_the_container_but_keeps_the_volume() -> None:
     assert instance.name in engine.containers
     # Suspending compute must never take the user's files with it.
     assert engine.destroyed == []
-    assert "ab-ws-keep" not in [v for v in engine.volumes]
+    assert "ab-ws-keep" not in list(engine.volumes)
 
 
 async def test_an_unreachable_runtime_still_gets_stopped() -> None:

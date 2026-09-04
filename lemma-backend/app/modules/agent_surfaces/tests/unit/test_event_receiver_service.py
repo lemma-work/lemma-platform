@@ -7,17 +7,26 @@ import pytest
 from unittest.mock import AsyncMock
 from uuid import UUID
 
-from app.modules.agent_surfaces.services import event_receiver_service
+from app.modules.agent_surfaces.services import (
+    event_receiver_service,
+    resend_polling_receiver,
+)
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.telegram.client import normalize_bot_base_url
+from app.modules.agent_surfaces.platforms.telegram.update_batching import (
+    assemble_telegram_updates as _assemble_telegram_updates,
+)
+from app.modules.agent_surfaces.services import native_receiver_base
+from app.modules.agent_surfaces.services.telegram_polling_runner import (
+    TelegramPollingReceiverRunner,
+)
 from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeReceiverCandidate,
     NativeSurfaceReceiverCoordinator,
-    TelegramPollingReceiverRunner,
-    _assemble_telegram_updates,
+    ResendPollingReceiverRunner,
     _candidate_from_surface,
     _publish_native_receiver_event,
     _receiver_key,
@@ -187,7 +196,7 @@ async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeyp
         published.append((stream, event))
 
     monkeypatch.setattr(
-        event_receiver_service.EventPublisher,
+        native_receiver_base.EventPublisher,
         "publish",
         publish,
     )
@@ -204,3 +213,189 @@ async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeyp
     assert event.source == "telegram"
     assert event.payload == {"update_id": 123}
     assert event.headers == {"x-lemma-surface-event-mode": "native_receiver"}
+
+
+@pytest.mark.asyncio
+async def test_two_polled_bots_sharing_an_update_id_are_two_events(monkeypatch):
+    """``update_id`` counts per bot, so the receiver key has to be in the id.
+
+    Both bots are polled by the same worker and both are on their first update.
+    One identity for the pair means the durable inbox claims a single row: the
+    first person is answered, the second is dropped as a duplicate.
+    """
+    published = []
+
+    async def publish(stream, event):
+        published.append(event)
+
+    monkeypatch.setattr(native_receiver_base.EventPublisher, "publish", publish)
+
+    for key in ("telegram:one:aaa", "telegram:two:bbb"):
+        await _publish_native_receiver_event(
+            source="telegram", payload={"update_id": 1}, receiver_key=key
+        )
+
+    assert published[0].source_event_id != published[1].source_event_id
+    assert published[0].event_id != published[1].event_id
+
+
+def _resend_candidate() -> NativeReceiverCandidate:
+    return NativeReceiverCandidate(
+        key="resend:system:abc",
+        platform=SurfacePlatform.RESEND,
+        surface_ids=(),
+        credential_label="system",
+        credentials={"api_key": "re_test"},
+    )
+
+
+class _FakeResendService:
+    """Serves list pages in order; records the ``after`` cursor of each call."""
+
+    def __init__(self, pages: list[dict]) -> None:
+        self._pages = list(pages)
+        self.after_args: list[str | None] = []
+
+    async def list_received_emails(self, *, after=None, limit=20):
+        self.after_args.append(after)
+        return self._pages.pop(0) if self._pages else {"data": [], "has_more": False}
+
+
+def test_resend_candidate_is_keyed_by_the_system_key():
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    candidate = _candidate_from_surface(surface, {"api_key": "re_live_x"})
+
+    assert isinstance(candidate, NativeReceiverCandidate)
+    assert candidate.platform is SurfacePlatform.RESEND
+    assert candidate.credential_label == "system"
+    assert candidate.key.startswith("resend:system:")
+
+
+@pytest.mark.asyncio
+async def test_resend_first_poll_seeds_cursor_without_replaying_history():
+    runner = ResendPollingReceiverRunner(_resend_candidate())
+    service = _FakeResendService(
+        [{"data": [{"id": "e3"}, {"id": "e2"}, {"id": "e1"}], "has_more": True}]
+    )
+
+    new_items, newest = await runner._collect_new_emails(service, cursor=None)
+
+    assert newest == "e3"
+    assert new_items == []  # history is seeded, not replayed
+    assert service.after_args == [None]
+
+
+@pytest.mark.asyncio
+async def test_resend_poll_collects_only_emails_newer_than_cursor():
+    runner = ResendPollingReceiverRunner(_resend_candidate())
+    service = _FakeResendService(
+        [
+            {
+                "data": [{"id": "e4"}, {"id": "e3"}, {"id": "e2"}, {"id": "e1"}],
+                "has_more": True,
+            }
+        ]
+    )
+
+    new_items, newest = await runner._collect_new_emails(service, cursor="e2")
+
+    assert newest == "e4"
+    assert [item["id"] for item in new_items] == ["e4", "e3"]
+
+
+@pytest.mark.asyncio
+async def test_resend_ingest_resolves_surface_by_address_and_publishes(monkeypatch):
+    published = []
+
+    async def publish(stream, event):
+        published.append(event)
+
+    monkeypatch.setattr(resend_polling_receiver.EventPublisher, "publish", publish)
+
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    class _FakeRepo:
+        def __init__(self, uow):
+            pass
+
+        async def get_active_by_address(self, *, platform, address):
+            return surface if address == "pod-abc@mail.example.com" else None
+
+    monkeypatch.setattr(resend_polling_receiver, "SurfaceRepository", _FakeRepo)
+
+    class _FakeUow:
+        session = object()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        resend_polling_receiver,
+        "SessionUnitOfWorkFactory",
+        lambda *a, **k: lambda: _FakeUow(),
+    )
+
+    runner = ResendPollingReceiverRunner(_resend_candidate())
+    await runner._ingest_email(
+        {
+            "id": "email-1",
+            "from": "person@example.com",
+            "to": ["pod-abc@mail.example.com"],
+            "subject": "Re: hi",
+        }
+    )
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.source == "resend"
+    assert event.surface_id == surface.id
+    # The same id the webhook mints for this email, so a deployment running
+    # both routes deduplicates in the durable inbox rather than in a Redis key
+    # with a 15-minute TTL.
+    assert event.source_event_id == f"resend:{surface.id}:email-1"
+    assert event.payload["to"] == "pod-abc@mail.example.com"
+
+
+@pytest.mark.asyncio
+async def test_resend_ingest_skips_when_no_surface_matches(monkeypatch):
+    published = []
+
+    async def publish(stream, event):
+        published.append(event)
+
+    monkeypatch.setattr(resend_polling_receiver.EventPublisher, "publish", publish)
+
+    class _FakeRepo:
+        def __init__(self, uow):
+            pass
+
+        async def get_active_by_address(self, *, platform, address):
+            return None
+
+    monkeypatch.setattr(resend_polling_receiver, "SurfaceRepository", _FakeRepo)
+
+    class _FakeUow:
+        session = object()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        resend_polling_receiver,
+        "SessionUnitOfWorkFactory",
+        lambda *a, **k: lambda: _FakeUow(),
+    )
+
+    runner = ResendPollingReceiverRunner(_resend_candidate())
+    await runner._ingest_email(
+        {"id": "x", "from": "a@b.com", "to": ["nobody@nowhere.com"]}
+    )
+
+    assert published == []

@@ -8,7 +8,7 @@ import { buildScopedConversationHref } from '@/lib/assistant/conversation-compos
 import { requestConversationStageNavigation } from '@/lib/assistant/conversation-presentation';
 import { formatRelativeTime } from '@/lib/utils/relative-time';
 
-// Shared between the agent detail page and the pod assistant page — the same
+// Shared between the agent detail page and Lem's page — the same
 // list, scoped to a named agent or to the pod default.
 
 // The clock moved to `lib/utils/relative-time` once the home pod list needed it

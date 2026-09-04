@@ -22,11 +22,20 @@ export interface DatastoreChangeFrame {
   record_id: string;
   operation: "insert" | "update" | "delete";
   /**
-   * The whole row as it stands after the write — including columns this write
-   * never touched and defaults the database filled in. On `delete` it is the
-   * row as it stood before removal, not `{}`.
+   * The row as it stands after the write — including columns this write never
+   * touched and defaults the database filled in. On `delete` it is the row as
+   * it stood before removal, not `{}`.
+   *
+   * Empty when `payload_truncated` is true: a row too large to carry is not
+   * shipped over the stream. Read the record instead of treating `{}` as the
+   * row's contents.
    */
   payload: Record<string, unknown>;
+  /**
+   * The row body was too large to carry and was dropped. `payload` is `{}`;
+   * fetch the record by `record_id` if you need its values.
+   */
+  payload_truncated?: boolean;
   occurred_at?: string;
   /** Redis stream id — pass back as `since` to resume after this change. */
   stream_id?: string;

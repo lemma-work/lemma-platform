@@ -49,6 +49,7 @@ concurrency:
 
 jobs:
   protected-e2e-gate:
+    timeout-minutes: 90
     name: Require fresh backend protected E2E
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +86,7 @@ jobs:
           sha: ${{ github.sha }}
 
   build:
+    timeout-minutes: 90
     name: Build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
     needs: protected-e2e-gate
     runs-on: ${{ matrix.platform.runner }}
@@ -114,10 +116,10 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -146,7 +148,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digest-${{ matrix.image.name }}--${{ matrix.platform.arch }}
           path: /tmp/digests/*
@@ -154,6 +156,7 @@ jobs:
           retention-days: 1
 
   merge:
+    timeout-minutes: 90
     name: Merge ${{ matrix.image }}
     runs-on: ubuntu-latest
     needs: build
@@ -194,10 +197,10 @@ jobs:
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -259,23 +262,24 @@ jobs:
           PY
 
       - name: Upload merged digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: merged-digest-${{ matrix.image }}
           path: /tmp/digests/digests-out/${{ matrix.image }}.json
           retention-days: 1
 
   infra-digests:
+    timeout-minutes: 90
     name: Pin third-party infrastructure images
     runs-on: ubuntu-latest
     needs: protected-e2e-gate
     env:
-      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
+      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg18
       REDIS_IMAGE: docker.io/redis:7.4-alpine
       SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Resolve immutable manifest digests
         shell: bash
@@ -320,7 +324,7 @@ jobs:
           PY
 
       - name: Upload infrastructure digests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: infra-digests
           path: infra-digests.json
@@ -328,6 +332,7 @@ jobs:
           retention-days: 1
 
   guest-runtimes:
+    timeout-minutes: 90
     name: Build managed guest runtime (${{ matrix.target }})
     needs: protected-e2e-gate
     runs-on: ${{ matrix.runner }}
@@ -344,10 +349,18 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      # This job compiled the workspace from cold on every release, once per
+      # matrix target. Same action and keying as the desktop CI jobs.
+      - name: Cache cargo and desktop target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: guest-runtime-${{ matrix.target }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install ARM64 kernel unpacker
         if: matrix.target == 'macos-aarch64'
@@ -365,7 +378,7 @@ jobs:
             --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
 
       - name: Upload managed guest runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: guest-runtime-${{ matrix.target }}
           path: |
@@ -375,6 +388,7 @@ jobs:
           retention-days: 1
 
   host-packs:
+    timeout-minutes: 90
     name: Build native host pack (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     needs: [merge, infra-digests]
@@ -427,10 +441,14 @@ jobs:
           echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
+        with:
+          # Matches ci.yml. Without it this job re-downloads every wheel it
+          # resolves, on every release.
+          enable-cache: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -579,8 +597,26 @@ jobs:
             --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip" \
             --archive-existing
 
+      # Before the archive is uploaded, on the pack that is actually shipped.
+      #
+      # `check_host_pack.py` existed and ran only in `host-pack-macos`, which is
+      # a merge-to-main lane on `macos-14`. So the pack users download was never
+      # checked at all, and the Windows one was checked by nothing on any
+      # trigger. That is the wrong way round: the merge lane is the rehearsal,
+      # this is the performance.
+      #
+      # Runs against the built directory rather than the zip, because that is
+      # what the archive is made from one step earlier. It executes the packed
+      # interpreters, which is what catches a relocatable CPython that still
+      # believes it lives on the build machine -- the failure that unpacks
+      # perfectly and fails at the first import, four minutes into a user's
+      # first run.
+      - name: The packed runtimes execute
+        shell: bash
+        run: python scripts/check_host_pack.py host-pack-out/local-runtime
+
       - name: Upload host pack
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: host-pack-${{ matrix.target }}
           path: |
@@ -603,6 +639,7 @@ jobs:
           }
 
   manifest:
+    timeout-minutes: 90
     name: Publish release manifest
     runs-on: ubuntu-latest
     needs: [merge, infra-digests, guest-runtimes, host-packs]
@@ -809,7 +846,7 @@ jobs:
 
       - name: Attach manifest to release
         if: github.event_name == 'push' || inputs.publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
           files: |
@@ -859,7 +896,7 @@ jobs:
 
       - name: Upload branch-test runtime bundle
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-local-test-${{ github.sha }}
           path: |
@@ -871,7 +908,7 @@ jobs:
 
       - name: Upload branch-test manifest for Desktop packaging
         if: github.event_name == 'workflow_dispatch' && !inputs.publish
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lemma-local-test-manifest-${{ github.sha }}
           path: lemma-local.json
@@ -890,6 +927,7 @@ jobs:
   # runtime artifacts this workflow already uploads. CI does not package them:
   # half a gigabyte per run, for something nobody can hand to a tester anyway.
   share-desktop-dmg:
+    timeout-minutes: 90
     name: Publish signed nightly macOS DMG
     if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
     runs-on: macos-14
@@ -899,24 +937,24 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: aarch64-apple-darwin
 
+      # Keyed on the lockfile alone, this changed only when a dependency did --
+      # so an ordinary Rust edit restored a stale `desktop/target`, recompiled
+      # anyway, and re-uploaded a multi-gigabyte cache of output it had just
+      # invalidated. Same replacement the desktop CI jobs got.
       - name: Cache cargo and desktop target
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-share-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-share-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-share
 
       - name: Resolve nightly tag
         id: tag
@@ -981,6 +1019,56 @@ jobs:
           VERIFY
           cp desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json
 
+      # Read, not recomputed. The app refuses to start against a runtime whose
+      # release is not exactly its own `CARGO_PKG_VERSION`, so the DMG must
+      # carry the version the manifest job stamped. Deriving it from the
+      # manifest we just downloaded makes that agreement structural: there is
+      # one string, and this job reads it rather than rebuilding it from the
+      # same formula and hoping the two never drift.
+      - name: Resolve the nightly app version
+        id: app-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+            desktop/runtime/lemma-local.json)"
+          [[ -n "${runtime_version}" ]]
+
+          # The invariant that broke a shipped nightly, now checked here.
+          #
+          # Everything the app does with a runtime compares it against
+          # `CARGO_PKG_VERSION`, which comes from `[workspace.package]` in
+          # desktop/Cargo.toml and from nowhere else. A nightly once stamped the
+          # runtime manifest and the app bundle and not the crate, so a freshly
+          # installed build met its own runtime and refused it: "This copy of
+          # Lemma and its runtime do not match." Nothing in the build noticed,
+          # because nothing compared these two numbers.
+          crate_version="$(python3 - <<'PY'
+          import re, pathlib
+          text = pathlib.Path("desktop/Cargo.toml").read_text()
+          section = text.split("[workspace.package]", 1)[1]
+          print(re.search(r'^version\s*=\s*"([^"]+)"', section, re.M).group(1))
+          PY
+          )"
+          if [[ "${runtime_version}" != "${crate_version}" ]]; then
+            echo "::error title=Runtime and app versions disagree::the runtime \
+          manifest is ${runtime_version} and the desktop crate is \
+          ${crate_version}; the app would refuse its own runtime"
+            exit 1
+          fi
+
+          # Only the *bundle* version carries the nightly stamp. Tauri takes
+          # `package_info().version` -- what the updater compares -- from the
+          # config's `version`, so this is enough to make one nightly newer than
+          # the last. The runtime keeps the plain version, which means it also
+          # keeps matching `CARGO_PKG_VERSION`, and a 1.7 GiB runtime is not
+          # re-downloaded for every nightly: install compares artifact digests,
+          # so a runtime whose contents actually changed still replaces itself.
+          version="${runtime_version}-nightly.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "runtime_version=${runtime_version}" >> "$GITHUB_OUTPUT"
+          echo "Building Lemma ${version} against runtime ${runtime_version}"
+
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
 
@@ -988,6 +1076,12 @@ jobs:
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
       - name: Build native local sidecars
+        # The telemetry key is compiled into locald here. Absent, install
+        # telemetry stays off -- which is the behaviour every local build gets
+        # and a safe default, but it means a release built without the secret
+        # reports nothing about installs that fail on a new macOS version.
+        env:
+          LEMMA_TELEMETRY_KEY: ${{ secrets.LEMMA_TELEMETRY_KEY }}
         run: desktop/scripts/build-sidecar.sh
 
       - name: Sign virtualization helper with its entitlement
@@ -1017,9 +1111,29 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SHA: ${{ github.sha }}
+          # Marks the build as a nightly. A nightly follows its own feed --
+          # the `desktop-nightly` tag published at the end of this job -- so
+          # that the update path is exercised every night instead of first
+          # meeting a user on release day.
+          LEMMA_RELEASE_CHANNEL: nightly
+          LEMMA_BUILD_SHA: ${{ github.sha }}
+          VERSION: ${{ steps.app-version.outputs.version }}
+          # Same key the stable channel signs with, because it is the same
+          # public key baked into every build. A nightly signed with anything
+          # else produces an update the app correctly refuses to install.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          npx -y "$TAURI_CLI" build --config tauri.online.conf.json
+          # Written outside the checkout so it cannot dirty a tree that later
+          # steps diff. It carries only the version: everything else about a
+          # nightly is already the online config.
+          overlay="${RUNNER_TEMP}/tauri.nightly.conf.json"
+          printf '{"version": "%s"}\n' "${VERSION}" > "${overlay}"
+          npx -y "$TAURI_CLI" build \
+            --config tauri.online.conf.json \
+            --config tauri.updater.conf.json \
+            --config "${overlay}"
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -1081,6 +1195,387 @@ jobs:
             echo "[Download the DMG](${url})"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # Tauri notarizes and staples the .app, then tars it. That ordering is
+      # believed, not documented -- and an update payload that is not notarized
+      # replaces a working install with one Gatekeeper refuses to open. The
+      # stable channel asserts this rather than assuming it; a nightly that
+      # updates itself every night has more chances to prove it, not fewer.
+      - name: Verify the updater payload is notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          test -f "${tarball}"
+          test -f "${tarball}.sig"
+          workdir="$(mktemp -d)"
+          tar -xzf "${tarball}" -C "${workdir}"
+          app="${workdir}/Lemma.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          xcrun stapler validate "${app}"
+          spctl -a -t exec -vv "${app}"
+
+      # The nightly update feed lives at a tag that never moves.
+      #
+      # The per-run `desktop-nightly-<sha>` prereleases below are pruned to the
+      # three most recent, so none of them can host a feed: an install two weeks
+      # old would be pointed at a release that no longer exists. `desktop-nightly`
+      # is created once and rewritten in place, which is what makes the endpoint
+      # baked into every nightly build durable. The prune step below selects on
+      # `desktop-nightly-`, with the trailing dash, so this tag is not a
+      # candidate -- deleting it would silently strand every nightly ever
+      # installed.
+      - name: Publish the nightly update feed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.app-version.outputs.version }}
+          FEED_TAG: desktop-nightly
+          RUNTIME_TAG: ${{ steps.tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          artifacts="desktop/target/release/release-artifacts"
+          tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
+          # Named for its version rather than clobbered under a fixed name. A
+          # feed and the payload it is signed for have to change together, and
+          # a single reused filename has a window -- small, but nightly -- where
+          # a client has last night's signature and this morning's bytes, which
+          # presents as a signature failure on the user's machine.
+          payload="Lemma_${VERSION}_aarch64.app.tar.gz"
+          cp "${tarball}" "${artifacts}/${payload}"
+          cp "${tarball}.sig" "${artifacts}/${payload}.sig"
+          python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          feed_tag = os.environ["FEED_TAG"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          artifacts = pathlib.Path("desktop/target/release/release-artifacts")
+          # The *contents* of the .sig file, not a path or a URL to it. A feed
+          # that carries the wrong thing here verifies nowhere but on a user's
+          # machine, which is the worst place to find out.
+          signature = (
+              artifacts / f"Lemma_{version}_aarch64.app.tar.gz.sig"
+          ).read_text().strip()
+          if not signature:
+              raise SystemExit("refusing to publish a feed with an empty signature")
+
+          # Same shape the stable feed publishes, including the `lemma` block
+          # the app reads to warn about a data-incompatible upgrade before
+          # downloading anything. Unknown top-level keys are ignored by the
+          # updater.
+          manifest = json.loads(pathlib.Path("desktop/runtime/lemma-local.json").read_text())
+          # The app bundle carries the nightly stamp and the runtime does not,
+          # so these differ by design -- but only by that suffix. Anything else
+          # means the DMG was built against a runtime that is not this one.
+          if not version.startswith(f"{manifest['version']}-nightly."):
+              raise SystemExit(
+                  f"runtime manifest is {manifest['version']}, app is {version}"
+              )
+          host = manifest["host_packs"]["aarch64-apple-darwin"]
+          guest = manifest["guest_runtimes"]["macos-aarch64"]
+          postgres = manifest.get("infra", {}).get("postgres", "")
+          major = None
+          if "-pg" in postgres:
+              digits = postgres.split("-pg")[1].split("@")[0].split(".")[0]
+              major = int(digits) if digits.isdigit() else None
+
+          feed = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).isoformat(),
+              "notes": f"Lemma Desktop nightly {version}",
+              "platforms": {
+                  "darwin-aarch64": {
+                      "url": (
+                          f"https://github.com/{repository}/releases/download/"
+                          f"{feed_tag}/Lemma_{version}_aarch64.app.tar.gz"
+                      ),
+                      "signature": signature,
+                  }
+              },
+              "lemma": {
+                  "postgres_major": major,
+                  "runtime_download_bytes": host["size"] + guest["size"],
+              },
+          }
+          (artifacts / "latest.json").write_text(json.dumps(feed, indent=2) + "\n")
+          PY
+          cat "${artifacts}/latest.json"
+
+          if ! gh release view "${FEED_TAG}" >/dev/null 2>&1; then
+            gh release create "${FEED_TAG}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "Lemma Desktop nightly update feed" \
+              --notes "$(printf '%s\n' \
+                'The update feed every nightly build follows.' \
+                '' \
+                'This tag is rewritten in place by each nightly run. Install a' \
+                'nightly from its own dated prerelease; it updates itself from' \
+                'here.')"
+          fi
+          # The payload before latest.json, so the feed never names an asset
+          # that is not there yet.
+          gh release upload "${FEED_TAG}" \
+            "${artifacts}/${payload}" \
+            "${artifacts}/${payload}.sig" \
+            --clobber
+          gh release upload "${FEED_TAG}" "${artifacts}/latest.json" --clobber
+
+          # Versioned payloads would otherwise accumulate on this tag for good.
+          # Keeping a few means an update that is already in flight still finds
+          # its bytes after tonight's run has replaced the feed.
+          gh release view "${FEED_TAG}" --json assets \
+            --jq '.assets | map(select(.name | endswith(".app.tar.gz")))
+                  | sort_by(.createdAt) | reverse | .[3:] | .[].name' \
+            > "${RUNNER_TEMP}/stale-payloads.txt" || : > "${RUNNER_TEMP}/stale-payloads.txt"
+          while read -r asset; do
+            [[ -n "${asset}" ]] || continue
+            echo "Removing superseded payload ${asset}"
+            gh release delete-asset "${FEED_TAG}" "${asset}" --yes || true
+            gh release delete-asset "${FEED_TAG}" "${asset}.sig" --yes || true
+          done < "${RUNNER_TEMP}/stale-payloads.txt"
+
+          {
+            echo "### Nightly update feed"
+            echo
+            echo "\`${VERSION}\` published to \`${FEED_TAG}\`."
+            echo "Installed nightlies will offer this build on their next check."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # The nightly channel is a rolling window, not an archive. Every shared
+      # build used to leave its prerelease behind for good: by 0.7.0 twelve had
+      # accumulated, so most of the releases page was throwaway builds and the
+      # newest real release had been pushed fifth from the top. Nothing reads a
+      # nightly tag except the DMG built in the same run, and its own notes say
+      # there is no upgrade path, so keeping them all bought nothing.
+      #
+      # Pruning here rather than beside the release's creation is deliberate.
+      # By this point the new nightly is complete -- runtime assets and a
+      # notarized, stapled DMG -- so the window never closes over older builds
+      # in favour of one that turned out to be unusable.
+      - name: Prune superseded nightly prereleases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: "3"
+        run: |
+          # No -e: this is housekeeping running after the DMG is already
+          # published. A GitHub API hiccup here must not report the nightly as
+          # failed, so failures warn and the step still succeeds.
+          set -uo pipefail
+          # `if !` rather than a bare assignment: with pipefail a failed
+          # listing yields an empty string, which is indistinguishable from
+          # "there is nothing to prune" -- and reporting a broken API as a tidy
+          # release page is how this quietly stops working.
+          if ! stale="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq '.[]
+                    | select(.prerelease and (.tag_name | startswith("desktop-nightly-")))
+                    | [.created_at, .tag_name]
+                    | @tsv' \
+              | sort -r \
+              | tail -n "+$((KEEP + 1))" \
+              | cut -f2
+          )"; then
+            echo "::warning title=Could not list nightly prereleases::Nothing was pruned."
+            exit 0
+          fi
+          if [[ -z "${stale}" ]]; then
+            echo "Nothing to prune: ${KEEP} or fewer nightly prereleases exist."
+            exit 0
+          fi
+          while read -r tag; do
+            [[ -n "${tag}" ]] || continue
+            # Re-checked rather than trusted, because the next line deletes a
+            # release *and its tag*. A version tag reaching this loop would
+            # destroy a real release, so a surprise here stops the step instead
+            # of proceeding on the assumption that the filter above held.
+            if [[ "${tag}" != desktop-nightly-* ]]; then
+              echo "::error title=Refusing to delete a non-nightly release::${tag}"
+              exit 1
+            fi
+            if gh release delete "${tag}" --cleanup-tag --yes; then
+              echo "Pruned ${tag}"
+            else
+              echo "::warning title=Could not prune a nightly prerelease::${tag}"
+            fi
+          done <<< "${stale}"
+
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  # Same run, same manifest, the other platform -- and deliberately a lesser
+  # citizen than the macOS job above. Windows is not supported yet; the point of
+  # this is to find out whether it runs at all, which nobody could do before,
+  # because there was no way to get an installable Windows build.
+  #
+  # It looked like there was. CI's "Windows desktop build check" bundles an NSIS
+  # installer on every desktop change -- but it uploads nothing, and it builds
+  # against the committed placeholder manifest whose URLs are unresolvable by
+  # design, so even a kept copy would refuse to install a runtime and say so.
+  # That job proves the bundler runs. It cannot produce something installable.
+  #
+  # Nothing here is load-bearing: the job cannot fail the nightly, its output is
+  # an artifact rather than a release asset, and it is unsigned. Each of those is
+  # a decision to keep Windows out of the supported surface until it has been
+  # tested end to end, not an oversight to tidy up later. Authenticode signing
+  # already exists in release-desktop.yml for the day that changes.
+  share-desktop-exe:
+    timeout-minutes: 90
+    name: Build nightly Windows installer
+    if: github.event_name == 'workflow_dispatch' && inputs.share && !inputs.publish
+    runs-on: windows-latest
+    needs: manifest
+    # Windows is not a supported platform yet, so it does not get a vote on
+    # whether a nightly succeeded. A build that cannot produce an installer must
+    # leave the macOS one -- the build people actually install -- green and
+    # attached, and say so in the run rather than in the run's status.
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Keyed on the lockfile alone, this changed only when a dependency did --
+      # so an ordinary Rust edit restored a stale `desktop/target`, recompiled
+      # anyway, and re-uploaded a multi-gigabyte cache of output it had just
+      # invalidated. Same replacement the desktop CI jobs got.
+      - name: Cache cargo and desktop target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-share
+
+      - name: Resolve nightly tag
+        id: tag
+        shell: bash
+        run: echo "release_tag=desktop-nightly-${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      # The same verification the macOS job does, for the same reason: the app
+      # trusts this manifest to fetch its runtime, so the digests it names are
+      # checked against the bytes actually published before anything is built.
+      - name: Download and verify the published runtime manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          TARGET: x86_64-pc-windows-msvc
+          GUEST_TARGET: windows-x86_64
+        run: |
+          New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
+          gh release download "$env:TAG" `
+            --pattern lemma-local.json `
+            --pattern "lemma-host-pack-$env:TARGET.zip" `
+            --pattern "lemma-guest-runtime-$env:GUEST_TARGET.zip" `
+            --dir desktop/runtime/download `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the nightly runtime for $env:TAG" }
+          @'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          for kind, key, name in (
+              ("host_packs", os.environ["TARGET"], "lemma-host-pack-{}.zip"),
+              ("guest_runtimes", os.environ["GUEST_TARGET"], "lemma-guest-runtime-{}.zip"),
+          ):
+              archive = root / name.format(key)
+              expected = manifest[kind][key]
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != expected["sha256"]:
+                  raise SystemExit(f"{archive.name} digest mismatch")
+              if archive.stat().st_size != expected["size"]:
+                  raise SystemExit(f"{archive.name} size mismatch")
+              if not expected["url"].endswith(f"/{archive.name}"):
+                  raise SystemExit(f"{archive.name} URL does not name the asset")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Published runtime did not match its manifest" }
+          Copy-Item desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json -Force
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build Windows sidecars
+        shell: pwsh
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Read the pinned Tauri CLI
+        shell: pwsh
+        run: |
+          $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
+          "TAURI_CLI=@tauri-apps/cli@$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build online NSIS installer
+        working-directory: desktop
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          npx -y $env:TAURI_CLI build --config tauri.online.conf.json --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
+          New-Item -ItemType Directory -Force target/release/release-artifacts | Out-Null
+          $installers = @(Get-ChildItem target/release/bundle/nsis/Lemma_*_x64-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected one online NSIS installer" }
+          $short = $env:SHA.Substring(0, 8)
+          Move-Item $installers[0].FullName `
+            "target/release/release-artifacts/Lemma-nightly-${short}_x64-setup.exe"
+
+      # The same ceiling the release build holds the online payload to. A
+      # nightly that quietly shipped the whole runtime inside the installer
+      # would not be testing the thing this is meant to test.
+      - name: Enforce small online application payload
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/lemma-local.json"
+          )
+          $bytes = ($paths | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          if ($bytes -gt 25MB) {
+            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
+          }
+
+      # Kept as a workflow artifact, never attached to the prerelease. Same
+      # rule release-desktop.yml follows and for the same reason: an installer
+      # sitting on a release page is an offer to support the platform, and
+      # Windows is not supported yet. Whoever is testing it downloads it from
+      # the run, which is exactly the audience it is for.
+      - name: Keep the installer as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lemma-desktop-windows-nightly-${{ github.sha }}
+          path: desktop/target/release/release-artifacts/Lemma-nightly-*_x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Say where it is
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          $short = $env:SHA.Substring(0, 8)
+          @(
+            "### Lemma Desktop nightly (Windows) -- experimental",
+            "",
+            "Not attached to the release: Windows is not a supported platform yet.",
+            "Download ``lemma-desktop-windows-nightly-$env:SHA`` from this run's",
+            "artifacts. Unsigned, so SmartScreen will interrupt the first launch."
+          ) | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY

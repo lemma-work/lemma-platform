@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
     apply_inline_workload_grants,
     list_grantee_resource_grants,
@@ -25,6 +26,7 @@ from app.modules.agent.api.dependencies import (
     AgentServiceDep,
     AgentViewerDep,
 )
+from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 from app.modules.agent.api.schemas import (
     AgentActionResponse,
     AgentDetailResponse,
@@ -63,6 +65,13 @@ def _agent_summary_response(
     summary = AgentSummaryResponse.model_validate(agent)
     summary.has_pinned_runtime = bool(
         getattr(getattr(agent, "agent_runtime", None), "profile_id", None)
+    )
+    # An empty object and a `properties` key with nothing under it both mean
+    # "declares no inputs" — the agent builder writes the second when someone
+    # opens the schema editor and adds nothing.
+    input_schema = getattr(agent, "input_schema", None) or {}
+    summary.takes_input = bool(
+        isinstance(input_schema, dict) and input_schema.get("properties")
     )
     summary.grants = grants
     return summary
@@ -117,6 +126,18 @@ async def create_agent(
         grantee_type="AGENT",
         grantee_id=agent.id,
         permissions=data.permissions,
+        created_by_user_id=user.id,
+    )
+    # After the block above, never before it: an inline `permissions` list
+    # REPLACES this agent's grants, so a memory grant applied first would be the
+    # first thing wiped. Derived from the toolsets, so it also comes back on the
+    # next save and goes away when MEMORY does.
+    await sync_memory_folder_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        toolsets=data.toolsets,
+        ctx=ctx,
         created_by_user_id=user.id,
     )
     return await _agent_action_response(agent)
@@ -285,6 +306,18 @@ async def replace_agent_permissions(
         ctx=ctx,
     )
     validate_pod_resource_grant_permissions(data.grants)
+    # Granting an agent a permission is conferral like any other (PS-ACCESS-010):
+    # an agent acts on its grants, so handing it one the granter does not hold
+    # would be a way to do through the agent what you may not do yourself.
+    assert_can_confer(
+        ctx,
+        [
+            permission_id
+            for grant in data.grants
+            for permission_id in grant.permission_ids
+        ],
+        action="grant an agent permissions you do not hold",
+    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,
@@ -296,6 +329,17 @@ async def replace_agent_permissions(
         grantee_type="AGENT",
         grantee_id=agent.id,
         grants=grants,
+        created_by_user_id=user.id,
+    )
+    # This endpoint replaces every grant the agent holds, memory's included, so
+    # it has to be put back -- otherwise editing any permission is a way to
+    # silently disable a capability that is still switched on.
+    await sync_memory_folder_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        toolsets=agent.toolsets,
+        ctx=ctx,
         created_by_user_id=user.id,
     )
     return await _agent_permissions_response(uow, pod_id=pod_id, agent=agent)
@@ -343,6 +387,16 @@ async def update_agent(
         grantee_type="AGENT",
         grantee_id=agent.id,
         permissions=data.permissions,
+        created_by_user_id=user.id,
+    )
+    # From the agent as it now stands, not from the request: a PATCH that never
+    # mentions toolsets must not read as "memory off".
+    await sync_memory_folder_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        toolsets=agent.toolsets,
+        ctx=ctx,
         created_by_user_id=user.id,
     )
     return await _agent_action_response(agent)

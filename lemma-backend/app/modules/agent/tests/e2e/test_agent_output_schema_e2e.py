@@ -41,7 +41,11 @@ class TestAgentOutputSchemaClearing:
         }
         created = await authenticated_client.post(
             f"/pods/{pod_id}/agents",
-            json={"name": "triage", "instruction": "Answer briefly.", "output_schema": schema},
+            json={
+                "name": "triage",
+                "instruction": "Answer briefly.",
+                "output_schema": schema,
+            },
         )
         assert created.status_code == status.HTTP_201_CREATED, created.text
 

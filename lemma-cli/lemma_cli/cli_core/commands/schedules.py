@@ -4,8 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from lemma_sdk.openapi_client.models.create_schedule_request import CreateScheduleRequest
-from lemma_sdk.openapi_client.models.update_schedule_request import UpdateScheduleRequest
+from lemma_sdk.openapi_client.models.create_schedule_request import (
+    CreateScheduleRequest,
+)
+from lemma_sdk.openapi_client.models.update_schedule_request import (
+    UpdateScheduleRequest,
+)
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
@@ -36,11 +40,11 @@ def init_schedule(
 
 
 @app.command("schema")
-def schema_schedule() -> None:
+def schema_schedule(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a schedule bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("schedule")
+    print_resource_schema(ctx, "schedule")
 
 
 def _normalize_datastore_operations(values: list[str]) -> list[str]:
@@ -50,7 +54,9 @@ def _normalize_datastore_operations(values: list[str]) -> list[str]:
         if op in {"ALL", "*"}:
             return list(_DATASTORE_OPERATIONS)
         if op not in _DATASTORE_OPERATIONS:
-            fail(f"Invalid --on value '{raw}'. Valid values: insert, update, delete, all.")
+            fail(
+                f"Invalid --on value '{raw}'. Valid values: insert, update, delete, all."
+            )
         if op not in normalized:
             normalized.append(op)
     return normalized
@@ -131,8 +137,25 @@ def create_schedule(
     name: str | None = typer.Option(
         None, "--name", help="Stable pod-scoped schedule name for import/export."
     ),
-    agent: str | None = typer.Option(None, "--agent"),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        help=(
+            "Pod agent to wake, by name. Pass POD_DEFAULT to wake the pod's "
+            "default assistant, which has no name of its own; that target "
+            "requires --instruction."
+        ),
+    ),
     workflow: str | None = typer.Option(None, "--workflow"),
+    instruction: str | None = typer.Option(
+        None,
+        "--instruction",
+        help=(
+            "What the target should do when this fires. Required with "
+            "--agent POD_DEFAULT. Unlike --filter, which decides whether to "
+            "fire at all, this directs the work afterwards."
+        ),
+    ),
     cron: str | None = typer.Option(None, "--cron"),
     at: str | None = typer.Option(
         None, "--at", help="ISO timestamp for a one-time schedule."
@@ -159,7 +182,9 @@ def create_schedule(
         ),
     ),
     filter_instruction: str | None = typer.Option(None, "--filter"),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -204,6 +229,7 @@ def create_schedule(
                     "agent_name": agent,
                     "workflow_name": workflow,
                     "config": config,
+                    "instruction": instruction or extra.get("instruction"),
                     "account_id": account,
                     "connector_trigger_id": connector_trigger
                     or extra.get("connector_trigger_id"),
@@ -223,19 +249,55 @@ def create_schedule(
 def update_schedule(
     ctx: typer.Context,
     schedule: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        help=(
+            "Retarget at a pod agent, by name. Pass POD_DEFAULT for the pod's "
+            "default assistant; that target requires --instruction."
+        ),
+    ),
+    workflow: str | None = typer.Option(
+        None, "--workflow", help="Retarget at a workflow, by name."
+    ),
+    instruction: str | None = typer.Option(
+        None,
+        "--instruction",
+        help=(
+            "What the target should do when this fires. Required with "
+            "--agent POD_DEFAULT. Unlike --filter, which decides whether to "
+            "fire at all, this directs the work afterwards."
+        ),
+    ),
+    filter_instruction: str | None = typer.Option(None, "--filter"),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Update a schedule from a JSON payload."""
-    payload = read_json(json_payload, file, required=True)
+    """Update a schedule."""
+    extra = read_json(json_payload, file, required=False)
+    flags = {
+        "agent_name": agent,
+        "workflow_name": workflow,
+        "instruction": instruction,
+        "filter_instruction": filter_instruction,
+    }
+    payload = {**extra, **{k: v for k, v in flags.items() if v is not None}}
+    if not payload:
+        fail("Nothing to update. Pass a flag, or --data/--file with a payload.")
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).schedules.update(
-            schedule, UpdateScheduleRequest.from_dict(payload)
+            schedule,
+            # `build_request`, not `from_dict`: the generated model drops every
+            # key it does not declare, so a hand-written payload naming the
+            # wrong field was applied as an empty update and reported success.
+            build_request(UpdateScheduleRequest, payload, context="schedule"),
         ),
     )
     if result is not None:

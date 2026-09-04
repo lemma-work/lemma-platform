@@ -7,18 +7,14 @@ from typing import Any
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.slack.blocks import (
-    AGENT_DM_ACTION_ID,
     CHANNEL_SETUP_ACTION_ID,
-    CHANNEL_SETUP_BLOCK_ID,
-    CHANNEL_SETUP_SELECT_ACTION_ID,
     CHANNEL_SETUP_VIEW_CALLBACK_ID,
-    DM_AGENT_BLOCK_ID,
-    DM_AGENT_SELECT_ACTION_ID,
-    DM_AGENT_SETUP_ACTION_ID,
-    DM_AGENT_VIEW_CALLBACK_ID,
-    POD_ASSISTANT_VALUE,
+)
+from app.modules.agent_surfaces.platforms.slack.home_blocks import (
+    AGENT_DM_ACTION_ID,
     SURFACE_SELECT_ACTION_ID,
 )
+
 
 logger = get_logger(__name__)
 
@@ -39,7 +35,7 @@ class SlackConfigurationParserMixin:
             if kind == "view_submission":
                 return self._parse_setup_submission(payload, tenant_id, actor)
             return None
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except AttributeError, KeyError, TypeError, ValueError:
             logger.debug("surface.slack.parse_channel_setup_failed", exc_info=True)
             return None
 
@@ -50,9 +46,6 @@ class SlackConfigurationParserMixin:
         trigger_id = str(payload.get("trigger_id") or "").strip()
         parsers = (
             lambda: self._parse_starter_action(actions, tenant_id, actor),
-            lambda: self._parse_dm_setup_action(
-                actions, trigger_id, tenant_id, actor
-            ),
             lambda: self._parse_surface_selection_action(actions, tenant_id, actor),
             lambda: self._parse_channel_setup_action(
                 payload, actions, trigger_id, tenant_id, actor
@@ -85,22 +78,6 @@ class SlackConfigurationParserMixin:
                 "actor_external_user_id": actor,
             }
         return None
-
-    @staticmethod
-    def _parse_dm_setup_action(actions, trigger_id, tenant_id, actor):
-        if not any(
-            action.get("action_id") == DM_AGENT_SETUP_ACTION_ID
-            for action in actions
-        ):
-            return None
-        if not trigger_id:
-            return None
-        return {
-            "kind": "open_dm",
-            "trigger_id": trigger_id,
-            "tenant_id": tenant_id,
-            "actor_external_user_id": actor,
-        }
 
     @staticmethod
     def _parse_surface_selection_action(actions, tenant_id, actor):
@@ -160,36 +137,35 @@ class SlackConfigurationParserMixin:
         self, payload: dict[str, Any], tenant_id: str | None, actor: str | None
     ) -> dict[str, Any] | None:
         view = payload.get("view") or {}
-        callback_id = view.get("callback_id")
         values = (view.get("state") or {}).get("values") or {}
-        if callback_id == DM_AGENT_VIEW_CALLBACK_ID:
-            selected = self._selected_value(
-                values, DM_AGENT_BLOCK_ID, DM_AGENT_SELECT_ACTION_ID
-            )
-            if not selected or not actor:
-                return None
-            return {
-                "kind": "submit_dm",
-                "agent_name": self._agent_or_pod_assistant(selected),
-                "tenant_id": tenant_id,
-                "actor_external_user_id": actor,
-                "surface_id": str(view.get("private_metadata") or "").strip()
-                or None,
-            }
-        if callback_id != CHANNEL_SETUP_VIEW_CALLBACK_ID:
-            return None
+        callback_id = view.get("callback_id")
+        if callback_id == CHANNEL_SETUP_VIEW_CALLBACK_ID:
+            return self._channel_submission(view, values, tenant_id, actor)
+        return None
+
+    def _channel_submission(
+        self,
+        view: dict[str, Any],
+        values: dict[str, Any],
+        tenant_id: str | None,
+        actor: str | None,
+    ) -> dict[str, Any] | None:
+        """Allowing this channel.
+
+        The channel id rides in ``private_metadata``, either inside an encoded
+        object or -- from before that encoding existed -- as the bare id. There
+        is nothing else to read: the modal asks whether to answer here, not who
+        answers, because the surface has one agent.
+        """
+        del values
         raw_metadata = str(view.get("private_metadata") or "").strip()
         metadata = self._decode_metadata(raw_metadata)
         channel_id = str(metadata.get("channel_id") or raw_metadata).strip()
-        selected = self._selected_value(
-            values, CHANNEL_SETUP_BLOCK_ID, CHANNEL_SETUP_SELECT_ACTION_ID
-        )
-        if not channel_id or not selected:
+        if not channel_id:
             return None
         return {
             "kind": "submit",
             "channel_id": channel_id,
-            "agent_name": self._agent_or_pod_assistant(selected),
             "tenant_id": tenant_id,
             "actor_external_user_id": actor,
             "surface_id": str(metadata.get("surface_id") or "").strip() or None,
@@ -208,7 +184,3 @@ class SlackConfigurationParserMixin:
             ((values.get(block_id) or {}).get(action_id) or {}).get("selected_option")
             or {}
         ).get("value")
-
-    @staticmethod
-    def _agent_or_pod_assistant(selected: str) -> str | None:
-        return None if selected == POD_ASSISTANT_VALUE else str(selected)

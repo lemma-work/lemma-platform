@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, create_autospec, patch
 from uuid import uuid4
 
 import pytest
@@ -12,31 +12,37 @@ from app.modules.connectors.domain.account import (
     ComposioCredentials,
     OAuthCredentials,
 )
-from app.modules.connectors.domain.connector import (
-    ConnectorKind,
-    AuthScheme,
-    ConnectorEntity,
-    AuthProvider,
-    ComposioProviderCapability,
-    HttpKindSpec,
-    LemmaProviderCapability,
-)
-from app.modules.connectors.domain.connector_operation import (
-    ConnectorOperationEntity,
-)
 from app.modules.connectors.domain.auth_config import (
     COMPOSIO_ORG_CUSTOM_REASON,
     AuthConfigEntity,
     AuthConfigSource,
 )
-from app.modules.connectors.domain.connect_request import ConnectRequestEntity
-from app.modules.connectors.domain.connect_request import ConnectRequestStatus
+from app.modules.connectors.domain.connect_request import (
+    ConnectRequestEntity,
+    ConnectRequestStatus,
+)
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    AuthScheme,
+    ComposioProviderCapability,
+    ConnectorEntity,
+    ConnectorKind,
+    HttpKindSpec,
+    LemmaProviderCapability,
+    McpKindSpec,
+)
+from app.modules.connectors.domain.connector_operation import (
+    ConnectorOperationEntity,
+)
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     ConnectorNotFoundError,
     ConnectorValidationError,
     ConnectRequestStateRequiredError,
     OAuthWorkflowError,
+)
+from app.modules.connectors.services.auth.auth_provider import (
+    AuthProviderInterface,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
 
@@ -47,6 +53,19 @@ ORG_ID = uuid4()
 
 def _connector(id: str = "slack") -> ConnectorEntity:
     return ConnectorEntity(id=id, provider_capabilities=[LemmaProviderCapability()])
+
+
+def _auth_provider():
+    """A provider double constrained to the port it stands in for.
+
+    A bare `AsyncMock()` accepts any call, in both directions: a method the
+    port has grown, and a keyword no implementation declares. The second is how
+    a `code_verifier` added to the port reached `ComposioAuthProvider` in
+    production and returned 502 from every Composio connect while this suite
+    stayed green. `create_autospec` raises `TypeError` on either, here, in six
+    seconds rather than in a live OAuth flow.
+    """
+    return create_autospec(AuthProviderInterface, instance=True)
 
 
 def _auth_config(connector_id: str = "slack") -> AuthConfigEntity:
@@ -103,7 +122,7 @@ def _service(**overrides) -> ConnectorService:
         "auth_config_repository": _auth_config_repo(),
         "account_repository": AsyncMock(),
         "connect_request_repository": AsyncMock(),
-        "auth_provider_registry": AsyncMock(),
+        "auth_provider_registry": Mock(get=Mock(return_value=_auth_provider())),
         "redirect_uri_builder": Mock(),
         "organization_access": _org_access(),
         "system_oauth_config": _system_oauth(),
@@ -181,7 +200,10 @@ async def test_fetch_account_profile_routes_http_kind_through_kind_dispatcher():
 
     fake_dispatcher = AsyncMock()
     fake_dispatcher.build_request.return_value = "resolved-request"
-    fake_dispatcher.execute.return_value = {"login": "octocat", "email": "octocat@github.com"}
+    fake_dispatcher.execute.return_value = {
+        "login": "octocat",
+        "email": "octocat@github.com",
+    }
 
     unused_gateway = AsyncMock()
     service = _service(
@@ -208,8 +230,11 @@ async def test_initiate_connect_request_allowed_when_account_exists():
     account no longer blocks a new connect request."""
     user_id = uuid4()
     auth_config = _auth_config()
-    auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider = _auth_provider()
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     uow = AsyncMock()
@@ -239,8 +264,11 @@ async def test_initiate_connect_request_allowed_when_account_exists():
 
 async def test_initiate_connect_request_success():
     user_id = uuid4()
-    auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider = _auth_provider()
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     uow = AsyncMock()
@@ -274,9 +302,7 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     user_id = uuid4()
     app = ConnectorEntity(
         id="dropbox",
-        provider_capabilities=[
-            ComposioProviderCapability(toolkit_slug="dropbox")
-        ],
+        provider_capabilities=[ComposioProviderCapability(toolkit_slug="dropbox")],
     )
     auth_config_repo = AsyncMock(
         get_active_by_org_and_app=AsyncMock(return_value=None),
@@ -301,7 +327,9 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     assert result.kind is ConnectorKind.COMPOSIO
     assert result.config_source == AuthConfigSource.SYSTEM_DEFAULT
     auth_config_repo.create.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    # Two: one to hand the connection back before install validation and MCP
+    # negotiation go to the network, one to persist the install afterwards.
+    assert uow.commit.await_count == 2
 
 
 async def test_create_composio_auth_config_refuses_org_custom_credentials():
@@ -398,8 +426,11 @@ async def test_initiate_connect_request_allows_reauth_for_unusable_account():
     unusable = _account(user_id)
     unusable.status = AccountStatus.REAUTH_REQUIRED
 
-    auth_provider = AsyncMock()
-    auth_provider.get_authorization_url.return_value = ("https://auth", "provider_state")
+    auth_provider = _auth_provider()
+    auth_provider.get_authorization_url.return_value = (
+        "https://auth",
+        "provider_state",
+    )
     registry = Mock()
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
@@ -439,7 +470,7 @@ async def test_create_account_composio_api_key_connects_via_provider():
     auth_config = _composio_auth_config("airtable")
     stored = ComposioCredentials(connection_id="ca_airtable")
 
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.connect_with_credentials.return_value = stored
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -468,7 +499,8 @@ async def test_create_account_composio_api_key_connects_via_provider():
     assert account.credentials == stored
     auth_provider.connect_with_credentials.assert_awaited_once()
     account_repo.create.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    # Two: released before the provider connect, reopened to store the account.
+    assert uow.commit.await_count == 2
 
 
 async def test_create_account_enriches_identity_via_profile_operation():
@@ -489,7 +521,7 @@ async def test_create_account_enriches_identity_via_profile_operation():
     auth_config = _composio_auth_config("notion")
     stored = ComposioCredentials(connection_id="ca_notion")
 
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.connect_with_credentials.return_value = stored
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -543,7 +575,7 @@ async def test_create_account_allows_multiple_and_sets_default():
         ],
     )
     auth_config = _composio_auth_config("airtable")
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.connect_with_credentials.return_value = ComposioCredentials(
         connection_id="ca_airtable"
     )
@@ -617,7 +649,7 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
     account_repo = AsyncMock()
     account_repo.get.return_value = account
     account_repo.update.side_effect = lambda entity: entity
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.refresh_credentials.side_effect = RuntimeError("token revoked")
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -670,7 +702,7 @@ async def test_handle_oauth_callback_resets_status_to_connected():
         credentials=OAuthCredentials(access_token="old"),
     )
     credentials = OAuthCredentials(access_token="xoxb-token")
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -679,7 +711,7 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     account_repo.get_by_user_and_auth_config.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -690,7 +722,9 @@ async def test_handle_oauth_callback_resets_status_to_connected():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-reauth&code=abc",
             state="state-reauth",
@@ -780,7 +814,7 @@ async def test_get_account_credentials_refreshes_expired_token():
         connector_id="slack",
         credentials=refreshed_credentials,
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.refresh_credentials.return_value = refreshed_credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -840,7 +874,7 @@ async def test_get_account_credentials_force_refreshes_valid_token():
         connector_id="slack",
         credentials=refreshed_credentials,
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.refresh_credentials.return_value = refreshed_credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -891,7 +925,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
         access_token="xoxb-token",
         raw_response={"authed_user": {"id": "U077RUS3FS7"}},
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -901,7 +935,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
     account_repo.get_by_user_auth_config_and_provider_account.return_value = None
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -912,7 +946,9 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-1&code=abc",
             state="state-1",
@@ -936,7 +972,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
         attributes={"state": "state-profile"},
     )
     credentials = OAuthCredentials(access_token="xoxb-token")
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -969,7 +1005,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     account_repo.get_by_user_auth_config_and_provider_account.return_value = None
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1029,7 +1065,7 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
         access_token="xoxb-token",
         raw_response={"authed_user": {"id": "U0999999999"}},
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -1038,7 +1074,7 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     account_repo.get_by_user_and_auth_config.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1049,7 +1085,9 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-2&code=abc",
             state="state-2",
@@ -1070,9 +1108,7 @@ def _composio_auth_config(connector_id: str) -> AuthConfigEntity:
     )
 
 
-def _profile_operation(
-    connector_id: str, name: str
-) -> ConnectorOperationEntity:
+def _profile_operation(connector_id: str, name: str) -> ConnectorOperationEntity:
     return ConnectorOperationEntity(
         id=f"{connector_id}:{name.lower()}",
         connector_id=connector_id,
@@ -1104,7 +1140,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
         attributes={"state": "state-outlook"},
     )
     credentials = OAuthCredentials(access_token="tok", connection_id="ca_123")
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -1129,7 +1165,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
     account_repo.get_by_user_auth_config_and_provider_account.return_value = None
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     outlook_app = ConnectorEntity(
@@ -1249,9 +1285,7 @@ async def test_fetch_account_profile_does_not_unwrap_for_lemma_provider():
 async def test_fetch_account_profile_skips_when_provider_unsupported():
     """capability_for raises for a provider the connector doesn't support --
     must be swallowed, not propagated, since this is a best-effort lookup."""
-    service = _service(
-        operation_gateway=AsyncMock(), operation_repository=AsyncMock()
-    )
+    service = _service(operation_gateway=AsyncMock(), operation_repository=AsyncMock())
     result = await service._fetch_account_profile(
         _connector("slack"), "COMPOSIO", OAuthCredentials(access_token="tok")
     )
@@ -1301,14 +1335,14 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
         status=ConnectRequestStatus.PENDING,
         attributes={"state": "state-3"},
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.side_effect = RuntimeError(
         "provider broke"
     )
     registry = Mock()
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
 
     service = _service(
         connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("slack"))),
@@ -1349,7 +1383,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
         access_token="xoxb-new-identity",
         raw_response={"authed_user": {"id": "U_NEW_IDENTITY"}},
     )
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.exchange_code_for_credentials.return_value = credentials
     registry = Mock()
     registry.get.return_value = auth_provider
@@ -1365,7 +1399,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
     account_repo.get_by_user_auth_config_and_provider_account.return_value = None
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
-    connect_repo.get_by_state.return_value = connect_request
+    connect_repo.claim_pending_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1376,7 +1410,9 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
         auth_provider_registry=registry,
     )
 
-    with patch.object(service, "_load_native_account_profile", AsyncMock(return_value=None)):
+    with patch.object(
+        service, "_load_native_account_profile", AsyncMock(return_value=None)
+    ):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-clobber&code=abc",
             state="state-clobber",
@@ -1399,7 +1435,9 @@ async def test_delete_default_account_promotes_next_default():
     account_repo = AsyncMock()
     service = _service(
         account_repository=account_repo,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("telegram"))),
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("telegram"))
+        ),
     )
     service.get_account = AsyncMock(return_value=default_account)
     service._resolve_auth_config = AsyncMock(return_value=_auth_config("telegram"))
@@ -1423,7 +1461,9 @@ async def test_delete_non_default_account_does_not_promote():
     account_repo = AsyncMock()
     service = _service(
         account_repository=account_repo,
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("telegram"))),
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("telegram"))
+        ),
     )
     service.get_account = AsyncMock(return_value=account)
     service._resolve_auth_config = AsyncMock(return_value=_auth_config("telegram"))
@@ -1445,7 +1485,7 @@ def _airtable_service(*, existing_by_identity):
         ],
     )
     auth_config = _composio_auth_config("airtable")
-    auth_provider = AsyncMock()
+    auth_provider = _auth_provider()
     auth_provider.connect_with_credentials.return_value = ComposioCredentials(
         connection_id="ca_airtable"
     )
@@ -1492,7 +1532,9 @@ async def test_create_account_allows_when_existing_identity_unhealthy():
     user_id = uuid4()
     existing = _account(user_id, "airtable")
     existing.status = AccountStatus.REAUTH_REQUIRED
-    service, auth_config, account_repo = _airtable_service(existing_by_identity=existing)
+    service, auth_config, account_repo = _airtable_service(
+        existing_by_identity=existing
+    )
 
     account = await service.create_account(
         user_id=user_id,
@@ -1503,3 +1545,175 @@ async def test_create_account_allows_when_existing_identity_unhealthy():
     )
     account_repo.create.assert_awaited_once()
     assert account.provider_account_id == "acc-dup"
+
+
+async def test_the_catalog_profile_supplies_the_provider_identity():
+    """`native_profile` is the vendored-client path and covers Gmail, Drive and
+    Slack only. Reading the provider identity from it alone meant every
+    `http`-kind connector with a profile operation -- GitHub, and every native
+    connector after it -- stored an account with no identity, which is the value
+    the duplicate-connect guard and re-auth matching key on."""
+    user_id = uuid4()
+    auth_config = _auth_config("github")
+    connect_request = ConnectRequestEntity(
+        id=uuid4(),
+        user_id=user_id,
+        organization_id=ORG_ID,
+        auth_config_id=auth_config.id,
+        connector_id="github",
+        authorization_url="https://auth",
+        status=ConnectRequestStatus.PENDING,
+        attributes={"state": "state-gh"},
+    )
+    auth_provider = _auth_provider()
+    auth_provider.exchange_code_for_credentials.return_value = OAuthCredentials(
+        access_token="ghu_token"
+    )
+    registry = Mock()
+    registry.get.return_value = auth_provider
+
+    account_repo = AsyncMock()
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = None
+    account_repo.get_by_user_and_auth_config.return_value = None
+    account_repo.create.side_effect = lambda entity: entity
+    connect_repo = AsyncMock()
+    connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.update.side_effect = lambda req: req
+
+    service = _service(
+        connector_repository=AsyncMock(
+            get=AsyncMock(return_value=_connector("github"))
+        ),
+        auth_config_repository=_auth_config_repo(auth_config),
+        account_repository=account_repo,
+        connect_request_repository=connect_repo,
+        auth_provider_registry=registry,
+    )
+
+    with (
+        patch.object(
+            service, "_load_native_account_profile", AsyncMock(return_value=None)
+        ),
+        patch.object(
+            service,
+            "_fetch_account_profile",
+            AsyncMock(return_value={"login": "sreejinping", "id": 298642121}),
+        ),
+    ):
+        account = await service.handle_oauth_callback(
+            redirect_uri="https://cb?state=state-gh&code=abc",
+            state="state-gh",
+        )
+
+    assert account.provider_account_id == "sreejinping"
+
+
+class TestAnInstallSaysHowItAuthenticates:
+    """The catalog cannot answer this for `mcp`, and answering from it was a bug.
+
+    One catalog entry stands for every MCP server a tenant may point at, and
+    they do not agree on how to sign in. The entry says API_KEY; an install
+    whose server described its own authorization when it was created is an
+    OAuth install. A client with only the catalog cannot tell the difference,
+    and the two gates in this service disagreeing about it is what let an
+    OAuth-only server end up "connected" with no token at all.
+    """
+
+    _OAUTH_BLOCK = {
+        "issuer": "https://server.example",
+        "authorization_endpoint": "https://server.example/oauth2/authorize",
+        "token_endpoint": "https://server.example/oauth2/token",
+        "resource": "https://server.example/mcp",
+        "scopes": ["read"],
+        "client_id": "registered-client",
+        "client_secret": None,
+    }
+
+    @staticmethod
+    def _mcp_install(config: dict) -> AuthConfigEntity:
+        return AuthConfigEntity(
+            id=uuid4(),
+            organization_id=ORG_ID,
+            connector_id="mcp",
+            provider="LEMMA",
+            kind=ConnectorKind.MCP,
+            config_source=AuthConfigSource.ORG_CUSTOM,
+            name="an-mcp-server",
+            config=config,
+        )
+
+    @staticmethod
+    def _service_for(install: AuthConfigEntity) -> ConnectorService:
+        return _service(
+            connector_repository=AsyncMock(
+                get=AsyncMock(
+                    return_value=ConnectorEntity(id="mcp", kinds=[McpKindSpec()])
+                ),
+                kinds_for=AsyncMock(
+                    return_value={"mcp": [McpKindSpec().model_dump(mode="json")]}
+                ),
+            ),
+            auth_config_repository=_auth_config_repo(install),
+        )
+
+    async def test_a_token_install_reports_the_catalog_scheme(self):
+        install = self._mcp_install({"server_url": "https://server.example/mcp"})
+
+        schemes = await self._service_for(install).install_auth_schemes([install])
+
+        assert schemes == {install.id: "API_KEY"}
+
+    async def test_an_install_that_negotiated_oauth_reports_oauth(self):
+        install = self._mcp_install(
+            {"server_url": "https://server.example/mcp", "oauth": self._OAUTH_BLOCK}
+        )
+
+        schemes = await self._service_for(install).install_auth_schemes([install])
+
+        assert schemes == {install.id: "OAUTH2"}, (
+            "the client has no other way to know signing in is what connects this"
+        )
+
+    async def test_nothing_to_resolve_is_an_empty_answer_not_a_query(self):
+        repository = AsyncMock(kinds_for=AsyncMock(return_value={}))
+
+        assert (
+            await _service(connector_repository=repository).install_auth_schemes([])
+            == {}
+        )
+        repository.kinds_for.assert_not_awaited()
+
+    async def test_an_oauth_mcp_install_refuses_a_credential_post(self):
+        """The account POST is how the broken state was reachable: an empty
+        credential set against a server that only accepts a browser sign-in
+        produced an account that looked connected and 401'd every call."""
+        install = self._mcp_install(
+            {"server_url": "https://server.example/mcp", "oauth": self._OAUTH_BLOCK}
+        )
+        service = self._service_for(install)
+
+        with pytest.raises(ConnectorValidationError, match="OAuth connect request"):
+            await service.create_account(
+                user_id=uuid4(),
+                organization_id=ORG_ID,
+                auth_config_id=install.id,
+                credentials={},
+            )
+
+    async def test_a_token_mcp_install_still_accepts_one(self):
+        install = self._mcp_install({"server_url": "https://server.example/mcp"})
+        service = self._service_for(install)
+        service.account_repository.get_by_user_and_auth_config = AsyncMock(
+            return_value=None
+        )
+
+        # Far enough to prove the scheme gate let it through; what happens after
+        # is the credential path's own business and its own tests.
+        with pytest.raises(Exception) as caught:
+            await service.create_account(
+                user_id=uuid4(),
+                organization_id=ORG_ID,
+                auth_config_id=install.id,
+                credentials={"bearer_token": "t"},
+            )
+        assert "OAuth connect request" not in str(caught.value)

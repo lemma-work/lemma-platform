@@ -51,6 +51,26 @@ Add `--json` to any command for machine-readable output, and `--full` to expand 
 See [SETUP.md](SETUP.md) for cloud/local server configuration, environment variables, project
 `.lemma.<server>.env` files, and the Textual TUI (`lemma tui`).
 
+## Staying up to date
+
+```bash
+lemma update                 # upgrade to the newest release
+lemma update --version 0.7.3 # or pin one
+lemma doctor                 # what's installed, and whether it matches the server
+```
+
+After a command that talked to a server, the CLI checks — in the background,
+after the command has already printed — whether that server is running a newer
+release, and prints a one-line notice on stderr once per version. It asks the
+server, not PyPI: one release publishes `lemma-terminal`, `lemma-sdk` and the API
+together, so the server's API version *is* the released version, and the check
+adds no host the command was not already talking to. Set `LEMMA_UPDATE_CHECK=0`
+to turn it off.
+
+`lemma update` reinstalls via `uv tool install --force`. Where that cannot work —
+a source checkout, or an image that overlays its Python environment — it says so
+and prints the command to run instead.
+
 ## Install Lemma skills into your coding agent
 
 Lemma ships agent **skills** (`SKILL.md` format) that teach a coding agent how to design, build, and
@@ -83,6 +103,24 @@ Use `--scope project` to install into the current directory (`.claude/skills/`, 
 `.opencode/skills/`, `.cursor/skills/`), or `--dir PATH` for an arbitrary location. Cursor is
 **project-scoped only** — run `lemma skills install --target cursor --scope project` inside the repo
 you're working in. Then restart your coding agent and ask it to build a pod.
+
+## Anonymous usage telemetry
+
+A CLI built with an ingestion key compiled in reports which command group you
+ran, whether it succeeded, the CLI version, and your OS — nothing else. Never
+arguments, flag values, paths, pod or resource names, ids, or anything you typed
+at the prompt; the command name is matched against a fixed list of groups and
+dropped if it is not one of them.
+
+It says so on the first command that reports, and turning it off is permanent:
+
+```bash
+lemma telemetry          # what this installation is (or is not) sending
+lemma telemetry off      # stop; LEMMA_TELEMETRY=0 does the same per-invocation
+```
+
+Builds without a key compiled in — every locally built and self-hosted CLI —
+send nothing, and no flag turns that into reporting.
 
 ## How it fits together
 

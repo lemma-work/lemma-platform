@@ -26,7 +26,7 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { usePod } from "@/lib/hooks/use-pods";
 import { usePodContext } from "@/lib/hooks/use-pod-context";
 import { usePodAccess } from "@/lib/hooks/use-pod-access";
-import { parseConversationMetadataParam } from "@/lib/pods/composer-launch";
+import { parseConversationMetadataParam, stripAssistantLaunchParams } from "@/lib/pods/composer-launch";
 import { clearLastOpenedPodId, writeLastOpenedPodId } from "@/lib/pods/last-opened-pod";
 import { getWorkspaceTabAfterClose, getWorkspaceTabHref } from "@/lib/pods/workspace-tabs";
 import {
@@ -36,6 +36,7 @@ import {
 } from "@/lib/assistant/conversation-presentation";
 import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
+import { appPageSlugFromRouteParam } from "@/lib/utils/app-page-slugs";
 import { barOwnsTitle, resolveTabLabel } from "@/lib/pods/topbar-title";
 import type { Pod } from "@/lib/types";
 import type { PodContext } from "@/lib/types/ai";
@@ -109,9 +110,6 @@ function getPodSectionLabel(podId: string, pathname: string) {
             return "Widgets";
         case "app":
             return "Apps";
-        case "recipes":
-        case "kits":
-            return "Add capability";
         default:
             return formatDisplayName(section);
     }
@@ -154,8 +152,6 @@ function getPodRoutePolicyKey(podId: string, pathname: string): PodRoutePolicyKe
             return "settings";
         case "forms":
         case "widgets":
-        case "kits":
-        case "recipes":
             return null;
         default:
             return "home";
@@ -212,7 +208,13 @@ function getPodScreenLabel(podId: string, pathname: string, searchParams: Search
 
     if (section === "forms" && detail === "view") return "Agent Needs Your Input";
 
-    if (section === "widgets" && detail === "view") return "Presented Widget";
+    // Widgets open one tab each, so the strip needs their names to tell them
+    // apart. The presenting card knows the name and passes it along; anything
+    // that arrives without one keeps the generic label.
+    if (section === "widgets" && detail === "view") {
+        const widgetTitle = searchParams.get("title")?.replace(/\s+/g, " ").trim();
+        return widgetTitle ? widgetTitle.slice(0, 200) : "Presented Widget";
+    }
 
     if (section === "files" || section === "docs") {
         const file = getPathBasename(searchParams.get("file"));
@@ -311,7 +313,23 @@ function PodShell({
     const isPodHome = pathname === `/pod/${pod.id}` || pathname === `/pod/${pod.id}/`;
     const isAppViewRoute = pathname.startsWith(`/pod/${pod.id}/app/view`);
     const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
-    const appSlug = isAppViewRoute ? searchParams.get("page") : null;
+    // Keyed so that moving between the pod's sections mounts a fresh surface and
+    // replays `pod-page-enter`. Every conversation is one section, not one
+    // surface each: the id enters the path the moment a send creates the
+    // conversation, and keying on the whole pathname tore the transcript, the
+    // composer and the caret down at exactly that moment — then played the
+    // route-enter animation over the message that had just landed. Switching
+    // between two conversations is a transcript swap, which carries its own
+    // motion; it does not need the route's.
+    const pageSurfaceKey = isConversationRoute
+        ? `/pod/${pod.id}/conversations`
+        : pathname;
+    // Canonical, not verbatim: a link from `display_resource` names the app the
+    // way its resource name reads ("Expense Tracker"), while the app index slugs
+    // it (`expense-tracker`). Normalizing here is what lets one route param feed
+    // the tab strip, the keep-alive host and the sidebar without any of them
+    // failing to find an app that exists.
+    const appSlug = isAppViewRoute ? appPageSlugFromRouteParam(searchParams.get("page")) : null;
     const isConversationStageEmbed =
         searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
     const sectionLabel = getPodSectionLabel(pod.id, pathname);
@@ -341,7 +359,7 @@ function PodShell({
     // A stable key for the "which app-workspace view is this" decision below:
     // changes when you switch apps, land on home, or leave for another section.
     const appNavIntent = isAppViewRoute
-        ? `app:${searchParams.get("page") || ""}`
+        ? `app:${appSlug || ""}`
         : isPodHome
             ? "home"
             : "other";
@@ -454,31 +472,26 @@ function PodShell({
         if (handledAssistantMessageRef.current === key) return;
         handledAssistantMessageRef.current = key;
 
-        const nextParams = new URLSearchParams(searchParams.toString());
-        nextParams.delete("assistantMessage");
-        const nextQuery = nextParams.toString();
-
         if (isPodHome) {
-            const conversationParams = new URLSearchParams(nextParams.toString());
-            conversationParams.set("assistantMessage", assistantMessage);
-            router.replace(`/pod/${pod.id}/conversations/new?${conversationParams.toString()}`);
+            router.replace(`/pod/${pod.id}/conversations/new?${searchParams.toString()}`);
             return;
         }
 
+        // Cleared as the send goes out. Clearing it after the turn instead
+        // pinned the launch URL on screen for the length of the answer, and
+        // then replaced whatever route the reader had moved on to.
+        const nextQuery = stripAssistantLaunchParams(searchParams);
+        router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+
         void (async () => {
-            if (isConversationRoute) {
-                closeAssistant();
-            } else {
-                openAssistant();
-            }
+            openAssistant();
             await sendMessage(assistantMessage, {
                 forceNewConversation: true,
                 instructions: conversationInstructions || undefined,
                 conversationMetadata: parsedConversationMetadata,
             });
-            router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
         })();
-    }, [assistantMessage, closeAssistant, conversationInstructions, conversationMetadata, isConversationRoute, isPodHome, isReady, openAssistant, parsedConversationMetadata, pathname, pod.id, router, searchParams, sendMessage]);
+    }, [assistantMessage, conversationInstructions, conversationMetadata, isConversationRoute, isPodHome, isReady, openAssistant, parsedConversationMetadata, pathname, pod.id, router, searchParams, sendMessage]);
 
     useEffect(() => {
         if (isPodHome && isAssistantOpen) {
@@ -667,7 +680,7 @@ function PodShell({
                             </TooltipProvider>
                         </div>
                 </header>
-                {!isPodHome && !isConversationRoute && !isAppViewRoute ? (
+                {!isPodHome && !isConversationRoute && !isAppViewRoute && !topbar.hideContextBar ? (
                     <header
                         className={cn(
                             "pod-shell-topbar pod-shell-contextbar flex h-12 shrink-0 items-center justify-between gap-4 bg-[var(--pod-main-bg)] px-4",
@@ -692,13 +705,23 @@ function PodShell({
                         ) : (
                             <>
                         <div key={`${currentHref}:topbar-title`} className="pod-shell-topbar-title-cluster flex h-7 min-w-0 flex-1 items-center gap-2">
+                            {/* The arrow always; the label only when there is room
+                                for it. This was `hidden sm:inline-flex` — the whole
+                                control, not just its text — so below 640px a
+                                resource page had no way back to the index it came
+                                from at all. The one place that needs it most is the
+                                one place it was missing: on a phone the tab strip
+                                is hidden too, which leaves the browser's own back
+                                button as the only exit. */}
                             {backTarget ? (
                                 <Link
                                     href={appendAssistantConversationParam(backTarget.href, assistantConversationId)}
-                                    className="lemma-shell-link lemma-shell-link-sm hidden sm:inline-flex"
+                                    className="lemma-shell-link lemma-shell-link-sm inline-flex shrink-0"
+                                    aria-label={`Back to ${backTarget.label}`}
+                                    title={backTarget.label}
                                 >
                                     <ArrowLeft className="h-3.5 w-3.5" />
-                                    {backTarget.label}
+                                    <span className="hidden sm:inline">{backTarget.label}</span>
                                 </Link>
                             ) : null}
                             <div
@@ -757,7 +780,7 @@ function PodShell({
                         )}
                     >
                         <div
-                            key={pathname}
+                            key={pageSurfaceKey}
                             className={cn(
                                 "pod-page-surface",
                                 isConversationRoute && "pod-conversation-workspace-surface",

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Awaitable, Callable
 from uuid import UUID
 
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.context import (
     ActorType,
     Context,
@@ -14,12 +16,14 @@ from app.core.authorization.context import (
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import (
     AgentAlreadyExistsError,
     AgentNotFoundError,
     AgentValidationError,
 )
+from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
@@ -27,7 +31,12 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.domain.ports import AgentRepository
 
-_UNSET = object()
+#: What `create_agent` does besides making the row. Both default to the real
+#: thing; both are here so a test can watch one without patching this module.
+MemoryGrantDeriver = Callable[..., Awaitable[None]]
+EmailSurfaceProvisioner = Callable[..., Awaitable[object]]
+
+
 def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     if value is None:
         return ResourceVisibility.POD.value
@@ -39,17 +48,42 @@ def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
     return visibility.value
 
 
+def _refuse_pod_default(agent: Agent, *, verb: str) -> None:
+    """The pod's own assistant is not editable, and not deletable.
+
+    Checked before the permission check on purpose. A pod admin genuinely holds
+    `agent.update`, so a 403 would be a lie about why this was refused -- the
+    answer is not "you may not", it is "this one cannot be".
+
+    The database says so too, through `ck_agents_pod_default_immutable` and the
+    name and identity checks beside it. This is the readable half; that is the
+    half that holds when something bypasses the service.
+    """
+    if agent.kind is AgentKind.POD_DEFAULT:
+        raise AgentValidationError(f"The pod's default assistant cannot be {verb}.")
+
+
 class AgentService:
     """Create and read pod-owned agent definitions."""
 
     def __init__(
         self,
         *,
+        uow: SqlAlchemyUnitOfWork,
         agent_repository: AgentRepository,
         authorization_service: object,
+        memory_grant_deriver: MemoryGrantDeriver | None = None,
+        email_surface_provisioner: EmailSurfaceProvisioner | None = None,
     ):
+        self.uow = uow
         self.agent_repository = agent_repository
         self.authorization_service = authorization_service
+        # Two things that happen when an agent is made, taken as collaborators
+        # rather than resolved by name at the call site: a test that wants to
+        # watch either one used to patch it inside this module, which is a
+        # double in front of half of this service's own behaviour.
+        self._derive_memory_grant_for = memory_grant_deriver
+        self._provision_email_surface = email_surface_provisioner
 
     async def _require_action(
         self,
@@ -135,15 +169,55 @@ class AgentService:
         # Give it a mailbox so the UI can offer "email this agent at …" from the
         # moment it exists. Best-effort by design: a deployment with no mail
         # domain still gets a perfectly good agent, just not an emailable one.
-        from app.composition.agent_email_surface import provision_agent_email_surface
+        provision = self._provision_email_surface
+        if provision is None:
+            # Deferred, and measured: `agent_surfaces.contracts.email_surfaces`
+            # reaches the surface service, which every process importing this
+            # one would otherwise pay for whether or not it ever creates an
+            # agent. Injectable above it because that is the seam the tests use.
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
+                provision_agent_email_surface as provision,
+            )
 
-        await provision_agent_email_surface(
-            self.agent_repository.uow,
+        await provision(
+            self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
             agent_name=agent.name,
         )
+        await self._derive_memory_grant(agent, pod_id=pod_id, ctx=ctx, user_id=user_id)
         return agent
+
+    async def _derive_memory_grant(
+        self, agent, *, pod_id: UUID, ctx: Context | None, user_id: UUID | None
+    ) -> None:
+        """The `/memory` folder the MEMORY toolset implies, for every caller.
+
+        This used to be the agent controller's job alone, so an agent created
+        straight through this service -- which is what the pod bundle applier
+        does -- got the toolset and no folder to write to. See
+        `app.modules.agent.services.agent_memory_grant` for what that cost.
+
+        A floor, not the whole story: an inline `permissions` list replaces
+        every grant a grantee holds, so the callers that do one still have to
+        re-derive afterwards.
+        """
+        if ctx is None:
+            return
+        derive = self._derive_memory_grant_for
+        if derive is None:
+            from app.modules.agent.services.agent_memory_grant import (
+                derive_agent_memory_grant as derive,
+            )
+
+        await derive(
+            self.uow,
+            pod_id=pod_id,
+            agent_id=agent.id,
+            toolsets=agent.toolsets,
+            ctx=ctx,
+            created_by_user_id=user_id or agent.user_id,
+        )
 
     async def list_agents(
         self,
@@ -198,20 +272,20 @@ class AgentService:
         *,
         pod_id: UUID,
         name: str,
-        description: str | None | object = _UNSET,
-        icon_url: str | None | object = _UNSET,
-        instruction: str | None | object = _UNSET,
-        agent_runtime: AgentRuntimeConfig | None | object = _UNSET,
-        toolsets: list[AgentToolset] | None | object = _UNSET,
-        input_schema: JsonObject | None | object = _UNSET,
-        output_schema: JsonObject | None | object = _UNSET,
-        visibility: ResourceVisibility | str | None | object = _UNSET,
-        metadata: JsonObject | None | object = _UNSET,
+        description: str | None | UnsetType = UNSET,
+        icon_url: str | None | UnsetType = UNSET,
+        instruction: str | None | UnsetType = UNSET,
+        agent_runtime: AgentRuntimeConfig | None | UnsetType = UNSET,
+        toolsets: list[AgentToolset] | None | UnsetType = UNSET,
+        input_schema: JsonObject | None | UnsetType = UNSET,
+        output_schema: JsonObject | None | UnsetType = UNSET,
+        visibility: ResourceVisibility | str | None | UnsetType = UNSET,
+        metadata: JsonObject | None | UnsetType = UNSET,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
     ) -> Agent:
-        sentinel = _UNSET
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
+        _refuse_pod_default(agent, verb="edited")
         await self._require_action(
             requester_user_id=requester_user_id,
             action=Permissions.AGENT_UPDATE,
@@ -220,25 +294,31 @@ class AgentService:
             ctx=ctx,
         )
 
-        if description is not sentinel:
+        # `isinstance` rather than `is not UNSET`, matching the other PATCH
+        # services here: an identity test against the singleton reads the same
+        # but narrows nothing, so every assignment below stayed `| UnsetType`.
+        if not isinstance(description, UnsetType):
             agent.description = description
-        if icon_url is not sentinel:
+        if not isinstance(icon_url, UnsetType):
             agent.icon_url = icon_url
-        if instruction is not sentinel:
-            if instruction is not None and not instruction.strip():
+        if not isinstance(instruction, UnsetType):
+            # `None` is rejected alongside blank, not accepted: the entity's
+            # instruction is a `str`, so clearing it wrote a null into a field
+            # that has no null.
+            if instruction is None or not instruction.strip():
                 raise AgentValidationError("Agent instruction is required")
             agent.instruction = instruction
-        if agent_runtime is not sentinel:
+        if not isinstance(agent_runtime, UnsetType):
             agent.agent_runtime = agent_runtime
-        if toolsets is not sentinel:
+        if not isinstance(toolsets, UnsetType):
             agent.toolsets = toolsets or []
-        if input_schema is not sentinel:
+        if not isinstance(input_schema, UnsetType):
             agent.input_schema = input_schema
-        if output_schema is not sentinel:
+        if not isinstance(output_schema, UnsetType):
             agent.output_schema = output_schema
-        if visibility is not sentinel:
+        if not isinstance(visibility, UnsetType):
             agent.visibility = _normalize_agent_visibility(visibility)
-        if metadata is not sentinel:
+        if not isinstance(metadata, UnsetType):
             agent.metadata = metadata
 
         updated = await self.agent_repository.update(agent)
@@ -248,7 +328,13 @@ class AgentService:
                 name=name,
                 ctx=ctx,
             )
-            return refreshed or updated
+            saved = refreshed or updated
+            # From the agent as saved, never from the request: a PATCH that
+            # omits `toolsets` is not the same thing as one turning memory off.
+            await self._derive_memory_grant(
+                saved, pod_id=pod_id, ctx=ctx, user_id=requester_user_id
+            )
+            return saved
         return updated
 
     async def delete_agent(
@@ -260,6 +346,7 @@ class AgentService:
         ctx: Context | None = None,
     ) -> None:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
+        _refuse_pod_default(agent, verb="deleted")
         # A delegated workload must always route through authz — agent.delete is
         # destructive and gated — so the owner shortcut (creator deletes their
         # own agent) never lets a workload bypass it.
@@ -276,6 +363,16 @@ class AgentService:
                 agent_id=agent.id,
                 ctx=ctx,
             )
+        # Before the row goes, not after: `agent_surfaces.agent_id` is
+        # ON DELETE SET NULL, so once the agent is deleted its surfaces are no
+        # longer identifiable as its own — they read as the pod assistant's,
+        # and the pod starts answering from a deleted agent's address.
+        # Deferred for the same reason as the provisioner above.
+        from app.modules.agent_surfaces.contracts.email_surfaces import (
+            teardown_agent_surfaces,
+        )
+
+        await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
         await self.agent_repository.delete(agent.id)
         # Revoke any in-flight delegated token minted for this agent so it stops
         # working immediately rather than lingering until the token expires.

@@ -52,6 +52,9 @@ async def test_the_same_work_offloaded_is_silent(strict_loop_stalls) -> None:
 
 
 async def test_ordinary_async_work_is_silent(strict_loop_stalls) -> None:
+    # Not a poll loop -- 20 small cooperative yields are the synthetic "ordinary
+    # async work" this test manufactures, to prove the loop-stall sampler does
+    # not false-positive on it. Nothing here is being waited *for*.
     for _ in range(20):
         await asyncio.sleep(0.01)
 

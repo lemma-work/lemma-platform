@@ -24,6 +24,7 @@ from app.modules.pod.domain.visibility import (
     roles_allow_required,
 )
 from app.modules.pod.services.pod_role_service import PodRoleService
+from app.core.authorization.permissions import Permissions
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -80,6 +81,9 @@ class PodMemberService:
                 requester_user_id=requester_user_id,
                 target_roles=target_roles,
                 target_user_id=None,
+                requester_is_org_owner=(
+                    requester_org_member.role == OrganizationRole.ORG_OWNER
+                ),
             )
         elif not self._member_has_role(requester_pod_member, PodRole.EDITOR):
             raise PodAccessDeniedError("Only pod editors or admins can assign members")
@@ -122,7 +126,7 @@ class PodMemberService:
                 )
             else:
                 logger.debug(
-                    'pod.pod_member_service.could_not_find_user_details.diagnostic',
+                    "pod.pod_member_service.could_not_find_user_details.diagnostic",
                     organization_member_id=entity.organization_member_id,
                 )
         except Exception:
@@ -149,6 +153,11 @@ class PodMemberService:
             created.roles = target_roles
         return created
 
+    # One rule for who reaches a pod, and it is the same one ``PodService.get_pod``
+    # and ``require_pod_membership`` apply: organization ownership reaches every
+    # pod, and everybody else -- editors included -- reaches the pods they are a
+    # member of. An editor who could administer the members of a pod they cannot
+    # open was the other half of the divergence PS-POD-030 names.
     async def get_pod_member(
         self,
         pod_id: UUID,
@@ -187,10 +196,7 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role not in [
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        ]:
+        if requester_org_member.role != OrganizationRole.ORG_OWNER:
             has_access = await self.pod_member_repository.check_user_has_pod_access(
                 pod_id, requester_org_member.id
             )
@@ -220,10 +226,7 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role not in [
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        ]:
+        if requester_org_member.role != OrganizationRole.ORG_OWNER:
             has_access = await self.pod_member_repository.check_user_has_pod_access(
                 pod_id, requester_org_member.id
             )
@@ -254,10 +257,7 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role not in [
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        ]:
+        if requester_org_member.role != OrganizationRole.ORG_OWNER:
             has_access = await self.pod_member_repository.check_user_has_pod_access(
                 pod_id, requester_org_member.id
             )
@@ -271,6 +271,62 @@ class PodMemberService:
         if not pod_member:
             raise PodMemberNotFoundError()
         return pod_member
+
+    async def _refuse_if_last_administrator(
+        self,
+        pod_id: UUID,
+        pod_member: PodMemberEntity,
+        *,
+        verb: str,
+        remaining_roles: list[str] | None = None,
+    ) -> None:
+        """Refuse to leave the pod with nobody in it who can administer it.
+
+        Both the trigger and the count go by *permission* rather than by the
+        ``POD_ADMIN`` name. The count always did (see ``count_members_who_can``);
+        the trigger did not, and half a rule is the wrong half. A pod whose only
+        administrator holds a custom role carrying ``pod.member.manage`` could
+        have that person removed, because they were not literally POD_ADMIN --
+        and demoting a POD_ADMIN to a custom role that *does* carry it was
+        refused, because the destination was not literally POD_ADMIN either.
+
+        ``remaining_roles`` is what the member will hold once the change lands;
+        pass it for a re-role. If those roles still administer the pod there is
+        nothing to refuse, whatever they are called.
+
+        **Nobody is exempt, including an organization owner.** The rule is about
+        the pod, so an owner who is also its only administrator is refused like
+        anyone else -- they appoint a second administrator first, then step
+        down. An owner reaching the pod through their organization role is not
+        the same thing as the pod having an administrator: the pod's own member
+        list is what every pod-scoped permission check reads, and a pod whose
+        only administrator has just demoted themselves shows nobody who can
+        manage it.
+
+        This is deliberate and was decided against the alternative, which the
+        code held for a while: exempting owners on the grounds that they reach
+        every pod anyway. It made the guarantee conditional on a role held
+        somewhere else, which is exactly the shape that produces a pod nobody
+        can administer the moment that other role changes.
+        """
+        administers = await self.pod_member_repository.roles_grant_permission(
+            pod_id, normalize_role_list(pod_member.roles), Permissions.POD_MEMBER_MANAGE
+        )
+        if not administers:
+            return
+        if remaining_roles is not None and (
+            await self.pod_member_repository.roles_grant_permission(
+                pod_id, remaining_roles, Permissions.POD_MEMBER_MANAGE
+            )
+        ):
+            return
+        administrators = await self.pod_member_repository.count_members_who_can(
+            pod_id, Permissions.POD_MEMBER_MANAGE
+        )
+        if administrators <= 1:
+            raise PodConflictError(
+                f"Cannot {verb} the last admin of the pod; appoint another admin first"
+            )
 
     async def remove_member_from_pod(
         self,
@@ -307,6 +363,11 @@ class PodMemberService:
                     "Only org owners or pod admins can remove members"
                 )
 
+        # Checked before anything is mutated, including the entity: a refusal
+        # should leave the aggregate exactly as it found it rather than lean on
+        # the transaction rolling back a `mark_removed` nobody asked for.
+        await self._refuse_if_last_administrator(pod_id, pod_member, verb="remove")
+
         removed_user_id: UUID | None = None
         try:
             org_member_to_remove = await self.organization_repository.get_member_by_id(
@@ -317,7 +378,7 @@ class PodMemberService:
                 pod_member.mark_removed(user_id=org_member_to_remove.user_id)
         except Exception:
             logger.debug(
-                'pod.pod_member_service.fetch_user_info_event_emission.diagnostic'
+                "pod.pod_member_service.fetch_user_info_event_emission.diagnostic"
             )
 
         deleted = await self.pod_member_repository.delete_entity(pod_member)
@@ -379,12 +440,16 @@ class PodMemberService:
         )
         target_user_id = org_member.user_id if org_member else None
         normalized_roles = normalize_role_list(roles)
+
         if self.pod_role_service is not None:
             await self.pod_role_service.require_role_manager_bounds(
                 pod_id=pod_member.pod_id,
                 requester_user_id=requester_user_id,
                 target_roles=normalized_roles,
                 target_user_id=target_user_id,
+                requester_is_org_owner=(
+                    requester_org_member.role == OrganizationRole.ORG_OWNER
+                ),
             )
         else:
             requester_pod_member = (
@@ -396,6 +461,17 @@ class PodMemberService:
                 raise PodAccessDeniedError(
                     "Only pod editors or admins can update member roles"
                 )
+
+        # After authorization, deliberately: "you may not do this" outranks "this
+        # would leave the pod unadministrable", and answering 409 first would tell
+        # somebody with no say over the pod that it has exactly one admin left.
+        # See PS-POD-041 and DEV-POD-002.
+        await self._refuse_if_last_administrator(
+            pod_id,
+            pod_member,
+            verb="demote",
+            remaining_roles=normalized_roles,
+        )
 
         updated = await self.pod_member_repository.update(pod_member)
         if updated.user_id is None:
@@ -436,10 +512,7 @@ class PodMemberService:
         if not requester_org_member:
             raise PodAccessDeniedError("Requester is not a member of the organization")
 
-        if requester_org_member.role in [
-            OrganizationRole.ORG_OWNER,
-            OrganizationRole.ORG_EDITOR,
-        ]:
+        if requester_org_member.role == OrganizationRole.ORG_OWNER:
             return await self.pod_member_repository.list_pod_members(
                 pod_id, limit, cursor
             )
@@ -469,7 +542,7 @@ class PodMemberService:
         if not org_member:
             return False
 
-        if org_member.role in [OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR]:
+        if org_member.role == OrganizationRole.ORG_OWNER:
             return True
 
         pod_member = await self.pod_member_repository.get_by_pod_and_org_member(

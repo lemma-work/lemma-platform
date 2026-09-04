@@ -197,9 +197,7 @@ async def test_a_real_paused_sandbox_keeps_its_files_and_is_adopted(
         deadline_at=_deadline(),
     )
 
-    await provider.release(
-        first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
-    )
+    await provider.release(first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline())
 
     # A later epoch must still adopt: identity decides, not the epoch.
     resumed = await provider.create(_spec(provider, sandbox_id, epoch=2))
@@ -255,13 +253,118 @@ async def test_creating_twice_really_yields_one_sandbox(
     assert first.provider_id == second.provider_id
 
 
+async def test_a_first_contact_herd_all_get_served(
+    provider: E2BSandboxProvider,
+) -> None:
+    """Parallel first tool calls on a cold sandbox must not fail.
+
+    This is the 2026-08-20 incident's shape: an agent's first turn fires
+    several tool calls at once, each one ensures the sandbox, and the cold
+    provision used to fail readiness while E2B was still coming up -- so the
+    first call died and only the retry passed. One sandbox is created here
+    and then readied and used by a herd, the way the service's singleflight
+    hands one provisioning to every waiting caller.
+    """
+    import asyncio
+
+    sandbox_id = uuid4()
+    instance = await _create(provider, sandbox_id)
+
+    async def tool_call(marker: bytes) -> bytes:
+        await provider.wait_ready(
+            instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+
+        async def payload():
+            yield marker
+
+        path = f"/workspace/herd-{marker.decode()}.txt"
+        await provider.write_file(
+            instance,
+            path=path,
+            data=payload(),
+            expected_sha256=None,
+            deadline_at=_deadline(),
+        )
+        chunks = [
+            chunk
+            async for chunk in provider.open_file(
+                instance,
+                path=path,
+                byte_range=ByteRange(offset=0, length=None),
+                deadline_at=_deadline(),
+            )
+        ]
+        return b"".join(chunks)
+
+    markers = [f"call{i}".encode() for i in range(8)]
+    results = await asyncio.gather(*(tool_call(marker) for marker in markers))
+
+    assert results == markers
+    # The herd shared one sandbox -- nobody got a second one underneath it.
+    found = await provider.inspect(
+        naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1),
+        deadline_at=_deadline(),
+    )
+    assert found is not None and found.provider_id == instance.provider_id
+
+
+async def test_files_survive_a_pause_and_a_herd_after_resume(
+    provider: E2BSandboxProvider,
+) -> None:
+    """Pause, resume, and the disk is the same disk -- under parallel load.
+
+    The disk-continuity promise: a paused workspace keeps its filesystem,
+    resumes as the same sandbox, and the tool calls waiting on that resume
+    all see the files that were written before it.
+    """
+    import asyncio
+
+    sandbox_id = uuid4()
+    first = await _create(provider, sandbox_id)
+
+    async def payload():
+        yield b"written-before-the-pause"
+
+    await provider.write_file(
+        first,
+        path="/workspace/before.txt",
+        data=payload(),
+        expected_sha256=None,
+        deadline_at=_deadline(),
+    )
+    await provider.release(first, kind=SandboxKind.WORKSPACE, deadline_at=_deadline())
+
+    resumed = await provider.create(_spec(provider, sandbox_id, epoch=2))
+    assert resumed.provider_id == first.provider_id
+    assert resumed.storage_adopted is True
+
+    async def read_back() -> bytes:
+        await provider.wait_ready(
+            resumed, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+        )
+        chunks = [
+            chunk
+            async for chunk in provider.open_file(
+                resumed,
+                path="/workspace/before.txt",
+                byte_range=ByteRange(offset=0, length=None),
+                deadline_at=_deadline(),
+            )
+        ]
+        return b"".join(chunks)
+
+    results = await asyncio.gather(*(read_back() for _ in range(8)))
+
+    assert results == [b"written-before-the-pause"] * 8
+
+
 async def test_real_storage_kind_is_sandbox_native(
     provider: E2BSandboxProvider,
 ) -> None:
     assert provider.storage_kind is ProviderStorageKind.SANDBOX_NATIVE
     assert (
-        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline())
-        is None
+        await provider.find_volume(sandbox_id=uuid4(), deadline_at=_deadline()) is None
     )
 
 
@@ -329,12 +432,92 @@ async def test_real_python_keeps_state_across_executions(
     assert "42" in second.stdout, (second.stdout, second.stderr)
 
 
-def _session_ref(session_id):
-    """Build the SDK-neutral session reference the provider only reads an id from."""
-    from dataclasses import dataclass
+def _session_ref(session_id, *, cwd: str = "/workspace"):
+    """The reference production hands the provider, not a stand-in for it.
 
-    @dataclass(frozen=True)
-    class _Ref:
-        session_id: object
+    It used to be a local dataclass carrying only `session_id` -- which is
+    exactly what the provider read, and exactly why nobody noticed the cwd it
+    also carries was going nowhere.
+    """
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
 
-    return _Ref(session_id=session_id)
+    return LocalPythonSessionRef(session_id=session_id, cwd=cwd)
+
+
+async def test_real_python_runs_where_the_shell_runs(
+    provider: E2BSandboxProvider,
+) -> None:
+    """The interpreter and the shell must be in the same directory, for real.
+
+    E2B starts a fresh `python3` per execution, so it can only be in the
+    session's directory if that directory is passed on the execution itself.
+    It was not, and `execute_python` reported `/workspace` while the shell
+    reported the conversation's own directory -- so a relative path meant two
+    different files. The cross-read below is the assertion that matters: it
+    fails for the reason an agent actually experiences.
+    """
+    from sandbox_runtime.protocol import ExecutePythonRequest
+
+    instance = await _create(provider, uuid4())
+    await provider.wait_ready(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+    cwd = f"/workspace/c/conformance-{uuid4().hex[:8]}"
+    await provider.create_directory(instance, path=cwd, deadline_at=_deadline())
+    session = _session_ref(uuid4(), cwd=cwd)
+
+    reported = await provider.execute_python(
+        instance,
+        session,
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code="import os\nprint(os.getcwd())",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+    assert cwd in reported.stdout, (reported.stdout, reported.stderr)
+
+    wrote = await provider.execute_python(
+        instance,
+        session,
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code=(
+                "from pathlib import Path\n"
+                "Path('python-wrote.txt').write_text('python-was-here')"
+            ),
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+    assert wrote.state is not None, wrote
+
+    process_id = await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="cat python-wrote.txt",
+            argv=None,
+            cwd=cwd,
+            environment=(),
+            tty=None,
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+    snapshot = await provider.read_process_output(
+        instance,
+        process_id=process_id,
+        after_sequence=0,
+        wait_seconds=10,
+        deadline_at=_deadline(),
+    )
+    output = b"".join(chunk.data for chunk in snapshot.chunks)
+    assert b"python-was-here" in output, output

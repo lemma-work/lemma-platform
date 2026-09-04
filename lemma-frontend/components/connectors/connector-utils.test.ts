@@ -4,6 +4,7 @@ import { AuthScheme, ConnectorKind } from 'lemma-sdk';
 import type { Connector } from '@/lib/types';
 import {
     canConnectWithDefaults,
+    describeConnectorError,
     describeInstallTarget,
     getCredentialSchema,
     getKindDescription,
@@ -13,6 +14,7 @@ import {
     getTenantConfiguredKindSpec,
     hasSystemDefault,
     isTenantConfigured,
+    installUsesOAuth,
     requiresInstallConfig,
     supportsCustomConfig,
 } from './connector-utils';
@@ -78,6 +80,13 @@ const oauthKind = {
     auth_scheme: AuthScheme.OAUTH2,
     system_default_available: true,
     supports_org_custom_oauth: true,
+    // The endpoints an org's own client id and secret are paired with. Without
+    // them the credentials have nowhere to send anyone, which is why
+    // `supportsCustomConfig` requires both halves — see the test below.
+    oauth2_defaults: {
+        authorization_url: 'https://example.com/oauth/authorize',
+        token_url: 'https://example.com/oauth/token',
+    },
     config_schema: {
         type: 'object',
         required: ['client_id', 'client_secret'],
@@ -96,6 +105,13 @@ const githubKind = {
     auth_scheme: AuthScheme.OAUTH2,
     system_default_available: true,
     supports_org_custom_oauth: true,
+    // The endpoints an org's own client id and secret are paired with. Without
+    // them the credentials have nowhere to send anyone, which is why
+    // `supportsCustomConfig` requires both halves — see the test below.
+    oauth2_defaults: {
+        authorization_url: 'https://example.com/oauth/authorize',
+        token_url: 'https://example.com/oauth/token',
+    },
     config_schema: {
         type: 'object',
         required: ['client_id', 'client_secret'],
@@ -304,5 +320,143 @@ describe('describeInstallTarget', () => {
     it('says nothing rather than guessing when there is no config', () => {
         expect(describeInstallTarget('sql', null)).toBeNull();
         expect(describeInstallTarget('composio', { toolkit: 'slack' })).toBeNull();
+    });
+});
+
+describe('describeConnectorError', () => {
+    // The SDK's `ApiError` is flat and has never had a `body`, but this
+    // function looked for one and bailed when it was absent -- which was
+    // always. So the branch it exists for, unwrapping `details.violations`,
+    // was unreachable, and a schema rejection rendered as the backend's
+    // generic "Invalid install config." with no indication of which field.
+    // There was no test for it at all.
+    class ApiErrorLike extends Error {
+        constructor(
+            readonly statusCode: number,
+            message: string,
+            readonly code?: string,
+            readonly details?: unknown,
+        ) {
+            super(message);
+            this.name = 'ApiError';
+        }
+    }
+
+    it('names the field the backend rejected', () => {
+        const error = new ApiErrorLike(400, 'Invalid install config.', 'VALIDATION', {
+            violations: [{ path: 'server_url', message: 'is not a valid URL' }],
+        });
+
+        expect(describeConnectorError(error, 'Failed')).toBe(
+            'server_url: is not a valid URL',
+        );
+    });
+
+    it('drops a (root) path rather than showing it to a person', () => {
+        const error = new ApiErrorLike(400, 'Invalid install config.', 'VALIDATION', {
+            violations: [{ path: '(root)', message: "'oauth' was unexpected" }],
+        });
+
+        expect(describeConnectorError(error, 'Failed')).toBe("'oauth' was unexpected");
+    });
+
+    it("keeps the SSRF guard's own explanation, which a user can act on", () => {
+        const error = new ApiErrorLike(
+            400,
+            "Host 'x' resolves to an address that is not routable on the public internet.",
+        );
+
+        expect(describeConnectorError(error, 'Failed')).toContain('not routable');
+    });
+
+    it('falls back to the message when there are no violations', () => {
+        const error = new ApiErrorLike(409, 'That name is already in use.');
+
+        expect(describeConnectorError(error, 'Failed')).toBe('That name is already in use.');
+    });
+
+    it('still reads an envelope carried under body, if one ever is', () => {
+        const error = { body: { message: 'Wrapped', details: { violations: [] } } };
+
+        expect(describeConnectorError(error, 'Failed')).toBe('Wrapped');
+    });
+
+    it('falls back for something that is not an error at all', () => {
+        expect(describeConnectorError(null, 'Failed')).toBe('Failed');
+        expect(describeConnectorError('a string', 'Failed')).toBe('Failed');
+    });
+});
+
+
+describe('an OAuth kind that promises an org app it cannot honour', () => {
+    /**
+     * Sixty of eighty-four connectors in one deployment carried a `package`
+     * OAuth kind with `supports_org_custom_oauth: true`, no `oauth2_defaults`
+     * and no platform client — Instagram among them. "Use my own" took a client
+     * id and secret, created the install, and only then failed at sign-in with
+     * "OAuth2 defaults are not configured", leaving the install behind and its
+     * name taken.
+     */
+    const strandedKind = {
+        kind: ConnectorKind.PACKAGE,
+        auth_scheme: AuthScheme.OAUTH2,
+        system_default_available: false,
+        supports_org_custom_oauth: true,
+        config_schema: {
+            type: 'object',
+            required: ['client_id', 'client_secret'],
+            properties: { client_id: { type: 'string' }, client_secret: { type: 'string' } },
+        },
+    } satisfies Partial<KindSpec> as Partial<KindSpec>;
+
+    it('is not offered a form whose only outcome is a stranded install', () => {
+        expect(supportsCustomConfig(strandedKind as KindSpec)).toBe(false);
+    });
+
+    it('is offered one as soon as there are endpoints to pair the app with', () => {
+        const usable = {
+            ...strandedKind,
+            oauth2_defaults: {
+                authorization_url: 'https://example.com/oauth/authorize',
+                token_url: 'https://example.com/oauth/token',
+            },
+        };
+
+        expect(supportsCustomConfig(usable as KindSpec)).toBe(true);
+    });
+});
+
+describe('how an install says it is connected', () => {
+    /**
+     * The catalog cannot answer this for `mcp`. One entry stands for every
+     * server a tenant may point at, and they do not agree: the entry says
+     * API_KEY, while an install whose server described its own authorization at
+     * create time signs in through a browser. Reading the catalog instead
+     * produced an account that looked connected, held no token, and 401'd every
+     * call, with no control anywhere that offered to fix it.
+     */
+    const install = (overrides: Record<string, unknown> = {}) =>
+        ({ id: 'i1', kind: 'mcp', connector_id: 'mcp', name: 'a-server', ...overrides }) as never;
+
+    it('believes the install over the catalog', () => {
+        expect(installUsesOAuth(install({ auth_scheme: 'OAUTH2' }), mcpKind as KindSpec)).toBe(true);
+    });
+
+    it('leaves a token install alone', () => {
+        expect(installUsesOAuth(install({ auth_scheme: 'API_KEY' }), mcpKind as KindSpec)).toBe(
+            false,
+        );
+    });
+
+    it('falls back to the catalog when the install does not say', () => {
+        // A deployment that predates the field. The catalog was the right
+        // answer for every kind except this one.
+        expect(installUsesOAuth(install(), mcpKind as KindSpec)).toBe(false);
+        expect(installUsesOAuth(install(), oauthKind as KindSpec)).toBe(true);
+    });
+
+    it('answers for no install at all', () => {
+        expect(installUsesOAuth(null, mcpKind as KindSpec)).toBe(false);
+        expect(installUsesOAuth(undefined, null)).toBe(false);
     });
 });

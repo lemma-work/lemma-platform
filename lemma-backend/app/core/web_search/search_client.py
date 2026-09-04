@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel
 
-from app.core.config import settings
+from app.core.config import reveal_secret, settings
 from app.core.net.domains import host_is_within, hostname_of
 from app.core.net.http_client import get_shared_http_client
 
@@ -148,7 +148,11 @@ class DuckDuckGoHTMLParser(HTMLParser):
             )
             self._depth -= 1
             if at_body_close:
-                if self._current and self._current.get("title") and self._current.get("url"):
+                if (
+                    self._current
+                    and self._current.get("title")
+                    and self._current.get("url")
+                ):
                     self.results.append(self._current)
                 self._current = None
                 self._body_depth = None
@@ -313,7 +317,7 @@ class BraveSearchClient(BaseSearchClient):
     }
 
     def __init__(self) -> None:
-        self.api_key = (settings.brave_search_api_key or "").strip()
+        self.api_key = (reveal_secret(settings.brave_search_api_key) or "").strip()
 
     def is_available(self) -> bool:
         return bool(self.api_key)
@@ -351,9 +355,7 @@ class BraveSearchClient(BaseSearchClient):
             if vertical is SearchVertical.WEB
             else payload.get("results", [])
         )
-        return [
-            self._to_result(item, vertical) for item in raw_results[:max_results]
-        ]
+        return [self._to_result(item, vertical) for item in raw_results[:max_results]]
 
     def _to_result(self, item: dict, vertical: SearchVertical) -> SearchResult:
         thumbnail = item.get("thumbnail")
@@ -361,9 +363,7 @@ class BraveSearchClient(BaseSearchClient):
             thumbnail.get("src") if isinstance(thumbnail, dict) else thumbnail
         )
         properties = item.get("properties")
-        image_url = (
-            properties.get("url") if isinstance(properties, dict) else None
-        )
+        image_url = properties.get("url") if isinstance(properties, dict) else None
         meta = item.get("meta_url")
         publisher = meta.get("netloc") if isinstance(meta, dict) else None
         return SearchResult(
@@ -375,7 +375,9 @@ class BraveSearchClient(BaseSearchClient):
             publisher=publisher,
             thumbnail_url=str(thumbnail_url) if thumbnail_url else None,
             image_url=str(image_url) if image_url else None,
-            duration=item.get("duration") if vertical is SearchVertical.VIDEOS else None,
+            duration=item.get("duration")
+            if vertical is SearchVertical.VIDEOS
+            else None,
         )
 
 
@@ -396,10 +398,20 @@ class SearchClient:
     def __init__(self, search_engine: AvailableSearchEngines | None = None):
         self._pinned = search_engine
         self.search_engine = self._get_client(search_engine)
+        # True when the selected provider cannot actually search: an operator
+        # pinned WEB_SEARCH_PROVIDER at a backend whose credentials are missing
+        # (brave with no API key, searxng with no URL), so nothing is looked at
+        # and every query comes back empty and "successful". A caller deserves
+        # to know the difference between a provider that answered "nothing" and
+        # no provider being looked at at all -- see PS-OPS-030 and DEV-OPS-005.
+        #
+        # The keyless DuckDuckGo default is deliberately NOT this. Under `auto`
+        # it is what a deployment with no keys resolves to, and it is a working
+        # provider: calling its genuine zero-result answers "unavailable" would
+        # be the same lie told the other way round.
+        self.provider_is_unconfigured = not self.search_engine.is_available()
 
-    def _get_client(
-        self, engine: AvailableSearchEngines | None
-    ) -> BaseSearchClient:
+    def _get_client(self, engine: AvailableSearchEngines | None) -> BaseSearchClient:
         if engine is not None:
             return _CLIENTS[engine]()
         configured_provider = settings.web_search_provider.strip().lower()

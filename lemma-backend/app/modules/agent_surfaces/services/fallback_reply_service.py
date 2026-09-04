@@ -264,8 +264,15 @@ async def deliver_fallback_reply(
     credentials: dict[str, Any],
 ) -> None:
     if not has_delivery_credentials(context.platform, credentials):
-        _fallback_incident.record_failure(
-            error_type="MissingCredentials",
+        # Not a dependency wobbling: the surface has no way to send at all, so
+        # every unrecognised sender on it is being ignored rather than told how
+        # to get access. `_fallback_incident` reported that as one anonymous
+        # `dependency.degraded` after three of them, and the surface is the one
+        # fact needed to repair it.
+        logger.warning(
+            "agent_surfaces.fallback_reply.surface_fallback_no_credentials.degraded",
+            platform=str(context.platform),
+            surface_id=str(context.surface_id) if context.surface_id else None,
         )
         return
     try:

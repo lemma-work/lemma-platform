@@ -30,6 +30,7 @@ from app.modules.schedule.domain.value_objects import (
     parse_datastore_operation,
 )
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.schedule.repositories.schedule_filters import list_filters
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,6 @@ logger = get_logger(__name__)
 #: relative to the one row this is expected to find, low enough that a data
 #: problem cannot turn one inbound webhook into an unbounded read.
 _CONFIG_MATCH_LIMIT = 50
-
 
 
 def cursor_for(entity_or_config, *, is_active: bool, schedule_type) -> datetime | None:
@@ -89,6 +89,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             agent_id=entity.agent_id,
             workflow_id=entity.workflow_id,
             config=entity.config,
+            instruction=entity.instruction,
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
             account_id=entity.account_id,
@@ -327,22 +328,17 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         else:
             stmt = select(Schedule).where(Schedule.is_internal.is_(False))
 
-        if schedule_type:
-            stmt = stmt.where(Schedule.schedule_type == schedule_type)
-        if is_active is not None:
-            stmt = stmt.where(Schedule.is_active == is_active)
-        if pod_id:
-            stmt = stmt.where(Schedule.pod_id == pod_id)
-        if user_id:
-            stmt = stmt.where(Schedule.user_id == user_id)
-        if agent_id:
-            stmt = stmt.where(Schedule.agent_id == agent_id)
-        if workflow_id:
-            stmt = stmt.where(Schedule.workflow_id == workflow_id)
-        if name:
-            stmt = stmt.where(Schedule.name == name)
-        if cursor is not None:
-            stmt = stmt.where(Schedule.id > cursor)
+        for clause in list_filters(
+            schedule_type=schedule_type,
+            is_active=is_active,
+            pod_id=pod_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            workflow_id=workflow_id,
+            name=name,
+            cursor=cursor,
+        ):
+            stmt = stmt.where(clause)
 
         stmt = (
             stmt.options(selectinload(Schedule.agent), selectinload(Schedule.workflow))
@@ -365,6 +361,23 @@ class ScheduleRepository(ScheduleRepositoryInterface):
                 for schedule, allowed_actions in rows
             ], next_cursor
         return [row[0].to_entity() for row in rows], next_cursor
+
+    async def deactivate_all_by_pod(self, pod_id: UUID) -> int:
+        """Disarm every schedule in a pod in one statement.
+
+        System-level, no RBAC filtering, includes internal schedules — the
+        counterpart of ``list_all_by_pod`` for the deleting request, which has
+        to stop schedules firing without paying for a per-schedule external
+        teardown while it holds a transaction open.
+        """
+        stmt = (
+            update(Schedule)
+            .where(Schedule.pod_id == pod_id, Schedule.is_active.is_(True))
+            .values(is_active=False)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return int(result.rowcount or 0)
 
     async def list_all_by_pod(self, pod_id: UUID) -> List[ScheduleEntity]:
         """List every schedule in a pod without RBAC filtering.
@@ -453,16 +466,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             stmt = stmt.where(Schedule.user_id == user_id)
         result = await self.session.execute(stmt)
         return [t.to_entity() for t in result.scalars().all()]
-
-    async def find_by_webhook_config(
-        self, source: str, criteria: dict[str, Any]
-    ) -> List[ScheduleEntity]:
-        """Find webhook schedules by source and config criteria."""
-        full_criteria = {"source": source, **criteria}
-        return await self.find_by_config(
-            schedule_type=ScheduleType.WEBHOOK,
-            criteria=full_criteria,
-        )
 
     async def find_by_pod_table_event(
         self,

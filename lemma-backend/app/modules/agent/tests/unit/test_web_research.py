@@ -24,6 +24,8 @@ from app.core.web_search.search_client import (
     apply_domain_operators,
 )
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
+from pydantic import ValidationError
+
 from app.modules.agent.tools.web.models import WebFetchRequest
 
 pytestmark = pytest.mark.unit
@@ -161,7 +163,7 @@ class _FakeSession:
             raise self._write_error
         self.files[path] = data
         self._api = getattr(self, "_api", set()) | {path}
-        return None
+        return
 
     def _capture_with_browser(self, cmd: str) -> None:
         """Emulate `save-webpage`: write the files it was asked to emit."""
@@ -218,7 +220,7 @@ def _patch_session(monkeypatch, session) -> None:
     async def fake_get(ctx, *, session_id, close_on_exit):
         return session
 
-    monkeypatch.setattr(web_fetch_module, "_get_workspace_session", fake_get)
+    monkeypatch.setattr(web_fetch_module, "get_workspace_session", fake_get)
     monkeypatch.setattr(
         web_fetch_module,
         "workspace_runtime_context",
@@ -552,6 +554,220 @@ class TestWebFetch:
         assert result.pages[0].files == {}
 
 
+class TestBrowserCaptureHelpers:
+    """The pure/near-pure pieces of the browser path, in isolation.
+
+    ``TestWebFetch`` above already drives `_capture_with_browser` and
+    `_present_files` thoroughly through `web_fetch_internal` with a fake
+    sandbox filesystem. What that integration coverage cannot see is whether
+    the command `_browser_script` actually builds is safe against a URL or
+    slug containing shell metacharacters, or how `_present_files`'s own
+    stdout-parsing behaves against a line the real probe would never emit --
+    both are exercised directly here.
+    """
+
+    def test_needs_browser_for_a_render_request_regardless_of_formats(self) -> None:
+        assert web_fetch_module._needs_browser(["markdown"], render=True) is True
+
+    def test_needs_browser_for_a_pdf_or_image_format(self) -> None:
+        assert web_fetch_module._needs_browser(["pdf"], render=False) is True
+        assert web_fetch_module._needs_browser(["jpeg"], render=False) is True
+        assert web_fetch_module._needs_browser(["png"], render=False) is True
+
+    def test_markdown_alone_does_not_need_a_browser(self) -> None:
+        assert web_fetch_module._needs_browser(["markdown"], render=False) is False
+        assert web_fetch_module._needs_browser([], render=False) is False
+
+    def test_browser_script_shape(self) -> None:
+        cmd = web_fetch_module._browser_script(
+            "https://example.com/a", "research", "example-a", ["markdown", "pdf"]
+        )
+        assert cmd == (
+            "mkdir -p research && save-webpage https://example.com/a "
+            "--formats markdown,pdf --out research --name example-a"
+        )
+
+    def test_browser_script_quotes_a_url_with_shell_metacharacters(self) -> None:
+        """A URL is caller-supplied text, not a trusted command fragment.
+
+        `save-webpage`'s own argument, quoted or not, still runs inside the
+        sandbox shell -- a query string is a completely ordinary place for a
+        `;`, `$(...)`, or `&&` to show up, and an unquoted URL would hand the
+        sandbox shell a second command to run.
+        """
+        hostile_url = "https://example.com/a?x=1;rm -rf / && echo pwned"
+        cmd = web_fetch_module._browser_script(
+            hostile_url, "research", "safe-name", ["markdown"]
+        )
+        # shlex.split proves the shell would see it as one argument, not as
+        # `;`, `&&`, or a subshell being interpreted.
+        parts = shlex.split(cmd)
+        assert hostile_url in parts
+        assert "rm" not in parts and "pwned" not in parts
+
+    def test_browser_script_quotes_a_hostile_out_dir_and_name(self) -> None:
+        cmd = web_fetch_module._browser_script(
+            "https://example.com/a",
+            "research/$(whoami)",
+            "name`id`",
+            ["markdown"],
+        )
+        parts = shlex.split(cmd)
+        assert "research/$(whoami)" in parts
+        assert "name`id`" in parts
+        # Neither injected form was actually interpreted by the split.
+        assert "whoami" not in parts and "id" not in parts
+
+    @pytest.mark.asyncio
+    async def test_present_files_returns_empty_without_touching_the_session(
+        self,
+    ) -> None:
+        session = _FakeSession()
+        result = await web_fetch_module._present_files(session, [])
+        assert result == {}
+        assert session.commands == []
+
+    @pytest.mark.asyncio
+    async def test_present_files_parses_size_and_path_skipping_malformed_lines(
+        self,
+    ) -> None:
+        session = _FakeSession(
+            responses={
+                "for f in": {
+                    "exit_code": 0,
+                    "stdout": (
+                        "1500 research/a.md\n"
+                        "not-a-size research/broken.md\n"
+                        "\n"
+                        "42000 research/b.pdf\n"
+                    ),
+                }
+            }
+        )
+
+        result = await web_fetch_module._present_files(
+            session, ["research/a.md", "research/broken.md", "research/b.pdf"]
+        )
+
+        assert result == {"research/a.md": 1500, "research/b.pdf": 42000}
+
+
+class TestTheBatchDoesNotRepeatItself:
+    """Sandbox round trips are the expensive part of an otherwise cheap path.
+
+    Measured at ~80ms each against a real container, so five pages doing the
+    same setup five times was half of all the chatter in a call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_output_directory_is_created_once_per_batch(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=[
+                    "https://example.com/a",
+                    "https://example.com/b",
+                    "https://example.com/c",
+                ],
+                formats=["markdown"],
+            ),
+        )
+
+        assert result.success
+        assert len(session.writes) == 3
+        # One directory, one `mkdir` — not one per page.
+        mkdirs = [cmd for cmd in session.commands if cmd.startswith("mkdir -p")]
+        assert len(mkdirs) == 1
+
+
+class TestUrlsWeWillNotRequestAtAll:
+    """`web_fetch` takes a URL the model chose and fetches it from the backend,
+    which makes it a server-side fetcher aimed by its input. The guard itself is
+    covered in `app/core/tests/unit/test_url_guard.py`; what matters here is
+    that *both* paths go through it."""
+
+    @staticmethod
+    def _refuse(monkeypatch, reason: str = "private_address") -> None:
+        from app.core.net.url_guard import UnsafeUrlError
+
+        async def fake_assert(url, *, policy=None):
+            raise UnsafeUrlError("nope", reason=reason)
+
+        monkeypatch.setattr(web_fetch_module, "assert_safe_url", fake_assert)
+
+    @pytest.mark.asyncio
+    async def test_a_url_resolving_into_the_private_network_is_refused(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+        self._refuse(monkeypatch)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://internal.example.com/"]),
+        )
+
+        assert not result.success
+        assert not result.pages[0].success
+        assert "private_address" in (result.pages[0].error or "")
+        # Nothing was written, and the sandbox was never asked to do anything.
+        assert session.writes == {}
+
+    @pytest.mark.asyncio
+    async def test_the_browser_path_is_guarded_too(self, monkeypatch) -> None:
+        """The regression this exists for: the in-process fetch reaches the
+        network from the backend and `save-webpage` reaches it from inside the
+        sandbox, so guarding only the cheap path would leave the browser as an
+        unguarded way to the same address."""
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        self._refuse(monkeypatch, reason="link_local_address")
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["http://169.254.169.254/latest/meta-data/"], render=True
+            ),
+        )
+
+        assert not result.success
+        assert "link_local_address" in (result.pages[0].error or "")
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_one_refused_url_does_not_sink_the_others(self, monkeypatch) -> None:
+        from app.core.net.url_guard import UnsafeUrlError
+
+        async def fake_assert(url, *, policy=None):
+            if "internal" in url:
+                raise UnsafeUrlError("nope", reason="private_address")
+            return url
+
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+        _patch_extraction(monkeypatch, markdown="Real article body. " * 40)
+        monkeypatch.setattr(web_fetch_module, "assert_safe_url", fake_assert)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://internal.example.com/", "https://example.com/a"]
+            ),
+        )
+
+        assert result.success
+        assert not result.pages[0].success
+        assert result.pages[1].success
+
+
 class TestTheToolAlwaysReturns:
     """A tool that blocks takes its whole agent run with it.
 
@@ -608,20 +824,42 @@ class TestTheToolAlwaysReturns:
         """The whole point of a partial answer: three of four beats nothing."""
         session = _FakeSession()
         _patch_session(monkeypatch, session)
-        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 0.5)
+        # 2s, not the 0.5s this used to run with. The budget has to outlast
+        # acquiring the session and capturing the quick page, and on a loaded
+        # CI runner under `coverage run` line tracing that setup does not
+        # reliably fit in half a second: this test failed with *both* pages
+        # reported "Not attempted", i.e. the deadline fired before the first
+        # fetch was even reached. That is event-loop starvation, not the
+        # behaviour under test, and the margin is the only thing that decided
+        # it. Production allows 240s; the point here is that the budget is
+        # finite, not what it is.
+        monkeypatch.setattr(web_fetch_module, "_BATCH_BUDGET_SECONDS", 2.0)
         monkeypatch.setattr(web_fetch_module, "_MAX_CONCURRENT_FETCHES", 1)
 
         from app.modules.agent.tools.web import page_extract
 
+        # Set when the quick page has been fetched, so the slow one cannot
+        # start spending the budget before it. The semaphore above already
+        # serialises them in list order, but that is a scheduling detail --
+        # this makes "quick first" the test's own guarantee rather than
+        # something inherited from `gather`.
+        quick_fetched = asyncio.Event()
+
         async def fetch(url: str):
             if "slow" in url:
-                await asyncio.sleep(30)
-            return page_extract.ExtractedPage(
+                await quick_fetched.wait()
+                # Nothing finishes this but the batch deadline, which is
+                # exactly what the assertions below are about. A fixed sleep
+                # would be a second race against the budget.
+                await asyncio.sleep(3600)
+            page = page_extract.ExtractedPage(
                 url=url,
                 title="A Title",
                 markdown="Body text here. " * 40,
                 content_type="text/html",
             )
+            quick_fetched.set()
+            return page
 
         monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fetch)
 
@@ -641,26 +879,44 @@ class TestTheToolAlwaysReturns:
         assert result.success, "a partial capture is still a useful result"
         assert "time budget" in (result.message or "")
 
+    def test_web_fetch_limits_agree(self) -> None:
+        """The tool must not accept more pages than it will render.
+
+        These were 10 and 3. A caller who sent ten JS-heavy URLs got seven back
+        as "Skipped: this call renders at most 3" -- a limit the schema had no
+        way to express, discovered only after paying for the call. Holding them
+        equal is what makes the advertised cap the real one.
+        """
+        accepted = WebFetchRequest.model_fields["urls"].metadata
+        max_urls = next(
+            item.max_length for item in accepted if hasattr(item, "max_length")
+        )
+
+        assert max_urls == web_fetch_module._MAX_BROWSER_RENDERS
+
     @pytest.mark.asyncio
-    async def test_browser_renders_are_capped_per_call(self, monkeypatch) -> None:
-        """Four JS-heavy URLs must not become four serialised Chrome renders.
+    async def test_a_full_batch_of_js_pages_skips_nothing(self, monkeypatch) -> None:
+        """The largest batch the schema accepts, every page needing a browser.
 
         This is the shape that hung in production: a research batch where most
-        of the list refuses a plain fetch.
+        of the list refuses a plain fetch. It must now render all of them
+        rather than reporting some as skipped.
         """
         session = _FakeSession()
         _patch_session(monkeypatch, session)
         _patch_extraction(monkeypatch, markdown=None)  # everything needs a browser
+        urls = [
+            f"https://spa{index}.example/app"
+            for index in range(web_fetch_module._MAX_BROWSER_RENDERS)
+        ]
 
         result = await web_fetch_module.web_fetch_internal(
-            SimpleNamespace(),
-            WebFetchRequest(urls=[f"https://spa{i}.example/app" for i in range(6)]),
+            SimpleNamespace(), WebFetchRequest(urls=urls)
         )
 
         rendered = sum("save-webpage" in cmd for cmd in session.commands)
-        assert rendered == web_fetch_module._MAX_BROWSER_RENDERS, session.commands
-        skipped = [p for p in result.pages if p.error and "Skipped" in p.error]
-        assert len(skipped) == 6 - web_fetch_module._MAX_BROWSER_RENDERS
+        assert rendered == len(urls), session.commands
+        assert [p for p in result.pages if p.error and "Skipped" in p.error] == []
 
     @pytest.mark.asyncio
     async def test_an_unreachable_workspace_reports_every_url(
@@ -671,7 +927,7 @@ class TestTheToolAlwaysReturns:
         async def no_session(ctx, *, session_id, close_on_exit):
             raise RuntimeError("sandbox is not available")
 
-        monkeypatch.setattr(web_fetch_module, "_get_workspace_session", no_session)
+        monkeypatch.setattr(web_fetch_module, "get_workspace_session", no_session)
         monkeypatch.setattr(
             web_fetch_module,
             "workspace_runtime_context",
@@ -688,7 +944,8 @@ class TestTheToolAlwaysReturns:
         assert result.error and "workspace" in result.error.lower()
 
     def test_the_url_list_is_capped(self) -> None:
-        """Ten is already several minutes of browser work in the worst case."""
-        WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(10)])
-        with pytest.raises(Exception):
-            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(11)])
+        """At exactly what the tool can render -- see test_web_fetch_limits_agree."""
+        limit = web_fetch_module._MAX_BROWSER_RENDERS
+        WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit)])
+        with pytest.raises(ValidationError):
+            WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit + 1)])

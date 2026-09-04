@@ -36,7 +36,9 @@ class UserRepositoryPort(Protocol):
     ) -> list[UUID]:
         raise NotImplementedError
 
-    async def get_id_by_telegram_lower(
+    async def get_id_by_telegram_lower(self, username_lower: str) -> Optional[UUID]: ...
+
+    async def get_live_id_by_telegram_lower(
         self, username_lower: str
     ) -> Optional[UUID]: ...
 
@@ -53,8 +55,6 @@ class OrganizationRepositoryPort(Protocol):
     async def create(self, entity: OrganizationEntity) -> OrganizationEntity: ...
 
     async def get(self, id: UUID) -> Optional[OrganizationEntity]: ...
-
-    async def get_by_name(self, name: str) -> Optional[OrganizationEntity]: ...
 
     async def get_by_slug(self, slug: str) -> Optional[OrganizationEntity]: ...
 
@@ -95,6 +95,12 @@ class OrganizationRepositoryPort(Protocol):
     async def list_organization_members(
         self, organization_id: UUID, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[OrganizationMemberEntity], Optional[str]]: ...
+
+    async def count_members(self, organization_id: UUID) -> int: ...
+
+    async def count_members_with_role_for_update(
+        self, organization_id: UUID, role: OrganizationRole
+    ) -> int: ...
 
     async def update_member(
         self, entity: OrganizationMemberEntity

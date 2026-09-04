@@ -19,8 +19,8 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.services.agent_service import AgentService
 from app.modules.agent.services.conversation_service import ConversationService
-from app.composition.authorization import create_authorization_service
-from app.composition.agent_usage import build_usage_service
+from app.core.authorization.factory import create_authorization_data_service
+from app.modules.usage.contracts.execution import build_usage_service
 
 
 def get_conversation_service(
@@ -30,15 +30,16 @@ def get_conversation_service(
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
 
 def get_agent_service(uow: UoWDep) -> AgentService:
     return AgentService(
+        uow=uow,
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
     )
 
 

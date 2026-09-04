@@ -31,13 +31,17 @@ pytestmark = pytest.mark.asyncio
 
 
 def _surface(platform: SurfacePlatform, *, agent_id=None) -> AgentSurfaceEntity:
+    # A surface has exactly one owner. `agent_id=None` here means the caller
+    # does not care which -- the pod's own assistant is the honest default, and
+    # its row id is the pod's.
+    pod_id = uuid4()
     return AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id,
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
-        agent_id=agent_id,
+        agent_id=agent_id or pod_id,
         credential_mode=SurfaceCredentialMode.SYSTEM,
     )
 
@@ -106,9 +110,7 @@ async def test_a_second_agent_in_one_pod_may_also_have_a_mailbox():
 
     repository = _Repository(first)
 
-    await ensure_unique_org_credential_binding(
-        second, surface_repository=repository
-    )
+    await ensure_unique_org_credential_binding(second, surface_repository=repository)
 
 
 async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():
@@ -117,8 +119,6 @@ async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():
     object.__setattr__(surface, "credential_mode", SurfaceCredentialMode.CUSTOM)
     repository = _Repository(_surface(SurfacePlatform.WHATSAPP))
 
-    await ensure_unique_org_credential_binding(
-        surface, surface_repository=repository
-    )
+    await ensure_unique_org_credential_binding(surface, surface_repository=repository)
 
     assert repository.system_lookups == 0

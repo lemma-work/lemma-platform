@@ -142,9 +142,7 @@ class NotificationRepository:
             NotificationModel.recipient_user_id == recipient_user_id,
         )
         if statuses:
-            stmt = stmt.where(
-                NotificationModel.status.in_([s.value for s in statuses])
-            )
+            stmt = stmt.where(NotificationModel.status.in_([s.value for s in statuses]))
         if cursor is not None:
             stmt = stmt.where(NotificationModel.id < cursor)
         stmt = stmt.order_by(NotificationModel.id.desc()).limit(limit + 1)
@@ -169,9 +167,7 @@ class NotificationRepository:
         )
         return int(result.scalar_one())
 
-    async def mark_all_read(
-        self, *, pod_id: UUID, recipient_user_id: UUID
-    ) -> int:
+    async def mark_all_read(self, *, pod_id: UUID, recipient_user_id: UUID) -> int:
         now = datetime.now(timezone.utc)
         result = await self.session.execute(
             select(NotificationModel).where(
@@ -191,6 +187,17 @@ class NotificationRepository:
     ) -> list[NotificationEntity]:
         """What the recipient's agent must be told about when they reply.
 
+        This is `NotificationEntity.awaiting_response` as a query, and the
+        `expects_response` arm is load-bearing rather than tidying. The one
+        thing the caller does with this list is tell an agent to answer it with
+        `respond_to_notification` -- and `respond()` refuses a notification that
+        never asked for an answer. Without the filter, an informational notice
+        delivered into the same thread was rendered as a question, the agent
+        did as it was told, and the domain refused it.
+
+        Informational rows are not simply missing a tool here: they are closed
+        by `acknowledge()`, which is the reader's action, not the agent's.
+
         Ordered oldest first: if two questions are outstanding in one thread,
         the reply most likely answers the one that has been waiting longest.
         """
@@ -199,6 +206,7 @@ class NotificationRepository:
             .where(
                 NotificationModel.delivery_conversation_id == conversation_id,
                 NotificationModel.status == NotificationStatus.OPEN.value,
+                NotificationModel.expects_response.is_(True),
             )
             .order_by(NotificationModel.id.asc())
         )
@@ -221,6 +229,32 @@ class NotificationRepository:
             )
         )
         return [m.to_entity() for m in result.scalars().all()]
+
+    async def count_open_from_origin_conversation(self, conversation_id: UUID) -> int:
+        """How many asks this conversation made are still waiting on a person.
+
+        Read on the *origin* side, not the delivery side: the question is what
+        one asking conversation is still owed, across however many people it
+        reached. Zero is what lets a sleeping asker wake early.
+
+        Scoped to AGENT_RUN because that is the only origin a conversation has —
+        a workflow form is owed to its run, and resuming it is the workflow
+        engine's job, not a snoozed conversation's.
+
+        EXPIRED and CANCELLED count as settled, deliberately. They are not
+        answers, but they are no longer outstanding, and an asker held asleep by
+        a question nobody will ever answer is the worse failure.
+        """
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(NotificationModel)
+            .where(
+                NotificationModel.origin_kind == NotificationOriginKind.AGENT_RUN.value,
+                NotificationModel.origin_conversation_id == conversation_id,
+                NotificationModel.status == NotificationStatus.OPEN.value,
+            )
+        )
+        return int(result.scalar_one())
 
     async def list_past_due(
         self, *, limit: int = 100, now: datetime | None = None

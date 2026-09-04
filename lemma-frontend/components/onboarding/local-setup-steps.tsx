@@ -19,8 +19,9 @@
  * together.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useThisComputer } from "@/lib/desktop/this-computer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -58,10 +59,14 @@ import {
     isDiscoveringHarnesses,
 } from "@/components/agents/agent-runtime-helpers";
 import { HarnessRow } from "@/components/agents/harness-row";
+import { StepLoader } from "@/components/brand/loader";
+import { Skeleton } from "@/components/shared/loading";
 import {
+    RECHECK_SETTLE_MS,
     discoveryHeadline,
     discoveryLines,
     discoveryPhase,
+    discoveryStatusLine,
     harnessRowStates,
 } from "@/components/agents/harness-discovery-rows";
 import { agentHostBridge } from "@/lib/desktop/agent-host-bridge";
@@ -85,10 +90,13 @@ function LocalPreview({
     icon,
     headline,
     lines,
+    working = false,
 }: {
     icon: React.ReactNode;
     headline: string;
     lines: string[];
+    /** Whether these lines describe work still in progress. */
+    working?: boolean;
 }) {
     return (
         <div className="flex h-full w-full flex-col justify-center gap-4 text-left">
@@ -99,7 +107,14 @@ function LocalPreview({
             <ul className="space-y-2">
                 {lines.map((line) => (
                     <li key={line} className="flex gap-2 text-sm text-[var(--text-tertiary)]">
-                        <Check className="mt-0.5 size-3.5 shrink-0 text-[var(--state-success)]" />
+                        {working ? (
+                            /* A green tick on "Each agent is started once to see
+                               what it offers" said the starting was done. It is
+                               the thing being waited for. */
+                            <StepLoader size="xs" className="mt-0.5 shrink-0" />
+                        ) : (
+                            <Check className="mt-0.5 size-3.5 shrink-0 text-[var(--state-success)]" />
+                        )}
                         <span>{line}</span>
                     </li>
                 ))}
@@ -133,7 +148,7 @@ function SkeletonHarnessRow({ displayName, looking }: { displayName: string; loo
             {looking ? (
                 /* A placeholder, not a liveness pulse: there is no content here
                    yet. The design system keeps those two apart deliberately. */
-                <span className="lemma-skeleton h-4 w-16 shrink-0 rounded-full" aria-label="Looking" />
+                <Skeleton shape="text" className="h-4 w-16 shrink-0 rounded-full" />
             ) : (
                 <span className="shrink-0 text-xs text-[var(--text-tertiary)]">Not installed</span>
             )}
@@ -164,13 +179,45 @@ type Preset = {
 
 // Local runners first: someone running Lemma on their own Mac most likely has
 // one of these serving already, and neither needs a key or an account.
-const PRESETS: Preset[] = [
-    { id: "ollama", title: "Ollama", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
-    { id: "lmstudio", title: "LM Studio", hint: "Runs on this Mac", protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
+//
+// `hint` takes the noun rather than reading it: evaluated at module scope it is
+// whatever the *first* evaluation saw, which on the server is "this computer"
+// for the life of the process -- frozen, and different from what the client
+// would render.
+const presets = (computer: string): Preset[] => [
+    { id: "ollama", title: "Ollama", hint: `Runs on ${computer}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
+    { id: "lmstudio", title: "LM Studio", hint: `Runs on ${computer}`, protocol: "openai_compat", baseUrl: "http://127.0.0.1:1234/v1", needsKey: false },
     { id: "openai", title: "OpenAI", hint: "API key", protocol: "openai_compat", baseUrl: "https://api.openai.com/v1", needsKey: true },
     { id: "anthropic", title: "Anthropic", hint: "API key", protocol: "anthropic_compat", baseUrl: "https://api.anthropic.com", needsKey: true },
     { id: "openrouter", title: "OpenRouter", hint: "API key", protocol: "openai_compat", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
 ];
+
+/**
+ * Milliseconds since the flag went true, ticking while it stays true.
+ *
+ * Only reason it exists: the copy has to change as a wait goes on, and nothing
+ * else on this screen knows how long anything has taken. Stops when the work
+ * does, so a settled screen is not re-rendering once a second for a number
+ * nobody reads.
+ */
+function useElapsedWhile(active: boolean): number {
+    // State written only from the interval and read straight back, so nothing
+    // sets state while an effect runs and nothing reads a clock during render --
+    // the two ways this turns into a cascade of renders.
+    const [elapsedMs, setElapsedMs] = useState(0);
+
+    useEffect(() => {
+        if (!active) return;
+        const began = Date.now();
+        const timer = setInterval(() => setElapsedMs(Date.now() - began), 1000);
+        return () => {
+            clearInterval(timer);
+            setElapsedMs(0);
+        };
+    }, [active]);
+
+    return active ? elapsedMs : 0;
+}
 
 export function LocalIntelligenceStep({
     organizationId,
@@ -182,6 +229,10 @@ export function LocalIntelligenceStep({
     onContinue: (outcome: "ready" | "deferred") => void;
 }) {
     const hasBridge = useDesktopBridge();
+    // A hook, so the server render and the first client render agree. Reading
+    // `thisComputer()` directly answers differently in the two, which is a
+    // hydration mismatch on every string below.
+    const computerNoun = useThisComputer();
     // Connects itself. Nobody is asked to press anything for a machine that is
     // already this workspace's own computer.
     const { status } = useAutoConnectThisComputer();
@@ -220,20 +271,51 @@ export function LocalIntelligenceStep({
     const phase = discoveryPhase({
         hostAvailable: status?.available,
         paired: status?.paired,
-        fetching: harnesses.isLoading || harnesses.isFetching,
+        // `isLoading`, not `isFetching`. This screen polls every two seconds, and
+        // `isFetching` is true for each of those — so a settled list threw itself
+        // back to four shimmering placeholders, twice a second, forever. The
+        // screen never looked like it had finished because it kept saying it had
+        // not.
+        fetching: harnesses.isLoading,
         stillDiscovering: !!host && isDiscoveringHarnesses(host, detected.length),
     });
     const rows = useMemo(() => harnessRowStates(detected, phase), [detected, phase]);
     const foundCount = rows.filter((row) => row.state === "found").length;
+    const working = phase !== "settled" && phase !== "unavailable";
+    // A clock, only while there is something to time. Probing spawns every agent
+    // on the machine, and how long that takes is the one thing the screen knows
+    // and the user does not -- but a wait is only worth explaining once it has
+    // gone on long enough to be worth explaining.
+    const elapsedMs = useElapsedWhile(working);
+    const statusLine = discoveryStatusLine({
+        phase,
+        foundCount,
+        elapsedMs,
+        computer: computerNoun,
+    });
+    // Asking the host to look again, which is a different act from asking the
+    // server what it was told last time. The host reads the request off its
+    // control file on a five-second beat and then probes every agent, so the
+    // answer arrives over the next few seconds through the poll this screen
+    // already runs -- there is no moment to refetch *at*.
+    const [rechecking, setRechecking] = useState(false);
     const recheck = useCallback(() => {
+        setRechecking(true);
         void agentHostBridge.refresh().then(
             () => {
-                toast.success("Rechecking the agents on this Mac");
-                setTimeout(() => void harnesses.refetch(), 1200);
+                toast.success(`Rechecking the agents on ${computerNoun}`);
+                // Long enough to cover the control-file beat and a probe, so the
+                // button stays busy until there is something new to look at
+                // rather than for a guessed 1.2s that expired before the host
+                // had even read the request.
+                setTimeout(() => setRechecking(false), RECHECK_SETTLE_MS);
             },
-            (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)),
+            (error: unknown) => {
+                setRechecking(false);
+                toast.error(error instanceof Error ? error.message : String(error));
+            },
         );
-    }, [harnesses]);
+    }, [computerNoun]);
     // Which harnesses already have a profile, so a row can say so instead of
     // offering to add the same agent again. Mutations invalidate the whole
     // agent-runtime tree, so this updates itself the moment one is saved.
@@ -302,12 +384,13 @@ export function LocalIntelligenceStep({
     return (
         <SetupSplitPanel
             title="What should answer in your chats?"
-            subtitle="A coding agent already on this Mac, an API provider, or both. Nothing here has AI until one of them is set."
+            subtitle={`A coding agent already on ${computerNoun}, an API provider, or both. Nothing here has AI until one of them is set.`}
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
-                    headline={discoveryHeadline(phase, foundCount)}
-                    lines={discoveryLines(phase, foundCount)}
+                    headline={discoveryHeadline(phase, foundCount, computerNoun)}
+                    lines={discoveryLines(phase, foundCount, computerNoun)}
+                    working={working}
                 />
             }
             onBack={onBack}
@@ -330,13 +413,30 @@ export function LocalIntelligenceStep({
                             variant="quiet"
                             size="sm"
                             className="gap-1.5 px-2"
-                            disabled={harnesses.isFetching || !hostId}
-                            onClick={() => void harnesses.refetch()}
+                            disabled={rechecking || !hostId}
+                            onClick={recheck}
                         >
-                            <RefreshCw className={harnesses.isFetching ? "size-3.5 lemma-spin" : "size-3.5"} />
+                            <RefreshCw className={rechecking ? "size-3.5 lemma-spin" : "size-3.5"} />
                             Rescan
                         </Button>
                     </div>
+
+                    {/*
+                     * Here rather than only in the preview, which is `hidden
+                     * lg:flex` -- so on a narrow window the screen said nothing
+                     * at all for the whole minute a first probe takes, next to
+                     * four grey rows and a disabled button.
+                     */}
+                    {statusLine ? (
+                        <p
+                            role="status"
+                            aria-live="polite"
+                            className="flex items-center gap-2 px-1 text-xs text-[var(--text-tertiary)]"
+                        >
+                            <StepLoader size="xs" className="shrink-0" />
+                            {statusLine}
+                        </p>
+                    ) : null}
 
                     {/*
                      * Every agent Lemma can drive, from the first frame, each
@@ -432,7 +532,7 @@ export function LocalIntelligenceStep({
                         Or connect a model provider
                     </p>
                     <div className="flex flex-wrap gap-2">
-                        {PRESETS.map((candidate) => (
+                        {presets(computerNoun).map((candidate) => (
                             <button
                                 key={candidate.id}
                                 type="button"
@@ -521,7 +621,7 @@ export function LocalIntelligenceStep({
                 <p className="text-xs text-[var(--text-tertiary)]">
                     A provider is this installation&apos;s single default — one profile, not one per
                     person. If you later open Lemma to your network or the web, that key answers for
-                    everyone. A coding agent stays on this Mac and uses its own credentials.
+                    everyone. A coding agent stays on {computerNoun} and uses its own credentials.
                 </p>
 
                 {/*
@@ -603,9 +703,18 @@ const ACCESS_MODES: Array<{
 
 export function LocalSharingStep({
     onContinue,
+    isCreating = false,
     onBack,
     steps,
-}: StepChrome & { onContinue: () => void }) {
+}: StepChrome & {
+    onContinue: () => void;
+    /**
+     * Whether answering this is what creates the pod. It is the last question a
+     * local install asks, so Continue is also the button that provisions — and a
+     * button that sits idle for the length of a create reads as a dead one.
+     */
+    isCreating?: boolean;
+}) {
     const hasBridge = useDesktopBridge();
     const [selected, setSelected] = useState<AccessMode>("this_computer");
 
@@ -695,10 +804,12 @@ export function LocalSharingStep({
                     <SetupPrimaryButton
                         type="button"
                         onClick={() => void handleContinue()}
-                        disabled={selected !== "this_computer" && !hasBridge}
+                        disabled={
+                            isCreating || (selected !== "this_computer" && !hasBridge)
+                        }
                         className="!mx-0"
                     >
-                        Continue
+                        {isCreating ? "Creating your pod" : "Continue"}
                         <ArrowRight className="h-4 w-4" />
                     </SetupPrimaryButton>
                 </div>

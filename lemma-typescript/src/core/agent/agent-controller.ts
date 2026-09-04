@@ -96,6 +96,8 @@ export interface AgentControllerOptions {
   onEvent?: (event: SseRawEvent, payload: unknown | null) => void;
   onStatus?: (status: string) => void;
   onMessage?: (message: ConversationMessage) => void;
+  /** The conversation was renamed mid-stream by the server's title generator. */
+  onTitle?: (title: string, conversationId: string | null) => void;
   onError?: (error: unknown) => void;
 }
 
@@ -342,6 +344,15 @@ export class AgentController {
     if (normalized) {
       this.options.onStatus?.(normalized);
     }
+  }
+
+  /** Apply a rename that arrived on the stream to the record we already hold. */
+  private setConversationTitle(title: string, conversationId: string | null): void {
+    const conversation = this.state.conversation;
+    if (conversation && (!conversationId || conversation.id === conversationId)) {
+      this.patch({ conversation: { ...conversation, title } });
+    }
+    this.options.onTitle?.(title, conversationId);
   }
 
   // -- streaming text buffering ----------------------------------------------
@@ -632,6 +643,8 @@ export class AgentController {
     this.clearStreamingText();
     this.clearStreamingThinking();
     let sawTerminalStatus = false;
+    // Set where the buffer is cleared, read where the turn is reconciled.
+    let unclaimedAnswer = false;
     let streamFailure: unknown = null;
 
     try {
@@ -642,6 +655,12 @@ export class AgentController {
         this.options.onEvent?.(event, payload);
 
         const parsed = parseAssistantStreamEvent(payload);
+        if (parsed.interrupted) {
+          // The transport gave up, not the run. Leaving `sawTerminalStatus`
+          // false is what sends this into the catch-up-and-reconnect path
+          // below, which is what the server is asking for.
+          continue;
+        }
         if (parsed.error) {
           const streamError = new Error(parsed.error);
           this.patch({ error: streamError });
@@ -690,10 +709,19 @@ export class AgentController {
             this.clearStreamingTool();
           }
         }
+        if (parsed.title) {
+          this.setConversationTitle(
+            parsed.title,
+            parsed.conversationId ?? streamConversationId ?? this.state.conversationId,
+          );
+        }
         if (parsed.status) {
           this.setConversationStatus(parsed.status);
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
+            // Read before the clear below: an answer still in the buffer when
+            // the run ends never got its durable message.
+            unclaimedAnswer = this.streamingBuffer.trim().length > 0;
             this.clearStreamingText();
             this.clearStreamingThinking();
             this.clearStreamingTool();
@@ -749,9 +777,22 @@ export class AgentController {
               streamFailure = reconnectError;
             }
           }
-        } else if (syncConversationId && (syncAfterStream ?? this.options.syncOnTurnEnd)) {
-          await this.refreshConversation(syncConversationId);
-          await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+        } else if (syncConversationId) {
+          // Text streamed as tokens that no durable message ever claimed is a
+          // frame that never arrived: every assistant or tool message clears
+          // the buffer as it lands, so anything left in it here is missing
+          // from the transcript. Publishing is best-effort — it swallows its
+          // own failures, and the fan-out drops a subscriber that falls behind
+          // — so one list, when we can see something is gone. The buffer and
+          // not the patched state: the state trails it by a flush.
+          const answerWentMissing = unclaimedAnswer
+            || this.streamingBuffer.trim().length > 0;
+          if (syncAfterStream ?? this.options.syncOnTurnEnd) {
+            await this.refreshConversation(syncConversationId);
+            await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+          } else if (answerWentMissing) {
+            await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+          }
         }
 
         if (!controller.signal.aborted && streamFailure) {
@@ -820,6 +861,45 @@ export class AgentController {
       const normalized = normalizeError(sendError, "Failed to send agent message.");
       this.patch({ error: normalized });
       this.options.onError?.(sendError);
+      throw normalized;
+    }
+  };
+
+  /**
+   * Send a follow-up into a run that is already working.
+   *
+   * `sendMessage` is the wrong call for this. It cancels the stream in flight
+   * and opens a second subscription for the same run, so the events between the
+   * two are simply lost — the person sees their turn stop mid-answer. This
+   * persists the message instead (joining the active run where the harness can
+   * steer, queued for the next one where it cannot) and reattaches whatever
+   * stream should be watching, which is what makes the answer arrive.
+   */
+  appendMessage = async (
+    content: string,
+    input: SendAssistantMessageOptions = {},
+  ): Promise<void> => {
+    this.patch({ error: null });
+    try {
+      const id = requireConversationId(input.conversationId ?? this.state.conversationId);
+      const scope = normalizeScope(this.client, this.scopeDefaults);
+      const scopedClient = applyPodScope(this.client, scope.podId);
+
+      await scopedClient.conversations.appendMessage(
+        id,
+        { content, metadata: input.metadata ?? undefined },
+        { pod_id: scope.podId ?? undefined },
+      );
+      // Forget the dedup key first: a steer never changes the conversation's
+      // status, so a run whose stream had died looks identical to one still
+      // being watched. `resumeIfRunning` still returns early while streaming,
+      // so a live stream is left alone.
+      this.autoResumedKey = null;
+      void this.resumeIfRunning(id).catch(() => {});
+    } catch (appendError) {
+      const normalized = normalizeError(appendError, "Failed to send agent message.");
+      this.patch({ error: normalized });
+      this.options.onError?.(appendError);
       throw normalized;
     }
   };

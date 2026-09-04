@@ -21,15 +21,22 @@ T = TypeVar("T", bound="SurfaceCreateRequest")
 class SurfaceCreateRequest:
     """Body for `POST /pods/{pod_id}/surfaces` — creates one surface.
 
-    A pod may have several surfaces of the same ``platform`` (different
-    bots/accounts, each routed to its own agent); ``name`` is the stable,
+    A pod may have several surfaces of the same ``platform`` — one bot per
+    agent is the model, not the exception; ``name`` is the stable,
     pod-unique identifier used to address it afterward. When omitted, it
     defaults to the lowercased platform (so the common single-surface-per-
     platform case needs no name at all) — pick an explicit name to create a
     second surface of the same platform.
 
         Attributes:
-            platform (SurfacePlatform):
+            platform (SurfacePlatform): The platforms a pod can be reached on.
+
+                Email is Resend, and only Resend. Gmail and Outlook were here as
+                Composio-backed mailboxes, which made "an email surface" mean three
+                different transports with three attachment strategies between them -- bytes,
+                Graph drafts, and a signed URL the provider downloads server-side. Reaching
+                a Gmail *account* is still something an agent does, through the connector;
+                it is just not a surface.
             account_id (None | Unset | UUID):
             config (SurfaceBehaviorConfigInput | Unset):
             credential_mode (SurfaceCredentialMode | Unset):

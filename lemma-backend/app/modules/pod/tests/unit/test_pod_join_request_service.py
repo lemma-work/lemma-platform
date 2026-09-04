@@ -138,7 +138,9 @@ async def test_request_join_rejects_owner_with_expected_message():
         organization_repository=org_repo,
     )
 
-    with pytest.raises(PodConflictError, match="Org owner has access to all pods by default"):
+    with pytest.raises(
+        PodConflictError, match="Org owner has access to all pods by default"
+    ):
         await service.request_join(pod_id, user_id)
 
 
@@ -449,7 +451,9 @@ def _pod_with_policy(pod_id, org_id, policy: PodJoinPolicy) -> PodEntity:
 async def test_join_pod_invite_only_is_rejected():
     pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
     pod_repo = AsyncMock()
-    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.INVITE_ONLY)
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.INVITE_ONLY
+    )
     org_repo = AsyncMock()
     org_repo.get_member.return_value = None
 
@@ -468,7 +472,9 @@ async def test_join_pod_invite_only_is_rejected():
 async def test_join_pod_org_members_requires_org_membership():
     pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
     pod_repo = AsyncMock()
-    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.ORG_MEMBERS
+    )
     org_repo = AsyncMock()
     org_repo.get_member.return_value = None
 
@@ -526,7 +532,9 @@ async def test_join_pod_public_creates_org_and_pod_membership():
 async def test_join_pod_org_member_joins_without_new_org_member():
     pod_id, org_id, user_id, org_member_id = uuid4(), uuid4(), uuid4(), uuid4()
     pod_repo = AsyncMock()
-    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.ORG_MEMBERS
+    )
 
     org_repo = AsyncMock()
     org_repo.get_member.return_value = _org_member(
@@ -607,7 +615,9 @@ async def test_request_join_public_pod_auto_joins_and_returns_approved():
 async def test_request_join_org_members_pod_auto_joins_existing_member():
     pod_id, org_id, user_id, org_member_id = uuid4(), uuid4(), uuid4(), uuid4()
     pod_repo = AsyncMock()
-    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.ORG_MEMBERS
+    )
 
     org_repo = AsyncMock()
     org_repo.get_member.return_value = _org_member(
@@ -648,7 +658,9 @@ async def test_request_join_org_members_pod_auto_joins_existing_member():
 async def test_request_join_org_members_pod_creates_pending_for_non_member():
     pod_id, org_id, user_id = uuid4(), uuid4(), uuid4()
     pod_repo = AsyncMock()
-    pod_repo.get.return_value = _pod_with_policy(pod_id, org_id, PodJoinPolicy.ORG_MEMBERS)
+    pod_repo.get.return_value = _pod_with_policy(
+        pod_id, org_id, PodJoinPolicy.ORG_MEMBERS
+    )
 
     org_repo = AsyncMock()
     org_repo.get_member.return_value = None

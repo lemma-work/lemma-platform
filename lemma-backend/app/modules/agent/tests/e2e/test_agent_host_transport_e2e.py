@@ -7,7 +7,7 @@ that gap, each hiding the next:
 * the global `verify_auth` dependency has an allowlist and `/agent-host` was not
   on it, so every one of these routes 401'd - a paired computer has no user
   session and never will;
-* `pairings:complete` is the one route whose credential *is* its body, and
+* `pairings/complete` is the one route whose credential *is* its body, and
   nothing checked that it works without a session;
 * the idle poll called `asyncio.wait_for(anext(...))`, whose timeout cancels and
   closes the async generator, so the second idle round raised
@@ -33,10 +33,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host_session_memory import (
+from app.modules.agent.infrastructure.agent_host.session_memory import (
     remember_provider_session,
     resume_session_id,
 )
@@ -51,6 +51,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
 )
 
 pytestmark = pytest.mark.e2e
+
 
 @pytest.mark.asyncio
 async def test_a_machine_pairs_without_a_user_session(
@@ -84,7 +85,10 @@ async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
     machine = hello()
 
     first = await pair(
-        authenticated_client, async_client, display_name="e2e same machine", machine=machine
+        authenticated_client,
+        async_client,
+        display_name="e2e same machine",
+        machine=machine,
     )
     second = await pair(
         authenticated_client, async_client, display_name="e2e renamed", machine=machine
@@ -125,12 +129,44 @@ async def test_a_pairing_code_is_single_use(authenticated_client, async_client):
         "hello": hello(),
     }
 
-    first = await async_client.post("/agent-host/pairings:complete", json=body)
+    first = await async_client.post("/agent-host/pairings/complete", json=body)
     assert first.status_code == status.HTTP_200_OK, first.text
 
-    replayed = await async_client.post("/agent-host/pairings:complete", json=body)
+    replayed = await async_client.post("/agent-host/pairings/complete", json=body)
     assert replayed.status_code != status.HTTP_200_OK
     assert first.json()["host_secret"] not in replayed.text
+
+
+@pytest.mark.asyncio
+async def test_the_colon_spelling_still_reaches_the_same_handler(
+    authenticated_client, async_client
+):
+    """An already-paired host keeps working after the slash rename.
+
+    `:complete` and `:append` were the shipped spelling, and the desktop app
+    has no auto-updater — an installed host keeps calling whatever it was built
+    with. Both spellings are the same function, so this asserts routing, not
+    behaviour: reaching the handler at all is the whole claim.
+    """
+    minted = await authenticated_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "e2e legacy path", "organization_id": None},
+    )
+    paired = await async_client.post(
+        "/agent-host/pairings:complete",
+        json={
+            "pairing_code": minted.json()["pairing_code"],
+            "display_name": "e2e legacy path",
+            "hello": hello(),
+        },
+    )
+    assert paired.status_code == status.HTTP_200_OK, paired.text
+
+    # The events route is host-authenticated, so an unauthenticated call must
+    # be rejected by the handler rather than by the router. A 404 would mean
+    # the alias is not registered at all, which is the failure this guards.
+    appended = await async_client.post("/agent-host/events:append", json={})
+    assert appended.status_code != status.HTTP_404_NOT_FOUND, appended.text
 
 
 @pytest.mark.asyncio
@@ -256,7 +292,7 @@ async def test_the_session_a_host_reports_comes_back_on_the_next_turn(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
 
     assert (
@@ -294,7 +330,7 @@ async def test_a_session_is_not_offered_to_a_harness_that_cannot_use_it(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
 
     assert (
@@ -337,7 +373,7 @@ async def test_a_checkpoint_without_a_session_leaves_the_stored_one_alone(
             lease_epoch=1,
             state=AgentHostRunState.DISPATCHING,
             detail={"provider_session_id": "rollout-42"},
-        )
+        ),
     )
     await remember_provider_session(
         uow,
@@ -346,7 +382,7 @@ async def test_a_checkpoint_without_a_session_leaves_the_stored_one_alone(
             lease_epoch=1,
             state=AgentHostRunState.SUCCEEDED,
             detail={"stop_reason": "end_turn"},
-        )
+        ),
     )
 
     assert (
@@ -506,9 +542,7 @@ async def test_a_cancel_is_delivered_ahead_of_starts_the_host_cannot_run(
     )
     await db_session.commit()
 
-    body, _ = await _elapsed_poll(
-        scenario.async_client, machine, capacity=_capacity(0)
-    )
+    body, _ = await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(0))
 
     assert AgentHostCommandKind.CANCEL_RUN.value in {
         command["kind"] for command in body["commands"]
@@ -538,8 +572,13 @@ async def test_a_second_cancel_for_the_same_lease_is_not_queued(db_session, scen
 
 
 @pytest.mark.asyncio
-async def test_concurrent_idle_polls_all_return(authenticated_client, async_client):
+async def test_concurrent_idle_polls_all_return(
+    authenticated_client, async_client, monkeypatch
+):
     """Two machines idling at once is the normal state of a workspace."""
+    monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 1.0)
+
     first = await pair(authenticated_client, async_client, display_name="e2e a")
     second = await pair(authenticated_client, async_client, display_name="e2e b")
     responses = await asyncio.gather(

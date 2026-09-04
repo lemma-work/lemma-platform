@@ -102,6 +102,12 @@ export class LemmaAgentThreadElement extends HTMLElementBase {
     if (!controller.getState().conversationId) {
       await controller.createConversation({ setActive: true });
     }
+    // A second `sendMessage` mid-run would cancel the stream carrying the
+    // answer and open another for the same run, losing everything in between.
+    if (controller.getState().isStreaming) {
+      await controller.appendMessage(content);
+      return;
+    }
     await controller.sendMessage(content);
   }
 

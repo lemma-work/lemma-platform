@@ -31,7 +31,14 @@ from app.modules.workspace.providers.docker_engine import (
     DockerVolumeCreateRequest,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+# Needs a reachable Docker daemon, which the unit lane's runner has no
+# reason to have -- there it could only skip. `sandbox-function-benchmark.yml`
+# runs this file by path on a runner that does have one.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.local_host,
+    pytest.mark.asyncio,
+]
 
 _SOCKET = os.getenv("WORKSPACE_DOCKER_SOCKET_PATH", "/var/run/docker.sock")
 
@@ -46,7 +53,9 @@ async def engine() -> AsyncIterator[DockerEngineClient]:
         pytest.skip(f"no docker socket at {_SOCKET}")
     client = DockerEngineClient(socket_path=_SOCKET)
     try:
-        await client.list_volumes(labels={"managed-by": "probe"}, deadline_at=_deadline())
+        await client.list_volumes(
+            labels={"managed-by": "probe"}, deadline_at=_deadline()
+        )
     except Exception as exc:  # pragma: no cover - environment guard
         await client.close()
         pytest.skip(f"docker engine not reachable: {exc}")

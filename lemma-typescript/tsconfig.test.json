@@ -1,8 +1,10 @@
 {
   // Typecheck-only config that INCLUDES the test files (the build tsconfig
-  // excludes them so they never land in dist). Wired into CI as a separate
-  // `tsc --noEmit -p tsconfig.test.json` step so the test suites keep their
-  // type coverage. See .github/workflows/sdk-checks.yml.
+  // excludes them so they never land in dist), so a type-level assertion
+  // written in a test proves something. Run as its own
+  // `tsc --noEmit -p tsconfig.test.json` step by
+  // .github/actions/verify-typescript-sdk/action.yml, which is what CI's
+  // "TypeScript SDK checks" job and the release workflow both call.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true

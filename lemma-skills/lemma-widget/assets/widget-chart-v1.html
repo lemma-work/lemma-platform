@@ -20,8 +20,11 @@
     var stateEl = document.getElementById("lwc-v1-state");
     var frameEl = document.getElementById("lwc-v1-frame");
     var totalEl = document.getElementById("lwc-v1-total");
-    function field(row, key) { return row && row.data && row.data[key] != null ? row.data[key] : row && row[key]; }
     function fail(message) { stateEl.hidden=false; stateEl.textContent=message || "Unable to load chart."; frameEl.hidden=true; }
+    // Separate from `fail` for its wording, not its styling: the widget is a
+    // cross-site iframe and the browser SDK authenticates by cookie, which some
+    // browsers withhold. The person is usually signed in — do not say otherwise.
+    function notice(message) { stateEl.hidden=false; stateEl.textContent=message; frameEl.hidden=true; totalEl.textContent=""; }
     function loadChartJs() {
       return new Promise(function (resolve, reject) {
         if (window.Chart) { resolve(); return; }
@@ -36,20 +39,28 @@
       try {
         var client = new window.LemmaClient.LemmaClient();
         var auth = await client.initialize();
-        if (!auth || auth.status !== "authenticated") { fail("Sign in to Lemma to view this chart."); return; }
-        var response = await client.records.list("__TABLE_NAME__", { limit: 200 });
-        var rows = (response && response.items) || [];
-        if (!rows.length) { fail("No __EMPTY_LABEL__ yet."); return; }
-        var counts = {};
-        rows.forEach(function (row) { var key=field(row,"__GROUP_FIELD__") || "Unspecified"; counts[key]=(counts[key]||0)+1; });
+        if (!auth || auth.status !== "authenticated") { notice("This view can't load pod data in this browser."); return; }
+        // Grouped in SQL, not over a page of records: `records.list` serves at most
+        // one capped page, so bars counted from it would each be a fraction of the
+        // real group and the caption would state a total the table does not have.
+        var response = await client.datastore.query(
+          "select __GROUP_FIELD__ as group_key, count(*) as group_count" +
+          " from __TABLE_NAME__ group by __GROUP_FIELD__ order by group_count desc"
+        );
+        var groups = (response && response.items) || [];
+        if (!groups.length) { notice("No __EMPTY_LABEL__ yet."); return; }
+        var labels = groups.map(function (row) { return row.group_key == null ? "Unspecified" : String(row.group_key); });
+        var counts = groups.map(function (row) { return Number(row.group_count) || 0; });
+        var sum = counts.reduce(function (running, value) { return running + value; }, 0);
         await loadChartJs();
         var theme=getComputedStyle(document.querySelector(".lwc-v1"));
         var palette=[1,2,3,4,5].map(function(index){return theme.getPropertyValue("--chart-"+index).trim();});
-        totalEl.textContent = new Intl.NumberFormat().format(rows.length) + " total";
+        totalEl.textContent = new Intl.NumberFormat().format(sum) +
+          (response && response.truncated ? " across the groups shown" : " total");
         frameEl.hidden=false; stateEl.hidden=true;
         new window.Chart(document.getElementById("lwc-v1-chart"), {
           type:"bar",
-          data:{ labels:Object.keys(counts), datasets:[{ data:Object.values(counts), backgroundColor:palette }] },
+          data:{ labels:labels, datasets:[{ data:counts, backgroundColor:palette }] },
           options:{ responsive:true, maintainAspectRatio:false, animation:false, color:theme.getPropertyValue("--muted").trim(), plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:theme.getPropertyValue("--line").trim()}},x:{grid:{display:false}}} }
         });
       } catch (error) { fail(error && error.message); }

@@ -486,6 +486,38 @@ describe("normalizeAssistantMarkdown", () => {
     expect(normalizeAssistantMarkdown("Imported the pod. --- Then it ran.")).toBe("Imported the pod.\n\nThen it ran.");
   });
 
+  it("puts a row squashed onto a delimiter row back on its own line", () => {
+    // The compact form: a whole table arrives on one line. The delimiter row
+    // has to end where the next row starts.
+    expect(normalizeAssistantMarkdown("| a | b |\n|---|---|   | 1 | 2 |")).toContain(
+      "|---|---|\n| 1 | 2 |",
+    );
+  });
+
+  it("rejects a long run of tabs in the separator rule in linear time", () => {
+    // `[ \t]+---[ \t]+` could start at every character of a whitespace run,
+    // and each start consumed the rest of the run before failing on `---`.
+    // 16k tabs took 209ms; 64k now takes under a millisecond. The budget is
+    // wide enough not to be flaky and far below quadratic.
+    const hostile = "\t".repeat(64_000) + "x";
+    const started = Date.now();
+    normalizeAssistantMarkdown(hostile);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("rejects a long run of tabs without backtracking over it", () => {
+    // A regular expression cannot express "two or more delimiter cells, then
+    // whitespace" unambiguously -- the whitespace inside a cell and the run
+    // after the row can each be claimed more than one way -- so rejecting this
+    // took time quadratic in its length. A budget, not a benchmark: the point
+    // is that it cannot be quadratic, and the margin is wide enough that a
+    // loaded machine does not make this flaky.
+    const hostile = "|" + ("---" + "\t".repeat(60) + "|").repeat(300) + "---";
+    const started = Date.now();
+    normalizeAssistantMarkdown(hostile);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("leaves a spaced table delimiter row intact", () => {
     const table = "## Next steps\n\n| Field | Type |\n| --- | --- |\n| id | int |";
     expect(normalizeAssistantMarkdown(table)).toBe(table);

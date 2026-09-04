@@ -31,7 +31,7 @@ function LemmaAppBody() {
       </div>
 
       <div className="lp-appview-approve">
-        <p>Above the $250 threshold — an approver has to decide.</p>
+        <p>Above the $250 threshold. An approver has to decide.</p>
         <span>
           <b>Approve</b>
           <i>Decline</i>
@@ -116,9 +116,8 @@ function ChatGptSurface({ surface }: { surface: SurfaceMode }) {
           </p>
 
           <p className="lp-gpt-msg">
-            I am not allowed to approve that one — the pod reserves it for an
-            approver. Use the button in the app and I will pick the work back
-            up.
+            The pod reserves that one for an approver. Use the button in the app
+            and I will pick the work back up.
           </p>
         </div>
 
@@ -192,8 +191,8 @@ function ClaudeSurface({ surface }: { surface: SurfaceMode }) {
           </p>
 
           <p className="lp-cl-msg">
-            I cannot approve that one. Use the button in the app and I will pick
-            the work back up from there.
+            That one is an approver&apos;s call. Use the button in the app and I will
+            pick the work back up from there.
           </p>
         </div>
 

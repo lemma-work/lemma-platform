@@ -14,6 +14,7 @@ import {
     routeWorkspaceTab,
     serializeWorkspaceTabs,
     syncAppWorkspaceTabs,
+    syncWorkspaceTabMetadata,
     upsertWorkspaceTab,
     type PodWorkspaceTab,
 } from './workspace-tabs';
@@ -49,14 +50,8 @@ describe('pod workspace tabs', () => {
                 title: 'Pricing follow-up',
                 status: null,
             },
-            {
-                id: 'app:quote-desk',
-                kind: 'app',
-                resourceId: 'quote-desk',
-                title: 'Quote Desk',
-                icon: 'Q',
-                url: 'https://quote.example.com',
-            },
+            // The pinned app tab above is left behind on purpose: apps live in
+            // the sidebar rail now, and stored app tabs are dropped at the door.
         ]);
     });
 
@@ -122,40 +117,22 @@ describe('pod workspace tabs', () => {
         });
     });
 
-    it('pins every installed app before the working set', () => {
+    it('drops app tabs outright, even for apps that still exist', () => {
         const conversation = conversationWorkspaceTab('conv-1', { title: 'First', status: 'completed' });
-        const staleApp = appWorkspaceTab({ slug: 'old-app', title: 'Old App' });
+        // This app's page still exists — the tab is dropped anyway, because
+        // apps live in the sidebar rail now and the strip never holds them.
+        const openApp = appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' });
         const staleAppRoute = routeWorkspaceTab(
             'apps',
-            'Old App',
-            '/pod/pod-1/app/view?page=old-app',
+            'Quote Desk',
+            '/pod/pod-1/app/view?page=quote-desk',
         );
-        const pages = [
-            { slug: 'morning-brief', title: 'Morning Brief', icon: 'M', order: 0, path: '' },
-            { slug: 'quote-desk', title: 'Quote Desk', icon: 'Q', order: 1, path: '' },
-        ];
 
-        // Tabs hold what someone opened, so syncing must not open anything:
-        // `pages` here has two apps and neither becomes a tab. The stale app tab
-        // is dropped because its app is gone, and the duplicate route goes too.
         expect(syncAppWorkspaceTabs(
-            [HOME_WORKSPACE_TAB, staleApp, conversation, staleAppRoute],
-            pages,
+            [HOME_WORKSPACE_TAB, openApp, conversation, staleAppRoute],
         )).toEqual([
             HOME_WORKSPACE_TAB,
             conversation,
-        ]);
-    });
-
-    it('keeps an open app tab and refreshes its title', () => {
-        const pages = [
-            { slug: 'quote-desk', title: 'Quote Desk Renamed', icon: 'Q', order: 0, path: '' },
-        ];
-        const open = appWorkspaceTab({ slug: 'quote-desk', title: 'Quote Desk' });
-
-        expect(syncAppWorkspaceTabs([HOME_WORKSPACE_TAB, open], pages)).toEqual([
-            HOME_WORKSPACE_TAB,
-            appWorkspaceTab(pages[0]),
         ]);
     });
 
@@ -208,8 +185,10 @@ describe('pod workspace tabs', () => {
 
     it('uses routes as the active-tab source of truth', () => {
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1')).toBe('home');
+        // The focused app yields its ephemeral tab id — rendered while viewed,
+        // never stored. A slug-less viewer has no app to mark.
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view', 'quote-desk')).toBe('app:quote-desk');
-        expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view')).toBe('route:apps');
+        expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/view')).toBeNull();
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/app/pages')).toBe('route:apps');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/data/projects')).toBe('route:data');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/datastores/default')).toBe('route:data');
@@ -218,6 +197,43 @@ describe('pod workspace tabs', () => {
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/conversations/new')).toBe('new');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/conversations/conv%201')).toBe('conversation:conv 1');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/settings')).toBe('route:settings');
+    });
+
+    it('gives every presented widget its own tab', () => {
+        const widgetPath = '/pod/pod-1/widgets/view';
+        const first = getActiveWorkspaceTabId(
+            'pod-1',
+            widgetPath,
+            null,
+            new URLSearchParams('toolCallId=toolu_01AAA&standalone=1'),
+        );
+        const second = getActiveWorkspaceTabId(
+            'pod-1',
+            widgetPath,
+            null,
+            new URLSearchParams('toolCallId=toolu_01BBB&standalone=1'),
+        );
+
+        expect(first).toBe('route:widget-toolu_01AAA');
+        // Two widgets are two things to hold open, not one tab that gets
+        // overwritten the second time you open one.
+        expect(second).not.toBe(first);
+
+        // Without a tool call there is no widget to key on, so it stays the
+        // plain section tab rather than inventing an identity.
+        expect(getActiveWorkspaceTabId('pod-1', widgetPath)).toBe('route:widgets');
+    });
+
+    it('keeps a widget tab pointing at its own widget', () => {
+        const tab = routeWorkspaceTab(
+            'widget-toolu_01AAA',
+            'Revenue by region',
+            '/pod/pod-1/widgets/view?toolCallId=toolu_01AAA&title=Revenue+by+region',
+        );
+
+        expect(tab.id).toBe('route:widget-toolu_01AAA');
+        expect(tab.title).toBe('Revenue by region');
+        expect(parseWorkspaceTabs(serializeWorkspaceTabs([HOME_WORKSPACE_TAB, tab]))[1]).toEqual(tab);
     });
 
     it('does not persist stale conversation activity', () => {
@@ -233,5 +249,39 @@ describe('pod workspace tabs', () => {
             title: 'Running',
             status: null,
         });
+    });
+
+    /* A sub-agent's conversation is a child, and a pod's conversation list
+       holds roots — so the list alone can never name one, and the tab a reader
+       opens to watch a sub-agent work is the one tab that stays "Untitled
+       conversation" with no activity dot. `usePodWorkspaceTabs` fetches what
+       the list cannot account for and merges it in; these pin what the merge
+       has to be worth. */
+    it('names a conversation tab and shows its activity once the conversation is accounted for', () => {
+        const tabs: PodWorkspaceTab[] = [
+            HOME_WORKSPACE_TAB,
+            conversationWorkspaceTab('child-1'),
+        ];
+
+        expect(tabs[1]).toMatchObject({ title: 'Untitled conversation', status: null });
+
+        const synced = syncWorkspaceTabMetadata(tabs, [
+            { id: 'child-1', title: 'Research the tournament format', status: 'running' },
+        ] as Parameters<typeof syncWorkspaceTabMetadata>[1]);
+
+        expect(synced[1]).toMatchObject({
+            id: 'conversation:child-1',
+            title: 'Research the tournament format',
+            status: 'running',
+        });
+    });
+
+    it('leaves a tab alone when nothing accounts for its conversation', () => {
+        const tabs: PodWorkspaceTab[] = [
+            HOME_WORKSPACE_TAB,
+            conversationWorkspaceTab('child-1', { title: 'Draft the brief', status: 'running' }),
+        ];
+
+        expect(syncWorkspaceTabMetadata(tabs, [])).toBe(tabs);
     });
 });

@@ -73,7 +73,7 @@ def _fake_scopes(monkeypatch, events):
 async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
     # A stand-in for the real ResolvedConnectorExecution: the saga reads
     # connector_id off it when deciding what to do with a file result.
-    resolved_sentinel = SimpleNamespace(connector_id="outlook")
+    resolved_sentinel = SimpleNamespace(connector_id="outlook", organization_id=uuid4())
     response_sentinel = SimpleNamespace(result={"ok": True})
 
     class _FakeService:
@@ -97,8 +97,6 @@ async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
         payload={"x": 1},
         user_id=uuid4(),
         request=object(),
-        auth_token="tok",
-        api_url="https://api",
         account_id=None,
     )
 
@@ -132,8 +130,6 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
         provider="COMPOSIO",
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
-        auth_token=None,
-        api_url=None,
         account_id=account_id,
         account_user_id=user_id,
         organization_id=org_id,
@@ -212,8 +208,6 @@ async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breake
         provider="COMPOSIO",
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
-        auth_token=None,
-        api_url=None,
         account_id=uuid4(),
         account_user_id=uuid4(),
         organization_id=uuid4(),
@@ -249,7 +243,9 @@ async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breake
         )
 
     assert len(attempts) == 2, "the credential refresh retry ran"
-    assert recorded == ["airtable:AIRTABLE_LIST_BASES"]
+    # Org-prefixed: the breaker is scoped per organization, so one tenant's
+    # provider outage cannot refuse another tenant's calls.
+    assert recorded == [f"{resolved.organization_id}:airtable:AIRTABLE_LIST_BASES"]
     # The provider fault surfaces as itself. Swapping it for the 401 would tell
     # the user to reconnect an account that is fine.
     connector_service.mark_account_reauth_required.assert_not_awaited()
@@ -276,8 +272,6 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
         provider="COMPOSIO",
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
-        auth_token=None,
-        api_url=None,
         account_id=uuid4(),
         account_user_id=uuid4(),
         organization_id=uuid4(),

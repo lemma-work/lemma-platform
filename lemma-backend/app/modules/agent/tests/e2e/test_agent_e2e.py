@@ -10,6 +10,7 @@ import pytest
 from fastapi import status
 from streaq.task import TaskStatus
 
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -18,6 +19,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
 from app.modules.agent.api.controllers.shared import (
     conversation_channel,
 )
+from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -35,8 +37,20 @@ from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.run_event_pump import RunOutcome
+from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_TOOL_NAME,
+    build_final_answer_toolset,
+)
+from app.modules.agent.infrastructure.agent_host.final_answer import (
+    read_final_answer,
+)
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     request_approval as request_approval_tool,
@@ -47,6 +61,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
     system_lemma_default_model,
     system_lemma_model_names,
 )
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
@@ -137,7 +152,9 @@ async def _seed_paused_interaction(
     return pod_id, conversation_id, agent, paused_run, approval_id
 
 
-async def _resume_run_and_tool_return(conversation_id: UUID, paused_run_id, approval_id):
+async def _resume_run_and_tool_return(
+    conversation_id: UUID, paused_run_id, approval_id
+):
     """Return (resume_run, tool_return_message) created by resolving the pause."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
         repo = ConversationRepository(uow)
@@ -449,33 +466,40 @@ async def _wait_for_run_status(
     run_id: UUID,
     status: str,
     *,
-    attempts: int = 50,
-    sleep_seconds: float = 0.1,
+    timeout_seconds: float = 5.0,
+    interval_seconds: float = 0.1,
 ) -> None:
     expected = status.value if isinstance(status, AgentRunStatus) else status
-    for _ in range(attempts):
+
+    async def probe() -> dict:
         db_session.expire_all()
         run_model = await db_session.get(AgentRunModel, run_id)
-        if run_model is not None and run_model.status == expected:
-            return
-        await asyncio.sleep(sleep_seconds)
-    db_session.expire_all()
-    run_model = await db_session.get(AgentRunModel, run_id)
-    actual = run_model.status if run_model else None
-    if actual == expected:
-        return
-    raise AssertionError(f"Expected run {run_id} to be {expected}, got {actual}")
+        return {"status": run_model.status if run_model else None}
+
+    # failed=set(): the original had no fail-fast concept at all, just a blind
+    # equality poll against the caller's single target status -- preserve that
+    # rather than introduce a new failure path if a run passes through
+    # FAILED/ERROR on its way to the target (e.g. STOPPED, which every current
+    # caller here waits for).
+    await wait_for_status(
+        label=f"run {run_id} to reach {expected}",
+        probe=probe,
+        expected={expected},
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
+    )
 
 
 async def _wait_for_streaq_job_status(job_id: str, status: TaskStatus) -> None:
-    last_status: TaskStatus | None = None
     async with create_streaq_client() as worker:
-        for _ in range(100):
-            last_status = await worker.status_by_id(job_id)
-            if last_status == status:
-                return
-            await asyncio.sleep(0.1)
-    raise AssertionError(f"Expected job {job_id} to be {status}, got {last_status}")
+        await eventually(
+            label=f"streaq job {job_id} to reach {status}",
+            probe=lambda: worker.status_by_id(job_id),
+            done=lambda current: current == status,
+            timeout_seconds=10.0,
+            interval_seconds=0.1,
+        )
 
 
 class TestPodAgentLifecycle:
@@ -555,9 +579,9 @@ class TestPodAgentLifecycle:
         assert default_alias_conversations.status_code == 200, (
             default_alias_conversations.text
         )
-        assert [
-            item["id"] for item in default_alias_conversations.json()["items"]
-        ] == [default_id]
+        assert [item["id"] for item in default_alias_conversations.json()["items"]] == [
+            default_id
+        ]
 
         empty_agent_name = await authenticated_client.get(
             f"/pods/{pod_id}/conversations",
@@ -593,6 +617,7 @@ class TestPodAgentLifecycle:
 
         assert response.status_code == 400, response.text
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_file_creation_tool_call_streams_tool_json_tokens(
@@ -752,7 +777,7 @@ class TestPodAgentLifecycle:
             harness_registry=object(),  # type: ignore[arg-type]
         )
 
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -761,10 +786,10 @@ class TestPodAgentLifecycle:
                     metadata={"is_final_answer": False, "harness_kind": "CODEX"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -775,10 +800,10 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
@@ -789,17 +814,17 @@ class TestPodAgentLifecycle:
                     metadata={"tool_name": "lemma_exec_command"},
                 ),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
-        await runner._handle_harness_event(
+        await runner.event_pump.handle(
             event=AgentEvent(
                 type=AgentEventType.MESSAGE,
                 agent_run_id=agent_run_id,
                 data=MessageDraft.of_text("Final answer."),
             ),
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
+            run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
+            outcome=RunOutcome(),
         )
 
         messages = await authenticated_client.get(
@@ -832,21 +857,25 @@ class TestPodAgentLifecycle:
         which are recorded as the tool's synthesized return and a fresh run is
         started to resume the agent. The pending list clears and re-deciding the
         same call conflicts."""
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="ask_user",
-                tool_args={
-                    "questions": [
-                        {
-                            "question": "Which auth method?",
-                            "header": "Auth",
-                            "options": [{"label": "OAuth"}, {"label": "API key"}],
-                        }
-                    ]
-                },
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="ask_user",
+            tool_args={
+                "questions": [
+                    {
+                        "question": "Which auth method?",
+                        "header": "Auth",
+                        "options": [{"label": "OAuth"}, {"label": "API key"}],
+                    }
+                ]
+            },
         )
 
         approvals = await authenticated_client.get(
@@ -858,7 +887,10 @@ class TestPodAgentLifecycle:
         decision = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_id}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert decision.status_code == 200, decision.text
 
@@ -902,18 +934,22 @@ class TestPodAgentLifecycle:
         fixed_test_org,
     ):
         """A denied request_approval resumes with a denial return and runs nothing."""
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="request_approval",
-                tool_args={
-                    "tool_name": "exec_command",
-                    "args": {"cmd": "lemma pods delete --all"},
-                    "title": "Delete all pods?",
-                    "reason": "Confirm destructive cleanup.",
-                },
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "lemma pods delete --all"},
+                "title": "Delete all pods?",
+                "reason": "Confirm destructive cleanup.",
+            },
         )
 
         decision = await authenticated_client.post(
@@ -933,7 +969,9 @@ class TestPodAgentLifecycle:
         assert tool_return is not None
         assert tool_return.tool_result["success"] is False
         assert tool_return.tool_result["executed"] is False
-        assert tool_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            tool_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        )
 
         approvals_after = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
@@ -951,6 +989,57 @@ class TestPodAgentLifecycle:
         assert duplicate.json()["status"] == "reconciled"
         assert duplicate.json()["decision"] == "DENY"
 
+    @pytest.mark.approval_worker
+    async def test_request_approval_denial_reconciles_through_the_real_worker(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        worker,
+    ):
+        """A production approval job must persist the denial and resume state."""
+        del worker
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "echo approval-worker"},
+                "title": "Run the command?",
+                "reason": "Exercise the production approval queue.",
+            },
+        )
+
+        decision = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+            f"/approvals/{approval_id}/decision",
+            json={"decision": "DENY", "response": {}},
+        )
+        assert decision.status_code == status.HTTP_200_OK, decision.text
+
+        async def probe():
+            return await _resume_run_and_tool_return(
+                conversation_id, paused_run.id, approval_id
+            )
+
+        resume_run, tool_return = await eventually(
+            label="approval reconciliation worker",
+            probe=probe,
+            done=lambda pair: pair[0] is not None and pair[1] is not None,
+            timeout_seconds=30.0,
+            interval_seconds=0.2,
+        )
+        assert resume_run is not None
+        assert tool_return is not None
+        assert tool_return.tool_result["success"] is False
+        assert tool_return.tool_result["executed"] is False
+
     async def test_resolution_self_heals_after_recorded_but_unfinished_resume(
         self,
         authenticated_client,
@@ -965,21 +1054,25 @@ class TestPodAgentLifecycle:
         report ``reconciled`` — instead of raising "Approval is not pending or no
         longer live" forever.
         """
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="ask_user",
-                tool_args={
-                    "questions": [
-                        {
-                            "question": "Which auth method?",
-                            "header": "Auth",
-                            "options": [{"label": "OAuth"}, {"label": "API key"}],
-                        }
-                    ]
-                },
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="ask_user",
+            tool_args={
+                "questions": [
+                    {
+                        "question": "Which auth method?",
+                        "header": "Auth",
+                        "options": [{"label": "OAuth"}, {"label": "API key"}],
+                    }
+                ]
+            },
         )
 
         # Simulate the wedge: decision committed, resume never finished.
@@ -1007,7 +1100,10 @@ class TestPodAgentLifecycle:
         healed = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_id}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert healed.status_code == 200, healed.text
         assert healed.json()["status"] == "reconciled"
@@ -1028,21 +1124,25 @@ class TestPodAgentLifecycle:
         fixed_test_org,
     ):
         """An approval id with no paused call and no decision is a 404, not a 409."""
-        pod_id, conversation_id, _agent, _paused_run, _approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="ask_user",
-                tool_args={
-                    "questions": [
-                        {
-                            "question": "Which auth method?",
-                            "header": "Auth",
-                            "options": [{"label": "OAuth"}, {"label": "API key"}],
-                        }
-                    ]
-                },
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            _paused_run,
+            _approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="ask_user",
+            tool_args={
+                "questions": [
+                    {
+                        "question": "Which auth method?",
+                        "header": "Auth",
+                        "options": [{"label": "OAuth"}, {"label": "API key"}],
+                    }
+                ]
+            },
         )
         missing = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1071,23 +1171,27 @@ class TestPodAgentLifecycle:
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fake_execute_as_user,
         )
 
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="request_approval",
-                tool_args={
-                    "tool_name": "exec_command",
-                    "args": {"cmd": "lemma records delete orders --id 42"},
-                    "title": "Delete order 42?",
-                    "reason": "Cleaning up a duplicate order.",
-                },
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "lemma records delete orders --id 42"},
+                "title": "Delete order 42?",
+                "reason": "Cleaning up a duplicate order.",
+            },
         )
 
         decision = await authenticated_client.post(
@@ -1104,7 +1208,10 @@ class TestPodAgentLifecycle:
         assert tool_return is not None
         assert tool_return.tool_result["success"] is True
         assert tool_return.tool_result["executed"] is True
-        assert tool_return.tool_result["result"] == {"stdout": "deleted", "success": True}
+        assert tool_return.tool_result["result"] == {
+            "stdout": "deleted",
+            "success": True,
+        }
         assert captured["tool_name"] == "exec_command"
         assert captured["args"] == {"cmd": "lemma records delete orders --id 42"}
         assert captured["calls"] == 1
@@ -1128,41 +1235,47 @@ class TestPodAgentLifecycle:
         """Two pausing tools in one turn: resolving the first must NOT resume (the
         sibling would be orphaned); only resolving the last starts one resume run
         whose history has a tool_return for both calls."""
-        pod_id, conversation_id, _agent, paused_run, approval_ids = (
-            await _seed_paused_interactions(
-                authenticated_client,
-                fixed_test_org,
-                interactions=[
-                    (
-                        "request_approval",
-                        {
-                            "tool_name": "exec_command",
-                            "args": {"cmd": "echo hi"},
-                            "title": "Run it?",
-                            "reason": "demo",
-                        },
-                    ),
-                    (
-                        "ask_user",
-                        {
-                            "questions": [
-                                {
-                                    "question": "Which auth?",
-                                    "header": "Auth",
-                                    "options": [{"label": "OAuth"}, {"label": "API key"}],
-                                }
-                            ]
-                        },
-                    ),
-                ],
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_ids,
+        ) = await _seed_paused_interactions(
+            authenticated_client,
+            fixed_test_org,
+            interactions=[
+                (
+                    "request_approval",
+                    {
+                        "tool_name": "exec_command",
+                        "args": {"cmd": "echo hi"},
+                        "title": "Run it?",
+                        "reason": "demo",
+                    },
+                ),
+                (
+                    "ask_user",
+                    {
+                        "questions": [
+                            {
+                                "question": "Which auth?",
+                                "header": "Auth",
+                                "options": [{"label": "OAuth"}, {"label": "API key"}],
+                            }
+                        ]
+                    },
+                ),
+            ],
         )
         approval_request, approval_ask = approval_ids
 
         approvals = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
         )
-        assert {i["tool_call_id"] for i in approvals.json()["items"]} == set(approval_ids)
+        assert {i["tool_call_id"] for i in approvals.json()["items"]} == set(
+            approval_ids
+        )
 
         # Resolve the FIRST (deny) — the sibling is still pending, so NO resume run
         # and the conversation stays WAITING.
@@ -1178,7 +1291,9 @@ class TestPodAgentLifecycle:
         )
         assert resume_run is None
         assert first_return is not None
-        assert first_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            first_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        )
         conversation = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
         )
@@ -1186,13 +1301,18 @@ class TestPodAgentLifecycle:
         approvals_mid = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
         )
-        assert [i["tool_call_id"] for i in approvals_mid.json()["items"]] == [approval_ask]
+        assert [i["tool_call_id"] for i in approvals_mid.json()["items"]] == [
+            approval_ask
+        ]
 
         # Resolve the SECOND (last) — now one resume run starts with BOTH returns.
         second = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_ask}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert second.status_code == 200, second.text
 
@@ -1234,22 +1354,26 @@ class TestPodAgentLifecycle:
         before the new run starts."""
         _ = worker
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="ask_user",
-                tool_args={
-                    "questions": [
-                        {
-                            "question": "Which auth method?",
-                            "header": "Auth",
-                            "options": [{"label": "OAuth"}, {"label": "API key"}],
-                        }
-                    ]
-                },
-                agent_runtime=mock_safe_runtime,
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="ask_user",
+            tool_args={
+                "questions": [
+                    {
+                        "question": "Which auth method?",
+                        "header": "Auth",
+                        "options": [{"label": "OAuth"}, {"label": "API key"}],
+                    }
+                ]
+            },
+            agent_runtime=mock_safe_runtime,
         )
 
         events = await _post_sse(
@@ -1320,31 +1444,37 @@ class TestPodAgentLifecycle:
         _ = worker
         executed: list[str] = []
 
-        async def fail_if_executed(self, *, conversation, user_id, agent_run_id, tool_name, args):
+        async def fail_if_executed(
+            self, *, conversation, user_id, agent_run_id, tool_name, args
+        ):
             del self, conversation, user_id, agent_run_id, args
             executed.append(tool_name)
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
 
         monkeypatch.setattr(
-            ConversationService,
+            ResumeToolReturnBuilder,
             "_execute_approved_tool_as_user",
             fail_if_executed,
         )
 
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="request_approval",
-                tool_args={
-                    "tool_name": "exec_command",
-                    "args": {"cmd": "lemma pods delete --all"},
-                    "title": "Delete all pods?",
-                    "reason": "Confirm destructive cleanup.",
-                },
-                agent_runtime=mock_safe_runtime,
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": {"cmd": "lemma pods delete --all"},
+                "title": "Delete all pods?",
+                "reason": "Confirm destructive cleanup.",
+            },
+            agent_runtime=mock_safe_runtime,
         )
 
         events = await _post_sse(
@@ -1371,7 +1501,10 @@ class TestPodAgentLifecycle:
         assert tool_return["agent_run_id"] == str(paused_run.id)
         assert tool_return["tool_result"]["success"] is False
         assert tool_return["tool_result"]["executed"] is False
-        assert tool_return["tool_result"]["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            tool_return["tool_result"]["decision"]
+            == AgentRunApprovalDecision.DENY.value
+        )
 
         approvals_after = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
@@ -1400,25 +1533,27 @@ class TestPodAgentLifecycle:
             executed_calls.append({"tool_name": tool_name, "args": args})
             return {"stdout": "ok", "success": True}
 
-        monkeypatch.setattr(
-            ApprovalExecutor, "execute_as_user", fake_execute_as_user
-        )
+        monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
 
         approved_args = {"cmd": "echo hi"}
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
-                authenticated_client,
-                fixed_test_org,
-                tool_name="request_approval",
-                tool_args={
-                    "tool_name": "exec_command",
-                    "args": approved_args,
-                    "title": "Run echo?",
-                    "reason": "Sanity check.",
-                },
-                agent_runtime=mock_safe_runtime,
-            )
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
+            authenticated_client,
+            fixed_test_org,
+            tool_name="request_approval",
+            tool_args={
+                "tool_name": "exec_command",
+                "args": approved_args,
+                "title": "Run echo?",
+                "reason": "Sanity check.",
+            },
+            agent_runtime=mock_safe_runtime,
         )
 
         decision = await authenticated_client.post(
@@ -1439,7 +1574,7 @@ class TestPodAgentLifecycle:
                 conversation_id
             )
             service = _build_conversation_service(uow)
-            live_deps = await service._build_resume_context(
+            live_deps = await service.resume_returns._build_resume_context(
                 conversation=conversation,
                 user_id=UUID(fixed_test_user["id"]),
                 agent_run_id=paused_run.id,
@@ -1599,6 +1734,7 @@ class TestPodAgentLifecycle:
         }
         assert new_run_ids and tool_return["agent_run_id"] not in new_run_ids
 
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_stopping_streaming_agent_run_does_not_wedge_worker(
         self,
@@ -1659,7 +1795,7 @@ class TestPodAgentLifecycle:
             db_session,
             stopped_run_id,
             AgentRunStatus.STOPPED,
-            attempts=300,
+            timeout_seconds=30.0,
         )
 
         followup_events = await _post_sse(
@@ -1669,6 +1805,7 @@ class TestPodAgentLifecycle:
         )
         _assert_completed_without_error(followup_events)
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_task_conversation_waits_then_completes_with_real_worker_model(
@@ -1742,7 +1879,9 @@ class TestPodAgentLifecycle:
             },
         )
         assert listed_waiting.status_code == 200, listed_waiting.text
-        assert conversation_id in [item["id"] for item in listed_waiting.json()["items"]]
+        assert conversation_id in [
+            item["id"] for item in listed_waiting.json()["items"]
+        ]
 
         completed_events = await _post_sse(
             authenticated_client,
@@ -1763,6 +1902,7 @@ class TestPodAgentLifecycle:
         assert completed_payload["status"] == ConversationStatus.COMPLETED.value
         assert "secret_code received" in str(completed_payload["output"])
 
+    @pytest.mark.provider
     @pytest.mark.real_llm
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_agent_http_lifecycle_with_real_worker_model(
@@ -1814,7 +1954,12 @@ class TestPodAgentLifecycle:
 
         listed = await authenticated_client.get(f"/pods/{pod_id}/agents")
         assert listed.status_code == 200, listed.text
-        assert [item["name"] for item in listed.json()["items"]] == ["lifecycle_agent"]
+        # The pod's own assistant is listed beside it, and sorts last: ids are
+        # time-ordered and its row is created with the pod.
+        assert [item["name"] for item in listed.json()["items"]] == [
+            "lifecycle_agent",
+            DEFAULT_POD_AGENT_NAME,
+        ]
 
         fetched = await authenticated_client.get(
             f"/pods/{pod_id}/agents/lifecycle_agent"
@@ -2055,14 +2200,23 @@ class TestAgentRoleVisibility:
             headers=ctx["viewer_headers"],
         )
         assert viewer_list.status_code == status.HTTP_200_OK, viewer_list.text
-        assert item_names(viewer_list.json()) == {default_name}
+        # The pod's own assistant is always among them: it is pod-scoped, so
+        # there is no per-agent grant to withhold, and every member can use it.
+        assert item_names(viewer_list.json()) == {
+            default_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
 
         editor_list = await async_client.get(
             f"/pods/{pod_id}/agents",
             headers=ctx["editor_headers"],
         )
         assert editor_list.status_code == status.HTTP_200_OK, editor_list.text
-        assert item_names(editor_list.json()) == {default_name, editor_name}
+        assert item_names(editor_list.json()) == {
+            default_name,
+            editor_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
         editor_items = {item["name"]: item for item in editor_list.json()["items"]}
         assert set(editor_items[default_name]["allowed_actions"]) == {
             "agent.read",
@@ -2102,7 +2256,11 @@ class TestAgentRoleVisibility:
             headers=ctx["custom_headers"],
         )
         assert custom_list.status_code == status.HTTP_200_OK, custom_list.text
-        assert item_names(custom_list.json()) == {default_name, custom_name}
+        assert item_names(custom_list.json()) == {
+            default_name,
+            custom_name,
+            DEFAULT_POD_AGENT_NAME,
+        }
         custom_items = {item["name"]: item for item in custom_list.json()["items"]}
         assert set(custom_items[default_name]["allowed_actions"]) == {"agent.read"}
         assert set(custom_items[custom_name]["allowed_actions"]) == {"agent.read"}
@@ -2148,6 +2306,7 @@ class TestAgentRoleVisibility:
 
 
 class TestPodAssistantLifecycle:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_pod_assistant_http_lifecycle_with_real_worker_model(
         self,
@@ -2424,16 +2583,16 @@ class TestAgentRuntimeConfigApis:
         assert org_response["has_credentials"] is True
         assert "credentials" not in org_response
         system_profile = next(
-            item
-            for item in profile_payload["items"]
-            if item["id"] == "system:lemma"
+            item for item in profile_payload["items"] if item["id"] == "system:lemma"
         )
         assert system_profile["scope"] == "SYSTEM"
         assert system_profile["kind"] == "MODEL_PROVIDER"
         assert system_profile["protocol"] == "OPENAI_COMPATIBLE"
         assert system_profile["name"] == "Lemma"
         assert system_profile["default_model_name"] == system_lemma_default_model()
-        assert [item["name"] for item in system_profile["model_catalog"]] == system_lemma_model_names()
+        assert [
+            item["name"] for item in system_profile["model_catalog"]
+        ] == system_lemma_model_names()
         assert system_profile["derived_harness_kind"] == "LEMMA"
 
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
@@ -2587,8 +2746,266 @@ class TestAgentRuntimeConfigApis:
                 )
             }
 
+    async def test_profile_update_archive_and_restore_lifecycle(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        """The editor's full write surface, exercised end to end.
+
+        `runtime_profile_editor.py` has no dedicated e2e coverage of its own --
+        every other test only touches it incidentally through fixture setup.
+        This drives create -> update -> archive -> restore against the real
+        routes and checks each transition's effect on both the direct GET and
+        the org listing.
+        """
+        org_id = fixed_test_org["id"]
+
+        created = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": f"Lifecycle Provider {uuid4().hex[:8]}",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "lifecycle-secret",
+                "description": "Original description",
+                "default_model_name": "lifecycle/model-a",
+                "model_names": ["lifecycle/model-a", "lifecycle/model-b"],
+            },
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        profile = created.json()
+        profile_id = profile["id"]
+        assert profile["status"] == "ACTIVE"
+        assert profile["default_model_name"] == "lifecycle/model-a"
+
+        # Update: rename, redescribe, and repoint the default model. base_url,
+        # api_key and model_names are all left unset, so the editor takes the
+        # no-rediscovery path rather than making a provider round trip.
+        updated_name = f"Lifecycle Provider Renamed {uuid4().hex[:8]}"
+        updated = await authenticated_client.patch(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+            json={
+                "source": "OPENAI_COMPATIBLE",
+                "name": updated_name,
+                "description": "Updated description",
+                "default_model_name": "lifecycle/model-b",
+            },
+        )
+        assert updated.status_code == status.HTTP_200_OK, updated.text
+        updated_payload = updated.json()
+        assert updated_payload["name"] == updated_name
+        assert updated_payload["description"] == "Updated description"
+        assert updated_payload["default_model_name"] == "lifecycle/model-b"
+        assert updated_payload["status"] == "ACTIVE"
+        # The catalog and credentials survive an edit that did not touch them.
+        assert {item["name"] for item in updated_payload["model_catalog"]} == {
+            "lifecycle/model-a",
+            "lifecycle/model-b",
+        }
+        assert updated_payload["has_credentials"] is True
+
+        fetched = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert fetched.status_code == status.HTTP_200_OK, fetched.text
+        assert fetched.json()["name"] == updated_name
+
+        # Archive: soft-disable. Dropped from the default listing, but still
+        # directly addressable -- otherwise it could never be restored.
+        archived = await authenticated_client.delete(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+        listed_default = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+        )
+        assert listed_default.status_code == status.HTTP_200_OK, listed_default.text
+        assert profile_id not in {item["id"] for item in listed_default.json()["items"]}
+
+        listed_with_disabled = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+            params={"include_disabled": True},
+        )
+        assert listed_with_disabled.status_code == status.HTTP_200_OK
+        disabled_entry = next(
+            item
+            for item in listed_with_disabled.json()["items"]
+            if item["id"] == profile_id
+        )
+        assert disabled_entry["status"] == "DISABLED"
+
+        fetched_after_archive = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert fetched_after_archive.status_code == status.HTTP_200_OK, (
+            fetched_after_archive.text
+        )
+        assert fetched_after_archive.json()["status"] == "DISABLED"
+
+        # Archiving an already-archived profile is idempotent, not an error.
+        archived_again = await authenticated_client.delete(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        )
+        assert archived_again.status_code == status.HTTP_204_NO_CONTENT, (
+            archived_again.text
+        )
+
+        # Restore: back to ACTIVE, and back in the default listing.
+        restored = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore",
+        )
+        assert restored.status_code == status.HTTP_200_OK, restored.text
+        restored_payload = restored.json()
+        assert restored_payload["status"] == "ACTIVE"
+        assert restored_payload["name"] == updated_name
+
+        listed_after_restore = await authenticated_client.get(
+            f"/organizations/{org_id}/agent-runtime/profiles",
+        )
+        assert profile_id in {
+            item["id"] for item in listed_after_restore.json()["items"]
+        }
+
+        # Restoring an already-active profile is idempotent too.
+        restored_again = await authenticated_client.post(
+            f"/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore",
+        )
+        assert restored_again.status_code == status.HTTP_200_OK, restored_again.text
+        assert restored_again.json()["status"] == "ACTIVE"
+
+
+class TestFinalAnswerToolset:
+    """The Agent Host ``final_answer`` MCP tool, called directly.
+
+    ``build_final_answer_toolset`` backs the structured-output contract for
+    remote (Agent Host) runs only -- the in-process LEMMA harness gets its
+    final answer through pydantic-ai's ``output_type`` instead, a completely
+    different mechanism covered elsewhere. Nothing drives this tool through a
+    real Agent Host wire-protocol run in this suite, and standing one up just
+    to reach one validation branch would be a lot of ACP scaffolding for what
+    is fundamentally a schema-validation-and-persistence question. So this
+    calls the tool function the toolset actually builds -- the same object an
+    MCP call would invoke -- against a real agent run row, exercising the real
+    jsonschema validator and the real ``agent_runs.run_metadata`` write.
+    """
+
+    async def test_schema_violations_are_rejected_then_accepted_and_flagged(
+        self,
+        authenticated_client,
+        fixed_test_org,
+    ):
+        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+        output_schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        create_agent = await authenticated_client.post(
+            f"/pods/{pod_id}/agents",
+            json={
+                "name": "Final Answer Agent",
+                "instruction": "Answer with the required schema.",
+                "output_schema": output_schema,
+            },
+        )
+        assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
+        agent_payload = create_agent.json()
+        agent_id = UUID(agent_payload["id"])
+
+        create_conversation = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations",
+            json={"agent_name": agent_payload["name"], "title": "Final answer"},
+        )
+        assert create_conversation.status_code == status.HTTP_201_CREATED, (
+            create_conversation.text
+        )
+        conversation_id = UUID(create_conversation.json()["id"])
+
+        uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            repo = ConversationRepository(uow)
+            run = await repo.create_agent_run(
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+                metadata={"source": "final_answer_e2e"},
+            )
+            await uow.commit()
+
+        user_id = UUID(agent_payload["user_id"])
+        domain_agent = Agent(
+            id=agent_id,
+            pod_id=UUID(pod_id),
+            user_id=user_id,
+            name=agent_payload["name"],
+            instruction="Answer with the required schema.",
+            output_schema=output_schema,
+        )
+        ctx = SimpleNamespace(
+            deps=BaseAgentContext(
+                user_id=user_id,
+                pod_id=UUID(pod_id),
+                conversation_id=conversation_id,
+                agent_run_id=run.id,
+            )
+        )
+
+        # A fresh toolset per phase: the rejection counter lives on the
+        # toolset closure, and each phase's assertions depend on starting at
+        # zero rejections.
+        def _build_tool():
+            toolset = build_final_answer_toolset(
+                agent=domain_agent, uow_factory=uow_factory
+            )
+            return toolset.tools[FINAL_ANSWER_TOOL_NAME].function
+
+        invalid_output = {"wrong_field": "nope"}
+
+        # Phase 1: within the rejection budget. Rejected, and nothing is
+        # persisted yet -- an agent mid-argument with its own schema must not
+        # have a bad answer recorded as authoritative.
+        final_answer = _build_tool()
+        for _ in range(3):
+            rejected = await final_answer(
+                ctx, status="COMPLETED", output=invalid_output
+            )
+            assert rejected["success"] is False
+            assert "does not match the agent's output schema" in rejected["error"]
+
+        assert await read_final_answer(uow_factory, agent_run_id=run.id) is None
+
+        # Phase 2: past the budget. The tool takes the bad answer rather than
+        # spend the rest of the run arguing with the validator, and flags it.
+        accepted = await final_answer(ctx, status="COMPLETED", output=invalid_output)
+        assert accepted["success"] is True
+        assert accepted["schema_violation"]
+
+        flagged_record = await read_final_answer(uow_factory, agent_run_id=run.id)
+        assert flagged_record is not None
+        assert flagged_record["schema_violation"]
+        assert flagged_record["output"] == invalid_output
+
+        # Phase 3: a fresh toolset (a new run's counter starts at zero) with a
+        # schema-conformant answer persists cleanly, overwriting the flagged
+        # record -- last write wins.
+        clean_final_answer = _build_tool()
+        clean = await clean_final_answer(
+            ctx, status="COMPLETED", output={"answer": "42"}
+        )
+        assert clean["success"] is True
+        assert "schema_violation" not in clean
+
+        clean_record = await read_final_answer(uow_factory, agent_run_id=run.id)
+        assert clean_record is not None
+        assert clean_record["output"] == {"answer": "42"}
+        assert "schema_violation" not in clean_record
+
 
 class TestAgentToolApis:
+    @pytest.mark.provider
     async def test_agent_tool_http_apis(self, authenticated_client, db_session):
         await _seed_gmail_connector(db_session)
 
@@ -2625,7 +3042,7 @@ class TestAgentOpenApi:
         schemas = openapi["components"]["schemas"]
 
         assert "/pods/{pod_id}/conversations" in paths
-        assert "/organizations/{org_id}/agent-runtime/profiles" in paths
+        assert "/organizations/{organization_id}/agent-runtime/profiles" in paths
         assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
         assert "/agent-runtime/profiles" not in paths
         assert "/agent-runtime/default" not in paths
@@ -2678,19 +3095,19 @@ class TestAgentOpenApi:
             == "agent.host.harnesses.list"
         )
         assert (
-            paths["/organizations/{org_id}/agent-runtime/profiles"]["get"][
+            paths["/organizations/{organization_id}/agent-runtime/profiles"]["get"][
                 "operationId"
             ]
             == "agent.runtime.profiles.list"
         )
         assert (
-            paths["/organizations/{org_id}/agent-runtime/profiles"]["post"][
+            paths["/organizations/{organization_id}/agent-runtime/profiles"]["post"][
                 "operationId"
             ]
             == "agent.runtime.profiles.create"
         )
         create_profile_schema = paths[
-            "/organizations/{org_id}/agent-runtime/profiles"
+            "/organizations/{organization_id}/agent-runtime/profiles"
         ]["post"]["requestBody"]["content"]["application/json"]["schema"]
         assert create_profile_schema["discriminator"]["propertyName"] == "source"
         assert set(create_profile_schema["discriminator"]["mapping"]) == {
@@ -2698,22 +3115,27 @@ class TestAgentOpenApi:
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
         }
-        assert schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
-            "base_url"
-        ]["format"] == "uri"
+        assert (
+            schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
+                "base_url"
+            ]["format"]
+            == "uri"
+        )
         assert (
             paths["/tools/report-feedback"]["post"]["operationId"]
             == "agent.tool.report_feedback"
         )
 
-        profile_path = paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}"]
+        profile_path = paths[
+            "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}"
+        ]
         assert profile_path["get"]["operationId"] == "agent.runtime.profiles.get"
         assert profile_path["patch"]["operationId"] == "agent.runtime.profiles.update"
         assert profile_path["delete"]["operationId"] == "agent.runtime.profiles.archive"
         assert (
-            paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore"][
-                "post"
-            ]["operationId"]
+            paths[
+                "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore"
+            ]["post"]["operationId"]
             == "agent.runtime.profiles.restore"
         )
         # `archive` is a VOID_VERB, so the SDK generates a `-> None` call and the
@@ -2744,26 +3166,30 @@ async def _wait_for_conversation_title(
     pod_id,
     conversation_id,
     *,
-    attempts: int = 160,
-    sleep_seconds: float = 0.25,
+    timeout_seconds: float = 40.0,
+    interval_seconds: float = 0.15,
 ) -> str:
     """Poll the conversation until the worker-generated title lands."""
-    last: str | None = None
-    for _ in range(attempts):
+
+    async def probe() -> dict:
         response = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
         )
         assert response.status_code == 200, response.text
-        last = response.json().get("title")
-        if last:
-            return last
-        await asyncio.sleep(sleep_seconds)
-    raise AssertionError(
-        f"Conversation {conversation_id} title was not generated in time (last={last!r})"
+        return response.json()
+
+    payload = await eventually(
+        label=f"conversation {conversation_id} title",
+        probe=probe,
+        done=lambda body: bool(body.get("title")),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
     )
+    return payload["title"]
 
 
 class TestConversationTitleGeneration:
+    @pytest.mark.provider
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_first_run_generates_title_with_real_worker_model(
         self,

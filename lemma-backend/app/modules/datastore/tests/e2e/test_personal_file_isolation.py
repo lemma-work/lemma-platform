@@ -144,7 +144,9 @@ class TestPersonalFileIsolation:
         assert grant.status_code == status.HTTP_200_OK, grant.text
 
         # The pod-wide grant DOES reach RESTRICTED pod documents...
-        assert (await other.get_file(restricted_doc["path"]))["id"] == restricted_doc["id"]
+        assert (await other.get_file(restricted_doc["path"]))["id"] == restricted_doc[
+            "id"
+        ]
 
         # ...but it must NOT reach another user's PERSONAL files, by any route.
         await other.get_file(internal_path, expected_status=status.HTTP_403_FORBIDDEN)
@@ -156,3 +158,96 @@ class TestPersonalFileIsolation:
 
         # The owner still reaches their own personal file.
         assert (await owner.get_file("/me/secret.md"))["id"] == secret["id"]
+
+
+class TestAgentMemoryIsolation:
+    """An agent's memory splits across two trees, and the split is the point.
+
+    `/memory` is what the pod knows and every member should see. `/me` is what
+    the agent knows about *one person* — their name, their preferences, what
+    they told it in confidence — and nobody else should. Both are ordinary
+    datastore files, so the split rests entirely on path-derived visibility.
+    This pins both directions: the shared one really is shared, and the private
+    one really is private.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pod_memory_is_readable_by_another_member(
+        self,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+    ):
+        ctx = await create_role_visibility_context(
+            authenticated_client,
+            async_client,
+            fixed_test_org,
+            pod_name_prefix="agent-memory-shared",
+            custom_role="MEM_SHARED",
+        )
+        pod_id = ctx["pod_id"]
+        owner = DatastoreApi(authenticated_client, pod_id)
+        other = DatastoreApi(async_client, pod_id, ctx["custom_viewer"])
+
+        await owner.create_folder("/memory")
+        shared = await owner.upload_file(
+            "AGENTS.md", b"- pod-wide fact", directory_path="/memory"
+        )
+
+        assert shared["visibility"] == "POD"
+        # The other member reads the same row, not a copy of their own.
+        assert (await other.get_file("/memory/AGENTS.md"))["id"] == shared["id"]
+
+    @pytest.mark.asyncio
+    async def test_personal_agent_memory_is_not_readable_by_another_member(
+        self,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+        index_datastore_file,
+    ):
+        ctx = await create_role_visibility_context(
+            authenticated_client,
+            async_client,
+            fixed_test_org,
+            pod_name_prefix="agent-memory-personal",
+            custom_role="MEM_PERSONAL",
+        )
+        pod_id = ctx["pod_id"]
+        owner = DatastoreApi(authenticated_client, pod_id)
+        other = DatastoreApi(async_client, pod_id, ctx["custom_viewer"])
+
+        token = f"ZZMemory{uuid4().hex[:8]}"
+        await owner.create_folder("/me/agents")
+        await owner.create_folder("/me/agents/butler")
+        note = await owner.upload_file(
+            "AGENTS.md",
+            f"{token} what the agent knows about this person".encode(),
+            directory_path="/me/agents/butler",
+        )
+        await _index(index_datastore_file, note)
+
+        assert note["visibility"] == "PERSONAL"
+
+        # Positive control. Without one, every denial below passes just as well
+        # when the other member has lost all access to the pod — the sibling
+        # test guards its own vacuity the same way.
+        shared = await owner.upload_file(
+            "readable.md", b"pod-visible", directory_path="/"
+        )
+        assert (await other.get_file("/readable.md"))["id"] == shared["id"]
+
+        # A different member's `/me` is a different tree entirely.
+        await other.get_file(
+            "/me/agents/butler/AGENTS.md",
+            expected_status=status.HTTP_404_NOT_FOUND,
+        )
+
+        # And the isolation is real, not an alias trick: the expanded path is
+        # spellable, and reaching for it is refused rather than merely hidden.
+        internal = f"/{note['owner_user_id']}/agents/butler/AGENTS.md"
+        await other.get_file(internal, expected_status=status.HTTP_403_FORBIDDEN)
+
+        # Nor can they find it by searching for something only it contains.
+        found = await other.search_files(token)
+        assert note["id"] not in {item["file_id"] for item in found["items"]}

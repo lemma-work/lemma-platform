@@ -28,9 +28,7 @@ from app.modules.agent_surfaces.services.telegram_mini_app_service import (
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
-    SurfaceAuthConfigInfo,
 )
-from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 
 pytestmark = pytest.mark.asyncio
 
@@ -102,9 +100,10 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         "text": "Open Pocket Desk",
         "web_app": {"url": "https://apps.example.test/pocket-desk"},
     }
-    assert {
-        command["command"] for command in calls["setMyCommands"]["commands"]
-    } == {"help", "retry"}
+    assert {command["command"] for command in calls["setMyCommands"]["commands"]} == {
+        "help",
+        "retry",
+    }
 
 
 async def test_create_surface(monkeypatch):
@@ -115,7 +114,7 @@ async def test_create_surface(monkeypatch):
         account_binding_resolver=enricher,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -155,7 +154,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
         account_binding_resolver=enricher,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     pod_id = uuid4()
@@ -199,7 +198,9 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
     assert second.name == "slack-support"
 
 
-async def test_create_telegram_surface_uses_built_in_credentials_without_account(monkeypatch):
+async def test_create_telegram_surface_uses_built_in_credentials_without_account(
+    monkeypatch,
+):
     repo = AsyncMock()
     enricher = AsyncMock()
     service = AgentSurfaceService(
@@ -250,13 +251,13 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "http://localhost:8711",
     )
 
     with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
         await service.create_surface(
-        platform=SurfacePlatform.TELEGRAM,
+            platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -266,7 +267,9 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
     repo.create.assert_not_awaited()
 
 
-async def test_create_telegram_webhook_surface_registers_per_surface_webhook(monkeypatch):
+async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
+    monkeypatch,
+):
     repo = AsyncMock()
     enricher = AsyncMock()
     account_port = AsyncMock()
@@ -288,7 +291,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(mon
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     register = AsyncMock()
@@ -330,13 +333,13 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
     )
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
     with pytest.raises(AgentSurfaceValidationError, match="already connected"):
         await service.create_surface(
-        platform=SurfacePlatform.TELEGRAM,
+            platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -366,7 +369,7 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
     repo.get_system_credential_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -374,7 +377,7 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
         AgentSurfaceCredentialConflictError, match="System WHATSAPP credentials"
     ) as raised:
         await service.create_surface(
-        platform=SurfacePlatform.WHATSAPP,
+            platform=SurfacePlatform.WHATSAPP,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -409,7 +412,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     repo.get_account_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -417,7 +420,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
         AgentSurfaceCredentialConflictError, match="connected account"
     ) as raised:
         await service.create_surface(
-        platform=SurfacePlatform.SLACK,
+            platform=SurfacePlatform.SLACK,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
@@ -447,7 +450,7 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = ("tenant-123", None, None)
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -467,7 +470,7 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
 async def test_create_teams_requires_account_id():
     with pytest.raises(AgentSurfaceValidationError, match="require account_id"):
         AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.TEAMS,
+            surface_type=SurfacePlatform.TEAMS,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=SurfaceConfig(),
@@ -494,302 +497,6 @@ async def test_create_telegram_surface():
         config=config,
     )
     assert entity.surface_type == SurfacePlatform.TELEGRAM
-
-
-async def test_create_gmail_surface_builds_inbox_filtered_trigger():
-    from app.modules.agent_surfaces.domain.ports import SurfaceAccountInfo
-
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    agent_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email="assistant@gmail.test",
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="gmail",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    config = SurfaceConfig()
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="gmail:gmail_new_gmail_message")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="gmail:gmail_new_gmail_message",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.GMAIL,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        config=config,
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email == "assistant@gmail.test"
-    schedule_payload = schedule_service.create_schedule.await_args.args[0]
-    assert schedule_payload.connector_trigger_id == "gmail:gmail_new_gmail_message"
-    assert schedule_payload.config["labelIds"] == "INBOX"
-    assert schedule_payload.config["query"] == "label:inbox -from:assistant@gmail.test"
-    assert schedule_payload.config["userId"] == "me"
-
-
-async def test_create_outlook_surface_keeps_trigger_config_minimal():
-    from app.modules.agent_surfaces.domain.ports import SurfaceAccountInfo
-
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    agent_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email="assistant@outlook.test",
-        connector_id="outlook",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="outlook",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    config = SurfaceConfig()
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="outlook:outlook_message_trigger")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="outlook:outlook_message_trigger",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.OUTLOOK,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        config=config,
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email == "assistant@outlook.test"
-    schedule_payload = schedule_service.create_schedule.await_args.args[0]
-    assert schedule_payload.connector_trigger_id == "outlook:outlook_message_trigger"
-    assert "query" not in schedule_payload.config
-    assert "labelIds" not in schedule_payload.config
-
-
-async def test_create_outlook_surface_allows_account_without_email():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    pod_id = uuid4()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    user_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=user_id,
-        auth_config_id=auth_config_id,
-        email=None,
-        connector_id="outlook",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="outlook",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    app_trigger_repo.get_by_app_name_and_event_type.return_value = [
-        AsyncMock(id="outlook:outlook_message_trigger")
-    ]
-    schedule_service.create_schedule.return_value = ScheduleEntity(
-        id=uuid4(),
-        user_id=user_id,
-        pod_id=pod_id,
-        schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="outlook:outlook_message_trigger",
-        config={},
-    )
-
-    result = await service.create_surface(
-        platform=SurfacePlatform.OUTLOOK,
-        pod_id=pod_id,
-        agent_id=uuid4(),
-        config=SurfaceConfig(),
-        mode=SurfaceMode.EMAIL,
-        account_id=account_id,
-    )
-
-    assert result.surface_identity_email is None
-    schedule_service.create_schedule.assert_awaited()
-
-
-async def test_create_gmail_surface_requires_account_email():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=uuid4(),
-        auth_config_id=auth_config_id,
-        email=None,
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="composio",
-        connector_id="gmail",
-    )
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    repo.create.side_effect = lambda entity: entity
-    repo.update.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-
-    with pytest.raises(AgentSurfaceValidationError, match="email address"):
-        await service.create_surface(
-            platform=SurfacePlatform.GMAIL,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            config=SurfaceConfig(),
-            mode=SurfaceMode.EMAIL,
-            account_id=account_id,
-        )
-
-
-async def test_create_gmail_surface_requires_composio_account():
-    repo = AsyncMock()
-    enricher = AsyncMock()
-    schedule_service = AsyncMock()
-    app_trigger_repo = AsyncMock()
-    account_port = AsyncMock()
-    auth_config_port = AsyncMock()
-    account_id = uuid4()
-    auth_config_id = uuid4()
-    config = SurfaceConfig()
-    account_port.get_account.return_value = SurfaceAccountInfo(
-        id=account_id,
-        user_id=uuid4(),
-        auth_config_id=auth_config_id,
-        email="assistant@gmail.test",
-        connector_id="gmail",
-        credentials={},
-    )
-    auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
-        id=auth_config_id,
-        kind="package",
-        connector_id="gmail",
-    )
-    repo.create.side_effect = lambda entity: entity
-    enricher.resolve_binding.return_value = (None, None, None)
-    service = AgentSurfaceService(
-        surface_repository=repo,
-        account_binding_resolver=enricher,
-        schedule_service=schedule_service,
-        connector_trigger_repository=app_trigger_repo,
-        account_port=account_port,
-        auth_config_port=auth_config_port,
-    )
-
-    with pytest.raises(AgentSurfaceValidationError, match="Composio-backed"):
-        await service.create_surface(
-        platform=SurfacePlatform.GMAIL,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            config=config,
-            mode=SurfaceMode.EMAIL,
-            account_id=account_id,
-        )
-
-    schedule_service.create_schedule.assert_not_awaited()
 
 
 async def test_get_surface_raises_not_found():
@@ -876,7 +583,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
         credentials={"bot_token": "telegram-token"},
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
     register = AsyncMock()
@@ -992,7 +699,7 @@ async def test_update_surface_updates_account_metadata(monkeypatch):
     repo.update.return_value = entity
     enricher.resolve_binding.return_value = (None, "T999", "U-BOT-NEW")
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.settings.api_url",
+        "app.core.config.settings.api_url",
         "https://api.example.test",
     )
 
@@ -1020,16 +727,17 @@ async def test_slack_surface_matches_workspace_from_connected_account():
 
 
 async def test_surface_event_mode_defaults_and_validation():
-    gmail = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.GMAIL,
+    email = AgentSurfaceEntity.create(
+        surface_type=SurfacePlatform.RESEND,
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
         account_id=uuid4(),
     )
-    # Email platforms default to EMAIL mode + COMPOSIO_TRIGGER without explicit args.
-    assert gmail.mode is SurfaceMode.EMAIL
-    assert gmail.event_mode is SurfaceEventMode.COMPOSIO_TRIGGER
+    # Email still defaults to EMAIL mode, and now receives over a webhook like
+    # everything else -- polling existed only for the Composio mailboxes.
+    assert email.mode is SurfaceMode.EMAIL
+    assert email.event_mode is SurfaceEventMode.WEBHOOK
 
     telegram = AgentSurfaceEntity.create(
         surface_type=SurfacePlatform.TELEGRAM,
@@ -1038,14 +746,6 @@ async def test_surface_event_mode_defaults_and_validation():
     )
     assert telegram.mode is SurfaceMode.DM
     assert telegram.event_mode is SurfaceEventMode.WEBHOOK
-
-    with pytest.raises(AgentSurfaceValidationError, match="COMPOSIO_TRIGGER"):
-        AgentSurfaceEntity.create(
-            surface_type=SurfacePlatform.TELEGRAM,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            event_mode=SurfaceEventMode.COMPOSIO_TRIGGER,
-        )
 
     with pytest.raises(AgentSurfaceValidationError, match="EMAIL mode"):
         AgentSurfaceEntity.create(
@@ -1062,8 +762,10 @@ async def test_surface_platform_from_source():
     assert SurfacePlatform.from_source("teams") == SurfacePlatform.TEAMS
     assert SurfacePlatform.from_source("whatsapp") == SurfacePlatform.WHATSAPP
     assert SurfacePlatform.from_source("telegram") == SurfacePlatform.TELEGRAM
-    assert SurfacePlatform.from_source("gmail") == SurfacePlatform.GMAIL
-    assert SurfacePlatform.from_source("outlook") == SurfacePlatform.OUTLOOK
+    assert SurfacePlatform.from_source("resend") == SurfacePlatform.RESEND
+    # Not surfaces any more. Still connectors an agent can use.
+    assert SurfacePlatform.from_source("gmail") is None
+    assert SurfacePlatform.from_source("outlook") is None
     assert SurfacePlatform.from_source("unknown") is None
 
 
@@ -1077,7 +779,9 @@ async def test_get_platform_setup_guide():
 
     assert guide.platform is SurfacePlatform.TEAMS
     assert guide.docs_path == "docs/surfaces/teams.md"
-    assert any(connector.mode.value == "CONNECTED_ACCOUNT" for connector in guide.connectors)
+    assert any(
+        connector.mode.value == "CONNECTED_ACCOUNT" for connector in guide.connectors
+    )
 
 
 async def test_get_platform_setup_guide_raises_for_invalid_platform():
@@ -1088,6 +792,27 @@ async def test_get_platform_setup_guide_raises_for_invalid_platform():
 
     with pytest.raises(AgentSurfaceValidationError):
         service.get_platform_setup_guide("not-a-platform")
+
+
+@pytest.mark.parametrize("platform", list(SurfacePlatform), ids=lambda p: p.value)
+async def test_every_surface_platform_has_a_setup_guide(platform):
+    """A platform you can create a surface for must have a guide for it.
+
+    ``RESEND`` did not. It resolved as a valid enum member and then fell off the
+    end of the guide builder into a bare ``ValueError``, so asking for the setup
+    of an auto-provisioned mailbox — one every agent gets, without anyone
+    configuring anything — returned a 500. Parametrised over the enum so a
+    platform added without a guide fails here rather than in production.
+    """
+    service = AgentSurfaceService(
+        surface_repository=AsyncMock(),
+        account_binding_resolver=AsyncMock(),
+    )
+
+    guide = service.get_platform_setup_guide(platform.value)
+
+    assert guide.platform is platform
+    assert guide.connectors, f"{platform.value} has a guide with no connector modes"
 
 
 class _FakeNonceCache:
@@ -1138,3 +863,45 @@ async def test_teams_consent_callback_requires_the_nonce_it_issued(monkeypatch):
     # The issued one works exactly once, so a replayed callback loses.
     assert await teams_consent.consume_nonce(surface_id, nonce)
     assert not await teams_consent.consume_nonce(surface_id, nonce)
+
+
+def _runtime_service() -> AgentSurfaceService:
+    return AgentSurfaceService(
+        surface_repository=AsyncMock(),
+        account_binding_resolver=AsyncMock(),
+    )
+
+
+async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
+    monkeypatch,
+):
+    """The desktop-app fix: a localhost API URL must not block a Resend surface
+    when polling mode is on — outbound goes over the API and inbound is polled,
+    so no public webhook callback is needed."""
+    monkeypatch.setattr(
+        "app.core.config.settings.api_url",
+        "http://localhost:8711",
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        True,
+    )
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    # Does not raise.
+    _runtime_service()._validate_runtime_supported(surface)
+
+
+async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.config.settings.api_url",
+        "http://localhost:8711",
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.surface_settings.enable_resend_polling_mode",
+        False,
+    )
+    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+
+    with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
+        _runtime_service()._validate_runtime_supported(surface)

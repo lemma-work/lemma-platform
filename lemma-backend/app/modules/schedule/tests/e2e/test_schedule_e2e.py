@@ -3,12 +3,14 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
@@ -17,6 +19,7 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -27,17 +30,15 @@ from app.modules.test_support.e2e_authz import (
 pytestmark = pytest.mark.e2e
 
 SCHEDULE_E2E_TIMEOUT_SECONDS = 90
-SCHEDULE_E2E_POLL_SECONDS = 0.5
-
 
 
 def _returns_async(fn):
-    """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
+    """Adapt a sync stub to the now-async ``verify_webhook`` operation.
 
-    The port became a coroutine so implementations are forced to offload the
-    blocking Composio SDK off the event loop. A sync stub still type-checks as
-    a callable, so without this the route awaits a dict, raises, and answers
-    403 -- which is what these tests started doing.
+    Verification became a coroutine so the blocking Composio SDK is forced off
+    the event loop. A sync stub still type-checks as a callable, so without this
+    the route awaits a dict, raises, and answers 403 -- which is what these
+    tests started doing.
     """
 
     async def _call(*args, **kwargs):
@@ -224,15 +225,24 @@ async def _wait_for_run_status(
     run_id: str,
     status: str,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    while asyncio.get_running_loop().time() < deadline:
-        run = await _workflow_run(client, pod_id, run_id)
-        if run["status"] == "FAILED":
-            pytest.fail(f"Workflow run failed while waiting for {status}: {run}")
-        if run["status"] == status:
-            return run
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for workflow run status {status}")
+    async def probe() -> dict:
+        return await _workflow_run(client, pod_id, run_id)
+
+    # failed={"FAILED"} (not wait_for_status's default {"FAILED", "ERROR"}):
+    # every caller here waits for "COMPLETED" -- "FAILED" is never the
+    # requested target -- so this preserves the original's unconditional
+    # fail-fast the instant the run's status becomes FAILED, regardless of
+    # what `status` was asked for. ("ERROR" isn't a WorkflowRunStatus value,
+    # so the two failed-sets are equivalent here; spelled out explicitly
+    # rather than relying on that coincidence.)
+    return await wait_for_status(
+        label=f"workflow run {run_id} status {status}",
+        probe=probe,
+        expected={status},
+        failed={"FAILED"},
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 async def _wait_for_workflow_run(
@@ -243,28 +253,39 @@ async def _wait_for_workflow_run(
     source: str,
     timeout_seconds: float = SCHEDULE_E2E_TIMEOUT_SECONDS,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> dict:
         for run_summary in await _workflow_runs(client, pod_id, workflow_name):
             if run_summary["status"] not in {"COMPLETED", "FAILED"}:
                 continue
             run = await _workflow_run(client, pod_id, run_summary["id"])
             if run_summary["status"] == "FAILED":
-                pytest.fail(f"Scheduled workflow run failed: {run}")
+                return {"outcome": "FAILED", "run": run}
             start_payload = run.get("execution_context", {}).get("start", {})
-            if (
-                run_summary["status"] == "COMPLETED"
-                and start_payload.get("payload", {}).get("source") == source
-            ):
-                return run
-            if (
-                run_summary["status"] == "COMPLETED"
-                and start_payload.get("payload", {}).get("data", {}).get("source")
-                == source
-            ):
-                return run
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for workflow run from {source}")
+            if start_payload.get("payload", {}).get("source") == source:
+                return {"outcome": "COMPLETED", "run": run}
+            if start_payload.get("payload", {}).get("data", {}).get("source") == source:
+                return {"outcome": "COMPLETED", "run": run}
+            # This terminal run didn't match `source` -- fall through to the
+            # next run_summary in the same pass, same as the original.
+        return {"outcome": "PENDING", "run": None}
+
+    # status_field="outcome" is synthetic, folded in by probe() above (not
+    # part of the API response) -- it lets a "first terminal run found" scan
+    # over a whole list, with a full-detail fetch per candidate, reuse
+    # wait_for_status's fail-fast/expected machinery instead of hand-rolling
+    # it. failed={"FAILED"} preserves the original's immediate pytest.fail on
+    # the first FAILED terminal run encountered while scanning, matching or
+    # not.
+    result = await wait_for_status(
+        label=f"workflow run from {source}",
+        probe=probe,
+        status_field="outcome",
+        expected={"COMPLETED"},
+        failed={"FAILED"},
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
+    return result["run"]
 
 
 async def _wait_for_agent_conversation(
@@ -274,18 +295,24 @@ async def _wait_for_agent_conversation(
     *,
     timeout_seconds: float = SCHEDULE_E2E_TIMEOUT_SECONDS,
 ) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> list[dict]:
         response = await client.get(
             f"/pods/{pod_id}/conversations",
             params={"agent_name": agent_name, "limit": 10},
         )
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
-        if items:
-            return items[0]
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for scheduled agent conversation {agent_name}")
+        return response.json()["items"]
+
+    # No fail-fast concept in the original -- just poll until a conversation
+    # shows up or time runs out.
+    items = await eventually(
+        label=f"scheduled agent conversation {agent_name}",
+        probe=probe,
+        done=bool,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
+    return items[0]
 
 
 async def _wait_for_schedule_runs(
@@ -296,15 +323,22 @@ async def _wait_for_schedule_runs(
     count: int,
     status: str,
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    while asyncio.get_running_loop().time() < deadline:
+    async def probe() -> list[dict]:
         response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
-        if len(items) == count and all(item["status"] == status for item in items):
-            return items
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for {count} schedule runs with status {status}")
+        return response.json()["items"]
+
+    # No fail-fast: `status` here is legitimately "TARGET_FAILED" at call
+    # sites, so this must never treat a FAILED-shaped status as an error.
+    return await eventually(
+        label=f"{count} schedule runs with status {status}",
+        probe=probe,
+        done=lambda items: (
+            len(items) == count and all(item["status"] == status for item in items)
+        ),
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 async def _wait_for_schedule_run_status_counts(
@@ -313,20 +347,29 @@ async def _wait_for_schedule_run_status_counts(
     schedule_id: str,
     expected: dict[str, int],
 ) -> list[dict]:
-    deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
     expected_total = sum(expected.values())
-    while asyncio.get_running_loop().time() < deadline:
+
+    async def probe() -> list[dict]:
         response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
-        items = response.json()["items"]
+        return response.json()["items"]
+
+    def _matches(items: list[dict]) -> bool:
         actual = {
             status: sum(item["status"] == status for item in items)
             for status in expected
         }
-        if len(items) == expected_total and actual == expected:
-            return items
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(f"Timed out waiting for schedule run statuses {expected}")
+        return len(items) == expected_total and actual == expected
+
+    # No fail-fast: `expected` legitimately includes "TARGET_FAILED"/"FAILED"
+    # counts at call sites -- those are the awaited distribution, not errors.
+    return await eventually(
+        label=f"schedule run statuses {expected}",
+        probe=probe,
+        done=_matches,
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
 
 
 def _composio_log_payload() -> dict:
@@ -786,13 +829,14 @@ async def test_cron_schedule_fires_workflow(
     authenticated_client: AsyncClient,
     fixed_test_org,
     worker,
+    db_session: AsyncSession,
     monkeypatch,
 ):
     """A recurring CRON schedule fires its workflow live via the scheduler."""
     _ = worker
-    # The product floor is 15 minutes, which no test can wait out. Lower it so
-    # this can watch a real fire at the next minute boundary; the floor itself is
-    # covered by test_time_schedule_policy.
+    # The product floor is 15 minutes, which no test can wait out. Lower it so a
+    # once-a-minute cron is accepted at all; the floor itself is covered by
+    # test_time_schedule_policy.
     monkeypatch.setattr(
         "app.modules.schedule.services.time_schedule_policy."
         "schedule_settings.schedule_minimum_interval_minutes",
@@ -810,17 +854,27 @@ async def test_cron_schedule_fires_workflow(
         pod_id,
         schedule_type=ScheduleType.TIME.value,
         workflow_name=workflow["name"],
-        # Every minute — fires at the next minute boundary (<= ~60s).
         config={"cron": "* * * * *", "payload": {"source": "cron-workflow"}},
     )
     assert schedule["config"]["cron"] == "* * * * *"
+
+    # This used to wait for the real next minute boundary, which cost up to 60
+    # seconds of doing nothing and made it the third-slowest test in the whole
+    # e2e suite. What is under test is that the poller claims a due cron row and
+    # fires its workflow -- not that wall-clock advances. So make the occurrence
+    # due now: claim_due_schedules selects on `next_fire_at <= now()`, and the
+    # poller ticks every DEFAULT_POLL_INTERVAL_SECONDS.
+    row = await db_session.get(Schedule, UUID(schedule["id"]))
+    assert row is not None, "the schedule API returned an id with no row behind it"
+    row.next_fire_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
 
     run = await _wait_for_workflow_run(
         authenticated_client,
         pod_id,
         workflow["name"],
         source="cron-workflow",
-        timeout_seconds=120,
+        timeout_seconds=60,
     )
     assert run["start_type"] == "SCHEDULED"
 
@@ -977,25 +1031,25 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
     )
 
     monkeypatch.setattr(
-        "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
+        "app.modules.connectors.contracts.triggers.verify_webhook",
         _returns_async(
-            lambda self, payload_text, headers: {
-            "version": "V3",
-            "payload": {
-                "id": provider_id,
-                "user_id": payload["metadata"]["user_id"],
-                "toolkit_slug": payload["metadata"]["toolkit_slug"],
-                "trigger_slug": payload["type"],
-                "metadata": {
-                    "connected_account": {
-                        "id": payload["metadata"]["connected_account_id"],
-                        "auth_config_id": payload["metadata"]["auth_config_id"],
-                    }
+            lambda payload_text, headers: {
+                "version": "V3",
+                "payload": {
+                    "id": provider_id,
+                    "user_id": payload["metadata"]["user_id"],
+                    "toolkit_slug": payload["metadata"]["toolkit_slug"],
+                    "trigger_slug": payload["type"],
+                    "metadata": {
+                        "connected_account": {
+                            "id": payload["metadata"]["connected_account_id"],
+                            "auth_config_id": payload["metadata"]["auth_config_id"],
+                        }
+                    },
+                    "payload": {**payload["data"], "source": "composio-log"},
                 },
-                "payload": {**payload["data"], "source": "composio-log"},
-            },
-            "raw_payload": payload,
-        }
+                "raw_payload": payload,
+            }
         ),
     )
     webhook = await authenticated_client.post("/webhooks/composio", json=payload)
@@ -1137,7 +1191,10 @@ async def test_webhook_agent_schedule_contract_requires_connector_trigger(
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         agent_name=agent["name"],
-        config={"source": "slack", "channel_id": "C123"},
+        # `composio`, not `slack`: this is a Composio-backed Slack trigger, so
+        # its deliveries arrive at `/webhooks/composio`, and a source no ingress
+        # answers for is refused at create.
+        config={"source": "composio", "channel_id": "C123"},
         expected_status=422,
     )
     assert "connector_trigger_id" in missing_trigger["details"][0]["msg"]
@@ -1148,14 +1205,14 @@ async def test_webhook_agent_schedule_contract_requires_connector_trigger(
         schedule_type=ScheduleType.WEBHOOK.value,
         agent_name=agent["name"],
         connector_trigger_id=connector_trigger_id,
-        config={"source": "slack", "channel_id": "C123"},
+        config={"source": "composio", "channel_id": "C123"},
         filter_instruction="Only continue for urgent messages",
         filter_output_schema={"type": "object"},
     )
     assert schedule["agent_id"] == agent["id"]
     assert schedule["workflow_id"] is None
     assert schedule["connector_trigger_id"] == connector_trigger_id
-    assert schedule["config"] == {"source": "slack", "channel_id": "C123"}
+    assert schedule["config"] == {"source": "composio", "channel_id": "C123"}
     assert schedule["filter_instruction"] == "Only continue for urgent messages"
     assert schedule["filter_output_schema"] == {"type": "object"}
 
@@ -1302,9 +1359,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
         source_run.target_outcome = ScheduleRunStatus.TARGET_FAILED.value
         source_run.completed_at = datetime.now(timezone.utc)
 
-    retry_path = (
-        f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
-    )
+    retry_path = f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
     hidden_retry = await async_client.post(
         retry_path,
         headers=auth_headers(peer),
@@ -1420,21 +1475,41 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert len(matching_events) == 1
         assert matching_events[0].payload["user_id"] == schedule["user_id"]
 
-    email_deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    matching_emails: list[dict] = []
-    while asyncio.get_running_loop().time() < email_deadline:
-        matching_emails = []
+    async def _matching_emails() -> list[dict]:
+        matches = []
         for path in Path(e2e_settings.email_output_dir).glob("*.json"):
-            message = json.loads(path.read_text(encoding="utf-8"))
+            # The filesystem mail spool is written by a separate worker
+            # process: ``glob`` can list a file whose ``os.open(O_CREAT)``
+            # has landed but whose ``json.dump`` body hasn't been flushed
+            # yet, or one the retention sweep deleted between the listing
+            # and the read. Either shows up here as an empty/partial read,
+            # not a real message -- skip it and let the next poll pick up
+            # the finished file, the same guard identity's e2e mailbox
+            # helper (``_filesystem_emails``) already applies.
+            try:
+                message = json.loads(path.read_text(encoding="utf-8"))
+            except OSError, json.JSONDecodeError:
+                continue
             # The subject leads with the schedule's humanized display name, so
             # match the stable tail rather than pinning the whole string.
             if message.get("to_email") == fixed_test_user["email"] and str(
                 message.get("subject", "")
             ).endswith("was paused after repeated failures"):
-                matching_emails.append(message)
-        if matching_emails:
-            break
-        await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
+                matches.append(message)
+        return matches
+
+    # No fail-fast -- done as soon as at least one match appears. The
+    # exactness check (exactly one, not a duplicate send) stays a separate
+    # assertion below, same as the original: it still catches 2+ matches,
+    # and 0 matches now surfaces as eventually's own timeout failure instead
+    # of via this assert.
+    matching_emails = await eventually(
+        label="pause email for the row owner's schedule",
+        probe=_matching_emails,
+        done=bool,
+        timeout_seconds=SCHEDULE_E2E_TIMEOUT_SECONDS,
+        interval_seconds=0.15,
+    )
     assert len(matching_emails) == 1
 
     workflow_runs = await _workflow_runs(authenticated_client, pod_id, workflow["name"])
@@ -2004,3 +2079,132 @@ async def test_matcher_skips_invalid_or_empty_operations(
         pod_id=UUID(pod_id), table_name="corrupt_records", operation="INSERT"
     )
     assert matched == []
+
+
+@pytest.mark.asyncio
+async def test_a_zoned_cron_is_armed_at_the_right_utc_instant(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+):
+    """ "09:00 daily in New York" has to reach the poller as the right instant.
+
+    The API takes wall clock and a zone; the poller only ever sees
+    `next_fire_at`, a UTC instant. That translation is the whole promise, and
+    nothing between the two is observable on the wire, so this reads the column
+    the poller reads.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="zoned-cron",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        workflow_name=workflow["name"],
+        config={"cron": "0 9 * * *", "timezone": "America/New_York"},
+    )
+    assert schedule["config"]["timezone"] == "America/New_York"
+
+    row = await db_session.get(Schedule, UUID(schedule["id"]))
+    assert row is not None, "the schedule API returned an id with no row behind it"
+    armed = row.next_fire_at
+    assert armed is not None, "a zoned cron schedule was created without a cursor"
+    if armed.tzinfo is None:
+        armed = armed.replace(tzinfo=timezone.utc)
+    local = armed.astimezone(ZoneInfo("America/New_York"))
+    assert (local.hour, local.minute) == (9, 0), (
+        f"armed at {armed.isoformat()}, which is {local.isoformat()} in New York"
+    )
+    # Not 09:00Z, which is what an unzoned schedule would have produced. The
+    # offset is -5 or -4 depending on the season, so assert it is one of those
+    # rather than pinning a date the test would age out of.
+    assert armed.hour in (13, 14)
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_timezone_is_refused_at_create(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """A zone the host cannot resolve must be a 422, not a schedule that never fires."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
+        name_prefix="bad-zone",
+    )
+    rejected = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        workflow_name=workflow["name"],
+        # Miscased: `ZoneInfo` would resolve this on a case-insensitive
+        # filesystem and fail in the container, so it has to be refused here.
+        config={"cron": "0 9 * * *", "timezone": "america/new_york"},
+        expected_status=422,
+    )
+    assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
+    assert "Unknown time zone" in rejected["message"]
+
+
+@pytest.mark.asyncio
+async def test_a_webhook_source_nothing_delivers_is_refused_at_create_and_update(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+):
+    """A schedule listening to nobody must be a 422, not a silent dead trigger.
+
+    `POST /webhooks/{source}` refuses a source with no plugin, so a schedule
+    naming one is accepted, stored, listed as active and never fires. The
+    accepted names are read out of the registry rather than spelled out: a
+    deployment that adds a third source should not need this test edited.
+    """
+    accepted = default_webhook_sources().sources
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+    connector_id = f"unheard_{uuid4().hex[:8]}"
+    connector_trigger_id = f"{connector_id}:message_created"
+    await _seed_connector_trigger(
+        db_session,
+        connector_id=connector_id,
+        trigger_id=connector_trigger_id,
+        event_type="message.created",
+    )
+
+    rejected = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        agent_name=agent["name"],
+        connector_trigger_id=connector_trigger_id,
+        config={"source": "no_such_webhook_source"},
+        expected_status=422,
+    )
+    assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
+    assert "no_such_webhook_source" in rejected["message"]
+    for source in accepted:
+        assert source in rejected["message"], rejected["message"]
+
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        agent_name=agent["name"],
+        connector_trigger_id=connector_trigger_id,
+        config={"source": accepted[0]},
+    )
+    assert schedule["config"] == {"source": accepted[0]}
+
+    rejected_update = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}",
+        json={"config": {"source": "no_such_webhook_source"}},
+    )
+    assert rejected_update.status_code == 422, rejected_update.text
+    assert rejected_update.json()["code"] == "SCHEDULE_VALIDATION_ERROR"

@@ -63,7 +63,9 @@ def _bundle_response(bundle_path: Path | None, *, label: str) -> Response:
     include_in_schema=False,
 )
 async def get_browser_sdk() -> Response:
-    return _bundle_response(settings.resolve_browser_sdk_path(), label="Browser SDK bundle")
+    return _bundle_response(
+        settings.resolve_browser_sdk_path(), label="Browser SDK bundle"
+    )
 
 
 @router.get(
@@ -75,7 +77,9 @@ async def get_browser_sdk() -> Response:
 async def get_browser_sdk_legacy() -> Response:
     # Back-compat: conversation widgets historically loaded /public/sdk/lemma-sdk.js.
     # It serves the same unified bundle (which also exposes window.Lemma).
-    return _bundle_response(settings.resolve_browser_sdk_path(), label="Browser SDK bundle")
+    return _bundle_response(
+        settings.resolve_browser_sdk_path(), label="Browser SDK bundle"
+    )
 
 
 @router.get(
@@ -88,4 +92,6 @@ async def get_browser_ui() -> Response:
     # Opt-in web components bundle for no-build HTML apps. Self-registers
     # <lemma-agent-task> / <lemma-agent-thread> on load; reuses window.LemmaClient
     # from the client bundle, so the app loads lemma-client.js first.
-    return _bundle_response(settings.resolve_browser_ui_path(), label="Browser UI bundle")
+    return _bundle_response(
+        settings.resolve_browser_ui_path(), label="Browser UI bundle"
+    )

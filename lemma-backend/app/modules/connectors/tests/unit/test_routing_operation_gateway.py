@@ -26,7 +26,9 @@ async def test_routes_lemma_apps_to_native_gateway():
         )
     )
     lemma_gateway = AsyncMock(execute_operation=AsyncMock(return_value={"events": []}))
-    composio_gateway = AsyncMock(execute_operation=AsyncMock(return_value={"items": []}))
+    composio_gateway = AsyncMock(
+        execute_operation=AsyncMock(return_value={"items": []})
+    )
 
     gateway = RoutingOperationGateway(
         connector_repository=connector_repository,
@@ -55,7 +57,9 @@ async def test_routes_composio_executor_apps_to_composio_gateway():
             )
         )
     )
-    lemma_gateway = AsyncMock(execute_operation=AsyncMock(return_value={"ignored": True}))
+    lemma_gateway = AsyncMock(
+        execute_operation=AsyncMock(return_value={"ignored": True})
+    )
     composio_gateway = AsyncMock(
         execute_operation=AsyncMock(return_value={"records": []})
     )

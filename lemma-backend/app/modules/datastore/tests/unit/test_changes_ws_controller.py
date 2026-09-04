@@ -36,8 +36,7 @@ def _mock_uow_factory(uow):
     factory_instance = MagicMock()
     factory_instance.return_value = cm
 
-    factory_class = MagicMock(return_value=factory_instance)
-    return factory_class
+    return MagicMock(return_value=factory_instance)
 
 
 def _make_ws(**accept_kwargs):
@@ -138,7 +137,9 @@ async def test_accept_succeeds_normally_starts_streaming():
     _, mock_auth_svc, mock_build_ts = _auth_patches(uow)
     mock_factory = _mock_uow_factory(uow)
 
-    async def _fake_forward_changes(websocket, *, pod_id, user_id, allowed_tables, since):
+    async def _fake_forward_changes(
+        websocket, *, pod_id, user_id, allowed_tables, since
+    ):
         await websocket.send_json({"type": "ready", "since": "0-0"})
 
     with (

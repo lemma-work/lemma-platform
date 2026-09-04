@@ -45,15 +45,6 @@ class FunctionValidationError(FunctionDomainError):
         self.validation_errors = validation_errors or []
 
 
-class FunctionAccessDeniedError(FunctionDomainError):
-    def __init__(self, message: str = "Access denied"):
-        super().__init__(
-            message=message,
-            code="FUNCTION_ACCESS_DENIED",
-            status_code=403,
-        )
-
-
 class FunctionNotFoundError(FunctionDomainError):
     def __init__(self, message: str = "Function not found"):
         super().__init__(
@@ -114,96 +105,6 @@ class FunctionConflictError(FunctionDomainError):
             code="FUNCTION_CONFLICT",
             status_code=409,
         )
-
-
-class FunctionResourceAccessError(FunctionAccessDeniedError):
-    """Base error for function resource access violations."""
-
-    def __init__(self, message: str, resource_type: str, resource_name: str):
-        super().__init__(message=message)
-        self.code = "FUNCTION_RESOURCE_ACCESS_DENIED"
-        self.resource_type = resource_type
-        self.resource_name = resource_name
-
-
-class FunctionDatastoreAccessDeniedError(FunctionResourceAccessError):
-    def __init__(self, datastore_name: str, function_name: str):
-        message = (
-            f"Function '{function_name}' does not have access to datastore '{datastore_name}'"
-        )
-        super().__init__(message, "datastore", datastore_name)
-        self.function_name = function_name
-
-
-class FunctionFileScopeAccessDeniedError(FunctionResourceAccessError):
-    def __init__(self, datastore_name: str, function_name: str):
-        message = (
-            f"Function '{function_name}' does not have access to datastore file scope "
-            f"'{datastore_name}'"
-        )
-        super().__init__(message, "file", datastore_name)
-        self.function_name = function_name
-
-
-class FunctionConnectorAccessDeniedError(FunctionResourceAccessError):
-    def __init__(self, app_name: str, function_name: str, mode: str | None = None):
-        message = (
-            f"Function '{function_name}' does not have access to connector '{app_name}'"
-        )
-        if mode:
-            message += f" in {mode} mode"
-        super().__init__(message, "connector", app_name)
-        self.function_name = function_name
-        self.mode = mode
-
-
-class FunctionResourceNotFoundError(FunctionDomainError):
-    def __init__(self, resource_type: str, resource_name: str, pod_id: str):
-        message = f"{resource_type.title()} '{resource_name}' not found in pod '{pod_id}'"
-        super().__init__(
-            message=message,
-            code="FUNCTION_RESOURCE_NOT_FOUND",
-            status_code=404,
-        )
-        self.resource_type = resource_type
-        self.resource_name = resource_name
-        self.pod_id = pod_id
-
-
-class FunctionInvalidResourceConfigurationError(FunctionValidationError):
-    def __init__(self, message: str, field: str | None = None, value: str | None = None):
-        super().__init__(
-            message=message,
-            code="FUNCTION_INVALID_RESOURCE_CONFIG",
-        )
-        self.field = field
-        self.value = value
-
-
-class FunctionInvalidConnectorModeError(FunctionInvalidResourceConfigurationError):
-    def __init__(self, mode: str, valid_modes: list[str]):
-        message = (
-            f"Invalid connector mode '{mode}'. "
-            f"Valid modes are: {', '.join(valid_modes)}"
-        )
-        super().__init__(message, "mode", mode)
-        self.valid_modes = valid_modes
-
-
-class FunctionMissingAccountIdError(FunctionInvalidResourceConfigurationError):
-    def __init__(self, app_name: str):
-        message = f"Connector '{app_name}' in FIXED mode requires account_id"
-        super().__init__(message, "account_id", None)
-        self.app_name = app_name
-
-
-class FunctionAccountOwnershipError(FunctionAccessDeniedError):
-    def __init__(self, account_id: str, user_id: str):
-        message = f"Account '{account_id}' is not owned by user '{user_id}'"
-        super().__init__(message=message)
-        self.code = "FUNCTION_ACCOUNT_OWNERSHIP_VIOLATION"
-        self.account_id = account_id
-        self.user_id = user_id
 
 
 # Backward-compatible alias

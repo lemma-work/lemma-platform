@@ -13,19 +13,25 @@ with the CLI through the top-level `lemma-pod-bundle` package.
 | --- | --- |
 | API routers | Import/upload/plan/apply/replan/cancel/events, export/status/download, publish/status/events |
 | streaq tasks | Export, plan URL/GitHub import, apply, GitHub publish |
-| cron | Sweep expired staging objects and mark stuck states |
+| cron | Sweep expired staging objects, mark stuck states, delete job rows past retention |
 | Realtime | Redis pub/sub SSE plus polling snapshots |
+| SQL tables | `pod_bundle_jobs`, `pod_bundle_job_steps` |
 
-The module deliberately owns no SQL tables. Active job state is a typed Redis
-document with a refreshed TTL; zip archives are staged in object storage.
-Completed import provenance is appended to `PodConfig.recipes`.
+Job state is authoritative in PostgreSQL and mirrored to Redis, not the other
+way round: a Redis flush loses the realtime mirror, not the job. Every job
+writes one `pod_bundle_jobs` row and one `pod_bundle_job_steps` row per plan
+step, so the two tables grow with every export, import and publish — the sweep
+cron deletes rows whose `completed_at` is past retention (30 days, the
+`JOB_ROW_RETENTION_SECONDS` constant in `infrastructure/job_retention.py`), and
+steps go with their job through the FK cascade. Zip archives are staged in
+object storage. Completed import provenance is appended to `PodConfig.recipes`.
 
 ## Job state
 
 | Job | Typical states |
 | --- | --- |
 | Export | `QUEUED -> EXPORTING -> READY` or `FAILED`; ready state includes signed download URL |
-| Import | `QUEUED/FETCHING -> PLANNING -> AWAITING_CONFIRMATION -> APPLYING -> COMPLETED` or `FAILED/CANCELLED` |
+| Import | `QUEUED/FETCHING -> PLANNING -> AWAITING_CONFIRMATION -> APPLYING -> COMPLETED` or `FAILED/CANCELLED`; `PARTIALLY_CANCELLED` when steps had already been applied |
 | Publish | `QUEUED -> EXPORTING/UPLOADING -> COMPLETED` or `FAILED` |
 
 ## API groups

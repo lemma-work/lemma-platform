@@ -7,6 +7,8 @@ actually spawned (parent_id linkage + same user). These tests pin that guard.
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from uuid import uuid4
 
 import pytest
@@ -30,6 +32,7 @@ class _FakeUowFactory:
 
 
 def _deps(conversation_id):
+    """A named agent's run context."""
     return SimpleNamespace(
         user_id=uuid4(),
         pod_id=uuid4(),
@@ -37,6 +40,7 @@ def _deps(conversation_id):
         workload_id=uuid4(),
         agent_name="parent",
         agent_run_id=uuid4(),
+        is_pod_default_agent=False,
     )
 
 
@@ -49,7 +53,9 @@ def _patch_repo(monkeypatch, *, conversation, messages=None):
             del conversation_id, include_runs
             return conversation
 
-        async def list_messages(self, *, conversation_id, after_sequence=None, limit=50):
+        async def list_messages(
+            self, *, conversation_id, after_sequence=None, limit=50
+        ):
             del conversation_id, after_sequence, limit
             return list(messages or []), None
 
@@ -143,14 +149,20 @@ def _patch_spawn(monkeypatch) -> _CaptureConvService:
 
 
 def _default_deps(conversation_id):
-    # The pod default agent: no workload_id / agent_name.
+    """The pod's assistant, as `run_context_builder` builds it.
+
+    It has a row, so it has an id (its pod's) and the reserved name -- the
+    absences this double used to carry are the pre-`agents`-row shape.
+    """
+    pod_id = uuid4()
     return SimpleNamespace(
         user_id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id,
         conversation_id=conversation_id,
-        workload_id=None,
-        agent_name=None,
+        workload_id=pod_id,
+        agent_name=DEFAULT_POD_AGENT_NAME,
         agent_run_id=uuid4(),
+        is_pod_default_agent=True,
     )
 
 

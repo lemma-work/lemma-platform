@@ -10,7 +10,6 @@ job identity, the queueing, and the work the queued job performs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -21,16 +20,13 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
-from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
-    MessageKind,
     to_json_value,
 )
 from app.modules.agent.tools.context import BaseAgentContext
-
-_PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
+from app.modules.agent.tools.tool_errors import safe_error_text
 
 RECONCILE_APPROVAL_JOB = "reconcile_agent_approval"
 
@@ -63,28 +59,6 @@ async def queue_approval_reconciliation(
         },
         _job_id=approval_reconcile_job_id(conversation_id, approval_id),
     )
-
-
-def pending_user_approval_messages(messages: Sequence[Message]) -> list[Message]:
-    """Keep an approval visible until its synthesized return is durable.
-
-    A decision is not fully resolved until its tool return has been persisted.
-    Approved tools now execute asynchronously, so keeping the card visible
-    during that processing window lets a repeated click safely re-enqueue the
-    deterministic job if a worker died mid-reconciliation.
-    """
-    returned_ids = {
-        message.tool_call_id
-        for message in messages
-        if message.kind == MessageKind.TOOL_RETURN and message.tool_call_id is not None
-    }
-    return [
-        message
-        for message in messages
-        if message.kind == MessageKind.TOOL_CALL
-        and message.tool_name in _PAUSING_TOOL_NAMES
-        and message.tool_call_id not in returned_ids
-    ]
 
 
 def should_defer_approved_tool(
@@ -139,8 +113,8 @@ async def dispatch_agent_host_permission(
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
-    from app.modules.agent.infrastructure.agent_host_channels import poke_host
-    from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+    from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
         AgentHostDispatchRepository,
     )
 
@@ -310,4 +284,10 @@ async def execute_approved_tool_as_user(
             }
         return {"ok": True, "value": value}
     except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
-        return {"ok": False, "error": str(exc)}
+        # Redacted, not `str(exc)`: this string is persisted as the approval's
+        # tool return, replayed into the model on every later turn and read by
+        # anyone with the conversation. An approved tool is the class of call
+        # most likely to be an authenticated HTTP request, and
+        # `httpx.HTTPStatusError` stringifies with the full URL -- a signed
+        # storage link or a connector callback carrying a token in its query.
+        return {"ok": False, "error": safe_error_text(exc)}

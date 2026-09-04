@@ -1,20 +1,20 @@
 {
   "informational": {
-    "rawButtonElements": 29,
+    "rawButtonElements": 40,
     "rawSwitchButtonElements": 0,
     "rawFieldElements": 3,
     "inlineEditableFieldElements": 4,
     "cardSkinOverrides": 0,
-    "buttonSkinOverrides": 0,
+    "buttonSkinOverrides": 24,
     "badgePresentationOverrides": 3,
     "viewportHeightWithoutDvhFallback": 0,
     "hoverOnlyDisplayReveal": 0,
     "fixedWidthsWiderThanPhones": 0,
     "pageBodyRepeatsResourceName": 0,
-    "rawFontSizeDeclaration": 8,
+    "rawFontSizeDeclaration": 9,
     "rawRadiusDeclaration": 0,
-    "rawSpacingDeclaration": 0,
-    "multiplePrimaryButtons": 20,
+    "rawSpacingDeclaration": 1,
+    "multiplePrimaryButtons": 17,
     "headerSlotPrimaryButtons": 0
   },
   "protectedAssistant": {

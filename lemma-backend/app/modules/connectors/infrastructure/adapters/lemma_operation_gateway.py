@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.domain.errors import (
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
@@ -41,13 +42,13 @@ class LemmaOperationGateway(AppOperationGatewayPort):
     ) -> Exception:
         details = getattr(exc, "details", None)
         status_code = getattr(exc, "status_code", None)
-        # Exception text is useful for local classification but may contain
-        # provider request bodies, callback URLs, or credentials. Never attach
-        # it to a domain error or log record.
         normalized_error = str(exc).lower()
         payload: dict[str, object] = {"error_type": type(exc).__name__}
         if isinstance(status_code, int):
             payload["upstream_status"] = status_code
+        provider_said = self._provider_message(exc)
+        if provider_said:
+            payload["upstream_message"] = provider_said
         if isinstance(details, dict):
             error_value = details.get("error")
             if isinstance(error_value, str):
@@ -73,14 +74,50 @@ class LemmaOperationGateway(AppOperationGatewayPort):
             return OperationExecutionNotFoundError(message, details=payload)
         return OperationExecutionInfrastructureError(message, details=payload)
 
+    @staticmethod
+    def _provider_message(exc: Exception) -> str | None:
+        """What Gmail, Slack or Jira actually said, when the client relayed it.
+
+        The http/sql/mcp kinds have always passed this through, and
+        `_safe_connector_details` allowlists `upstream_message` precisely so it
+        reaches the caller. This gateway dropped it, so the connectors most
+        people use on day one were the ones that could not tell "invalid_scope"
+        from "message not found" -- for a person reading the failure, or for an
+        agent trying to correct itself.
+
+        Narrowed to the vendored clients' own exception type, because that is
+        the only text known to be a relay rather than an internal. Those
+        clients build it from the provider's status and response body
+        (`_raise_for_status`) or wrap the transport error verbatim, and unlike
+        our own executors they attach no status code -- which is why the
+        shared `upstream_message` heuristic cannot recognise them. Everything
+        else that reaches here is ours, and its text stays here.
+        """
+        from lemma_connectors.core.errors import IntegrationError
+
+        from app.modules.connectors.services.execution.failure_translation import (
+            redacted_upstream_text,
+        )
+
+        if not isinstance(exc, IntegrationError):
+            return None
+        return redacted_upstream_text(str(exc))
+
     async def list_operations(self, connector_id: str) -> list[str]:
-        info_client = create_lemma_info_client(connector_id)
+        # Importing the connector's generated client costs 63-169ms of
+        # filesystem and bytecode work, on the loop, the first time per
+        # process per connector.
+        info_client = await run_blocking(
+            create_lemma_info_client, connector_id, limiter="cpu_bound"
+        )
         return [descriptor.name for descriptor in await info_client.list_operations()]
 
     async def get_operation_details(
         self, connector_id: str, operation_name: str
     ) -> OperationDetailsPort:
-        info_client = create_lemma_info_client(connector_id)
+        info_client = await run_blocking(
+            create_lemma_info_client, connector_id, limiter="cpu_bound"
+        )
         operation = await info_client.get_operation(operation_name)
         descriptor = operation.descriptor
         return LemmaOperationDetails(
@@ -121,19 +158,20 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         operation_name: str,
         payload: dict[str, Any],
         third_party_credentials: dict[str, Any] | None,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         provider: str | None = None,
     ) -> Any:
-        del auth_token, api_url, provider
+        del provider
         logger.debug(
             "connectors.lemma_operation_gateway.calling_s_native_operation_s.observed",
             connector_id=connector_id,
             operation_name=operation_name,
         )
         try:
-            client = create_lemma_execution_client(
-                connector_id, third_party_credentials
+            client = await run_blocking(
+                create_lemma_execution_client,
+                connector_id,
+                third_party_credentials,
+                limiter="cpu_bound",
             )
             operation = await client.get_operation(operation_name)
             prepared_payload = self._prepare_payload(

@@ -78,7 +78,9 @@ class ChatScreen(Screen[None]):
         yield Header()
         yield VerticalScroll(id="chat-log")
         yield UsageBar()
-        yield Input(placeholder="Message the agent… (Esc stops a running turn)", id="chat-input")
+        yield Input(
+            placeholder="Message the agent… (Esc stops a running turn)", id="chat-input"
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -96,10 +98,14 @@ class ChatScreen(Screen[None]):
         if not message:
             return
         event.input.value = ""
-        if self._streaming:
-            self.notify("A turn is already streaming — Esc to stop it first.", severity="warning")
-            return
         self._mount_widget(UserMessage(message))
+        if self._streaming:
+            # A follow-up joins the turn already running rather than waiting for
+            # it. `send_stream` would be wrong here: it opens a second SSE
+            # subscription for the same run, and the stream this screen is
+            # already reading is the one carrying the answer.
+            self.append_turn(message)
+            return
         self.stream_turn(message)
 
     def action_stop_or_back(self) -> None:
@@ -136,7 +142,9 @@ class ChatScreen(Screen[None]):
                     )
                     self.conversation_id = str(created.get("id") or "")
                     app.call_from_thread(self._refresh_subtitle)
-                response = pod_sdk.conversations.send_stream(self.conversation_id, message)
+                response = pod_sdk.conversations.send_stream(
+                    self.conversation_id, message
+                )
                 try:
                     for raw in iter_sse_events(response):
                         if worker.is_cancelled:
@@ -150,6 +158,31 @@ class ChatScreen(Screen[None]):
             app.call_from_thread(self.handle_event, ErrorEvent(str(exc)))
         finally:
             app.call_from_thread(self._set_streaming, False)
+
+    @work(thread=True, group="chat-append")
+    def append_turn(self, message: str) -> None:
+        """Add a message to the run in flight, without a stream of its own.
+
+        Its own worker group, not ``chat``: that group is exclusive and holds
+        the stream reading the answer, so appending there would cancel the very
+        stream this message is waiting on.
+        """
+        conversation_id = self.conversation_id
+        app = self.app
+        if not conversation_id:
+            return
+        try:
+            with client_session(self.state) as client:
+                pod_id = resolve_pod_id(self.state) or ""
+                result = to_plain(
+                    client.pod(pod_id).conversations.append(conversation_id, message)
+                )
+            if not result.get("started_new_run", True):
+                app.call_from_thread(self.notify, "Added to the running turn.")
+        except Exception as exc:
+            app.call_from_thread(
+                self.notify, f"Could not send that: {exc}", severity="error"
+            )
 
     @work(thread=True, group="chat-stop")
     def stop_run(self) -> None:
@@ -208,10 +241,14 @@ class ChatScreen(Screen[None]):
         try:
             with client_session(self.state) as client:
                 pod_id = resolve_pod_id(self.state) or ""
-                payload = client.pod(pod_id).conversations.messages(conversation_id, limit=100)
+                payload = client.pod(pod_id).conversations.messages(
+                    conversation_id, limit=100
+                )
             messages = [to_plain(item) for item in list_items(payload)]
         except Exception as exc:
-            app.call_from_thread(self.handle_event, ErrorEvent(f"History load failed: {exc}"))
+            app.call_from_thread(
+                self.handle_event, ErrorEvent(f"History load failed: {exc}")
+            )
             return
         app.call_from_thread(self._replay_history, messages)
 
@@ -267,7 +304,9 @@ class ChatScreen(Screen[None]):
                     # The durable approval id only lives on the approvals endpoint.
                     self.check_approvals()
                 return
-            widget = ToolCallWidget(tool_name=event.tool_name, tool_input=event.tool_input)
+            widget = ToolCallWidget(
+                tool_name=event.tool_name, tool_input=event.tool_input
+            )
             if event.tool_call_id:
                 self._tool_widgets[event.tool_call_id] = widget
             else:
@@ -305,7 +344,11 @@ class ChatScreen(Screen[None]):
             self._mount_widget(StatusLine(f"Error: {event.text}", error=True))
         elif isinstance(event, Terminal):
             self._finalize_active()
-            detail = f" — {event.detail}" if event.detail and event.detail != event.kind else ""
+            detail = (
+                f" — {event.detail}"
+                if event.detail and event.detail != event.kind
+                else ""
+            )
             self._mount_widget(StatusLine(f"{event.kind}{detail}"))
 
     # ------------------------------------------------------------- helpers

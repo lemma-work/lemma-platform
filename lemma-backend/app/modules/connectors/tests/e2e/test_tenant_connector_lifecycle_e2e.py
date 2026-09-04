@@ -24,6 +24,8 @@ from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.connectors.services.install_provisioning import DiscoveryStatus
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -53,20 +55,32 @@ async def live_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
-    for _ in range(100):
+
+    async def probe() -> None:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        _, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+    # retry_exceptions=(OSError,): the port not listening yet is the expected
+    # "not ready" case. A crashed server task instead raises RuntimeError from
+    # inside probe(), which is not in retry_exceptions and so propagates
+    # immediately, same as the original loop's eager task.done() check.
+    # interval kept at the original 0.05s (already tighter than the usual
+    # 0.15s default) since this is a hot local port check.
+    await eventually(
+        label=f"MCP server on port {port} to start listening",
+        probe=probe,
+        done=lambda _: True,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
 
     yield f"http://127.0.0.1:{port}/mcp"
 
@@ -89,20 +103,28 @@ async def second_mcp_server():
 
     port = _free_port()
     task = asyncio.create_task(
-        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+        server.run_async(
+            transport="http", host="127.0.0.1", port=port, show_banner=False
+        )
     )
-    for _ in range(100):
+
+    async def probe() -> None:
         if task.done():
             raise RuntimeError(f"MCP server failed to start: {task.exception()}")
-        try:
-            _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.close()
-            await writer.wait_closed()
-            break
-        except OSError:
-            await asyncio.sleep(0.05)
-    else:
-        raise RuntimeError("MCP server did not start in time")
+        _, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+    # See live_mcp_server above for why retry_exceptions is OSError-only and
+    # the interval stays at 0.05s.
+    await eventually(
+        label=f"MCP server on port {port} to start listening",
+        probe=probe,
+        done=lambda _: True,
+        retry_exceptions=(OSError,),
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
 
     yield f"http://127.0.0.1:{port}/mcp"
 
@@ -170,7 +192,13 @@ def _service(db_session):
 
 class TestInstallingAnMcpServer:
     async def test_creating_the_install_discovers_its_operations(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         install = await service.create_auth_config(
@@ -190,9 +218,9 @@ class TestInstallingAnMcpServer:
             AuthConfigOperationRepository,
         )
 
-        operations = await AuthConfigOperationRepository(db_session).list_by_auth_config(
-            install.id
-        )
+        operations = await AuthConfigOperationRepository(
+            db_session
+        ).list_by_auth_config(install.id)
         names = {op.name for op in operations}
         # Discovered from the live server, not from any catalog.
         assert {"add", "lookup_customer"} <= names
@@ -232,7 +260,13 @@ class TestInstallingAnMcpServer:
             )
 
     async def test_two_installs_of_the_same_connector_coexist(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         first = await service.create_auth_config(
@@ -256,7 +290,13 @@ class TestInstallingAnMcpServer:
         assert first.is_default is True and second.is_default is False
 
     async def test_refresh_repopulates_operations(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         install = await service.create_auth_config(
@@ -268,16 +308,39 @@ class TestInstallingAnMcpServer:
             name=f"mcp-refresh-{uuid4().hex[:8]}",
         )
         # The recovery path: without it, a failed first discovery could only be
-        # fixed by deleting the install, which cascades away its accounts.
-        count = await service.refresh_auth_config_operations(
+        # fixed by deleting the install, which cascades away its accounts. It
+        # answers with an outcome rather than a count so a refused retry is not
+        # reported as a successful one that found nothing.
+        discovery = await service.refresh_auth_config_operations(
             user_id=fixed_test_user["id"],
             organization_id=fixed_test_org["id"],
             auth_config_name=install.name,
         )
-        assert count >= 2
+        assert discovery.status is DiscoveryStatus.OK
+        assert discovery.operation_count >= 2
 
 
 class TestSqlInstallTargetsAreVetted:
+    @pytest.fixture(autouse=True)
+    def guard_is_closed(self, monkeypatch):
+        """Assert the refusal against a deployment that has not opted out.
+
+        This class is the only place that asserts the guard *refuses*, and it
+        was reading whatever ambient value the process happened to hold rather
+        than stating the precondition it needs. That is a real difference, not
+        a theoretical one: `agent_surfaces/tests/e2e/conftest.py` sets
+        `CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS=true` in `os.environ` at
+        import time -- it has to, so the worker subprocess inherits it -- and
+        pytest imports every conftest for the directories a shard collects. So
+        the moment a shard happened to hold both modules, this test stopped
+        testing anything and reported `DID NOT RAISE`.
+
+        A test of a refusal has to own the setting that makes it a refusal.
+        """
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", False)
+
     async def test_a_private_database_host_is_refused(
         self, db_session, fixed_test_org, fixed_test_user
     ):
@@ -367,8 +430,7 @@ class TestConnectingAnAccountAndExecuting:
         # authorization context is built from it. Calling it any other way
         # would be testing a path no caller uses.
         executed = await authenticated_client.post(
-            f"/organizations/{org_id}/connectors/{install.name}"
-            f"/operations/add/execute",
+            f"/organizations/{org_id}/connectors/{install.name}/operations/add/execute",
             json={"payload": {"a": 2, "b": 3}},
         )
         assert executed.status_code == 200, executed.text
@@ -414,9 +476,7 @@ class TestUpdatingAnInstallInPlace:
         )
         return service, org_id, user_id, install, account
 
-    async def test_renaming_keeps_the_account_attached(
-        self, installed_with_account
-    ):
+    async def test_renaming_keeps_the_account_attached(self, installed_with_account):
         service, org_id, user_id, install, account = installed_with_account
         renamed = f"renamed-{uuid4().hex[:8]}"
         updated, _discovered, marked = await service.update_auth_config(
@@ -444,8 +504,10 @@ class TestUpdatingAnInstallInPlace:
             config={"server_url": second_mcp_server},
         )
         assert updated.config["server_url"] == second_mcp_server
-        # The new server's tools replaced the old ones.
-        assert discovered >= 1
+        # The new server's tools replaced the old ones -- and the update says
+        # so, rather than reporting a refused re-discovery as "found nothing".
+        assert discovered.status is DiscoveryStatus.OK
+        assert discovered.operation_count >= 1
         assert marked == 1
 
         # The whole point: the account still exists, with the same id.
@@ -507,20 +569,32 @@ class TestUpdatingAnInstallInPlace:
             )
 
     async def test_promoting_a_second_install_demotes_the_first(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user, live_mcp_server, allow_private_targets
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         org_id = UUID(str(fixed_test_org["id"]))
         user_id = UUID(str(fixed_test_user["id"]))
         first = await service.create_auth_config(
-            user_id=user_id, organization_id=org_id, connector_id=mcp_connector.id,
+            user_id=user_id,
+            organization_id=org_id,
+            connector_id=mcp_connector.id,
             config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            config={"server_url": live_mcp_server}, name=f"mcp-d1-{uuid4().hex[:8]}",
+            config={"server_url": live_mcp_server},
+            name=f"mcp-d1-{uuid4().hex[:8]}",
         )
         second = await service.create_auth_config(
-            user_id=user_id, organization_id=org_id, connector_id=mcp_connector.id,
+            user_id=user_id,
+            organization_id=org_id,
+            connector_id=mcp_connector.id,
             config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
-            config={"server_url": live_mcp_server}, name=f"mcp-d2-{uuid4().hex[:8]}",
+            config={"server_url": live_mcp_server},
+            name=f"mcp-d2-{uuid4().hex[:8]}",
         )
         assert first.is_default and not second.is_default
 
@@ -537,6 +611,120 @@ class TestUpdatingAnInstallInPlace:
         demoted = await service.auth_config_repository.get(first.id)
         assert demoted.is_default is False
 
+    async def test_promotion_works_with_a_third_install_in_the_way(
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
+    ):
+        """Demoting has to find the DEFAULT, not whichever row comes back first.
+
+        `_clear_default_install` asked for "the active install for this
+        connector", and that query had no `is_default` predicate and no ORDER
+        BY -- so with more than two installs it could be handed a non-default
+        row, return early leaving the real default in place, and the promotion
+        then violated `uq_auth_configs_default_per_connector` as an unhandled
+        IntegrityError.
+
+        Two installs could not catch it: one of them IS the default, so an
+        arbitrary pick is right half the time and right by luck the rest. It
+        took a third row and an unlucky heap order, which is what CI found and
+        a local run did not.
+        """
+        service = _service(db_session)
+        org_id = UUID(str(fixed_test_org["id"]))
+        user_id = UUID(str(fixed_test_user["id"]))
+
+        installs = []
+        for index in range(3):
+            installs.append(
+                await service.create_auth_config(
+                    user_id=user_id,
+                    organization_id=org_id,
+                    connector_id=mcp_connector.id,
+                    config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+                    config={"server_url": live_mcp_server},
+                    name=f"mcp-t{index}-{uuid4().hex[:8]}",
+                )
+            )
+        assert installs[0].is_default, "the first connected becomes the default"
+
+        promoted, _d, _m = await service.update_auth_config(
+            user_id=user_id,
+            organization_id=org_id,
+            auth_config_name=installs[2].name,
+            is_default=True,
+        )
+
+        assert promoted.is_default is True
+        defaults = [
+            (await service.auth_config_repository.get(install.id)).is_default
+            for install in installs
+        ]
+        assert defaults == [False, False, True], (
+            f"exactly one default must survive, got {defaults}"
+        )
+
+    async def test_a_bare_connector_id_resolves_to_the_default_install(
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
+    ):
+        """The property underneath, asserted where it cannot depend on luck.
+
+        The flow test above only fails when the planner happens to return a
+        non-default row first, which is heap order -- so it passed locally and
+        failed in CI. This asks the query directly, with the default made the
+        NEWEST row rather than the oldest, so an unordered scan reliably meets
+        a different one first.
+        """
+        service = _service(db_session)
+        org_id = UUID(str(fixed_test_org["id"]))
+        user_id = UUID(str(fixed_test_user["id"]))
+
+        installs = []
+        for index in range(3):
+            installs.append(
+                await service.create_auth_config(
+                    user_id=user_id,
+                    organization_id=org_id,
+                    connector_id=mcp_connector.id,
+                    config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+                    config={"server_url": live_mcp_server},
+                    name=f"mcp-o{index}-{uuid4().hex[:8]}",
+                )
+            )
+        assert installs[0].is_default, "the first connected becomes the default"
+
+        # Promote the LAST one, so the default is no longer the oldest row.
+        # That is what makes this deterministic: an unordered scan returns the
+        # first row it meets, which is now emphatically not the default, so the
+        # assertion below cannot pass by luck the way the flow test above did.
+        await service.update_auth_config(
+            user_id=user_id,
+            organization_id=org_id,
+            auth_config_name=installs[-1].name,
+            is_default=True,
+        )
+        default_id = installs[-1].id
+
+        resolved = await service.auth_config_repository.get_active_by_org_and_app(
+            org_id, mcp_connector.id
+        )
+
+        assert resolved is not None
+        assert resolved.id == default_id, (
+            "a bare connector id must resolve to the default install, not to "
+            "whichever row the planner returned first"
+        )
+
 
 class TestDiscoveredOperationsAreVisibleThroughTheApi:
     """Listing an install's operations must return the ones it discovered.
@@ -551,8 +739,13 @@ class TestDiscoveredOperationsAreVisibleThroughTheApi:
 
     @pytest_asyncio.fixture
     async def install(
-        self, db_session, mcp_connector, fixed_test_org, fixed_test_user,
-        live_mcp_server, allow_private_targets,
+        self,
+        db_session,
+        mcp_connector,
+        fixed_test_org,
+        fixed_test_user,
+        live_mcp_server,
+        allow_private_targets,
     ):
         service = _service(db_session)
         return await service.create_auth_config(

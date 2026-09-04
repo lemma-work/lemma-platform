@@ -20,12 +20,16 @@ class OrganizationCreateRequest:
         name (str):
         email_domain (None | str | Unset):
         join_policy (OrganizationJoinPolicy | Unset): Who may self-join an organization, ordered from closed to open.
+        resolve_name_conflicts (bool | Unset): Take the next free name instead of conflicting. For a name the user did
+            not choose -- onboarding's derived first workspace -- where a 409 is a dead end for someone who never typed a
+            name. Leave false for a name they typed, so a clash is reported. Default: False.
         slug (None | str | Unset):
     """
 
     name: str
     email_domain: None | str | Unset = UNSET
     join_policy: OrganizationJoinPolicy | Unset = UNSET
+    resolve_name_conflicts: bool | Unset = False
     slug: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -41,6 +45,8 @@ class OrganizationCreateRequest:
         join_policy: str | Unset = UNSET
         if not isinstance(self.join_policy, Unset):
             join_policy = self.join_policy.value
+
+        resolve_name_conflicts = self.resolve_name_conflicts
 
         slug: None | str | Unset
         if isinstance(self.slug, Unset):
@@ -59,6 +65,8 @@ class OrganizationCreateRequest:
             field_dict["email_domain"] = email_domain
         if join_policy is not UNSET:
             field_dict["join_policy"] = join_policy
+        if resolve_name_conflicts is not UNSET:
+            field_dict["resolve_name_conflicts"] = resolve_name_conflicts
         if slug is not UNSET:
             field_dict["slug"] = slug
 
@@ -85,6 +93,8 @@ class OrganizationCreateRequest:
         else:
             join_policy = OrganizationJoinPolicy(_join_policy)
 
+        resolve_name_conflicts = d.pop("resolve_name_conflicts", UNSET)
+
         def _parse_slug(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -98,6 +108,7 @@ class OrganizationCreateRequest:
             name=name,
             email_domain=email_domain,
             join_policy=join_policy,
+            resolve_name_conflicts=resolve_name_conflicts,
             slug=slug,
         )
 

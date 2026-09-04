@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from pathlib import Path
 import subprocess
 from typing import Literal
 
@@ -68,7 +67,6 @@ def hermetic_datastore_runtime():
 # runs on just postgres/redis/supertokens and never starts it.
 e2e_settings = e2e_fixtures.e2e_settings
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -85,7 +83,7 @@ authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
 scenario = e2e_fixtures.scenario
 
-DocumentProcessorName = Literal["kreuzberg", "docling", "markitdown"]
+DocumentProcessorName = Literal["kreuzberg", "docling", "xberg"]
 
 
 @pytest_asyncio.fixture
@@ -95,10 +93,20 @@ async def datastore_outbox_dispatcher(e2e_settings, db_manager):
     await ensure_datastore_event_outbox()
     message_bus = get_message_bus()
     await message_bus.connect()
-    async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(), message_bus
-    ):
+    async with outbox_dispatcher_lifespan(get_datastore_session_maker(), message_bus):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _forget_document_processor_traffic(request):
+    """Give each test the shared fake with an empty ledger.
+
+    Autouse and lazy: it only touches the server for tests that actually asked
+    for it, so nothing else pays for a session fixture it does not use.
+    """
+    if "fake_document_processor_server" in request.fixturenames:
+        request.getfixturevalue("fake_document_processor_server").forget_traffic()
+    yield
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -137,18 +145,13 @@ def document_worker(
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
         }
-        if processor == "markitdown":
-            fake_dependencies = Path(__file__).parent / "fake_processor_deps"
-            extra_env["PYTHONPATH"] = f"{fake_dependencies}:."
         async with production_worker_process(
             e2e_settings,
             log_prefix=f"lemma_datastore_{processor}_worker",
             extra_env=extra_env,
             # Module path, not `module:attribute` — the worker is started with
             # `python -m` so it runs every lane, matching production.
-            worker_entrypoint=(
-                "app.modules.datastore.tests.e2e.worker_entrypoint"
-            ),
+            worker_entrypoint=("app.modules.datastore.tests.e2e.worker_entrypoint"),
         ) as process:
             yield process
 
@@ -220,23 +223,25 @@ async def member_users(
 
 @pytest_asyncio.fixture(scope="function")
 async def index_datastore_file(db_manager, kreuzberg_wired):
-    import asyncio
-
     from app.modules.datastore.domain.file_entities import FileStatus
     from app.modules.datastore.infrastructure.models import DatastoreFile
+    from app.modules.test_support.e2e.waiters import wait_for_status
 
     _TERMINAL = {FileStatus.COMPLETED.value, FileStatus.NOT_REQUIRED.value}
 
-    async def _file_status(file_id):
+    async def _file_status(file_id) -> dict:
         async with db_manager.session_factory() as session:
             result = await session.execute(
                 select(DatastoreFile).where(DatastoreFile.id == file_id)
             )
             file_model = result.scalar_one()
-            return file_model.status, (file_model.file_metadata or {})
+            return {
+                "status": file_model.status,
+                "metadata": file_model.file_metadata or {},
+            }
 
     async def _index(pod_id, file_id):
-        _, metadata = await _file_status(file_id)
+        initial = await _file_status(file_id)
 
         service = get_datastore_composition().build_processing_service(
             pod_id,
@@ -247,16 +252,18 @@ async def index_datastore_file(db_manager, kreuzberg_wired):
         # worker is still indexing async. Either way, wait until indexing has
         # actually finished so the subsequent search sees a populated index;
         # otherwise the search races the indexer and returns nothing under load.
-        await service.process_file_async(file_id, metadata)
-        for _ in range(120):  # ~60s at 0.5s
-            status, _ = await _file_status(file_id)
-            if status in _TERMINAL:
-                return
-            if status == FileStatus.FAILED.value:
-                raise AssertionError(f"Indexing failed for file {file_id}")
-            await asyncio.sleep(0.5)
-        raise AssertionError(
-            f"Indexing did not complete for file {file_id} (last status: {status})"
+        await service.process_file_async(file_id, initial["metadata"])
+        # failed={FAILED}: unlike the document-worker-journey helper, every
+        # caller here always expects COMPLETED/NOT_REQUIRED -- none is testing
+        # a FAILED path through this fixture -- so fail fast instead of
+        # burning the full timeout on a file that already went terminal-bad.
+        await wait_for_status(
+            label=f"datastore file {file_id} indexing",
+            probe=lambda: _file_status(file_id),
+            expected=_TERMINAL,
+            failed={FileStatus.FAILED.value},
+            timeout_seconds=60,
+            interval_seconds=0.15,
         )
 
     return _index
@@ -283,7 +290,6 @@ __all__ = [
     "supertokens_container",
     "test_app",
     "test_database_url",
-    "test_network",
     "test_redis_url",
     "sandbox_reachable_backend",
     "worker",

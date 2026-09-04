@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 from urllib.parse import urlencode
 from uuid import UUID
 
+from app.core import app_install
 from app.core.config import settings
 
 # Sentinel attribute marking the injected <script>. Idempotency keys off this,
@@ -25,6 +26,31 @@ from app.core.config import settings
 RUNTIME_CONFIG_SENTINEL = "data-lemma-runtime-config"
 SOCIAL_METADATA_SENTINEL = "data-lemma-social-metadata"
 APP_BRANDING_SENTINEL = "data-lemma-app-branding"
+APP_INSTALL_SENTINEL = app_install.APP_INSTALL_SENTINEL
+
+# Where an app reaches the API: its own origin, under a reserved prefix that
+# ``AppHostRoutingMiddleware`` strips back off.
+#
+# Relative on purpose. The SDK resolves a non-absolute ``apiUrl`` against
+# ``window.location.origin`` (``resolveApiBase`` in the browser SDK's
+# supertokens module), so the app's calls are same-origin wherever it is served
+# and nothing here needs to know the request's Host. Same-origin is the point:
+# a browser only sends the session cookie first-party, and on desktop every
+# `.localhost` host is a separate site as far as WebKit is concerned, so an app
+# calling the API's real host got no cookie and loaded signed out.
+APP_ORIGIN_API_URL = "/_lemma"
+
+
+def app_api_url() -> str | None:
+    """The API an app should call, or None to use the API host as before.
+
+    Gated, because the problem it solves is not universal: on a real domain the
+    app subdomain and the API host share a registrable domain, so an app's
+    cross-origin calls are already same-site and carry the session. It is
+    `.localhost` that has no registrable domain, which is what makes desktop the
+    only place those calls are third-party.
+    """
+    return APP_ORIGIN_API_URL if settings.app_api_via_app_origin else None
 
 
 def build_runtime_app_identity(
@@ -54,16 +80,22 @@ def build_runtime_config(
     *,
     app: dict[str, str] | None = None,
     app_id: UUID | str | None = None,
+    api_url: str | None = None,
 ) -> dict[str, object]:
     """Pod context handed to the browser SDK at serve time.
 
     No-build pages bake nothing in; the SDK's resolveConfig prefers this
     ``window.__LEMMA_CONFIG__`` global over env, so the host is the single source
     of truth for which pod/api/auth a served page talks to.
+
+    ``api_url`` overrides the API the page talks to. Pages served on an app's
+    own origin pass ``APP_ORIGIN_API_URL`` so their calls stay first-party and
+    carry the session cookie; widgets are served from the API host itself and
+    take the default.
     """
     config: dict[str, object] = {
         "podId": str(pod_id),
-        "apiUrl": settings.api_url,
+        "apiUrl": api_url or settings.api_url,
         "authUrl": settings.auth_frontend_url,
     }
     if app_id:
@@ -117,6 +149,18 @@ def _public_app_social_metadata(app: dict[str, str] | None) -> str:
     )
 
 
+def _public_app_install(app: dict[str, str] | None) -> str:
+    """Manifest, icons and the install offer -- for a hosted app only.
+
+    Gated on the public URL for the same reason the social tags are: an app has
+    an origin of its own and a widget does not, and a manifest with no scope of
+    its own has nothing to install.
+    """
+    if not app or not app.get("url"):
+        return ""
+    return app_install.install_head_links() + app_install.install_prompt_script()
+
+
 def build_app_branding(public_url: str) -> dict[str, str]:
     """Build the host-controlled attribution shown on a public app."""
 
@@ -162,11 +206,11 @@ def _public_app_branding_script(branding: dict[str, str] | None) -> str:
         ":host{all:initial;position:fixed;right:max(12px,env(safe-area-inset-right));"
         "bottom:max(12px,env(safe-area-inset-bottom));z-index:2147483647;"
         "display:inline-flex;align-items:center;gap:6px;"
-        "font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}"
+        'font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}'
         "a{box-sizing:border-box;display:inline-flex;height:32px;align-items:center;gap:8px;"
         "padding:0 12px 0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;"
         "background:rgba(20,20,19,.94);color:#fff;text-decoration:none;"
-        "font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;"
+        'font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
         "letter-spacing:-.01em;box-shadow:0 8px 28px rgba(0,0,0,.22);"
         "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);"
         "transition:transform 140ms ease,background 140ms ease,box-shadow 140ms ease}"
@@ -190,13 +234,13 @@ def _public_app_branding_script(branding: dict[str, str] | None) -> str:
         "bottom:max(8px,env(safe-area-inset-bottom))}a{height:30px;padding:0 10px 0 9px}}"
         "@media(prefers-reduced-motion:reduce){a{transition:none}}"
         "</style>"
-        "<a target=\"_blank\" rel=\"noopener noreferrer\">"
-        "<span class=\"mark\" aria-hidden=\"true\"><i></i><i></i><i></i></span>"
-        "<span class=\"label\"></span></a>"
-        "<button type=\"button\" aria-label=\"Dismiss\">"
-        "<svg viewBox=\"0 0 10 10\" fill=\"none\" aria-hidden=\"true\">"
-        "<path d=\"M1 1L9 9M9 1L1 9\" stroke=\"currentColor\" stroke-width=\"1.4\" "
-        "stroke-linecap=\"round\"/></svg></button>';"
+        '<a target="_blank" rel="noopener noreferrer">'
+        '<span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>'
+        '<span class="label"></span></a>'
+        '<button type="button" aria-label="Dismiss">'
+        '<svg viewBox="0 0 10 10" fill="none" aria-hidden="true">'
+        '<path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.4" '
+        'stroke-linecap="round"/></svg></button>\';'
         "const link=root.querySelector('a');"
         "link.href=config.url;"
         "link.setAttribute('aria-label',config.label);"
@@ -221,12 +265,24 @@ def runtime_config_token(
     *,
     app: dict[str, str] | None = None,
     branding: dict[str, str] | None = None,
+    api_url: str | None = None,
 ) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
-    config = build_runtime_config(pod_id, app=app)
+    config = build_runtime_config(pod_id, app=app, api_url=api_url)
+    install = _public_app_install(app)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
     )
+    if install:
+        # Deploying a new install script has to reach pages already cached.
+        # Nothing else in the tag moves when only the host's own injection
+        # changes -- the release version does not, and no-cache revalidation
+        # would keep answering 304 against the old one.
+        token_payload = {
+            "config": config,
+            "branding": branding,
+            "install": hashlib.sha256(install.encode("utf-8")).hexdigest()[:12],
+        }
     payload = json.dumps(token_payload, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
@@ -238,6 +294,7 @@ def inject_runtime_config(
     app: dict[str, str] | None = None,
     app_id: UUID | str | None = None,
     branding: dict[str, str] | None = None,
+    api_url: str | None = None,
 ) -> bytes:
     """Insert host runtime data and presentation into an HTML entrypoint.
 
@@ -256,10 +313,8 @@ def inject_runtime_config(
     injection = ""
     if RUNTIME_CONFIG_SENTINEL not in text:
         payload = json.dumps(
-            build_runtime_config(pod_id, app=app, app_id=app_id)
-        ).replace(
-            "<", "\\u003c"
-        )
+            build_runtime_config(pod_id, app=app, app_id=app_id, api_url=api_url)
+        ).replace("<", "\\u003c")
         injection += (
             f"<script {RUNTIME_CONFIG_SENTINEL}>"
             f"window.__LEMMA_CONFIG__={payload};</script>"
@@ -268,6 +323,8 @@ def inject_runtime_config(
         injection += _public_app_social_metadata(app)
     if APP_BRANDING_SENTINEL not in text:
         injection += _public_app_branding_script(branding)
+    if APP_INSTALL_SENTINEL not in text:
+        injection += _public_app_install(app)
     if not injection:
         return text.encode("utf-8")
 

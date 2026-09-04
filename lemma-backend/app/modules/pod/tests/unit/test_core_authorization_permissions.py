@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 
-from fastapi import HTTPException
 
 from app.core.authorization.context import (
     ActorType,
@@ -33,6 +32,7 @@ from app.core.authorization.permissions import (
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.service import Authorizer
+from app.core.domain.errors import BadRequestError
 
 
 class CountingAuthorizer:
@@ -204,16 +204,16 @@ def test_resource_grant_validation_only_accepts_pod_permissions():
     validate_pod_resource_grant_permissions([Grant()])
 
     Grant.permission_ids = [Permissions.CONNECTOR_MANAGE]
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "Only pod-scoped permissions" in exc_info.value.detail
+    assert "Only pod-scoped permissions" in exc_info.value.message
 
     Grant.permission_ids = ["missing.permission"]
-    with pytest.raises(HTTPException) as unknown_exc:
+    with pytest.raises(BadRequestError) as unknown_exc:
         validate_pod_resource_grant_permissions([Grant()])
     assert unknown_exc.value.status_code == 400
-    assert "Unknown permission" in unknown_exc.value.detail
+    assert "Unknown permission" in unknown_exc.value.message
 
 
 def test_resource_grant_validation_rejects_permission_resource_type_mismatch():
@@ -222,11 +222,11 @@ def test_resource_grant_validation_rejects_permission_resource_type_mismatch():
         resource_name = "helper"
         permission_ids = [Permissions.APP_READ]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "do not apply to the resource type" in exc_info.value.detail
-    assert "agent:app.read" in exc_info.value.detail
+    assert "do not apply to the resource type" in exc_info.value.message
+    assert "agent:app.read" in exc_info.value.message
 
     Grant.permission_ids = [Permissions.AGENT_EXECUTE]
     validate_pod_resource_grant_permissions([Grant()])
@@ -241,10 +241,10 @@ def test_connector_grants_validate_use_permission():
     validate_pod_resource_grant_permissions([Grant()])
 
     Grant.permission_ids = [Permissions.AGENT_EXECUTE]
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         validate_pod_resource_grant_permissions([Grant()])
     assert exc_info.value.status_code == 400
-    assert "do not apply to the resource type" in exc_info.value.detail
+    assert "do not apply to the resource type" in exc_info.value.message
 
 
 class _FakeScalarResult:
@@ -296,7 +296,7 @@ async def test_resource_grant_normalization_reports_missing_connector_app():
         resource_name = "telegram"
         permission_ids = [Permissions.CONNECTOR_USE]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -304,8 +304,8 @@ async def test_resource_grant_normalization_reports_missing_connector_app():
         )
 
     assert exc_info.value.status_code == 400
-    assert "Unknown resource name(s)" in exc_info.value.detail
-    assert "connector:telegram" in exc_info.value.detail
+    assert "Unknown resource name(s)" in exc_info.value.message
+    assert "connector:telegram" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -322,7 +322,7 @@ async def test_resource_grant_normalization_reports_all_unknown_names():
         resource_name = "missing_function"
         permission_ids = [Permissions.FUNCTION_EXECUTE]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -330,8 +330,8 @@ async def test_resource_grant_normalization_reports_all_unknown_names():
         )
 
     assert exc_info.value.status_code == 400
-    assert "agent:missing_agent" in exc_info.value.detail
-    assert "function:missing_function" in exc_info.value.detail
+    assert "agent:missing_agent" in exc_info.value.message
+    assert "function:missing_function" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -343,7 +343,7 @@ async def test_resource_grant_normalization_rejects_unsupported_resource_type():
         resource_name = "some-conversation"
         permission_ids = [Permissions.CONVERSATION_READ]
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(BadRequestError) as exc_info:
         await normalize_pod_resource_grants(
             _FakeSession([]),
             pod_id=pod_id,
@@ -351,7 +351,7 @@ async def test_resource_grant_normalization_rejects_unsupported_resource_type():
         )
 
     assert exc_info.value.status_code == 400
-    assert "do not support name-based grants" in exc_info.value.detail
+    assert "do not support name-based grants" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -389,13 +389,14 @@ async def test_resource_grant_can_satisfy_specific_resource_without_broad_permis
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("workload_type", ["FUNCTION", "AGENT"])
-async def test_named_delegated_workload_grant_alone_suffices_for_pod_visible_resource(
+async def test_named_delegated_workload_needs_its_grant_and_its_invoker(
     monkeypatch,
     workload_type,
 ):
-    # Grant-first: the workload's explicit grant is standalone authority — the
-    # invoking user here holds NO matching role capability (viewer-like) and
-    # the action is still allowed.
+    # PS-ACCESS-020: a workload gets the person's access INTERSECTED with its
+    # own grants. Here both halves are present — the workload holds the grant
+    # and the person driving it holds the permission — so the action goes
+    # through, on the grant.
     workload_grant_id = uuid4()
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     workload_principal_refs = frozenset({PrincipalRef(workload_type, uuid4())})
@@ -406,8 +407,9 @@ async def test_named_delegated_workload_grant_alone_suffices_for_pod_visible_res
         resource,
         principal_sets,
     ):
-        assert principal_sets == (workload_principal_refs,)
-        return [workload_grant_id]
+        return (
+            [workload_grant_id] if principal_sets == (workload_principal_refs,) else []
+        )
 
     monkeypatch.setattr(
         authorizer,
@@ -425,7 +427,9 @@ async def test_named_delegated_workload_grant_alone_suffices_for_pod_visible_res
         actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
         user_id=uuid4(),
         pod_id=resource.pod_id,
-        permission_ids=frozenset(),
+        # The invoking person's own permissions; the delegated context keeps
+        # them unmerged from the workload's for exactly this check.
+        permission_ids=frozenset({Permissions.DATASTORE_RECORD_WRITE}),
         workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
@@ -439,6 +443,55 @@ async def test_named_delegated_workload_grant_alone_suffices_for_pod_visible_res
     assert decision.allowed
     assert decision.reason_code == "POD_VISIBLE"
     assert decision.matched_grant_ids == (workload_grant_id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workload_type", ["FUNCTION", "AGENT"])
+async def test_named_delegated_workload_cannot_exceed_its_invoker(
+    monkeypatch,
+    workload_type,
+):
+    # The same workload with the same grant, driven by a viewer-like person who
+    # holds nothing. A grant is a ceiling on the workload, never a promotion for
+    # whoever starts it -- this is the case grant-first used to allow, and the
+    # one PS-ACCESS-020 names: "if a workload holds a grant on a resource the
+    # invoking person cannot reach, then the system shall refuse the access".
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    workload_principal_refs = frozenset({PrincipalRef(workload_type, uuid4())})
+
+    async def workload_only_grants(ctx, permission_id, resource, principal_sets):
+        return [uuid4()] if principal_sets == (workload_principal_refs,) else []
+
+    monkeypatch.setattr(
+        authorizer, "_matching_grant_ids_for_principal_sets", workload_only_grants
+    )
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = Context(
+        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor_id=f"{workload_type.lower()}:{next(iter(workload_principal_refs)).id}",
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
+        workload_principal_refs=workload_principal_refs,
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx,
+        Permissions.DATASTORE_RECORD_WRITE,
+        resource,
+    )
+
+    assert not decision.allowed
+    # Distinct from MISSING_WORKLOAD_RESOURCE_GRANT on purpose: the two
+    # refusals need opposite fixes, and granting the workload more never
+    # repairs this one.
+    assert decision.reason_code == "DELEGATION_EXCEEDS_INVOKER"
 
 
 @pytest.mark.asyncio
@@ -488,17 +541,19 @@ async def test_named_delegated_workload_requires_workload_grant_for_pod_visible_
 
 
 @pytest.mark.asyncio
-async def test_named_delegated_workload_grant_alone_suffices_for_restricted_resource(
+async def test_named_delegated_workload_restricted_resource_needs_both_grants(
     monkeypatch,
 ):
-    # RESTRICTED resources follow the same grant-first rule: the workload's
-    # grant decides; no additional per-user grant is required.
+    # A RESTRICTED resource is reachable through grants and nothing else, which
+    # is where the intersection is sharpest: the workload's grant AND the
+    # person's own, or no access.
     workload_grant_id = uuid4()
+    user_grant_id = uuid4()
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     user_principal_refs = frozenset({PrincipalRef("POD_MEMBER", uuid4())})
     workload_principal_refs = frozenset({PrincipalRef("FUNCTION", uuid4())})
 
-    async def workload_only_grants_for_principal_sets(
+    async def grants_for_principal_sets(
         ctx,
         permission_id,
         resource,
@@ -506,12 +561,14 @@ async def test_named_delegated_workload_grant_alone_suffices_for_restricted_reso
     ):
         if principal_sets == (workload_principal_refs,):
             return [workload_grant_id]
+        if principal_sets == (user_principal_refs,):
+            return [user_grant_id]
         return []
 
     monkeypatch.setattr(
         authorizer,
         "_matching_grant_ids_for_principal_sets",
-        workload_only_grants_for_principal_sets,
+        grants_for_principal_sets,
     )
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,
@@ -528,6 +585,7 @@ async def test_named_delegated_workload_grant_alone_suffices_for_restricted_reso
         principal_refs=user_principal_refs | workload_principal_refs,
         grant_principal_sets=(user_principal_refs, workload_principal_refs),
         workload_principal_refs=workload_principal_refs,
+        invoker_principal_refs=user_principal_refs,
         authorizer=authorizer,
     )
 
@@ -543,13 +601,62 @@ async def test_named_delegated_workload_grant_alone_suffices_for_restricted_reso
 
 
 @pytest.mark.asyncio
+async def test_named_delegated_workload_restricted_resource_refuses_a_lone_grant(
+    monkeypatch,
+):
+    # Same shape, one grant removed: the person was never shared this resource.
+    # Grant-first read the workload's row and stopped there, which is how a
+    # workload came to reach a table its invoker had been deliberately left out
+    # of.
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    user_principal_refs = frozenset({PrincipalRef("POD_MEMBER", uuid4())})
+    workload_principal_refs = frozenset({PrincipalRef("FUNCTION", uuid4())})
+
+    async def workload_only_grants(ctx, permission_id, resource, principal_sets):
+        return [uuid4()] if principal_sets == (workload_principal_refs,) else []
+
+    monkeypatch.setattr(
+        authorizer, "_matching_grant_ids_for_principal_sets", workload_only_grants
+    )
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.RESTRICTED,
+    )
+    ctx = Context(
+        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor_id=f"function:{next(iter(workload_principal_refs)).id}",
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
+        principal_refs=user_principal_refs | workload_principal_refs,
+        grant_principal_sets=(user_principal_refs, workload_principal_refs),
+        workload_principal_refs=workload_principal_refs,
+        invoker_principal_refs=user_principal_refs,
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx,
+        Permissions.DATASTORE_RECORD_READ,
+        resource,
+    )
+
+    assert not decision.allowed
+    assert decision.reason_code == "DELEGATION_EXCEEDS_INVOKER"
+
+
+@pytest.mark.asyncio
 async def test_delegation_scope_is_implication_expanded(monkeypatch):
     # A {function.execute} scope must also admit the implied function.read a
     # run needs; anything outside the scope's implications stays denied.
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
 
-    async def matching_grants_for_principal_sets(ctx, permission_id, resource, principal_sets):
+    async def matching_grants_for_principal_sets(
+        ctx, permission_id, resource, principal_sets
+    ):
         return [uuid4()]
 
     monkeypatch.setattr(
@@ -603,7 +710,9 @@ async def test_personal_resource_owned_by_other_denied_despite_workload_grant(
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
 
-    async def matching_grants_for_principal_sets(ctx, permission_id, resource, principal_sets):
+    async def matching_grants_for_principal_sets(
+        ctx, permission_id, resource, principal_sets
+    ):
         return [uuid4()]
 
     monkeypatch.setattr(
@@ -725,7 +834,9 @@ def test_org_owner_shortcut_covers_pod_scoped_child_resources():
     )
     # Non-org-owners get nothing from this shortcut.
     non_owner = _default_pod_agent_ctx(pod_id=pod_id, permission_ids=frozenset())
-    assert not Authorizer._is_org_owner_of_pod(non_owner, Permissions.APP_UPDATE, app_ref)
+    assert not Authorizer._is_org_owner_of_pod(
+        non_owner, Permissions.APP_UPDATE, app_ref
+    )
 
 
 @pytest.mark.asyncio
@@ -791,9 +902,7 @@ async def test_default_pod_agent_is_blocked_from_another_pod():
         authorizer=authorizer,
     )
 
-    decision = await authorizer.authorize(
-        ctx, Permissions.APP_UPDATE, other_pod_app
-    )
+    decision = await authorizer.authorize(ctx, Permissions.APP_UPDATE, other_pod_app)
 
     assert not decision.allowed
     assert decision.reason_code == "DELEGATED_POD_SCOPE_ONLY"
@@ -941,7 +1050,12 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
 ):
     """An explicit destructive grant works without any approval — the headless
     (schedule/webhook) path. The grant is standing authority even with no
-    session approval recorded."""
+    session approval recorded.
+
+    Nobody is at a keyboard to approve, but there is still a person behind the
+    run — a schedule fires as its owner — so the invoker ceiling applies here
+    like anywhere else, and that owner holds the permission below.
+    """
     from app.core.authorization import service as service_module
 
     async def no_approval(**kwargs):
@@ -953,11 +1067,9 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
     grant_id = uuid4()
 
     async def grants(ctx, permission_id, resource, principal_sets):
-        return [grant_id]
+        return [grant_id] if principal_sets == (workload_principal_refs,) else []
 
-    monkeypatch.setattr(
-        authorizer, "_matching_grant_ids_for_principal_sets", grants
-    )
+    monkeypatch.setattr(authorizer, "_matching_grant_ids_for_principal_sets", grants)
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,
         resource_id=uuid4(),
@@ -969,7 +1081,7 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
         user_id=uuid4(),
         pod_id=resource.pod_id,
-        permission_ids=frozenset(),
+        permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
         workload_principal_refs=workload_principal_refs,
         authorizer=authorizer,
     )
@@ -1005,9 +1117,7 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
     async def no_grants(ctx, permission_id, resource, principal_sets):
         return []
 
-    monkeypatch.setattr(
-        authorizer, "_matching_grant_ids_for_principal_sets", no_grants
-    )
+    monkeypatch.setattr(authorizer, "_matching_grant_ids_for_principal_sets", no_grants)
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,
         resource_id=uuid4(),
@@ -1019,7 +1129,9 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
         actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
         user_id=uuid4(),
         pod_id=resource.pod_id,
-        permission_ids=frozenset(),
+        # The person approving holds the permission themselves — anything else
+        # is the escalation the test below pins separately.
+        permission_ids=frozenset({Permissions.DATASTORE_TABLE_DELETE}),
         workload_principal_refs=workload_principal_refs,
         delegation_session_id=str(uuid4()),
         authorizer=authorizer,
@@ -1034,6 +1146,52 @@ async def test_named_workload_destructive_without_grant_needs_session_approval(
 
 
 @pytest.mark.asyncio
+async def test_a_session_approval_does_not_lift_the_invoker_ceiling(monkeypatch):
+    """Approving unlocks the destructive gate; it confers no authority.
+
+    Otherwise the approval dialog is an escalation route: a person who cannot
+    delete a table clicks "allow for this session" and the workload deletes it
+    for them.
+    """
+    from app.core.authorization import service as service_module
+
+    async def approved(**kwargs):
+        return True
+
+    monkeypatch.setattr(service_module, "has_session_approval", approved)
+    authorizer = Authorizer(session=None)  # type: ignore[arg-type]
+    workload_principal_refs = frozenset({PrincipalRef("AGENT", uuid4())})
+
+    async def no_grants(ctx, permission_id, resource, principal_sets):
+        return []
+
+    monkeypatch.setattr(authorizer, "_matching_grant_ids_for_principal_sets", no_grants)
+    resource = ResourceRef(
+        resource_type=ResourceType.DATASTORE_TABLE,
+        resource_id=uuid4(),
+        pod_id=uuid4(),
+        visibility=ResourceVisibility.POD,
+    )
+    ctx = Context(
+        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
+        actor_id=f"agent:{next(iter(workload_principal_refs)).id}",
+        user_id=uuid4(),
+        pod_id=resource.pod_id,
+        permission_ids=frozenset({Permissions.DATASTORE_RECORD_READ}),
+        workload_principal_refs=workload_principal_refs,
+        delegation_session_id=str(uuid4()),
+        authorizer=authorizer,
+    )
+
+    decision = await authorizer.authorize(
+        ctx, Permissions.DATASTORE_TABLE_DELETE, resource
+    )
+
+    assert not decision.allowed
+    assert decision.reason_code == "DELEGATION_EXCEEDS_INVOKER"
+
+
+@pytest.mark.asyncio
 async def test_user_actor_destructive_action_is_ungated(monkeypatch):
     """Human users never hit the destructive gate."""
     from app.core.authorization import service as service_module
@@ -1041,7 +1199,9 @@ async def test_user_actor_destructive_action_is_ungated(monkeypatch):
     async def fail_if_approval_checked(**kwargs):
         raise AssertionError("USER actors must not consult session approvals")
 
-    monkeypatch.setattr(service_module, "has_session_approval", fail_if_approval_checked)
+    monkeypatch.setattr(
+        service_module, "has_session_approval", fail_if_approval_checked
+    )
     authorizer = Authorizer(session=None)  # type: ignore[arg-type]
     resource = ResourceRef(
         resource_type=ResourceType.DATASTORE_TABLE,

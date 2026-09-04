@@ -12,7 +12,6 @@ from collections.abc import AsyncIterable, AsyncIterator
 from datetime import datetime, timezone
 import hashlib
 
-import anyio
 
 from sandbox_runtime.protocol import (
     ByteRange,
@@ -22,6 +21,7 @@ from sandbox_runtime.protocol import (
     FileStat,
     ProcessOutputChannel,
     ProcessOutputSnapshot,
+    ProcessState,
     PythonExecutionState,
     PythonResult,
     PythonSessionRef,
@@ -29,7 +29,6 @@ from sandbox_runtime.protocol import (
     TerminalSize,
 )
 
-from app.core.request_context import create_inherited_task
 from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxRejected,
@@ -43,57 +42,36 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
-from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
+from app.modules.workspace.providers.e2b_process_index import (
+    ENTRY_TTL_SECONDS,
+    decode_pid,
+    encode_entry,
+    index_key,
+    pid_key,
+    read_descriptors,
+)
+from app.modules.workspace.providers.e2b_process_lifetime import (
+    seconds_until,
+    watch_for_exit,
+)
+from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
 WORKSPACE_MOUNT = "/workspace"
 
+# A process that has stopped will produce no further output, so a reader
+# waiting for more has nothing left to wait for.
+_FINISHED_PROCESS_STATES = frozenset(
+    {
+        ProcessState.SUCCEEDED,
+        ProcessState.FAILED,
+        ProcessState.CANCELLED,
+        ProcessState.TIMED_OUT,
+    }
+)
 
-_PYTHON_RUNNER = """
-import ast, pickle, os, sys
 
-_STATE = {state_path!r}
-_CODE = {code_path!r}
-_RESULT = {result_path!r}
-
-_ns = {{"__name__": "__main__"}}
-if os.path.exists(_STATE):
-    try:
-        with open(_STATE, "rb") as handle:
-            _ns.update(pickle.load(handle))
-    except Exception:
-        pass
-
-with open(_CODE) as handle:
-    _source = handle.read()
-
-_tree = ast.parse(_source)
-_tail = None
-if _tree.body and isinstance(_tree.body[-1], ast.Expr):
-    _tail = ast.Expression(_tree.body.pop().value)
-
-try:
-    exec(compile(_tree, "<session>", "exec"), _ns)
-    if _tail is not None:
-        _value = eval(compile(_tail, "<session>", "eval"), _ns)
-        if _value is not None:
-            with open(_RESULT, "w") as handle:
-                handle.write(repr(_value) if not isinstance(_value, str) else _value)
-finally:
-    _keep = {{}}
-    for _name, _value in list(_ns.items()):
-        if _name.startswith("__"):
-            continue
-        try:
-            pickle.dumps(_value)
-        except Exception:
-            continue
-        _keep[_name] = _value
-    try:
-        with open(_STATE, "wb") as handle:
-            pickle.dump(_keep, handle)
-    except Exception:
-        pass
-"""
+def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
+    return snapshot.state in _FINISHED_PROCESS_STATES
 
 
 class E2BOpsMixin:
@@ -105,24 +83,36 @@ class E2BOpsMixin:
     """
 
     async def _remember_pid(
-        self, process_id: str, pid: int, *, tty: bool, sandbox_id: str = ""
+        self,
+        process_id: str,
+        pid: int,
+        *,
+        tty: bool,
+        sandbox_id: str = "",
+        expires_at: float = 0.0,
+        cwd: str = "",
+        command: str = "",
     ) -> None:
         redis = self._redis()
-        await redis.set(
-            f"workspace:e2b:pid:v1:{process_id}", f"{pid}:{int(tty)}", ex=60 * 60
+        entry = encode_entry(
+            pid,
+            tty=tty,
+            expires_at=expires_at,
+            cwd=cwd,
+            command=command,
+            started_at=datetime.now(timezone.utc).timestamp(),
         )
+        await redis.set(pid_key(process_id), entry, ex=ENTRY_TTL_SECONDS)
         if sandbox_id:
-            # A per-sandbox index, because "list the processes" means the ones
-            # this platform started, not every pid inside the sandbox.
-            key = f"workspace:e2b:procs:v1:{sandbox_id}"
-            await redis.hset(key, process_id, f"{pid}:{int(tty)}")
-            await redis.expire(key, 60 * 60)
+            key = index_key(sandbox_id)
+            await redis.hset(key, process_id, entry)
+            await redis.expire(key, ENTRY_TTL_SECONDS)
 
     async def _recall_pid(self, process_id: str) -> tuple[int, bool]:
-        raw = await self._redis().get(f"workspace:e2b:pid:v1:{process_id}")
+        raw = await self._redis().get(pid_key(process_id))
         if raw is None:
             raise ProviderGone(f"process {process_id} is no longer tracked")
-        return _decode_pid(raw)
+        return decode_pid(raw)
 
     async def list_processes(
         self, instance: ProviderInstance, *, deadline_at: datetime
@@ -132,23 +122,16 @@ class E2BOpsMixin:
         Read from our own index rather than E2B's process list, which reports
         every pid inside the sandbox and cannot say which operation any of them
         belongs to. State comes from the output buffer, which is where a
-        process's completion is recorded.
+        process's completion is recorded, corrected by the recorded deadline --
+        see `e2b_process_index.read_descriptors`.
         """
-        entries = await self._redis().hgetall(
-            f"workspace:e2b:procs:v1:{instance.provider_id}"
+        del deadline_at
+        return await read_descriptors(
+            self._redis(),
+            self._output,
+            sandbox_id=instance.provider_id,
+            now=datetime.now(timezone.utc).timestamp(),
         )
-        descriptors: list[ProcessDescriptor] = []
-        for raw_id in entries:
-            process_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
-            snapshot = await self._output.read(process_id, after_sequence=0)
-            descriptors.append(
-                ProcessDescriptor(
-                    process_id=process_id,
-                    state=snapshot.state,
-                    exit_code=snapshot.exit_code,
-                )
-            )
-        return tuple(descriptors)
 
     @staticmethod
     def _redis():
@@ -189,6 +172,7 @@ class E2BOpsMixin:
 
         with sdk_errors():
             if request.tty is not None:
+
                 async def on_pty(data: bytes) -> None:
                     await self._output.append(
                         process_id, channel=ProcessOutputChannel.PTY, data=data
@@ -228,45 +212,12 @@ class E2BOpsMixin:
             handle.pid,
             tty=request.tty is not None,
             sandbox_id=instance.provider_id,
+            expires_at=deadline_at.timestamp(),
+            cwd=request.cwd or "",
+            command=command,
         )
-        self._watch_for_exit(process_id, handle)
+        watch_for_exit(self._output, self._watchers, process_id, handle)
         return process_id
-
-    def _watch_for_exit(self, process_id: str, handle) -> None:
-        """Record the exit code when the process finishes.
-
-        Nothing else can. E2B reports completion by resolving the handle, not
-        by any state a later poll could read, so without this a finished
-        command reads as still running forever: the caller sees no exit code,
-        never treats it as complete, and polls until its deadline.
-        """
-
-        async def watch() -> None:
-            try:
-                outcome = await handle.wait()
-                exit_code = getattr(outcome, "exit_code", None)
-            except Exception as exc:
-                # A command that exits non-zero raises in some SDK versions;
-                # the exit code is still the thing the caller needs.
-                exit_code = getattr(exc, "exit_code", None)
-            except asyncio.CancelledError:
-                # `wait()` awaits an SDK-internal task, so a cancellation
-                # anywhere in that chain (a disconnect, a sandbox release)
-                # arrives here — and `except Exception` does not catch it.
-                # Skipping the record leaves the process reading as "still
-                # running" for the rest of the sandbox's life, and the agent
-                # polls a corpse until its own deadline. Record the outcome we
-                # have, then let the cancellation continue.
-                with anyio.CancelScope(shield=True):
-                    await self._output.record_exit(process_id, exit_code=None)
-                raise
-            await self._output.record_exit(process_id, exit_code=exit_code)
-
-        task = create_inherited_task(watch(), name=f"e2b-process-watch:{process_id}")
-        # Held so the task is not garbage collected mid-flight, and discarded
-        # once it has recorded the outcome.
-        self._watchers.add(task)
-        task.add_done_callback(self._watchers.discard)
 
     async def read_process_output(
         self,
@@ -278,18 +229,30 @@ class E2BOpsMixin:
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot:
         snapshot = await self._output.read(process_id, after_sequence=after_sequence)
-        if snapshot.chunks or wait_seconds <= 0:
+        if snapshot.chunks or wait_seconds <= 0 or _has_finished(snapshot):
             return snapshot
 
         # Nothing new yet. Poll the buffer rather than holding an E2B stream
         # open, so a caller that goes away costs nothing.
+        #
+        # Waking on the exit as well as on output is what makes this bounded by
+        # the command instead of by the yield window. Exit is recorded by a
+        # separate watcher task, so it almost always lands *after* the last
+        # chunk: the collector's first poll took the output while the state was
+        # still RUNNING, came back, saw a non-terminal state and polled again --
+        # and this loop then had no new bytes to wait for and no reason to stop,
+        # so it slept out the whole remaining window. Every command that printed
+        # something and then exited paid that in full. Measured on a real
+        # workspace, `lemma tables list` ran in 771 ms and the tool call around
+        # it took 23-39 s, which agents read as a hang: they poll, give up, kill
+        # the process and start again.
         deadline = asyncio.get_running_loop().time() + wait_seconds
         while asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.1)
             snapshot = await self._output.read(
                 process_id, after_sequence=after_sequence
             )
-            if snapshot.chunks:
+            if snapshot.chunks or _has_finished(snapshot):
                 break
         return snapshot
 
@@ -471,8 +434,14 @@ class E2BOpsMixin:
         E2B has no resident-interpreter concept to reserve, so there is nothing
         to allocate ahead of time and pretending otherwise would mean tracking
         state with no backing.
+
+        The request's ``cwd`` is deliberately not remembered here either. It
+        arrives again on every ``execute_python`` through the session reference,
+        which is the only form of it that survives this backend running in more
+        than one process -- remembering it in this one would work until the next
+        call landed on another worker.
         """
-        return None
+        return
 
     async def execute_python(
         self,
@@ -496,6 +465,14 @@ class E2BOpsMixin:
         code is split with `ast` and the last node evaluated separately when it
         is an expression. Without this, `x = 6 * 7` followed by `x` returns
         nothing and an agent cannot see what it computed.
+
+        *A working directory* -- the interpreter starts in the session's `cwd`,
+        the very same one `start_process` gives a shell command. A fresh process
+        per call means there is no shell to inherit it from, and without this it
+        started in whatever directory the image defaults to: `execute_python`
+        reported `/workspace` while `exec_command` reported the conversation's
+        own directory, so a file one tool wrote by relative path was invisible
+        to the other.
         """
         sandbox = await self._connect(instance.provider_id)
         state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
@@ -503,21 +480,53 @@ class E2BOpsMixin:
         result_path = f"/tmp/lemma-python-{request.operation_id}.result"
         runner_path = f"/tmp/lemma-python-{request.operation_id}.py"
 
-        with sdk_errors():
-            await sandbox.files.write(code_path, request.code)
-            await sandbox.files.write(
-                runner_path,
-                _PYTHON_RUNNER.format(
-                    state_path=state_path,
-                    code_path=code_path,
-                    result_path=result_path,
-                ),
-            )
-            outcome = await sandbox.commands.run(
-                f"python3 {runner_path}",
-                envs={item.name: item.value for item in request.environment},
-                timeout=None,
-            )
+        # Registered like any other process, because the idle sweep decides
+        # what to release from this index and nothing put `execute_python` in
+        # it. The comment below reasoned that a runaway loop would be held by
+        # "the idle sweeper will not release a sandbox with live processes" --
+        # true of `exec_command`, and never true of this call, so a ten-minute
+        # analysis had no protection at all. The pid is not recorded: this run
+        # is blocking, so nothing addresses it by pid.
+        tracked_id = str(request.operation_id)
+        await self._remember_pid(
+            tracked_id,
+            0,
+            tty=False,
+            sandbox_id=instance.provider_id,
+            expires_at=request.deadline_at.timestamp(),
+            cwd=session.cwd or "",
+            command="execute_python",
+        )
+        await self._output.record_start(tracked_id)
+        exit_code: int | None = None
+        try:
+            with sdk_errors():
+                await sandbox.files.write(code_path, request.code)
+                await sandbox.files.write(
+                    runner_path,
+                    PYTHON_RUNNER.format(
+                        state_path=state_path,
+                        code_path=code_path,
+                        result_path=result_path,
+                    ),
+                )
+                outcome = await sandbox.commands.run(
+                    f"python3 {runner_path}",
+                    cwd=session.cwd,
+                    envs={item.name: item.value for item in request.environment},
+                    # `None` here meant unbounded, so `execute_python`'s
+                    # `timeout_seconds` bounded only how long the backend
+                    # waited -- nothing stopped the code itself. A runaway loop
+                    # kept running in the sandbox after the tool had returned,
+                    # holding CPU and memory on a box with one core.
+                    timeout=seconds_until(request.deadline_at),
+                )
+            exit_code = outcome.exit_code
+        finally:
+            if exit_code is None:
+                await self._output.record_unknown(tracked_id)
+            else:
+                await self._output.record_exit(tracked_id, exit_code=exit_code)
 
         # No trailing expression, or a run that failed before writing one,
         # both mean there is no result to report.
@@ -563,13 +572,6 @@ class E2BOpsMixin:
             return f"https://{sandbox.get_host(port)}"
 
 
-def _decode_pid(raw) -> tuple[int, bool]:
-    text = raw.decode() if isinstance(raw, bytes) else str(raw)
-    pid, _, flag = text.partition(":")
-    return int(pid), flag == "1"
-
-
-
 def _to_stat(entry) -> FileStat:
     is_dir = str(getattr(entry, "type", "")).lower().endswith("dir")
     modified = getattr(entry, "modified_time", None)
@@ -582,5 +584,3 @@ def _to_stat(entry) -> FileStat:
         # 0o644/0o755 is the honest default rather than inventing a number.
         mode=int(getattr(entry, "mode", 0) or (0o755 if is_dir else 0o644)),
     )
-
-

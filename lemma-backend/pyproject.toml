@@ -1,6 +1,6 @@
 [project]
 name = "lemma-backend"
-version = "0.7.0"
+version = "0.7.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -62,6 +62,12 @@ dependencies = [
     # Emits markdown directly, so a fetched page never becomes raw HTML in the
     # agent's context.
     "trafilatura>=2.2.0",
+    # Browser TLS/JA3 fingerprint for `web_fetch` (MIT). Sites fingerprint the
+    # handshake before they read User-Agent, so a header alone cannot stop a 403
+    # -- measured, 8 of 15 ordinary research URLs failed the plain-httpx fetch and
+    # fell through to a ~5s sandbox browser render. See
+    # app/core/net/impersonating_client.py.
+    "curl-cffi>=0.16.0",
     "lemma-pod-bundle",
 ]
 
@@ -69,7 +75,7 @@ dependencies = [
 # Managed/local composition: document conversion in the single backend
 # process. Cloud/split deployments do not need to install this extra.
 local = [
-    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+    "xberg>=1.0.14",
 ]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
 # imports are lazy (only loaded when secret_key_provider selects them).
@@ -87,12 +93,15 @@ e2b = [
 keychain = [
     "keyring>=25.0.0",
 ]
-# In-process document processor (DOCUMENT_PROCESSOR=markitdown), so a
-# deployment can convert docs to markdown without the Kreuzberg container. Kept
-# optional so OSS/pip installs stay lean; the released backend image installs it
-# (see lemma-backend/Dockerfile) because the local stack defaults to it.
-markitdown = [
-    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+# In-process document processor (DOCUMENT_PROCESSOR=xberg), so a deployment can
+# convert documents without the Kreuzberg container. Kept optional so OSS/pip
+# installs stay lean; the released backend image installs it (see
+# lemma-backend/Dockerfile) because local and desktop default to it.
+#
+# A Rust core with abi3 wheels and no Python dependencies of its own, so this
+# adds one compiled extension rather than a dependency tree.
+xberg = [
+    "xberg>=1.0.14",
 ]
 
 [dependency-groups]
@@ -111,6 +120,11 @@ dev = [
     "psycopg[binary,pool]>=3.3.2",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
+    # Redis's own semantics, in-process. The output buffer's cursor arithmetic
+    # depends on exactly what `LTRIM`/`LRANGE`/`LINDEX` do at their boundaries,
+    # and a hand-written stand-in only asserts what its author already believed
+    # those commands do -- which is how the cursor defect it now pins survived.
+    "fakeredis>=2.26.0",
     "kubernetes>=34.1.0",
     "nest-asyncio>=1.6.0",
     "pip-audit>=2.9.0",
@@ -148,17 +162,107 @@ lemma-connectors = { path = "lemma-connectors", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 lemma-sdk = { path = "../lemma-python", editable = true }
 
-# Ruff config. The full default ruleset is not yet enforced repo-wide (generated
-# connector clients + migrations carry many pre-existing findings), so CI runs a
-# focused async-safety gate instead — `make lint-async` — which enforces the
-# flake8-async (ASYNC) rules on production code under app/. This catches the
-# class of bug that wedged the worker: blocking calls on the event loop (sync
-# HTTP clients, blocking open/subprocess, time.sleep in async functions).
+# Ruff config.
+#
+# `select` is explicit because the default is four rule families (E4, E7, E9, F)
+# and nothing said so: "ruff passes" meant syntax errors and unused imports, and
+# the rules the contributing guide bolds -- no `Any`, no bare `dict` -- were not
+# among them. Every family below is at zero on this tree and is a hard failure;
+# a family is added here only once it has been driven to zero, so this list may
+# grow and never carries a baseline.
+#
+# What is deliberately *not* here, with today's count on production code, so the
+# next person does not have to re-measure before picking one up:
+#
+#   ANN   2211  (ANN401 `Any` = 527)  ratcheted per module by check_architecture
+#   D     6202  docstring style; no decision has been taken on the convention
+#   COM   4371  trailing commas; churn against the formatter, no defect class
+#   UP    1712  pyupgrade; mostly safe but a large single diff
+#   TRY   1365  raise/except structure; overlaps the swallowed-errors gate
+#   EM    1275  exception message literals; cosmetic at this size
+#   E     987   (beyond E4/E7/E9 -- almost all line length)
+#   PLR    737  / PLC 711 / PLW 139  -- complexity is already ratcheted
+#   I      514  import sorting; one mechanical diff, worth doing on its own
+#   S      251  bandit; wants a triage pass, not a bulk fix
+#   BLE    248  blind except; ratcheted by check_swallowed_errors instead
+#   INP    248  implicit namespace packages
+#   ARG    199  unused arguments; many are protocol conformance
+#   SLF    168  private member access; concentrated in tests
+#   B      141  bugbear; worth doing next
+#   FBT    135  boolean traps
+#   N       61  naming; renames reach the API surface
+#   C90     68  mccabe; already ratcheted by check_architecture
+#   A       54  builtin shadowing
+#   PTH     42  pathlib over os.path; mechanical, but it edits real file I/O
+#   ERA     28  commented-out code; each site needs a judgement, not a bulk fix
+#
+# The two ignores below are not concessions, they are conventions:
+# ASYNC109/110/240 were already excluded by `make lint-async` (this config now
+# subsumes that gate's selection), and G201 asks for `logger.exception(...)`
+# where the logging contract in docs/development.md deliberately specifies
+# `logger.error(..., exc_info=True)`.
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes
+    # `B015`/`B018` only, not the whole bugbear family: they are the rule
+    # CodeQL's `py/ineffectual-statement` is trying to be, and unlike it they
+    # know that a lone `...` is a `Protocol`/`@overload` stub body rather than a
+    # statement someone forgot to finish. That query has been open against
+    # github/codeql as a labelled false positive since 2022 (issue 11351), and
+    # GitHub Code Quality runs its own workflow with a fixed query list, so
+    # `.github/codeql-config.yml` cannot filter it. Catching the real cases here
+    # instead means they are caught locally, in `make quality`, before a PR.
+    "B015",  # useless comparison
+    "B018",  # useless expression
+    "E4",    # imports
+    "E7",    # statement-level errors
+    "E9",    # runtime errors
+    "W",     # whitespace
+    "ASYNC", # blocking calls on the event loop
+    "C4",    # comprehensions
+    "DTZ",   # naive datetimes
+    "G",     # logging-format correctness
+    "ISC",   # implicit string concatenation
+    "LOG",   # logging misuse
+    "PIE",   # misc lints
+    "PLE",   # pylint errors
+    "RET",   # return statements
+    "T20",   # print in production code
+    "TID",   # banned/relative imports
+]
+ignore = ["ASYNC109", "ASYNC110", "ASYNC240", "G201"]
+
+[tool.ruff.format]
+# `event_catalog.py` is generated by scripts/generate_logging_event_catalogs.py,
+# one line per entry. Formatting it splits those entries across lines, which
+# does not change the code but does make the file differ from what the generator
+# emits -- so the freshness check in `make quality` fails after every `make
+# format`. Excluded at config level rather than in the Makefile so an editor's
+# format-on-save cannot reintroduce the drift either.
+exclude = ["app/core/log/event_catalog.py"]
+
 [tool.ruff.lint.per-file-ignores]
 # Test harnesses and e2e infra legitimately do blocking subprocess/open/file
 # I/O — they don't run on the worker event loop — so the ASYNC gate skips them.
-"**/tests/**" = ["ASYNC"]
-"app/modules/test_support/**" = ["ASYNC"]
+# They also print: a diagnostic helper whose output nobody sees is not a helper.
+"app/modules/test_support/**" = ["ASYNC", "T20"]
+"app/core/test_utils.py" = ["T20"]
+# Operator and maintenance scripts are command-line programs. `print` is their
+# interface, not a leftover debug statement, and T20 exists to catch the latter.
+"scripts/**" = ["T20"]
+"app/**/scripts/**" = ["T20"]
+"migrations/**" = ["T20"]
+# Both files end in an `if __name__ == "__main__":` block — an outbox admin CLI
+# and a parser demo. Their prints are that program's output.
+"app/core/infrastructure/events/admin.py" = ["T20"]
+"app/core/file_editor/file_editor.py" = ["T20"]
+# A test pins a fixed instant on purpose; which zone it carries is usually not
+# what the test is about, and naive literals keep the arithmetic readable.
+"**/tests/**" = ["ASYNC", "T20", "DTZ"]
+# Trailing whitespace here is the fixture, not a typo: these are conflict-marker
+# strings the parser is asserted to tolerate, and `W` autofix silently rewrote
+# `<<<<<<< SEARCH  ` to `<<<<<<< SEARCH`, deleting the case the test existed for.
+"app/core/file_editor/test_file_editor.py" = ["W", "T20"]
 
 [tool.basedpyright]
 pythonVersion = "3.14"

@@ -82,7 +82,7 @@ class ReleaseSweepOutcome:
 async def _prune_one_app(uow_factory: UnitOfWorkFactory, app_id: UUID) -> int:
     """Plan and stamp in one short unit of work, then delete the bytes outside
     it. Returns how many releases lost their bytes."""
-    from app.composition.pod_bundle_apps import build_app_service
+    from app.modules.apps.api.dependencies import build_app_service
     from app.modules.apps.services.app_release_retention import AppReleaseRetention
 
     async with uow_factory() as uow:
@@ -90,7 +90,9 @@ async def _prune_one_app(uow_factory: UnitOfWorkFactory, app_id: UUID) -> int:
         app = await service.repository.get(app_id)
         if app is None:
             return 0
-        retention = AppReleaseRetention(service.repository, service.file_manager_factory)
+        retention = AppReleaseRetention(
+            service.repository, service.file_manager_factory
+        )
         plan = await retention.plan(app)
         await uow.commit()
     if plan.is_empty:

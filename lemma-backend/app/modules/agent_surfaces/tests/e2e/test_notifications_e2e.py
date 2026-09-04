@@ -191,9 +191,7 @@ async def test_mark_all_read_clears_the_badge_without_answering_anything(
             title=f"Question {index}",
         )
 
-    cleared = await authenticated_client.post(
-        f"/pods/{pod_id}/notifications/read-all"
-    )
+    cleared = await authenticated_client.post(f"/pods/{pod_id}/notifications/read-all")
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["unread"] == 0
 
@@ -284,7 +282,11 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
 
     created = await authenticated_client.post(
         f"/pods/{pod_id}/workflows",
-        json={"name": "expense-approval", "start": {"type": "MANUAL"}, "mode": "GLOBAL"},
+        json={
+            "name": "expense-approval",
+            "start": {"type": "MANUAL"},
+            "mode": "GLOBAL",
+        },
     )
     assert created.status_code == 201, created.text
     workflow_name = created.json()["name"]
@@ -394,10 +396,10 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
         wait_for_messages,
     )
     from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+        script_text,
         process_ingress_and_run_scripted,
     )
     from app.modules.connectors.domain.connector import AuthProvider
-    from app.modules.test_support.e2e.scripted_model import script_email_reply
 
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
@@ -451,7 +453,7 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
             },
             headers={},
         ),
-        script=[script_email_reply("resend_reply_email", "Thanks, recorded.")],
+        script=[script_text("Thanks, recorded.")],
     )
 
     threaded = await _conversation_by_external_thread(
@@ -476,9 +478,9 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
     unit tests around this stub the provisioner, so they can prove routing
     *asks* for a mailbox but not that a usable one comes back.
 
-    This asserts the surface that actually lands: owned by the pod rather than
-    any named agent — which is what the pod assistant reaches for — and carrying
-    an address a person could be asked to type.
+    This asserts the surface that actually lands: owned by the pod's own
+    assistant rather than any named agent, and carrying an address a person
+    could be asked to type.
     """
     from sqlalchemy import select
 
@@ -491,15 +493,17 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
 
     pod_id = test_pod["id"]
     before = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert before == [], "this test is only meaningful in a pod with no surfaces"
 
-    created = await _notify(
-        authenticated_client, pod_id, fixed_test_user["id"]
-    )
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
 
     # Not undeliverable for want of a surface: one was created to carry it.
     assert created["undeliverable_reason"] != (
@@ -508,16 +512,22 @@ async def test_a_pod_with_nothing_connected_mints_itself_a_readable_mailbox(
 
     await db_session.commit()
     surfaces = (
-        await db_session.execute(
-            select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     assert len(surfaces) == 1
     surface = surfaces[0]
     assert surface.surface_type == "RESEND"
     # The pod's own, not an agent's — this is the surface the assistant uses.
-    assert surface.agent_id is None
+    # The assistant's, whose row id is its pod's. It used to be *nobody's*,
+    # which is what made one column mean two things.
+    assert surface.agent_id == UUID(pod_id)
     assert surface.surface_identity_email.endswith("@ops.example.com")
     # Readable, not pod-<32 hex chars>: people are asked to write to this.
     local_part = surface.surface_identity_email.split("@")[0]
@@ -569,9 +579,7 @@ async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
     # The first pod claims a mailbox, as it would on any deployment.
     await _notify(authenticated_client, test_pod["id"], fixed_test_user["id"])
     # The second pod asks for one while that claim exists.
-    created = await _notify(
-        authenticated_client, second_pod_id, fixed_test_user["id"]
-    )
+    created = await _notify(authenticated_client, second_pod_id, fixed_test_user["id"])
 
     assert "creating a mailbox" not in (created["undeliverable_reason"] or "")
 
@@ -581,15 +589,167 @@ async def test_a_second_pod_in_the_org_also_gets_a_mailbox(
         for row in (
             await db_session.execute(
                 select(AgentSurface).where(
-                    AgentSurface.pod_id.in_(
-                        [UUID(test_pod["id"]), UUID(second_pod_id)]
-                    )
+                    AgentSurface.pod_id.in_([UUID(test_pod["id"]), UUID(second_pod_id)])
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
 
     assert len(addresses) == 2, "both pods should hold a mailbox of their own"
     # Distinct addresses are what makes sharing the key safe: inbound routes on
     # the address, which carries a unique index.
     assert len(set(addresses.values())) == 2
+
+
+async def test_resend_mailbox_is_blocked_on_a_local_url_without_polling(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The desktop-app failure, reproduced against the real surface service.
+
+    On a localhost API URL with no public webhook and polling mode off, the
+    Resend mailbox cannot be provisioned (the runtime gate demands a public
+    HTTPS callback), so ``message_user`` is UNDELIVERABLE and no surface lands.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+    # Override the e2e's public HTTPS URL back to the desktop app's reality.
+    monkeypatch.setattr(core_settings, "api_url", "http://localhost:8711")
+    monkeypatch.setattr(surface_settings, "enable_resend_polling_mode", False)
+
+    pod_id = test_pod["id"]
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
+
+    assert created["delivery_status"] == "UNDELIVERABLE"
+    assert "creating a mailbox for it failed" in (created["undeliverable_reason"] or "")
+
+    await db_session.commit()
+    surfaces = (
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert surfaces == [], "no surface should be provisioned when the gate blocks it"
+
+
+async def test_resend_mailbox_is_minted_on_a_local_url_with_polling(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """The fix: ENABLE_RESEND_POLLING_MODE lets the desktop app (localhost, no
+    public webhook) mint a Resend mailbox, so ``message_user`` is deliverable.
+    """
+    from sqlalchemy import select
+
+    from app.core.config import settings as core_settings
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+
+    monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.example.com")
+    monkeypatch.setattr(core_settings, "api_url", "http://localhost:8711")
+    monkeypatch.setattr(surface_settings, "enable_resend_polling_mode", True)
+
+    pod_id = test_pod["id"]
+    created = await _notify(authenticated_client, pod_id, fixed_test_user["id"])
+
+    # The mailbox was minted, so this is not the "no surface / provision failed"
+    # branch. Same localhost URL as the test above — only polling mode differs.
+    assert "creating a mailbox for it failed" not in (
+        created["undeliverable_reason"] or ""
+    )
+
+    await db_session.commit()
+    surfaces = (
+        (
+            await db_session.execute(
+                select(AgentSurface).where(AgentSurface.pod_id == UUID(pod_id))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(surfaces) == 1
+    assert surfaces[0].surface_type == "RESEND"
+    assert surfaces[0].surface_identity_email.endswith("@ops.example.com")
+
+
+async def test_the_agent_is_only_told_about_asks_it_can_actually_answer(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """The prompt must not name a notification the domain will refuse.
+
+    Everything open in a conversation used to be rendered under "Open requests
+    for this person", ending in "Call `respond_to_notification`". An
+    informational notice delivered into the same thread was rendered exactly
+    like a question, so the agent answered it, and `respond()` raised
+    `NotificationTransitionError` -- which, before the toolset was wrapped,
+    ended the conversation. The two halves are fixed separately; this is the
+    half that stops the prompt asking for the impossible.
+    """
+    from sqlalchemy import text as sql_text
+
+    from app.modules.agent_surfaces.contracts.notifications import (
+        open_notifications_for_conversation,
+    )
+
+    pod_id = test_pod["id"]
+    asking = await _notify(
+        authenticated_client,
+        pod_id,
+        recipient=fixed_test_user["email"],
+        title="Standup",
+    )
+    telling = await _notify(
+        authenticated_client,
+        pod_id,
+        recipient=fixed_test_user["email"],
+        title="Deploy finished",
+        expects_response=False,
+    )
+    assert telling["awaiting_response"] is False
+
+    conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"title": "reply thread", "type": "CHAT"},
+    )
+    assert conversation.status_code == 201, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    # Delivery normally sets this; the surface pipeline is not what is under
+    # test here, so both rows are pointed at the thread directly.
+    await db_session.execute(
+        sql_text(
+            "UPDATE notifications SET delivery_conversation_id = :cid "
+            "WHERE id IN (:asking, :telling)"
+        ),
+        {"cid": conversation_id, "asking": asking["id"], "telling": telling["id"]},
+    )
+    await db_session.commit()
+
+    open_asks = await open_notifications_for_conversation(UUID(conversation_id))
+
+    assert [item["notification_id"] for item in open_asks] == [asking["id"]]

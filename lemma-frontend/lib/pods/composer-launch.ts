@@ -24,6 +24,25 @@ export const COMPOSER_LAUNCH_PARAMS = [
   CONVERSATION_METADATA_PARAM,
 ] as const;
 
+export const ASSISTANT_MESSAGE_PARAM = "assistantMessage";
+
+/**
+ * The third kind of arrival: nothing has been said yet, and the route should
+ * ask before anything is sent. Lives here with the other two so a route can
+ * see all three ways it may be entered in one place.
+ */
+export const POD_WELCOME_PARAM = "welcome";
+
+/**
+ * The loud version's params. `assistantMessage` sends on arrival and the other
+ * two are the framing that rides with it; all three are spent by that one send.
+ */
+export const ASSISTANT_LAUNCH_PARAMS = [
+  ASSISTANT_MESSAGE_PARAM,
+  CONVERSATION_INSTRUCTIONS_PARAM,
+  CONVERSATION_METADATA_PARAM,
+] as const;
+
 export interface ComposerLaunch {
   /** An unfinished sentence for the user to complete. Never sent on its own. */
   draft: string;
@@ -86,13 +105,31 @@ export function readComposerLaunch(
   };
 }
 
+function withoutParams(
+  params: URLSearchParams,
+  remove: readonly string[],
+): string {
+  const next = new URLSearchParams(params.toString());
+  for (const param of remove) next.delete(param);
+  return next.toString();
+}
+
 /**
  * The same URL with the launch params removed, for the `router.replace` that
  * follows seeding. Without it a refresh re-seeds a draft the user already
  * cleared, and a second conversation inherits the first one's framing.
  */
 export function stripComposerLaunchParams(params: URLSearchParams): string {
-  const next = new URLSearchParams(params.toString());
-  for (const param of COMPOSER_LAUNCH_PARAMS) next.delete(param);
-  return next.toString();
+  return withoutParams(params, COMPOSER_LAUNCH_PARAMS);
+}
+
+/**
+ * The same for a send-on-arrival launch, and it must run when the message is
+ * dispatched rather than when the answer lands. A turn is minutes long: held
+ * that whole time, the launch URL is still on screen for a reload to replay,
+ * and the replace that finally clears it arrives wherever the reader has since
+ * navigated to.
+ */
+export function stripAssistantLaunchParams(params: URLSearchParams): string {
+  return withoutParams(params, ASSISTANT_LAUNCH_PARAMS);
 }

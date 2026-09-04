@@ -5,8 +5,12 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from lemma_sdk.openapi_client.models.workflow_create_request import WorkflowCreateRequest
-from lemma_sdk.openapi_client.models.workflow_update_request import WorkflowUpdateRequest
+from lemma_sdk.openapi_client.models.workflow_create_request import (
+    WorkflowCreateRequest,
+)
+from lemma_sdk.openapi_client.models.workflow_update_request import (
+    WorkflowUpdateRequest,
+)
 
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
@@ -43,7 +47,9 @@ def init_workflow(
 @app.command("validate")
 def validate_workflow_cmd(
     path: Path = typer.Argument(
-        ..., exists=True, help="A workflow JSON file or its bundle folder (workflows/<name>)."
+        ...,
+        exists=True,
+        help="A workflow JSON file or its bundle folder (workflows/<name>).",
     ),
 ) -> None:
     """Statically check a workflow graph before import (entry node, edges, END, targets)."""
@@ -62,7 +68,9 @@ def validate_workflow_cmd(
         fail(f"Could not parse {json_path}: {exc}")
     issues = validate_workflow(payload)
     if not issues:
-        console.print(f"[green]ok[/green] {json_path.name}: workflow graph looks valid.")
+        console.print(
+            f"[green]ok[/green] {json_path.name}: workflow graph looks valid."
+        )
         return
     for issue in issues:
         console.print(f"[red]error[/red]  {issue}")
@@ -107,7 +115,9 @@ def get_workflow(
 @app.command("create")
 def create_workflow(
     ctx: typer.Context,
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -132,11 +142,11 @@ def create_workflow(
 
 
 @app.command("schema")
-def schema_workflow() -> None:
+def schema_workflow(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a workflow bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("workflow")
+    print_resource_schema(ctx, "workflow")
 
 
 @app.command("update")
@@ -144,7 +154,10 @@ def update_workflow(
     ctx: typer.Context,
     workflow: str = typer.Argument(...),
     json_payload: str | None = typer.Option(
-        None, "--data", "-d", help="Metadata JSON (description, mode, visibility, start)."
+        None,
+        "--data",
+        "-d",
+        help="Metadata JSON (description, mode, visibility, start).",
     ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
@@ -157,7 +170,7 @@ def update_workflow(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).workflows.update(
-            workflow, WorkflowUpdateRequest.from_dict(payload)
+            workflow, build_request(WorkflowUpdateRequest, payload, context="workflow")
         ),
     )
     if result is not None:
@@ -168,7 +181,9 @@ def update_workflow(
 def update_workflow_graph(
     ctx: typer.Context,
     workflow: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),

@@ -1,0 +1,434 @@
+name: Product scenarios
+
+# The black-box suite. It boots a real Lemma — Postgres, Redis, SuperTokens,
+# migrations, and the backend under uvicorn — and drives it over HTTP as an
+# external client. Nothing is mocked and nothing is imported from the backend.
+#
+# Job names are product journeys, not modules, so a red check on a pull request
+# says which promise to the user stopped being kept.
+#
+# Two speeds, and they are triggered differently on purpose.
+#
+# The two gate jobs cost seconds, need no Docker, and run on every pull request.
+# They are also the only place the specification-honesty gates run at all: CI's
+# `lemma-backend quality gates` job runs the individual gate targets rather than
+# `make quality`, so without them here a promise could be marked covered with no
+# test and nothing would notice.
+#
+# The lanes that boot a stack take minutes and run nightly, or on request. They
+# are not a required check. Putting them on every pull request would mean a
+# ten-minute wait for a signal that is about the product rather than about the
+# change, and the slowest shards are not yet reliable on a two-core runner.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # Nightly, after the working day in IST.
+    - cron: '0 19 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed by event as well as branch, so the two speeds do not cancel each
+  # other. Without it a push — which starts a seconds-long gates run — kills a
+  # lanes run already ten minutes into booting stacks, and the expensive signal
+  # is the one that never survives.
+  group: scenarios-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # The guards on the suite itself: no backend imports, no mocking, no sleeping,
+  # every test declaring what it proves. No Docker, no stack, seconds — so it
+  # runs on every push and fails before anything expensive starts.
+  guards:
+    timeout-minutes: 10
+    name: scenario suite guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Suite guards
+        working-directory: tests/scenarios
+        run: uv run pytest journeys/test_harness_contract.py -q
+
+  # Traceability between docs/product and the suite. Pure text analysis — it
+  # reads the specification and parses the tests with `ast` rather than running
+  # them, so it needs neither the stack nor the backend's dependencies.
+  traceability:
+    timeout-minutes: 10
+    name: spec traceability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Scenario coverage gates
+        run: python3 scripts/check_scenario_coverage.py
+
+  journeys:
+    timeout-minutes: 30
+    name: scenarios (${{ matrix.journey.name }})
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
+    strategy:
+      # One red journey must not hide another. Each is an independent statement
+      # about the product.
+      fail-fast: false
+      matrix:
+        # Add a row per journey directory as its scenarios land. `path` is what
+        # pytest is pointed at; `name` is what the check is called, and should
+        # read as the journey does in docs/product.
+        journey:
+          - name: getting started
+            path: journeys/getting_started
+          - name: building a pod
+            path: journeys/building_a_pod
+          - name: working with data
+            path: journeys/working_with_data
+          - name: agents and conversations
+            path: journeys/agents_and_conversations
+          - name: automating work
+            path: journeys/automating_work
+          - name: sharing and permissions
+            path: journeys/sharing_and_permissions
+          - name: scheduling and triggers
+            path: journeys/scheduling_and_triggers
+          - name: surfaces and notifications
+            path: journeys/surfaces_and_notifications
+          - name: packaging and reuse
+            path: journeys/packaging_and_reuse
+          - name: connectors and usage
+            path: journeys/connectors_and_accounts journeys/operating_a_deployment
+          - name: platform services
+            path: journeys/platform
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      # The suite boots the backend with the backend's own interpreter, so its
+      # dependencies have to be installed even though the suite never imports it.
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Run journey
+        working-directory: tests/scenarios
+        run: uv run pytest ${{ matrix.journey.path }} -q --junitxml=results.xml
+
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # The XML carries journey, capability, scenario and proven promises as
+      # properties on each case, so a CI front end can show the sentence without
+      # the reporting plugin being involved.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scenarios-${{ strategy.job-index }}
+          path: tests/scenarios/results.xml
+          retention-days: 7
+
+  # Functions and workflows executing for real, in Docker sandboxes. Separate
+  # from the journey matrix because it has to build the two workspace images
+  # first, which is minutes — and because "the platform works" and "code runs
+  # inside it" are different failures worth telling apart at a glance.
+  sandbox:
+    name: scenarios in a sandbox
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Build the sandbox images
+        run: make scenarios-images
+      - name: Run the sandbox lane
+        working-directory: tests/scenarios
+        run: uv run pytest -m sandbox -q --junitxml=sandbox-results.xml
+
+      # A sandbox failure is a container failure, and the container is gone by
+      # the time anyone reads this. `schema_extraction` failing with a bare
+      # ConnectError says only that nothing answered on the published port —
+      # whether the runtime crashed, or had not finished starting, is in here
+      # and nowhere else.
+      - name: What the sandboxes did
+        if: failure()
+        run: |
+          docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+          for c in $(docker ps -aq --filter ancestor=lemma-function:scenarios \
+                                   --filter ancestor=lemma-workspace:scenarios); do
+            echo "=== $(docker inspect -f '{{.Name}} {{.State.Status}} exit={{.State.ExitCode}}' "$c")"
+            docker logs --tail 80 "$c" 2>&1 || true
+          done
+
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scenarios-sandbox
+          path: tests/scenarios/sandbox-results.xml
+          retention-days: 7
+
+  # The clients we ship, driven as a user drives them. Separate from the journey
+  # matrix because it needs node and the TypeScript build, and because a client
+  # being broken is a different fact from the platform being broken.
+  clients:
+    timeout-minutes: 20
+    name: shipped clients conform
+    needs: [guards, traceability]
+    runs-on: ubuntu-latest
+    # Nightly, on request, or when a pull request explicitly asks by label.
+    # Booting a stack per shard is minutes of runner time; a change that wants
+    # that signal says so.
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-scenarios')
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          # This workflow had no uv caching anywhere, so every one of its jobs
+          # resolved and downloaded from scratch -- including the two gate jobs
+          # that run on every pull request.
+          enable-cache: true
+          cache-dependency-glob: |
+            tests/scenarios/uv.lock
+            lemma-backend/uv.lock
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      - name: Sync backend
+        working-directory: lemma-backend
+        run: uv sync
+      - name: Sync the CLI and the Python SDK
+        run: |
+          uv sync --project lemma-cli
+          uv sync --project lemma-python
+      # Without this the TypeScript scenario skips rather than failing, which
+      # would hide DEV-SDK-001 rather than proving it.
+      - name: Build the TypeScript SDK
+        working-directory: lemma-typescript
+        run: npm ci && npm run build
+      - name: Sync scenario suite
+        working-directory: tests/scenarios
+        run: uv sync
+      - name: Client conformance
+        working-directory: tests/scenarios
+        # `--junitxml`, which this lane alone was missing, so it appeared in no
+        # report at all -- the one lane whose subject is the SDKs a user
+        # actually installs.
+        run: uv run pytest journeys/clients -q --junitxml=clients-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scenarios-clients
+          path: tests/scenarios/clients-results.xml
+          retention-days: 7
+
+      # The stack writes the server and worker to one file. Without it a
+      # CI-only failure is undiagnosable from CI: the scenario says what it
+      # waited for, and the reason it never happened is in the worker's log.
+      - name: Keep the stack log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stack-log-${{ github.job }}-${{ strategy.job-index || '0' }}
+          path: /tmp/lemma-scenarios-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # One report for the whole run, wherever it is going.
+  #
+  # Two audiences, one reading of the same XML. A labelled pull request gets a
+  # comment, the same shape the backend coverage gate already posts, so a
+  # reviewer learns one place to look. The nightly gets a Slack message, because
+  # nobody is watching it -- and it was that lane, red 9 runs running, that made
+  # the case for any of this.
+  #
+  # Aggregated rather than per-lane on purpose. The first cut of this posted
+  # from inside the journey matrix, which on a nightly would have been twelve
+  # Slack messages for one run: the shape of noise that stops a channel being
+  # read, which is the thing this is supposed to fix.
+  #
+  # `!cancelled()` rather than `success()`: a run where a lane failed is exactly
+  # the run worth reporting.
+  scenarios-reported:
+    name: scenarios reported
+    timeout-minutes: 10
+    needs: [journeys, sandbox, clients]
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-scenarios'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect every lane's results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: scenarios-*
+          path: scenario-results
+        continue-on-error: true
+
+      # Grouped by journey, which the reporting plugin writes onto every case,
+      # so the report names stretches of product rather than CI shards.
+      - name: Compose the report
+        id: report
+        run: |
+          shopt -s globstar nullglob
+          reports=(scenario-results/**/*.xml)
+          if [ ${#reports[@]} -eq 0 ]; then
+            echo "::warning title=No scenario results::Nothing was uploaded, so there is nothing to report."
+            echo "written=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/report_scenarios_to_slack.py "${reports[@]}" \
+            --lane "${{ github.event_name == 'schedule' && 'nightly' || 'run-scenarios' }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --markdown-out scenario-report.md
+          echo "written=true" >> "$GITHUB_OUTPUT"
+          cat scenario-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The same comment every time, edited rather than added to, keyed on the
+      # marker the composer writes. A fork's token cannot comment, so that case
+      # is skipped rather than failed.
+      - name: Publish one scenario comment
+        if: >-
+          steps.report.outputs.written == 'true' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-product-scenarios -->';
+            const body = fs.readFileSync('scenario-report.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const number = context.issue.number;
+            const {data: pull} = await github.rest.pulls.get(
+              {owner, repo, pull_number: number},
+            );
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping the scenario comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment(
+                {owner, repo, comment_id: existing.id, body},
+              );
+            } else {
+              await github.rest.issues.createComment(
+                {owner, repo, issue_number: number, body},
+              );
+            }
+
+      # Slack only where nobody is reading a pull request. Reporting is not the
+      # build: no webhook, or a Slack outage, prints and exits 0.
+      - name: Say what the product did
+        if: >-
+          steps.report.outputs.written == 'true' &&
+          github.event_name != 'pull_request'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          shopt -s globstar nullglob
+          python3 scripts/report_scenarios_to_slack.py scenario-results/**/*.xml \
+            --lane nightly \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

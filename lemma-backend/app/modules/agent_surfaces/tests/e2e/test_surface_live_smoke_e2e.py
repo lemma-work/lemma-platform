@@ -8,13 +8,15 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.platforms.gmail.service import GmailPlatformService
-from app.modules.agent_surfaces.platforms.outlook.service import OutlookPlatformService
 from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformService
 from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
 from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import TelegramPlatformService
-from app.modules.agent_surfaces.platforms.whatsapp.service import WhatsAppPlatformService
+from app.modules.agent_surfaces.platforms.telegram.service import (
+    TelegramPlatformService,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.service import (
+    WhatsAppPlatformService,
+)
 
 pytestmark = [
     pytest.mark.e2e,
@@ -133,45 +135,6 @@ async def test_live_teams_minimal_send():
             },
         ).model_copy(update={"tenant_id": env["LEMMA_SURFACE_LIVE_TEAMS_TENANT_ID"]}),
         message="Lemma surface live smoke: Teams",
-    )
-
-
-async def test_live_gmail_minimal_send():
-    env = _required_env(
-        "LEMMA_SURFACE_LIVE_GMAIL_ACCESS_TOKEN",
-        "LEMMA_SURFACE_LIVE_EMAIL_TO",
-    )
-    service = GmailPlatformService(
-        {"access_token": env["LEMMA_SURFACE_LIVE_GMAIL_ACCESS_TOKEN"]}
-    )
-
-    await service.send_message(
-        event=_event(
-            "GMAIL",
-            target={
-                "recipient_email": env["LEMMA_SURFACE_LIVE_EMAIL_TO"],
-                "subject": "Lemma surface live smoke",
-            },
-        ),
-        message="Lemma surface live smoke: Gmail",
-    )
-
-
-async def test_live_outlook_minimal_reply():
-    env = _required_env(
-        "LEMMA_SURFACE_LIVE_OUTLOOK_ACCESS_TOKEN",
-        "LEMMA_SURFACE_LIVE_OUTLOOK_MESSAGE_ID",
-    )
-    service = OutlookPlatformService(
-        {"access_token": env["LEMMA_SURFACE_LIVE_OUTLOOK_ACCESS_TOKEN"]}
-    )
-
-    await service.send_message(
-        event=_event(
-            "OUTLOOK",
-            target={"message_id": env["LEMMA_SURFACE_LIVE_OUTLOOK_MESSAGE_ID"]},
-        ),
-        message="Lemma surface live smoke: Outlook",
     )
 
 

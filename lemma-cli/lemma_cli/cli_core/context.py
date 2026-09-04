@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import os
 import shlex
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from lemma_sdk.config import resolve_base_url
-from lemma_sdk.errors import LemmaAPIError
+from lemma_sdk.errors import (
+    LemmaAPIError,
+    LemmaNotFoundError,
+    LemmaPermissionError,
+)
 
-from .io import list_items
+from .io import list_items, to_plain
 from .state import CliState, console, fail, humanize_error, update_config
 
 if TYPE_CHECKING:
@@ -101,11 +105,14 @@ def remember_org(
 
 def remember_pod(state: CliState, pod_id: str) -> dict[str, Any]:
     return update_config(
-        state, lambda config: config.setdefault("defaults", {}).update({"pod_id": pod_id})
+        state,
+        lambda config: config.setdefault("defaults", {}).update({"pod_id": pod_id}),
     )
 
 
-def remember_conversation(state: CliState, conversation_id: str | None) -> dict[str, Any]:
+def remember_conversation(
+    state: CliState, conversation_id: str | None
+) -> dict[str, Any]:
     def mutate(config: dict[str, Any]) -> None:
         defaults = config.setdefault("defaults", {})
         if conversation_id:
@@ -133,10 +140,12 @@ def render_session_selection(
     ``eval "$(lemma … select X -x)"``; otherwise print a human summary plus the
     eval one-liner. JSON output mode emits a structured payload for scripts.
     """
-    exports = [f"export {key}={shlex.quote(value)}" for key, value in env.items() if value]
+    exports = [
+        f"export {key}={shlex.quote(value)}" for key, value in env.items() if value
+    ]
     if export_only:
         for line in exports:
-            print(line)  # plain stdout — must be eval-safe (no rich markup)
+            print(line)  # noqa: T201 — eval-safe stdout, no rich markup
         return
     if state.output == "json":
         from .io import emit
@@ -148,20 +157,85 @@ def render_session_selection(
     )
     if saved:
         console.print(f"[dim]also saved as this server's default {label}.[/dim]")
-    console.print('[dim]apply to your shell:[/dim] ' + f'eval "$({command_hint} -x)"')
+    console.print("[dim]apply to your shell:[/dim] " + f'eval "$({command_hint} -x)"')
     for line in exports:
         console.print(f"  [dim]{line}[/dim]")
+
+
+#: One page of a name scan, and how many of them to walk. Bounded rather than
+#: unbounded: the cost of `lemma --pod my-pod …` must not scale with how many
+#: pods a mature org has, and past a thousand a name lookup is the wrong tool.
+#: Matches `_MAX_POD_LOOKUP_PAGES` in commands/pods.py, which does the same walk
+#: for the UUID case.
+LOOKUP_PAGE_SIZE = 200
+MAX_LOOKUP_PAGES = 5
+
+
+def walk_lookup_pages(
+    fetch: Callable[[str | None], object],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Every item across at most `MAX_LOOKUP_PAGES` pages, and whether the walk
+    stopped with more still to come.
+
+    The second half is the point. A single page and a bare "not found" is a
+    confident wrong answer — the caller can say how far it looked instead, which
+    is the difference between a dead end and a hint.
+    """
+    items: list[dict[str, Any]] = []
+    token: str | None = None
+    for _page in range(MAX_LOOKUP_PAGES):
+        response = fetch(token)
+        items.extend(list_items(response))
+        plain = to_plain(response)
+        token = (
+            (str(plain.get("next_page_token") or "") or None)
+            if isinstance(plain, dict)
+            else None
+        )
+        if not token:
+            return items, False
+    return items, True
+
+
+def _matches(item: dict[str, Any], selector: str) -> bool:
+    return selector in {
+        str(item.get("id")),
+        str(item.get("slug")),
+        str(item.get("name")),
+    }
+
+
+def _searched_clause(count: int, truncated: bool) -> str:
+    """Say what was actually looked at, when the walk did not see everything.
+
+    A sentence appended to a complete message, not a parenthetical: "not found"
+    and "not found in the part we looked at" are different answers, and the
+    second one has an action attached.
+    """
+    if not truncated:
+        return ""
+    return f" Only the first {count} were searched — pass the id instead."
 
 
 def resolve_org(client: Lemma, selector: str) -> dict[str, Any]:
     try:
         return client.orgs.get(selector).to_dict()
-    except Exception:
+    except LemmaNotFoundError, LemmaPermissionError:
+        # Only "it is not there / not yours" falls through to the slug scan. A
+        # bare `except Exception` here turned an expired session, a 500 and a
+        # dropped connection into "Organization not found", which sends the user
+        # hunting for a typo that does not exist. Everything else propagates to
+        # run_with_client, which names the status.
         pass
-    for org in list_items(client.orgs.list(limit=200)):
-        if selector in {str(org.get("id")), str(org.get("slug")), str(org.get("name"))}:
+    orgs, truncated = walk_lookup_pages(
+        lambda token: client.orgs.list(limit=LOOKUP_PAGE_SIZE, page_token=token)
+    )
+    for org in orgs:
+        if _matches(org, selector):
             return org
-    fail(f"Organization not found: {selector}")
+    fail(f"Organization not found: {selector}.{_searched_clause(len(orgs), truncated)}")
+    # fail() is NoReturn, but ruff's RET503 cannot see that; this line is for
+    # the linter, not the reader.
     raise AssertionError("unreachable")
 
 
@@ -170,36 +244,30 @@ def resolve_pod(
 ) -> dict[str, Any]:
     try:
         return client.pods.get(selector).to_dict()
-    except Exception:
-        pass
-    from lemma_sdk import Lemma
+    except LemmaNotFoundError, LemmaPermissionError:
+        pass  # see resolve_org: only "not there / not yours" scans by slug
 
     org_id = org or selected_org(state, required=False)
     if not org_id:
         fail(
             "Pod lookup by slug needs an organization. Run `lemma orgs`, pass --org, or set LEMMA_ORG_ID."
         )
-    scoped = Lemma(
-        base_url=client.settings.base_url,
-        token=client.settings.token,
-        org_id=org_id,
-        timeout=client.settings.timeout,
-        verify_ssl=client.settings.verify_ssl,
+    # for_org is a view of this client -- same endpoint, credential and
+    # connection pool. Constructing a second Lemma here opened a second pool
+    # nobody closed and re-ran settings resolution, which can answer differently
+    # from the client already in hand.
+    scoped = client.for_org(str(org_id))
+    pods, truncated = walk_lookup_pages(
+        lambda token: scoped.pods.list(limit=LOOKUP_PAGE_SIZE, page_token=token)
     )
-    try:
-        pods = scoped.pods.list(limit=200)
-    finally:
-        scoped.close()
-    for pod in list_items(pods):
-        if selector in {str(pod.get("id")), str(pod.get("slug")), str(pod.get("name"))}:
+    for pod in pods:
+        if _matches(pod, selector):
             return pod
-    fail(pod_lookup_error(selector, state))
-    raise AssertionError("unreachable")
+    fail(pod_lookup_error(selector, state) + _searched_clause(len(pods), truncated))
+    raise AssertionError("unreachable")  # see resolve_org: RET503 only
 
 
-def pod_lookup_error(
-    pod_id: str, state: CliState, exc: Exception | None = None
-) -> str:
+def pod_lookup_error(pod_id: str, state: CliState, exc: Exception | None = None) -> str:
     """A pod-not-found/forbidden message that names the server, so a folder pointed
     at the wrong server (or a stale ``LEMMA_POD_ID``) is obvious. Non 403/404 API
     errors fall through to the normal humanized message."""
@@ -243,4 +311,4 @@ def org_for(client: Lemma, state: CliState, explicit: str | None = None) -> str:
         "No organization selected. Pass --org, set LEMMA_ORG_ID, or target a pod "
         "whose org can be resolved."
     )
-    raise AssertionError("unreachable")
+    raise AssertionError("unreachable")  # see resolve_org: RET503 only

@@ -24,6 +24,15 @@ class DatastoreRepositoryBase:
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
+    async def commit(self) -> None:
+        """Commit the unit of work this repository writes through.
+
+        For a caller that has to make one store durable before touching
+        another; the request's own boundary commits too late to order two
+        databases against each other.
+        """
+        await self.uow.commit()
+
     def _collect_events(self, entity: AggregateRoot) -> None:
         events = entity.collect_events()
         if events:

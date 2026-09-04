@@ -151,41 +151,21 @@ CHANNEL_SETUP_VIEW_CALLBACK_ID = "lemma_channel_setup_view"
 CHANNEL_SETUP_BLOCK_ID = "lemma_channel_agent"
 CHANNEL_SETUP_SELECT_ACTION_ID = "lemma_channel_agent_select"
 
-# Value used for "the pod's own assistant" — the surface default, which is
-# stored as an empty agent_name on the route rather than as a named agent.
-POD_ASSISTANT_VALUE = "__pod_assistant__"
-
 
 def channel_setup_modal(
     *,
     channel_id: str,
     channel_label: str | None,
-    agent_names: list[str],
+    agent_name: str,
     surface_id: str | None = None,
 ) -> dict[str, Any]:
-    """The "who answers here?" modal.
+    """The "answer here?" confirmation.
 
-    Two dependent choices cannot live in a message — Slack messages can't
-    cascade one select off another — which is the whole reason this is a modal
-    and the reason the ephemeral carries a button rather than a form.
-
-    The pod assistant is offered first because it is the answer for someone who
-    has not built a named agent yet, and it is what an empty route already means.
+    It used to ask *who* answers, offering every agent in the pod. One app is
+    one agent now, so the only question left is whether this channel is a place
+    that agent may be spoken to -- an allow-list entry rather than a choice.
     """
     where = f"#{channel_label}" if channel_label else "this channel"
-    options = [
-        {
-            "text": {"type": "plain_text", "text": "Pod assistant"},
-            "value": POD_ASSISTANT_VALUE,
-        }
-    ]
-    options.extend(
-        {
-            "text": {"type": "plain_text", "text": _truncate(name, 74)},
-            "value": name,
-        }
-        for name in agent_names[:99]
-    )
     return {
         "type": "modal",
         "callback_id": CHANNEL_SETUP_VIEW_CALLBACK_ID,
@@ -195,26 +175,18 @@ def channel_setup_modal(
             {"channel_id": channel_id, "surface_id": surface_id},
             separators=(",", ":"),
         ),
-        "title": {"type": "plain_text", "text": "Who answers here?"},
-        "submit": {"type": "plain_text", "text": "Save"},
+        "title": {"type": "plain_text", "text": "Answer here?"},
+        "submit": {"type": "plain_text", "text": "Allow"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"Pick who replies when someone mentions Lemma in *{where}*.",
-                },
-            },
-            {
-                "type": "input",
-                "block_id": CHANNEL_SETUP_BLOCK_ID,
-                "label": {"type": "plain_text", "text": "Answered by"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": CHANNEL_SETUP_SELECT_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": "Choose an agent"},
-                    "options": options,
+                    "text": (
+                        f"`{agent_name}` will reply when someone mentions it in "
+                        f"*{where}*."
+                    ),
                 },
             },
         ],
@@ -242,308 +214,4 @@ def fallback_text(message: str) -> str:
     return collapsed[: _FALLBACK_TEXT_LIMIT - 1].rstrip() + "…"
 
 
-DM_AGENT_SETUP_ACTION_ID = "lemma_dm_agent_setup"
-DM_AGENT_VIEW_CALLBACK_ID = "lemma_dm_agent_view"
-DM_AGENT_BLOCK_ID = "lemma_dm_agent"
-DM_AGENT_SELECT_ACTION_ID = "lemma_dm_agent_select"
 CHANNEL_ROUTE_EDIT_ACTION_ID = "lemma_channel_route_edit"
-
-
-def dm_agent_modal(
-    *, agent_names: list[str], current: str | None, surface_id: str | None = None
-) -> dict[str, Any]:
-    """Pick who answers *your* DMs.
-
-    Per person, not per workspace: two people in the same Slack can talk to
-    different agents, which is the limit Slack used to impose and no longer has
-    to.
-    """
-    options = [
-        {
-            "text": {"type": "plain_text", "text": "Pod assistant"},
-            "value": POD_ASSISTANT_VALUE,
-        }
-    ]
-    options.extend(
-        {"text": {"type": "plain_text", "text": _truncate(name, 74)}, "value": name}
-        for name in agent_names[:99]
-    )
-    element: dict[str, Any] = {
-        "type": "static_select",
-        "action_id": DM_AGENT_SELECT_ACTION_ID,
-        "placeholder": {"type": "plain_text", "text": "Choose an agent"},
-        "options": options,
-    }
-    selected = next((o for o in options if o["value"] == (current or "")), None)
-    if selected is not None:
-        element["initial_option"] = selected
-    return {
-        "type": "modal",
-        "callback_id": DM_AGENT_VIEW_CALLBACK_ID,
-        "private_metadata": surface_id or "",
-        "title": {"type": "plain_text", "text": "Who answers you?"},
-        "submit": {"type": "plain_text", "text": "Save"},
-        "close": {"type": "plain_text", "text": "Cancel"},
-        "blocks": [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "This only changes *your* direct messages. Everyone else keeps theirs.",
-                },
-            },
-            {
-                "type": "input",
-                "block_id": DM_AGENT_BLOCK_ID,
-                "label": {"type": "plain_text", "text": "Answered by"},
-                "element": element,
-            },
-        ],
-    }
-
-
-AGENT_DM_ACTION_ID = "lemma_agent_dm"
-SURFACE_SELECT_ACTION_ID = "lemma_surface_select"
-
-
-def app_home_view(
-    *,
-    pod_name: str | None,
-    dm_agent_name: str | None,
-    channel_routes: list,
-    agents: list | None = None,
-    apps: list | None = None,
-    workspace_url: str | None = None,
-    logo_url: str | None = None,
-    surface_choices: list[tuple[str, str]] | None = None,
-    access_message: str | None = None,
-) -> dict[str, Any]:
-    """The App Home — the one screen that has to explain and sell Lemma.
-
-    Ordered by what a first-time viewer needs: what this is, one thing to try,
-    then what exists, and only then how it is wired up. Configuration is real
-    but it is not the pitch, so it sits at the bottom.
-
-    Slack gives no CSS and no layout control, so the craft here is entirely in
-    ordering, copy, and using ``card`` blocks (Apr 2026) instead of stacked
-    sections — cards are the only native thing that reads as an object rather
-    than as a paragraph.
-    """
-    agents = list(agents or [])
-    apps = list(apps or [])
-    choices = list(surface_choices or [])
-    if access_message:
-        return {
-            "type": "home",
-            "blocks": [
-                {"type": "header", "text": {"type": "plain_text", "text": "Lemma"}},
-                {"type": "section", "text": {"type": "mrkdwn", "text": access_message}},
-            ],
-        }
-    if choices:
-        return {
-            "type": "home",
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "Choose a Lemma pod"},
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "This Slack workspace is connected to more than one pod. Pick the one this app should show you.",
-                    },
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "action_id": SURFACE_SELECT_ACTION_ID,
-                            "text": {"type": "plain_text", "text": _truncate(label, 74)},
-                            "value": surface_id,
-                        }
-                        for label, surface_id in choices[:5]
-                    ],
-                },
-            ],
-        }
-    blocks: list[dict[str, Any]] = []
-
-    # Masthead. The logo is skipped unless it is publicly fetchable: Slack
-    # loads it from its own servers, so a localhost URL renders an empty box.
-    if logo_url and str(logo_url).startswith("https://"):
-        blocks.append(
-            {
-                "type": "context",
-                "elements": [
-                    {"type": "image", "image_url": logo_url, "alt_text": "Lemma"},
-                    {"type": "mrkdwn", "text": "*Lemma*"},
-                ],
-            }
-        )
-    blocks.append(
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"{pod_name}" if pod_name else "Your agents, in Slack",
-            },
-        }
-    )
-    blocks.append(
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    "Ask a question in plain English and get an answer from your "
-                    "own data — tables, files, workflows and connected tools. "
-                    "No dashboards, no context switch."
-                ),
-            },
-        }
-    )
-    blocks.append(
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "💬 Message me here  ·  # @-mention me in any channel",
-                }
-            ],
-        }
-    )
-
-    # One thing to try, before any configuration. A new person should be able
-    # to get a real answer without reading anything else on this page.
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "*Try one*"},
-        }
-    )
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": f"{AGENT_DM_ACTION_ID}:what_can_you_do",
-                    "text": {"type": "plain_text", "text": "What can you do?"},
-                    "value": "What can you help me with in this workspace?",
-                },
-                {
-                    "type": "button",
-                    "action_id": f"{AGENT_DM_ACTION_ID}:show_data",
-                    "text": {"type": "plain_text", "text": "Show me my data"},
-                    "value": "What tables and records can you see?",
-                },
-                {
-                    "type": "button",
-                    "action_id": f"{AGENT_DM_ACTION_ID}:whats_new",
-                    "text": {"type": "plain_text", "text": "Catch me up"},
-                    "value": "Summarise what changed in this workspace recently.",
-                },
-            ],
-        }
-    )
-
-    if agents:
-        blocks.append({"type": "divider"})
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "*Agents*"}}
-        )
-        for name, description in agents[:8]:
-            summary = _truncate(str(description or "").strip(), 160)
-            blocks.append(
-                {
-                    "type": "card",
-                    "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
-                    "body": {
-                        "type": "mrkdwn",
-                        "text": summary or "_No description yet._",
-                    },
-                }
-            )
-
-    if apps:
-        blocks.append({"type": "divider"})
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": "*Apps*"}}
-        )
-        for name, url in apps[:6]:
-            blocks.append(
-                {
-                    "type": "card",
-                    "title": {"type": "plain_text", "text": _truncate(str(name), 74)},
-                    "body": {"type": "mrkdwn", "text": "Opens in your browser."},
-                    "actions": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Open"},
-                            "url": url,
-                            "style": "primary",
-                        }
-                    ],
-                }
-            )
-
-    # Settings last: real, but not the pitch.
-    blocks.append({"type": "divider"})
-    blocks.append(
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    f"*Your direct messages*\nAnswered by `{dm_agent_name}`"
-                    if dm_agent_name
-                    else "*Your direct messages*\nAnswered by the pod assistant"
-                ),
-            },
-            "accessory": {
-                "type": "button",
-                "action_id": DM_AGENT_SETUP_ACTION_ID,
-                "text": {"type": "plain_text", "text": "Change"},
-            },
-        }
-    )
-    if channel_routes:
-        lines = "\n".join(
-            f"<#{channel_id}> \u2192 `{agent or 'Pod assistant'}`"
-            for channel_id, agent in list(channel_routes)[:20]
-        )
-        blocks.append(
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Channels*\n{lines}"}}
-        )
-    else:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        "*Channels*\nInvite me to a channel and I'll ask who "
-                        "should answer there."
-                    ),
-                },
-            }
-        )
-
-    footer: list[dict[str, Any]] = []
-    if workspace_url:
-        footer.append(
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Open Lemma"},
-                "url": workspace_url,
-            }
-        )
-    if footer:
-        blocks.append({"type": "divider"})
-        blocks.append({"type": "actions", "elements": footer})
-    return {"type": "home", "blocks": blocks}

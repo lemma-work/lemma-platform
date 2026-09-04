@@ -190,7 +190,8 @@ export function previousOnboardingStep(
   return previousStep === "boot" ? null : previousStep;
 }
 
-// A local installation's own setup, regardless of audience.
+// A local installation's own setup, regardless of audience: the questions this
+// machine cannot answer for itself, and nothing else.
 //
 // The hosted flow can defer AI configuration because hosted Lemma has models of
 // its own; a local one has none until someone points it at something, so
@@ -198,11 +199,18 @@ export function previousOnboardingStep(
 // both answers to that question — a coding agent already on this Mac, or an API
 // provider — in one place, because they are one decision and splitting them
 // meant sending the user through two screens and a second window to make it.
+//
+// `identity` and `start` are deliberately absent. A hosted signup is not asked
+// for either one — the name comes from the address and the first pod is created
+// for them — and a local signup knows exactly as much. Keeping those two here
+// meant the one deployment that provisions nothing on its own was also the one
+// that made the user do it by hand: an organization only existed once a name
+// was typed, and a pod only once a starting point was picked. Both are now
+// created around these steps rather than by them, which leaves this list as the
+// difference between local and hosted rather than a longer version of it.
 export const LOCAL_SETUP_STEPS: SetupStep[] = [
-  "identity",
   "intelligence",
   "sharing",
-  "start",
 ];
 
 // Solo users skip the workspace step entirely — their workspace is created
@@ -252,8 +260,10 @@ export function normalizeOnboardingStep(
   if (isLocal) {
     // A draft written before this install grew its own steps, or by the same
     // account against hosted Lemma, can name a step this flow does not have.
-    // Resuming on one would strand the user on a screen with no way forward.
-    return LOCAL_SETUP_STEPS.includes(step) ? step : "identity";
+    // Resuming on one would strand the user on a screen with no way forward, so
+    // it resumes at the first local question instead — the organization behind
+    // it is provisioned either way.
+    return LOCAL_SETUP_STEPS.includes(step) ? step : LOCAL_SETUP_STEPS[0];
   }
   // Drafts created by the old team-first flow may resume on the team step
   // before an organization exists. Send those users through workspace setup
@@ -693,6 +703,45 @@ export function organizationNameCandidate({
   if (attempt === 1) return workDomain as string;
   if (attempt < COMPANY_NAME_ATTEMPTS) return `${companyName} ${attempt}`;
   return generatedOrganizationName(email, attempt - COMPANY_NAME_ATTEMPTS);
+}
+
+// The server accepts letters, numbers, spaces, hyphens and underscores in a pod
+// name and nothing else (`normalize_pod_name`), because pods are addressable by
+// name from the CLI. A name derived from a person routinely breaks that —
+// apostrophes in "O'Brien", accents in "José" — so it is folded to the allowed
+// set here rather than discovered as a rejected create.
+const POD_NAME_DISALLOWED = /[^A-Za-z0-9 _-]/g;
+const COMBINING_MARKS = /[\u0300-\u036f]/g;
+
+function podNameSafe(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(COMBINING_MARKS, "")
+    .replace(POD_NAME_DISALLOWED, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * What to call the pod an account is given on arrival.
+ *
+ * "Personal Pod" is nobody's workspace; a name with the person in it is theirs
+ * from the first screen. The possessive form this wanted ("Ada's Pod") is not
+ * available: the apostrophe is exactly what the server rejects. Falls back to
+ * the generic name when nothing usable survives.
+ */
+export function firstPodName(
+  profile?: {
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    full_name?: string | null;
+  } | null,
+) {
+  const { firstName } = splitName(inferFullName(profile));
+  const safe = podNameSafe(firstName || "");
+  if (!safe) return "Personal Pod";
+  return `${safe} Pod`;
 }
 
 export function podNameForAudience(audience: Audience, teamName = "") {

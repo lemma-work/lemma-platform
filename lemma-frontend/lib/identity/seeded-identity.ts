@@ -26,6 +26,18 @@ export const FORM_COUNT = 8;
 export const CREST_COUNT = 4;
 
 /**
+ * Bodies past `FORM_COUNT` that the generator never draws.
+ *
+ * Reserved rather than carved out of the seeded range on purpose: taking index
+ * 7 back would have cost the roster twenty buckets (160 → 140) to identify one
+ * creature, which is a bad trade in a system whose whole problem is collisions.
+ * Appending costs nothing — the generator still rolls 0–7 and every agent's face
+ * is bit-for-bit what it was before this existed.
+ */
+export const RESERVED_FORM_COUNT = 1;
+export const LEM_FORM = FORM_COUNT;
+
+/**
  * 160 visually-distinct buckets at sidebar size, where the eyes are too small
  * to separate anything and only tone, silhouette and crest survive.
  *
@@ -111,7 +123,69 @@ export function identitySeed(...parts: Array<string | null | undefined>): string
     return parts.filter(Boolean).join('/');
 }
 
+/**
+ * The one seed an agent is drawn from, wherever it is drawn.
+ *
+ * The rule above — id when there is one, name only as a fallback — was left to
+ * each call site to remember, and the sidebar forgot: it seeded its rows on
+ * `agent.name` while the agent's own header seeded on `agent.id`, so the same
+ * agent wore two different faces on two halves of one screen. Nothing catches
+ * that, because both faces are valid output for the seed each was handed.
+ *
+ * So the rule lives here now, and a caller passes the agent rather than a
+ * string. The fallback is still worth keeping: an agent being composed in the
+ * "new agent" flow has a name before it has an id, and a face that appears only
+ * after the first save would be worse than one that settles on it.
+ */
+export function agentIdentitySeed(agent: {
+    id?: string | null;
+    name?: string | null;
+}): string {
+    return agent.id?.trim() || agent.name?.trim() || '';
+}
+
+/**
+ * The pod's default responder is the same creature in every pod, so its genes
+ * are written down rather than rolled.
+ *
+ * A seeded face would have been wrong twice over: it would introduce a stranger
+ * on the one row that is meant to be the responder you already know, and it
+ * would be a different stranger in every pod. The previous answer — the Lemma
+ * trademark on a tinted tile — was wrong differently: it drew the pod's most
+ * capable agent in the treatment reserved for *inert* things, so the being with
+ * the most agency in the system was the one being that could not open its eyes,
+ * carry a state pip, or move. `design.md` had to write a special rule for the
+ * recents list to work around it.
+ *
+ * The values sit mid-range on every axis the generator varies, so Lem stands in
+ * a lineup as one of the cast rather than as an outsized mascot. Its body is the
+ * one thing no agent can borrow.
+ */
+export const LEM_SEED = '__lem__';
+
+export const LEM_GENES: IdentityGenes = {
+    tone: 0,
+    form: LEM_FORM,
+    // No crest. The reserved body has a concave waist, and a crest anchors to
+    // the top-centre expecting a solid convex crown to rise out of.
+    crest: 0,
+    eyeSpacing: 14,
+    // Higher than the seeded 48–55, because the plinth carries its mass up top:
+    // eyes at 51 would sit on the waist rather than in the face.
+    eyeY: 46,
+    eyeR: 9,
+    ground: 0,
+    groundRotation: 0,
+    phase: 0,
+};
+
 export function identityGenes(seed: string): IdentityGenes {
+    // One reserved seed, checked before the hash. Everything downstream — the
+    // sidebar row, the front door, the transcript avatar — draws Lem by passing
+    // this seed to the same `being` renderer every agent uses, so there is no
+    // second code path to keep in step with the first.
+    if (seed === LEM_SEED) return LEM_GENES;
+
     const random = makeRandom(hashSeed(seed));
     return {
         tone: Math.floor(random() * TONE_COUNT),
@@ -140,6 +214,22 @@ export const FORMS: readonly string[] = [
     'M50 10a34 34 0 0 1 34 34v18a34 34 0 0 1-68 0V44A34 34 0 0 1 50 10Z',
     'M14 22a7 7 0 0 1 7-7h58a7 7 0 0 1 7 7v32a36 36 0 0 1-72 0Z',
     'M50 14.4 89.6 54 50 93.6 10.4 54Z',
+    /*
+     * Index 8 — reserved for Lem, never rolled. See `RESERVED_FORM_COUNT`.
+     *
+     * All eight seeded bodies are convex; this one is not. That is the entire
+     * distinction, and it is deliberately the only one: Lem keeps the cast's
+     * tone, its light, its eyes and its pip, so it reads as one of them, and it
+     * is told apart by the single channel that survives the shrink to a 20px
+     * transcript avatar. Colour cannot do that job — an agent may roll tone 0
+     * too — and a crest cannot, because the visible band above a body is only
+     * about eight units tall and detail dies there first.
+     *
+     * Concavity is also the one property the generator can never reach by
+     * accident, so this is a guarantee rather than a low probability: adding a
+     * ninth convex blob would have left Lem one unlucky hash away from a twin.
+     */
+    'M50 8C70 8 86 24 86 44C86 58 70 62 70 72H80A8 8 0 0 1 88 80V86A8 8 0 0 1 80 94H20A8 8 0 0 1 12 86V80A8 8 0 0 1 20 72H30C30 62 14 58 14 44C14 24 30 8 50 8Z',
 ];
 
 /**
@@ -172,6 +262,10 @@ export const FORM_DEPTH: readonly string[] = [
     '<rect x="12" width="22" height="100" fill="#fff" opacity=".13"/><rect x="64" width="26" height="100" fill="#000" opacity=".13"/>',
     '<circle cx="26" cy="20" r="44" fill="#fff" opacity=".12"/><circle cx="80" cy="82" r="48" fill="#000" opacity=".12"/>',
     '<path d="M50 14.4 89.6 54 50 93.6Z" fill="#000" opacity=".12"/><path d="M50 14.4 10.4 54 50 93.6Z" fill="#fff" opacity=".11"/><path d="M50 14.4v79.2" stroke="#000" stroke-opacity=".12" stroke-width="1.4" fill="none"/>',
+    /* Lem. A round body takes the oversized offset circles, for the same reason
+       the other round forms do — a half-plane would lay a hard stripe across the
+       curve. Same sun, upper left, as all eight. */
+    '<circle cx="26" cy="26" r="46" fill="#fff" opacity=".12"/><circle cx="80" cy="88" r="46" fill="#000" opacity=".12"/>',
 ];
 
 /**

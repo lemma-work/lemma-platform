@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.log.log import get_logger
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     parse_callback_id,
 )
@@ -35,12 +30,34 @@ def parse_interaction_target(parsed) -> tuple[UUID, str] | None:
         return None
 
 
+def _external_id(value) -> str:
+    """One external user id, folded so two spellings of a person are one person.
+
+    Neither side was normalized before, so a platform that varies the case of an
+    id between a message and an interaction read as a different human.
+    """
+    return str(value or "").strip().casefold()
+
+
 def interaction_sender_matches(link, parsed) -> bool:
-    return not (
-        link.external_user_id
-        and parsed.external_user_id
-        and link.external_user_id != parsed.external_user_id
-    )
+    """May this person resolve the interaction shown in this conversation?
+
+    Both ids must be present and equal. This used to return True whenever
+    *either* was empty, which is fail-open on the only authorization control
+    standing in front of a native Approve button: the tap resolves a
+    `request_approval`, and the action it approves then runs. Both sides can be
+    empty in ordinary traffic -- a thread opened by a notification whose
+    channel had no address, a Slack payload with no `event.user`, a Teams one
+    with neither `aadObjectId` nor `from.id` -- so "we could not tell who tapped"
+    was a common state, and it meant "anyone may".
+
+    Refusing when we cannot tell costs a person the button and not the answer:
+    typing the decision resolves the same pause through
+    `maybe_resume_pending_interaction`, which does not consult this.
+    """
+    link_id = _external_id(getattr(link, "external_user_id", None))
+    sender_id = _external_id(getattr(parsed, "external_user_id", None))
+    return bool(link_id) and bool(sender_id) and link_id == sender_id
 
 
 async def resolve_interaction_delivery(
@@ -102,33 +119,3 @@ async def _resolve_link_delivery(ingress, parsed, link):
         return None
     credentials = await ingress._resolve_credentials(surface)
     return link, surface, adapter, credentials
-
-
-async def retry_interaction_conversation(
-    *,
-    conversation_service,
-    uow,
-    conversation,
-) -> None:
-    auth_ctx = await create_authorization_data_service(uow).build_user_context(
-        user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
-    )
-    token = set_current_context(auth_ctx)
-    try:
-        retry_service = ConversationRetryService(
-            uow=conversation_service.uow,
-            conversation_repository=conversation_service.conversation_repository,
-            agent_repository=conversation_service.agent_repository,
-            authorization_service=conversation_service.authorization_service,
-            fallback_model_name=conversation_service.fallback_model_name,
-            usage_service=conversation_service.usage_service,
-        )
-        await retry_service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-            agent_name=None,
-        )
-    finally:
-        reset_current_context(token)

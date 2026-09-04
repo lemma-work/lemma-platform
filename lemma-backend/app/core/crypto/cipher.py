@@ -62,7 +62,9 @@ class EnvelopeSecretCipher:
         fernet = self._fernet_for_kid(kid)
         if fernet is None:
             raise RuntimeError(f"Primary key {kid!r} is not available in the keyring")
-        return env.make_v2(kid=kid, alg=env.ALG_FERNET, ciphertext=fernet.encrypt(payload))
+        return env.make_v2(
+            kid=kid, alg=env.ALG_FERNET, ciphertext=fernet.encrypt(payload)
+        )
 
     def _decrypt_v2(self, envelope: dict[str, Any]) -> bytes:
         alg = envelope.get("alg")
@@ -97,7 +99,9 @@ class EnvelopeSecretCipher:
     def encrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None:
         if value is None or env.is_encrypted_dict(value):
             return value
-        payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
         return self._encrypt_payload(payload)
 
     def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -156,7 +160,7 @@ class EnvelopeSecretCipher:
         elif env.is_encrypted_str(value):
             try:
                 envelope = env.decode_str(value)
-            except (ValueError, json.JSONDecodeError):
+            except ValueError, json.JSONDecodeError:
                 return False
         if envelope is None:
             return False

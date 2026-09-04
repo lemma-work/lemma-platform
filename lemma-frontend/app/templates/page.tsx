@@ -48,7 +48,7 @@ export default function TemplatesPage() {
                         <Link href="/">Home</Link>
                         <Link href="/docs">Docs</Link>
                         <Link href="/auth" className="templates-gallery-nav-cta">
-                            Start building
+                            Get started
                             <ArrowRight className="h-3.5 w-3.5" />
                         </Link>
                     </nav>

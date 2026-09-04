@@ -13,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -35,14 +34,16 @@ WIDGET_CONTENT = '<div id="w">hello widget</div>'
 
 
 @pytest_asyncio.fixture
-async def test_pod(authenticated_client, fixed_test_org):
+async def widget_pod(authenticated_client, fixed_test_org):
     payload = {
         "name": f"Widget Test Pod {uuid4()}",
         "slug": f"widget-test-pod-{uuid4()}",
         "type": "ASSISTANT",
         "organization_id": fixed_test_org["id"],
     }
-    response = await authenticated_client.post("/pods", json=payload, follow_redirects=True)
+    response = await authenticated_client.post(
+        "/pods", json=payload, follow_redirects=True
+    )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     return response.json()
 
@@ -61,7 +62,11 @@ async def _seed_widget(db_session, *, pod_id: UUID, user_id: UUID) -> tuple[UUID
             kind="TOOL_CALL",
             tool_call_id=tool_call_id,
             tool_name="display_resource",
-            tool_args={"type": "WIDGET", "content": WIDGET_CONTENT, "name": "Demo Widget"},
+            tool_args={
+                "type": "WIDGET",
+                "content": WIDGET_CONTENT,
+                "name": "Demo Widget",
+            },
         )
     )
     await db_session.commit()
@@ -75,11 +80,13 @@ def _serve_path(absolute_url: str) -> str:
 
 @pytest.mark.asyncio
 async def test_widget_serve_requires_auth_and_injects_config(
-    authenticated_client, test_app, test_pod, fixed_test_user, db_session
+    authenticated_client, test_app, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    conv_id, tool_call_id = await _seed_widget(db_session, pod_id=pod_id, user_id=user_id)
+    conv_id, tool_call_id = await _seed_widget(
+        db_session, pod_id=pod_id, user_id=user_id
+    )
     serve_path = f"/widgets/serve/{conv_id}/{tool_call_id}"
 
     # Member session (Bearer) → served, wrapped, config-injected, with height bridge.
@@ -103,11 +110,13 @@ async def test_widget_serve_requires_auth_and_injects_config(
 
 @pytest.mark.asyncio
 async def test_widget_embed_token_round_trip(
-    authenticated_client, test_app, test_pod, fixed_test_user, db_session
+    authenticated_client, test_app, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    conv_id, tool_call_id = await _seed_widget(db_session, pod_id=pod_id, user_id=user_id)
+    conv_id, tool_call_id = await _seed_widget(
+        db_session, pod_id=pod_id, user_id=user_id
+    )
 
     # A member mints a signed embed URL.
     mint = await authenticated_client.post(
@@ -126,17 +135,21 @@ async def test_widget_embed_token_round_trip(
         assert WIDGET_CONTENT in token_res.text
 
         # A tampered token is rejected.
-        bad = await anon.get(f"/widgets/serve/{conv_id}/{tool_call_id}?token=not-a-token")
+        bad = await anon.get(
+            f"/widgets/serve/{conv_id}/{tool_call_id}?token=not-a-token"
+        )
         assert bad.status_code == status.HTTP_401_UNAUTHORIZED, bad.text
 
 
 @pytest.mark.asyncio
 async def test_save_widget_as_app_produces_standalone_document(
-    authenticated_client, test_pod, fixed_test_user, db_session
+    authenticated_client, widget_pod, fixed_test_user, db_session
 ):
-    pod_id = UUID(test_pod["id"])
+    pod_id = UUID(widget_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    conv_id, tool_call_id = await _seed_widget(db_session, pod_id=pod_id, user_id=user_id)
+    conv_id, tool_call_id = await _seed_widget(
+        db_session, pod_id=pod_id, user_id=user_id
+    )
 
     app_name = f"saved_widget_{uuid4().hex[:8]}"
     promote = await authenticated_client.post(

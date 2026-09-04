@@ -4,7 +4,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn
 
 import typer
 from rich.console import Console
@@ -12,7 +12,7 @@ from rich.console import Console
 from lemma_sdk.auth import refresh_cli_session
 from lemma_sdk.errors import LemmaAPIError
 
-from .errors import set_dialed_base_url
+from .errors import next_step_for, set_dialed_base_url
 
 if TYPE_CHECKING:
     # The Lemma client pulls in the full resource/model tree; import it only when
@@ -115,9 +115,27 @@ def state_from_ctx(ctx: typer.Context) -> CliState:
     return state
 
 
-def fail(message: str, *, code: int = 1) -> None:
-    console.print(f"[red]{message}[/red]")
+def fail(message: str, *, code: int = 1) -> NoReturn:
+    # err_console, not console: this is the single funnel for every runtime
+    # error in the CLI, so printing it on stdout put a non-JSON line into the
+    # stream `--output json` promises is parseable — every `| jq` and every
+    # agent driving the CLI broke on exactly the failures it needed to read.
+    err_console.print(f"[red]{message}[/red]")
     raise typer.Exit(code=code)
+
+
+def env_token_hint(state: CliState) -> str:
+    """Where the LEMMA_TOKEN we are running on came from, as a trailing clause.
+
+    Returns ``" (set in <file>)"`` when a project env file supplied it, else the
+    empty string. "Unset LEMMA_TOKEN" is only advice a user can act on if they
+    can find the variable, and a project ``.lemma.<server>.env.local`` sets it
+    for the process without it ever appearing in their shell.
+    """
+    info = state.project_env or {}
+    if "LEMMA_TOKEN" not in (info.get("applied") or []):
+        return ""
+    return f" (set in {info.get('project_dir')}/{info.get('token_file')})"
 
 
 def _extract_field_errors(details: Any) -> list[str]:
@@ -142,21 +160,22 @@ def _extract_field_errors(details: Any) -> list[str]:
 def humanize_error(exc: Exception) -> str:
     """Turn raw create/import failures into actionable messages: a bare
     `KeyError` from `*Request.from_dict` becomes 'Missing required field: X',
-    and API validation details are appended to the API error line."""
+    API validation details are appended to the API error line, and a status the
+    user can act on carries the action.
+
+    The next-step wording comes from `errors.next_step_for`, shared with the
+    top-level boundary so the same 401 does not read two different ways
+    depending on which handler caught it."""
     if isinstance(exc, KeyError):
         key = exc.args[0] if exc.args else ""
         return f"Missing required field: {key}." if key else "Missing required field."
     if isinstance(exc, LemmaAPIError):
-        if getattr(exc, "status_code", None) == 429:
-            return (
-                str(exc)
-                + "\nYou've hit a rate limit — export/import are capped per day. "
-                "Wait and try again, or ask an admin to raise the limit."
-            )
-        fields = _extract_field_errors(exc.details)
-        if fields:
-            return str(exc) + "\n" + "\n".join(f"  - {line}" for line in fields)
-        return str(exc)
+        lines = [str(exc)]
+        lines.extend(f"  - {line}" for line in _extract_field_errors(exc.details))
+        step = next_step_for(exc)
+        if step:
+            lines.append(step)
+        return "\n".join(lines)
     return str(exc)
 
 
@@ -165,8 +184,16 @@ def client_session(state: CliState) -> Iterator[Lemma]:
     from lemma_sdk import Lemma
 
     use_env = state.server_source == "env"
-    defaults = state.config.get("defaults") if isinstance(state.config.get("defaults"), dict) else {}
-    runtime = state.config.get("_runtime") if isinstance(state.config.get("_runtime"), dict) else {}
+    defaults = (
+        state.config.get("defaults")
+        if isinstance(state.config.get("defaults"), dict)
+        else {}
+    )
+    runtime = (
+        state.config.get("_runtime")
+        if isinstance(state.config.get("_runtime"), dict)
+        else {}
+    )
     base_url = resolve_base_url(state.base_url, state.config, use_env=use_env)
     # Remember what we dialed, so the error boundary in app.main() can name the
     # server in a connection failure. state.base_url is only the raw override.
@@ -252,9 +279,7 @@ def refresh_auth_session(state: CliState) -> bool:
     return True
 
 
-def run_with_client(
-    ctx: typer.Context, fn: Callable[[Lemma, CliState], Any]
-) -> Any:
+def run_with_client(ctx: typer.Context, fn: Callable[[Lemma, CliState], Any]) -> Any:
     state = state_from_ctx(ctx)
     # Imported here, not at module top: httpx costs ~80ms and every command
     # module imports this one, so an eager import lands on `lemma --help`.
@@ -296,7 +321,8 @@ def update_config(
 def clear_auth(state: CliState) -> None:
     if state.server_read_only:
         fail(
-            "The env server is read-only. Unset LEMMA_TOKEN or select a stored server with --server."
+            f"The env server is read-only. Unset LEMMA_TOKEN{env_token_hint(state)} "
+            "or select a stored server with --server."
         )
     state.config = clear_auth_session(state.config)
     if state.root_config is not None:

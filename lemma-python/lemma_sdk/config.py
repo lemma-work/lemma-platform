@@ -63,7 +63,9 @@ def _migrate_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
     and the previously-shipped default server ``default`` -> ``DEFAULT_SERVER_NAME``
     (``lemma-cloud``)."""
     # Older rename: contexts -> servers.
-    if not isinstance(data.get("servers"), dict) and isinstance(data.get("contexts"), dict):
+    if not isinstance(data.get("servers"), dict) and isinstance(
+        data.get("contexts"), dict
+    ):
         data["servers"] = data.pop("contexts")
         legacy_active = data.pop("active_context", None)
         if "active_server" not in data and legacy_active:
@@ -74,7 +76,11 @@ def _migrate_legacy_config(data: dict[str, Any]) -> dict[str, Any]:
     # `lemma-cloud` already exists so an explicit one is never clobbered; a
     # user-customized `default` is preserved verbatim under the new name.
     servers = data.get("servers")
-    if isinstance(servers, dict) and "default" in servers and DEFAULT_SERVER_NAME not in servers:
+    if (
+        isinstance(servers, dict)
+        and "default" in servers
+        and DEFAULT_SERVER_NAME not in servers
+    ):
         servers[DEFAULT_SERVER_NAME] = servers.pop("default")
         if data.get("active_server") == "default":
             data["active_server"] = DEFAULT_SERVER_NAME
@@ -111,7 +117,9 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def _ensure_server_shape(server: dict[str, Any]) -> dict[str, Any]:
     # Keys starting with "_" (_runtime, _sources) are in-memory only.
-    next_server = {key: value for key, value in server.items() if not key.startswith("_")}
+    next_server = {
+        key: value for key, value in server.items() if not key.startswith("_")
+    }
     defaults = next_server.get("defaults")
     if defaults is None:
         next_server["defaults"] = {}
@@ -183,9 +191,7 @@ def normalize_server_config(
         servers[DEFAULT_SERVER_NAME] = _ensure_server_shape({})
 
     active = normalize_server_name(
-        selected_server
-        or os.getenv("LEMMA_SERVER")
-        or raw.get("active_server")
+        selected_server or os.getenv("LEMMA_SERVER") or raw.get("active_server")
     )
     if active not in servers:
         servers[active] = _ensure_server_shape({})
@@ -259,13 +265,15 @@ def discover_local_server_config() -> dict[str, Any] | None:
         state_path = state_home / "lemma" / "locald" / "state.json"
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         return None
     if not isinstance(state, dict):
         return None
     base_url = state.get("apiUrl")
     frontend_url = state.get("url")
-    if not _valid_desktop_endpoint(base_url) or not _valid_desktop_endpoint(frontend_url):
+    if not _valid_desktop_endpoint(base_url) or not _valid_desktop_endpoint(
+        frontend_url
+    ):
         return None
     return {
         "base_url": str(base_url).rstrip("/"),
@@ -277,13 +285,26 @@ def discover_local_server_config() -> dict[str, Any] | None:
     }
 
 
+# The base domains a Lemma Desktop install serves its workspace under.
+#
+# More than one because the choice is made at runtime: a browser derives no
+# registrable domain from `*.localhost`, so an install that needs pod apps to
+# work inside the workspace serves itself under a loopback wildcard instead.
+# Both are loopback-only, which is the property this gate is checking.
+#
+# Kept in step with `TRUSTED_LOCAL_BASES` in the desktop shell by hand -- the
+# two do not share a build -- so a new base has to be added in both places. The
+# symptom of forgetting is that `--server local` stops finding the install.
+_DESKTOP_LOCAL_BASES = ("lemma.localhost", "127.0.0.1.sslip.io")
+
+
 def _valid_desktop_endpoint(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     parsed = urlsplit(value)
     return (
         parsed.scheme == "http"
-        and parsed.hostname == "app.lemma.localhost"
+        and parsed.hostname in tuple(f"app.{base}" for base in _DESKTOP_LOCAL_BASES)
         and parsed.port is not None
         and parsed.username is None
         and parsed.password is None
@@ -465,8 +486,14 @@ def resolve_base_url(
     *,
     use_env: bool = True,
 ) -> str:
-    if config and config.get("_local_discovery_error") and not (
-        explicit or config.get("base_url") or (os.getenv("LEMMA_BASE_URL") if use_env else None)
+    if (
+        config
+        and config.get("_local_discovery_error")
+        and not (
+            explicit
+            or config.get("base_url")
+            or (os.getenv("LEMMA_BASE_URL") if use_env else None)
+        )
     ):
         raise ValueError(str(config["_local_discovery_error"]))
     return (
@@ -483,10 +510,14 @@ def resolve_auth_url(
     *,
     use_env: bool = True,
 ) -> str:
-    if config and config.get("_local_discovery_error") and not (
-        explicit
-        or (config or {}).get("auth_url")
-        or (os.getenv("LEMMA_AUTH_URL") if use_env else None)
+    if (
+        config
+        and config.get("_local_discovery_error")
+        and not (
+            explicit
+            or (config or {}).get("auth_url")
+            or (os.getenv("LEMMA_AUTH_URL") if use_env else None)
+        )
     ):
         raise ValueError(str(config["_local_discovery_error"]))
     auth = get_auth_session(config or {})
@@ -526,7 +557,9 @@ def should_use_managed_auth(explicit_token: str | None = None) -> bool:
     return not explicit_token and not CliRuntimeSettings.from_env().token
 
 
-def upsert_auth_session(config: dict[str, Any], session: dict[str, Any]) -> dict[str, Any]:
+def upsert_auth_session(
+    config: dict[str, Any], session: dict[str, Any]
+) -> dict[str, Any]:
     next_config = dict(config)
     next_config["auth"] = dict(session)
     next_config["token"] = session["access_token"]
@@ -548,21 +581,32 @@ def resolve_sdk_token(token: str | None = None, config_path: Path | None = None)
         return token
     if settings.token:
         return settings.token
-    root_config, server = normalize_server_config(load_config(config_path or DEFAULT_CONFIG_PATH))
+    root_config, server = normalize_server_config(
+        load_config(config_path or DEFAULT_CONFIG_PATH)
+    )
     config = get_server_config(root_config, server)
     resolved = get_access_token_from_config(config)
     if not resolved:
-        raise ValueError("Missing token. Set LEMMA_TOKEN, run `lemma auth login`, or pass token explicitly.")
+        raise ValueError(
+            "Missing token. Set LEMMA_TOKEN, run `lemma auth login`, or pass token explicitly."
+        )
     return resolved
 
 
-def resolve_sdk_base_url(api_url: str | None = None, config_path: Path | None = None) -> str:
+def resolve_sdk_base_url(
+    api_url: str | None = None, config_path: Path | None = None
+) -> str:
     settings = CliRuntimeSettings.from_env(str(config_path) if config_path else None)
     if api_url:
         return api_url.rstrip("/")
     env_value = os.getenv("LEMMA_BASE_URL")
     if env_value:
         return env_value.rstrip("/")
-    root_config, server = normalize_server_config(load_config(config_path or DEFAULT_CONFIG_PATH))
+    root_config, server = normalize_server_config(
+        load_config(config_path or DEFAULT_CONFIG_PATH)
+    )
     config = get_server_config(root_config, server)
-    return ((config.get("base_url") if isinstance(config, dict) else None) or settings.base_url).rstrip("/")
+    return (
+        (config.get("base_url") if isinstance(config, dict) else None)
+        or settings.base_url
+    ).rstrip("/")

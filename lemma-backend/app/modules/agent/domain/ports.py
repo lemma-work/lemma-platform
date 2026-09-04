@@ -9,8 +9,14 @@ from app.core.authorization.context import Context
 from app.modules.agent.domain.events import AgentDomainEvent
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.run_projections import (
+    ConversationOpeningTexts,
+    StaleAgentRunRef,
+    StrandedConversationRef,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AgentRunApprovalDecision,
     AgentRuntimeConfig,
     AgentRunFinishResult,
     AgentRunStatus,
@@ -30,7 +36,10 @@ class Harness(Protocol):
 
     kind: HarnessKind
 
-    async def run(
+    # Not `async def`: that would declare a coroutine *returning* an iterator,
+    # which is not what either harness is. Both are async generator functions and
+    # every caller iterates the return value directly, un-awaited.
+    def run(
         self,
         *,
         agent: Agent,
@@ -52,6 +61,12 @@ class AgentRepository(Protocol):
     ) -> Agent | None: ...
 
     async def create(self, agent: Agent) -> Agent: ...
+
+    #: The pod's own assistant, minted with the pod. Separate from `create`
+    #: because nobody created it: it emits no agent-created event, takes no
+    #: entity, and fills in only identity -- what it does comes from the
+    #: `POD_DEFAULT` constants at run time, not from its row.
+    async def create_pod_default(self, *, pod_id: UUID, user_id: UUID) -> Agent: ...
 
     async def update(self, agent: Agent) -> Agent: ...
 
@@ -76,6 +91,16 @@ class AgentRepository(Protocol):
 
 
 class ConversationRepository(Protocol):
+    """The full conversation/run/message surface, including both query mixins.
+
+    Declared here in one piece on purpose. The implementation is assembled from
+    a class and two mixins, and every time the port has listed only the subset
+    some caller happened to need, the next caller reached past it -- #445 had to
+    delete `load_runtime_history_by_run_id` from this Protocol for exactly the
+    mirror-image reason. A port that is a strict subset of its implementation is
+    not a narrower contract, it is an unenforced one.
+    """
+
     async def create_conversation(self, conversation: Conversation) -> Conversation: ...
 
     async def create_conversation_once(
@@ -85,7 +110,43 @@ class ConversationRepository(Protocol):
 
     async def update_conversation(self, conversation: Conversation) -> Conversation: ...
 
-    async def get_conversation(self, conversation_id: UUID) -> Conversation | None: ...
+    async def get_conversation(
+        self,
+        conversation_id: UUID,
+        *,
+        include_messages: bool = False,
+        include_runs: bool = False,
+    ) -> Conversation | None: ...
+
+    async def get_conversation_metadata_key(
+        self,
+        conversation_id: UUID,
+        key: str,
+    ) -> JsonValue | None: ...
+
+    async def set_conversation_metadata_key(
+        self,
+        conversation_id: UUID,
+        key: str,
+        value: JsonValue,
+    ) -> None: ...
+
+    async def lock_conversation(self, conversation_id: UUID) -> None: ...
+
+    async def get_conversation_opening_texts(
+        self, conversation_id: UUID
+    ) -> ConversationOpeningTexts: ...
+
+    async def find_existing_voice_transcript(
+        self, conversation_id: UUID, paths: tuple[str, ...]
+    ) -> str | None: ...
+
+    async def set_conversation_status(
+        self,
+        *,
+        conversation_id: UUID,
+        status: ConversationStatus,
+    ) -> None: ...
 
     async def list_conversations(
         self,
@@ -97,9 +158,19 @@ class ConversationRepository(Protocol):
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
         parent_id: UUID | None = None,
+        archived: bool = False,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]: ...
+
+    async def list_children(
+        self,
+        *,
+        parent_id: UUID,
+        user_id: UUID,
+        limit: int = 50,
+        include_runs: bool = True,
+    ) -> list[Conversation]: ...
 
     async def create_agent_run(
         self,
@@ -128,16 +199,61 @@ class ConversationRepository(Protocol):
         conversation_id: UUID,
     ) -> AgentRun | None: ...
 
+    async def list_stale_active_runs(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]: ...
+
+    async def list_active_runs_pending_liveness(
+        self,
+        *,
+        cutoff_seconds: int,
+        decided_after_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]: ...
+
+    async def list_runs_stuck_stopping(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StaleAgentRunRef]: ...
+
+    async def list_conversations_stranded_by_a_finished_run(
+        self,
+        *,
+        cutoff_seconds: int,
+        limit: int = 200,
+    ) -> list[StrandedConversationRef]: ...
+
+    async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
+
+    async def count_queued_user_messages(self, agent_run_id: UUID) -> int: ...
+
+    async def claim_queued_user_messages(self, agent_run_id: UUID) -> list[Message]: ...
+
+    async def list_agent_runs_with_messages(
+        self,
+        conversation_id: UUID,
+    ) -> list[AgentRun]: ...
+
     async def list_agent_runs_with_messages_by_run_id(
         self,
         agent_run_id: UUID,
     ) -> list[AgentRun]: ...
 
-    async def load_runtime_history_by_run_id(
+    async def load_runtime_history_digests_by_run_id(
         self,
         agent_run_id: UUID,
+    ) -> list[AgentRun]: ...
+
+    async def attach_runtime_history_messages(
+        self,
+        runs: list[AgentRun],
         *,
-        full_run_count: int,
+        full_run_ids: set[UUID],
     ) -> list[AgentRun]: ...
 
     async def append_message(
@@ -166,5 +282,83 @@ class ConversationRepository(Protocol):
         error: str | None = None,
         output_data: JsonValue | None = None,
     ) -> AgentRunFinishResult | None: ...
+
+    async def record_approval_decision(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+        agent_run_id: UUID | None,
+        tool_name: str | None,
+        decision: AgentRunApprovalDecision,
+        response: JsonObject | None,
+        resolved_by_user_id: UUID,
+    ) -> bool: ...
+
+    async def claim_approval_execution(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+    ) -> bool: ...
+
+    async def approval_execution_claim_expired(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+        stale_after_seconds: int,
+    ) -> bool: ...
+
+    async def get_approval_decision(
+        self,
+        *,
+        conversation_id: UUID,
+        approval_id: str,
+    ) -> tuple[AgentRunApprovalDecision, JsonObject] | None: ...
+
+    async def list_resolved_approval_ids(
+        self,
+        *,
+        conversation_id: UUID,
+    ) -> set[str]: ...
+
+    async def get_tool_call(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+    ) -> Message | None: ...
+
+    async def get_tool_return(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+    ) -> Message | None: ...
+
+    async def unresolved_pausing_call_ids(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        pausing_tool_names: Sequence[str],
+    ) -> list[str]: ...
+
+    async def pausing_calls_awaiting_a_return(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[Message]: ...
+
+    async def pausing_calls_awaiting_a_decision(
+        self,
+        *,
+        conversation_id: UUID,
+        pausing_tool_names: Sequence[str],
+        limit: int | None = None,
+    ) -> list[Message]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...

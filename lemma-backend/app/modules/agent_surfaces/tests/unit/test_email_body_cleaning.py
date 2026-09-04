@@ -1,6 +1,6 @@
 """What reaches the model when somebody emails an agent.
 
-All three email providers share ``email_common``, so these are the guarantees
+All three email providers share ``email_text``, so these are the guarantees
 that hold for Resend, Gmail and Outlook alike. None of them held before: there
 was no quoted-reply trimming anywhere, stylesheets were extracted as text, and
 every newline was collapsed, so an HTML email arrived as one unbroken line.
@@ -12,9 +12,9 @@ import base64
 
 import pytest
 
-from app.modules.agent_surfaces.platforms.email_common import (
+from app.modules.agent_surfaces.platforms.email_identity import email_thread_root
+from app.modules.agent_surfaces.platforms.email_text import (
     decode_email_html,
-    email_thread_root,
     inbound_email_text,
     plain_text_from_html,
     strip_quoted_reply,
@@ -171,7 +171,9 @@ def test_a_forward_keeps_everything_below_the_marker(subject):
     this" and threw away the invoice — the one thing the agent was asked to act
     on. Trimming now needs evidence of a reply rather than assuming one.
     """
-    body = "Please process this:\n\n-----Original Message-----\nInvoice #8812, due Friday"
+    body = (
+        "Please process this:\n\n-----Original Message-----\nInvoice #8812, due Friday"
+    )
 
     assert strip_quoted_reply(body, subject) == body.strip()
 
@@ -210,7 +212,7 @@ def test_an_enormous_html_body_is_bounded_before_parsing():
     """
     import time
 
-    from app.modules.agent_surfaces.platforms.email_common import (
+    from app.modules.agent_surfaces.platforms.email_text import (
         _MAX_HTML_CHARS,
         plain_text_from_html,
     )
@@ -227,6 +229,49 @@ def test_an_enormous_html_body_is_bounded_before_parsing():
 
 
 def test_an_ordinary_body_is_untouched_by_the_cap():
-    from app.modules.agent_surfaces.platforms.email_common import plain_text_from_html
+    from app.modules.agent_surfaces.platforms.email_text import plain_text_from_html
 
     assert "Hi there" in plain_text_from_html("<p>Hi there</p><p>Thanks!</p>")
+
+
+class TestASoftWrappedAttribution:
+    """Gmail breaks a long attribution mid-address, and the quote survived it.
+
+    Found in real use, not in a fixture. On an email surface the cost is not
+    just a bloated prompt: a one-word "approve" arrived as
+    `approve\\n\\nOn Tue ... <\\nbutler@...> wrote:`, stopped being a decision,
+    fell through to the ordinary message path, and superseded the very approval
+    it was answering. The person said yes three times and the agent read three
+    denials.
+    """
+
+    def test_the_wrapped_form_is_stripped(self) -> None:
+        body = (
+            "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
+            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+        )
+        assert strip_quoted_reply(body, "Re: Hello") == "approve"
+
+    def test_a_wrapped_reply_is_still_a_decision(self) -> None:
+        from app.modules.agent_surfaces.services.pending_interaction_resume import (
+            _classify_approval_reply,
+        )
+        from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
+
+        body = (
+            "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
+            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+        )
+        text = inbound_email_text(text=body, subject="Re: Hello")
+        assert _classify_approval_reply(text) is not None, (
+            "an emailed approval must still read as a decision"
+        )
+
+    def test_prose_that_merely_opens_with_on_is_left_alone(self) -> None:
+        """Why the marker demands an address in the span rather than any span."""
+        body = (
+            "On the migration I think we should wait.\n"
+            "Bob wrote: keep it simple.\n"
+            "So please proceed."
+        )
+        assert strip_quoted_reply(body, "Re: Plan") == body

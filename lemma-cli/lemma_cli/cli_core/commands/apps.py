@@ -26,13 +26,14 @@ from ..app_scaffold import (
 )
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
-from ..payload import read_json
+from ..payload import build_request, read_json
 from ..sdk import pod_client
 from ..state import console, fail, run_with_client, state_from_ctx
 from lemma_sdk.config import resolve_auth_url, resolve_base_url, resolve_token
 from ...cli_app.app_bundle import (
     classify_app_source,
     deploy_app_bundle,
+    pull_app_bundle,
 )
 
 app = typer.Typer(help="App commands.")
@@ -230,7 +231,9 @@ def open_app(
 @app.command("create")
 def create_app(
     ctx: typer.Context,
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -242,7 +245,7 @@ def create_app(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).apps.create(
-            CreateAppRequest.from_dict(payload)
+            build_request(CreateAppRequest, payload, context="app")
         ),
     )
     if result is not None:
@@ -253,7 +256,9 @@ def create_app(
 def update_app(
     ctx: typer.Context,
     app: str = typer.Argument(...),
-    json_payload: str | None = typer.Option(None, "--data", "-d", help="Raw JSON payload."),
+    json_payload: str | None = typer.Option(
+        None, "--data", "-d", help="Raw JSON payload."
+    ),
     file: Path | None = typer.Option(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
@@ -265,7 +270,7 @@ def update_app(
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).apps.update(
-            app, UpdateAppRequest.from_dict(payload)
+            app, build_request(UpdateAppRequest, payload, context="app")
         ),
     )
     if result is not None:
@@ -393,6 +398,68 @@ def deploy_app(
     )
     if result is not None:
         emit(state, result)
+
+
+@app.command("pull")
+def pull_app(
+    ctx: typer.Context,
+    app: str = typer.Argument(...),
+    directory: Path | None = typer.Argument(
+        None,
+        file_okay=False,
+        dir_okay=True,
+        help="Where to write the app. Defaults to ./<app>.",
+    ),
+    pod: str | None = typer.Option(None, "--pod"),
+    dist: bool = typer.Option(
+        False,
+        "--dist",
+        help="Pull the built output instead of the source.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite the target directory if it is not empty.",
+    ),
+) -> None:
+    """Download a deployed app's source to edit locally.
+
+    What lands is a valid deploy source: a Vite project keeps its files, and a
+    no-build app arrives as a single index.html. Edit it, then
+    `lemma apps deploy <app> <directory>` to push it back.
+    """
+    state = state_from_ctx(ctx)
+    # Resolve for the filesystem, but echo back what was typed: an absolute temp
+    # path in the "next step" line is unreadable and not what anyone retypes.
+    written_to = directory or Path(app)
+    target = written_to.resolve()
+
+    def run(client, s):  # type: ignore[no-untyped-def]
+        from .pods import resolve_pod_id
+
+        return pull_app_bundle(
+            client,
+            pod_id=resolve_pod_id(client, s, pod),
+            app_name=app,
+            target_dir=target,
+            dist=dist,
+            force=force,
+        )
+
+    result = run_with_client(ctx, run)
+    if result is None:
+        return
+    if result.get("archive") == "dist" and not dist:
+        console.print(
+            f"[yellow]Warning:[/yellow] {app} has no stored source — pulled its "
+            "built output instead. Redeploying it works, but it is not the code "
+            "you wrote."
+        )
+    emit(state, result)
+    console.print(
+        f"Next: edit {written_to}, then `lemma apps deploy {app} {written_to}`"
+    )
 
 
 @app.command("init")

@@ -17,6 +17,7 @@ a new kind cannot forget to add a timeout.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 from app.core.log.log import get_logger
@@ -26,9 +27,18 @@ from app.modules.connectors.domain.errors import OperationExecutionTimeoutError
 from app.modules.connectors.domain.kinds import (
     DiscoveredOperation,
     ExecutionRequest,
+    ExecutionResult,
+    KindPlugin,
     ResolvedInstall,
 )
 from app.modules.connectors.infrastructure.kinds.registry import KindRegistry
+from app.modules.connectors.services.execution.credential_presenter import (
+    PresenterRegistry,
+)
+from app.modules.connectors.services.execution.presenters import default_presenters
+from app.modules.connectors.services.execution.failure_translation import (
+    execution_failures_translated,
+)
 
 logger = get_logger(__name__)
 
@@ -50,8 +60,11 @@ _TIMEOUT_BY_KIND: dict[str, float] = {
 class KindDispatcher:
     """Routes to a kind's plugin and bounds how long it may take."""
 
-    def __init__(self, registry: KindRegistry):
+    def __init__(
+        self, registry: KindRegistry, presenters: PresenterRegistry | None = None
+    ):
         self._registry = registry
+        self._presenters = presenters or default_presenters()
 
     def timeout_for(self, kind: ConnectorKind | str) -> float:
         value = kind.value if isinstance(kind, ConnectorKind) else str(kind)
@@ -68,8 +81,8 @@ class KindDispatcher:
         payload: dict[str, Any],
         credentials: dict[str, Any],
         config: dict[str, Any],
-        auth_token: str | None = None,
-        api_url: str | None = None,
+        account_external_ref: str | None = None,
+        act_as: str = "user",
     ) -> ExecutionRequest:
         return ExecutionRequest(
             connector_id=connector_id,
@@ -79,15 +92,15 @@ class KindDispatcher:
             credentials=credentials or {},
             config=config or {},
             deadline_seconds=self.timeout_for(kind),
-            auth_token=auth_token,
-            api_url=api_url,
+            account_external_ref=account_external_ref,
+            act_as="app" if act_as == "app" else "user",
         )
 
     async def execute(self, request: ExecutionRequest) -> Any:
         plugin = self._registry.get(request.kind)
         try:
             return await asyncio.wait_for(
-                plugin.executor.execute(request),
+                self._executed(plugin, request),
                 timeout=request.deadline_seconds,
             )
         except (asyncio.TimeoutError, TimeoutError) as exc:
@@ -105,6 +118,21 @@ class KindDispatcher:
                 },
             ) from exc
 
+    async def _executed(
+        self, plugin: KindPlugin, request: ExecutionRequest
+    ) -> ExecutionResult:
+        """Present the credential, then run.
+
+        Inside the deadline on purpose: presenting can mean a call to the
+        provider -- minting a GitHub installation token is one -- and work that
+        can hang belongs under the same bound as the operation it is for.
+        """
+        presenter = self._presenters.for_connector(request.connector_id)
+        credentials = await presenter.present(request)
+        if credentials is not request.credentials:
+            request = replace(request, credentials=credentials)
+        return await plugin.executor.execute(request)
+
     async def discover(
         self, install: ResolvedInstall, credentials: dict[str, Any] | None = None
     ) -> list[DiscoveredOperation]:
@@ -118,10 +146,24 @@ class KindDispatcher:
         if plugin.discoverer is None:
             return []
         timeout = connector_settings.connector_discovery_timeout_seconds
+
+        async def _discover() -> list[DiscoveredOperation]:
+            # The same translation execute gets, and for the same reason.
+            # Discovery reaches the tenant's own server over the network, so it
+            # fails the same ways -- but only the timeout was handled, and an
+            # HTTP status escaped as a raw `httpx.HTTPStatusError`. Installing an
+            # MCP server that wants a token answered 500 with a Python traceback
+            # in the body, which is both unusable and against the rule that an
+            # API response carries no traceback.
+            #
+            # Inside `wait_for`, not around it: the translator reads a
+            # `TimeoutError` as an outage, so wrapping the deadline too would
+            # swallow the specific timeout below before it could be raised.
+            with execution_failures_translated():
+                return await plugin.discoverer.discover(install, credentials)
+
         try:
-            return await asyncio.wait_for(
-                plugin.discoverer.discover(install, credentials), timeout=timeout
-            )
+            return await asyncio.wait_for(_discover(), timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError) as exc:
             raise OperationExecutionTimeoutError(
                 f"Discovery for '{install.connector_id}' timed out after "
@@ -131,4 +173,3 @@ class KindDispatcher:
                     "timeout_seconds": timeout,
                 },
             ) from exc
-

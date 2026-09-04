@@ -1,14 +1,19 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+
+import { AddPeopleDialog } from '@/components/members/add-people-dialog';
+import { Plus } from '@/components/ui/icons';
 
 import { useAgents } from '@/lib/hooks/use-agents';
 import { usePodMembers } from '@/lib/hooks/use-pod-members';
 import { usePodSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { useSchedules } from '@/lib/hooks/use-schedules';
+import { useProfile } from '@/lib/hooks/use-user';
+import { TONE_COUNT as IDENTITY_TONE_COUNT } from '@/lib/identity/seeded-identity';
 import { getSurfaceDefinition } from '@/lib/surfaces/registry';
 import { getSurfacePlatformKey } from '@/lib/utils/surfaces';
 import { getScheduleTargetName } from '@/lib/utils/schedules';
@@ -23,13 +28,30 @@ function initialOf(label: string): string {
     return trimmed ? trimmed[0].toUpperCase() : '?';
 }
 
-/** Deterministic per-person tint, so the same face keeps the same colour. */
+/**
+ * Deterministic per-person tint, so the same face keeps the same colour — drawn
+ * from the identity system's tone pool, the palette built for "a distinct
+ * being" and already worn by the agent faces standing beside these avatars.
+ *
+ * It used to draw from four fixed tints of its own, three of which were state
+ * colours: `--accent-rgb`, `--state-success` and `--state-warning`. The comment
+ * defending that pool said it existed so a hash would not "drift into the state
+ * colours and start implying an agent is failing" — and then picked them
+ * anyway, which put two people in success-green one scroll above an Activity
+ * panel that uses success-green for "Completed". A person is not a status, and
+ * a hue cannot mean both.
+ */
 function avatarToneClass(seed: string): string {
     let hash = 0;
     for (let index = 0; index < seed.length; index += 1) {
         hash = (hash * 31 + seed.charCodeAt(index)) % 997;
     }
-    return `pod-home-presence-avatar-t${hash % 4}`;
+    // `hue`, not `tone`: the tone variant also sets `color`, and
+    // `resource-identity.css` imports after this feature sheet, so it would win
+    // over the avatar's white initial and paint the letter the same colour as
+    // the disc behind it. The hue variant carries the custom properties only —
+    // which is the split that file documents, for exactly this case.
+    return `lm-identity-hue-${hash % IDENTITY_TONE_COUNT}`;
 }
 
 interface PresenceFace {
@@ -58,6 +80,9 @@ export function PodHomePresence({
     conversations: Conversation[];
 }) {
     const podAccess = usePodAccess(podId);
+    const canAddPeople = podAccess.can('pod.member.manage');
+    const [addPeopleOpen, setAddPeopleOpen] = useState(false);
+    const { data: profile } = useProfile();
     const canReadAgents = podAccess.can('agent.read');
     const canReadSchedules = podAccess.can('schedule.read');
     const canReadSurfaces = podAccess.canAccessRoute('surfaces');
@@ -121,22 +146,29 @@ export function PodHomePresence({
         return [...seen.values()];
     }, [surfaces]);
 
-    const peopleLabel = members.length === 1 ? '1 person' : `${members.length} people`;
+    // A pod of one is the state this row most needs to name, because it is the
+    // one with something to do about it. "1 person" reads as a tally of other
+    // people; "Just you" reads as an empty room, which is what it is.
+    const isAloneHere = members.length === 1 && members[0].user_id === profile?.id;
+    const peopleLabel = isAloneHere
+        ? 'Just you'
+        : members.length === 1 ? '1 person' : `${members.length} people`;
     const hasPeople = members.length > 0;
     const hasDuty = onDuty.length > 0;
     const hasSurfaces = surfacePlatforms.length > 0;
 
-    if (!hasPeople && !hasDuty && !hasSurfaces) return null;
+    if (!hasPeople && !hasDuty && !hasSurfaces && !canAddPeople) return null;
 
     return (
         <div className="pod-home-presence">
             {faces.length > 0 ? (
-                <span className="pod-home-presence-faces" aria-hidden="true">
+                <span className="pod-home-presence-faces">
                     {faces.map((face) => (
                         <span
                             key={face.key}
                             className={`pod-home-presence-avatar pod-home-presence-avatar-${face.kind} ${avatarToneClass(face.label)}`}
                             title={face.label}
+                            aria-hidden="true"
                         >
                             {face.iconUrl ? (
                                 <Image src={face.iconUrl} alt="" width={16} height={16} className="object-contain" />
@@ -145,14 +177,35 @@ export function PodHomePresence({
                             )}
                         </span>
                     ))}
+                    {canAddPeople ? (
+                        <button
+                            type="button"
+                            onClick={() => setAddPeopleOpen(true)}
+                            className="pod-home-presence-add custom-focus-ring"
+                            aria-label="Add people to this pod"
+                            title="Add people"
+                        >
+                            <Plus className="h-3 w-3" />
+                        </button>
+                    ) : null}
                 </span>
             ) : null}
 
             <span className="pod-home-presence-copy">
                 {hasPeople ? (
-                    <Link href={`/pod/${podId}/settings/members`} className="pod-home-presence-link custom-focus-ring">
-                        {peopleLabel}
-                    </Link>
+                    isAloneHere && canAddPeople ? (
+                        <button
+                            type="button"
+                            onClick={() => setAddPeopleOpen(true)}
+                            className="pod-home-presence-link custom-focus-ring"
+                        >
+                            Just you — add people
+                        </button>
+                    ) : (
+                        <Link href={`/pod/${podId}/settings/members`} className="pod-home-presence-link custom-focus-ring">
+                            {peopleLabel}
+                        </Link>
+                    )
                 ) : null}
 
                 {hasPeople && hasDuty ? <span className="pod-home-presence-sep" aria-hidden="true" /> : null}
@@ -171,12 +224,18 @@ export function PodHomePresence({
                 {hasSurfaces ? (
                     // The agents index is `/ai`; `/agents` only holds `[agentId]`
                     // and `new`, so a bare link there is a 404.
+                    /* The marks carry their own colour, so they take no
+                       `surface-logo-chip` plate. That plate is for a monochrome
+                       mark that would vanish on dark stock; on these it only
+                       pasted three near-white tiles into a line of prose, which
+                       is the one thing on the row that did not belong to either
+                       appearance. */
                     <Link href={`/pod/${podId}/ai`} className="pod-home-presence-link custom-focus-ring">
                         <span className="pod-home-presence-surfaces">
                             {surfacePlatforms.map((platform) => (
-                                <span key={platform.key} className="pod-home-presence-surface surface-logo-chip" title={platform.label}>
+                                <span key={platform.key} className="pod-home-presence-surface" title={platform.label}>
                                     {platform.logoSrc ? (
-                                        <Image src={platform.logoSrc} alt="" width={13} height={13} className="object-contain" aria-hidden="true" />
+                                        <Image src={platform.logoSrc} alt="" width={15} height={15} className="object-contain" aria-hidden="true" />
                                     ) : (
                                         initialOf(platform.label)
                                     )}
@@ -187,6 +246,10 @@ export function PodHomePresence({
                     </Link>
                 ) : null}
             </span>
+
+            {canAddPeople ? (
+                <AddPeopleDialog podId={podId} open={addPeopleOpen} onOpenChange={setAddPeopleOpen} />
+            ) : null}
         </div>
     );
 }

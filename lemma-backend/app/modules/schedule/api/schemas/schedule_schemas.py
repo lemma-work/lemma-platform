@@ -3,8 +3,10 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+from app.modules.schedule.config import schedule_settings
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
     ScheduleRunStatus,
     ScheduleFireStatus,
@@ -23,9 +25,27 @@ class CreateScheduleRequest(BaseModel):
         description="Stable pod-scoped schedule name used for import/export upserts.",
     )
     schedule_type: ScheduleType
-    agent_name: str | None = None
+    agent_name: str | None = Field(
+        default=None,
+        description=(
+            f"Pod agent to wake, by name. Pass '{POD_DEFAULT_AGENT_SELECTOR}' "
+            "(or 'pod_default') to wake the pod's default assistant, which has "
+            "no name of its own."
+        ),
+    )
     workflow_name: str | None = None
     config: dict = Field(default_factory=dict)
+    instruction: str | None = Field(
+        default=None,
+        max_length=8000,
+        description=(
+            "What the target should do when this fires, in your own words. "
+            "Reaches an agent as the run's conversation instructions, layered "
+            "after the agent's own. Required when targeting the default "
+            "assistant, which has no standing instruction to fall back on. "
+            "Distinct from filter_instruction, which decides whether to fire."
+        ),
+    )
     account_id: UUID | None = Field(
         default=None,
         description=(
@@ -69,6 +89,10 @@ class CreateScheduleRequest(BaseModel):
             and not self.connector_trigger_id
         ):
             raise ValueError("Agent webhook schedules require connector_trigger_id")
+        # "A target with no standing instruction must be told what to do" is
+        # enforced in the service, not here: it is a question about the resolved
+        # agent, and a validator cannot look one up. The cost is that it comes
+        # back as a 400 rather than a field-scoped 422.
         if self.workflow_name and self.connector_trigger_id:
             raise ValueError(
                 "connector_trigger_id is only valid for agent webhook schedules; "
@@ -86,6 +110,7 @@ class UpdateScheduleRequest(BaseModel):
     config: dict | None = None
     agent_name: str | None = None
     workflow_name: str | None = None
+    instruction: str | None = Field(default=None, max_length=8000)
     filter_instruction: str | None = None
     filter_output_schema: dict | None = None
     is_active: bool | None = None
@@ -113,9 +138,13 @@ class ScheduleResponse(BaseModel):
     schedule_type: ScheduleType
     agent_id: UUID | None
     workflow_id: UUID | None
+    # `POD_DEFAULT` when the target is the pod's own assistant. That is the
+    # selector the API takes rather than the row's internal name, so a client
+    # reads back exactly what it wrote.
     agent_name: str | None = None
     workflow_name: str | None = None
     config: dict
+    instruction: str | None = None
     account_id: UUID | None
     connector_trigger_id: str | None
     filter_instruction: str | None
@@ -127,10 +156,34 @@ class ScheduleResponse(BaseModel):
     last_run_id: str | None = None
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
+    consecutive_failures: int = 0
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    # A breaker pause and a deliberate one were indistinguishable on the wire:
+    # ``is_active`` goes false either way, and the pod overview drops inactive
+    # schedules entirely. "The user never sees why their schedules stopped" was
+    # that, not a missing signal — the failures have been recorded, emailed and
+    # served all along, with nothing tying them to the pause.
+    #
+    # Derived rather than stored so it cannot drift from the breaker's own rule,
+    # and so it needs no migration: both halves are already persisted.
+    @computed_field(  # type: ignore[prop-decorator]
+        description=(
+            "True when the failure breaker paused this schedule, as opposed to "
+            "a person pausing it. Reactivating resets the failure count."
+        )
+    )
+    @property
+    def paused_by_failures(self) -> bool:
+        threshold = schedule_settings.schedule_max_consecutive_failures
+        return (
+            not self.is_active
+            and threshold > 0
+            and self.consecutive_failures >= threshold
+        )
 
 
 class ScheduleDetailResponse(ScheduleResponse):

@@ -3,8 +3,9 @@
 import asyncio
 from typing import cast
 
-from sqlalchemy import Table
+from sqlalchemy import Table, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.events.models import DomainEventOutbox
@@ -12,6 +13,26 @@ from app.core.infrastructure.events.outbox_wake import notify_outbox_wake
 
 _outbox_ready = False
 _outbox_lock = asyncio.Lock()
+
+#: Serializes the create below across processes. An `asyncio.Lock` coordinates
+#: one event loop; two API replicas or two workers booting together are two
+#: processes, and both can observe the table as absent and race the `pg_type` /
+#: `pg_class` catalogs — where the loser gets a unique violation and, because
+#: the API lifespan calls this, refuses to start. The two other bootstrap paths
+#: in this module (`SchemaManager._lock_schema_bootstrap`,
+#: `PostgresSearchService.ensure_schema`) already take an advisory lock for the
+#: same reason; a constant key, since there is one table.
+_OUTBOX_BOOTSTRAP_LOCK_KEY = 0x6C6D6F7574  # "lmout"
+
+
+def _is_duplicate_object(exc: DBAPIError) -> bool:
+    """Whether the create lost a race it does not need to win.
+
+    Belt and braces behind the lock: an install whose outbox was created by
+    something outside this lock's reach (a migration running concurrently, an
+    operator) would otherwise fail a replica's startup over a table that exists.
+    """
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "42P07"
 
 
 async def ensure_datastore_event_outbox() -> None:
@@ -29,9 +50,17 @@ async def ensure_datastore_event_outbox() -> None:
     async with _outbox_lock:
         if _outbox_ready:
             return
-        async with get_datastore_engine().begin() as connection:
-            outbox_table = cast(Table, DomainEventOutbox.__table__)
-            await connection.run_sync(outbox_table.create, checkfirst=True)
+        try:
+            async with get_datastore_engine().begin() as connection:
+                await connection.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": _OUTBOX_BOOTSTRAP_LOCK_KEY},
+                )
+                outbox_table = cast(Table, DomainEventOutbox.__table__)
+                await connection.run_sync(outbox_table.create, checkfirst=True)
+        except DBAPIError as exc:
+            if not _is_duplicate_object(exc):
+                raise
         _outbox_ready = True
 
 

@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any, Callable
 from uuid import UUID
 
+import httpx
 from fastapi import Request
 
 from app.core.authorization.scope import current_context_scope, uow_scope
@@ -21,8 +22,6 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
-import httpx
-
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     OperationExecutionAccessDeniedError,
@@ -32,8 +31,14 @@ from app.modules.connectors.domain.errors import (
 )
 from app.modules.connectors.infrastructure.operation_breaker import (
     breaker_scope,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     guard as breaker_guard,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     record_failure as breaker_record_failure,
+)
+from app.modules.connectors.infrastructure.operation_breaker import (
     record_success as breaker_record_success,
 )
 from app.modules.connectors.services.connector_operation_service import (
@@ -67,8 +72,6 @@ class ConnectorOperationUseCases:
         payload: dict[str, Any],
         user_id: UUID,
         request: Request,
-        auth_token: str | None = None,
-        api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> OperationExecutionResponse:
         # Phase 1 (short scope): build + bind the request Context (org/delegation
@@ -85,8 +88,6 @@ class ConnectorOperationUseCases:
                 operation_name=operation_name,
                 payload=payload,
                 actor=scope.ctx,
-                auth_token=auth_token,
-                api_url=api_url,
                 account_id=account_id,
             )
 
@@ -102,7 +103,9 @@ class ConnectorOperationUseCases:
         # Only infrastructure and timeout failures feed the breaker; a rejected
         # request or a stale credential is the caller's problem and must not
         # disable the operation for everyone else.
-        scope_key = breaker_scope(resolved.connector_id, operation_name)
+        scope_key = breaker_scope(
+            resolved.connector_id, operation_name, resolved.organization_id
+        )
         await breaker_guard(scope_key)
         try:
             response = await self._attempt_with_credential_refresh(
@@ -247,7 +250,7 @@ class ConnectorOperationUseCases:
                     force_refresh=True,
                 )
                 credentials = refreshed.model_dump(exclude_none=True)
-        except (ConnectorDomainError, httpx.HTTPError, OSError, TimeoutError):
+        except ConnectorDomainError, httpx.HTTPError, OSError, TimeoutError:
             # Refresh itself failed: no refresh token on the account, or the
             # provider is unreachable. Fall back to the reauth path rather than
             # masking the original rejection. Anything outside this set is a bug

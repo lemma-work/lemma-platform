@@ -14,7 +14,7 @@ import type { AssistantSurface, Schedule } from '@/lib/types';
 // agent/workflow then happens client-side — no per-agent N+1 fetches.
 const POD_SCHEDULES_FILTER = { limit: 100 } as const;
 
-export { surfaceChannelAgents, surfaceReachesAgent, surfaceUsesDefaultAgent } from '@/lib/utils/surfaces';
+export { surfaceReachesAgent, surfaceUsesDefaultAgent } from '@/lib/utils/surfaces';
 
 export interface PodAutomation {
     schedules: Schedule[];
@@ -34,7 +34,7 @@ export interface PodAutomation {
 /**
  * Shared read layer for the schedules + surfaces a pod owns. Fetches each list
  * once (pod-wide) and exposes client-side grouping so agent/workflow detail
- * pages, the agents list, and the Pod Assistant view all read from the same
+ * pages, the agents list, and Lem's page all read from the same
  * cache. Pass `{ schedules: false }` / `{ surfaces: false }` to skip a fetch the
  * caller has no permission for (or does not need).
  */

@@ -5,11 +5,13 @@ from typing import Any, Optional
 
 import typer
 from lemma_sdk.openapi_client.models.account_create_schema import AccountCreateSchema
-from lemma_sdk.openapi_client.models.auth_config_create_schema import AuthConfigCreateSchema
+from lemma_sdk.openapi_client.models.auth_config_create_schema import (
+    AuthConfigCreateSchema,
+)
 
 from ..confirm import confirm_destructive
 from ..io import emit, list_items, to_plain
-from ..payload import read_json
+from ..payload import build_request, read_json
 from ..state import console, run_with_client, state_from_ctx
 from ..context import org_for
 
@@ -24,10 +26,34 @@ operations_app = typer.Typer(
 triggers_app = typer.Typer(help="Connector trigger list and detail commands.")
 
 
-# The installed auth configs, memoized per client for the life of one command.
-# Resolution consults them up to twice (once to classify a positional, once to
-# resolve it), and that should still cost one request, not two.
-_AUTH_CONFIG_CACHE: dict[int, list[dict]] = {}
+# The installed auth configs, memoized on the client for the life of one
+# command. Resolution consults them up to twice (once to classify a positional,
+# once to resolve it), and that should still cost one request, not two.
+#
+# On the client, not in a module-level map. This was `dict[int, ...]` keyed on
+# `id(client)`, which is an address, and addresses are reused: CPython hands a
+# freshly allocated object the address a just-freed one had, reliably enough
+# that a loop allocating the same type hits it on the first attempt. So a new
+# client read a dead client's listing -- and a listing that had *errored*, which
+# is cached as None, became "No connectors are installed in this organization"
+# for a client that would have answered perfectly well. It surfaced as one CI
+# failure that reproduced on Linux and not on macOS, because whether the address
+# is reused depends on the allocator's state and nothing in this file.
+#
+# A weak-keyed map fixes the aliasing but not the shape of the problem: it
+# declines, silently, to memoize anything that is not weak-referenceable, and
+# `types.SimpleNamespace` -- what every fake client in this suite is -- is
+# exactly that. The memo would have been live in production and absent under
+# test, which is the arrangement where a test proves the least.
+#
+# An attribute is bound to the client's own lifetime, so there is no address to
+# collide on, nothing retained after the client is gone, and no global to reset
+# between tests.
+_AUTH_CONFIG_MEMO = "_lemma_auth_config_memo"
+
+# `None` is a meaningful memoized value here -- "we asked and could not find
+# out" -- so absence needs its own marker.
+_NOT_CACHED = object()
 
 
 def _auth_config_items(client: Any) -> list[dict] | None:
@@ -41,9 +67,9 @@ def _auth_config_items(client: Any) -> list[dict] | None:
     ids. Collapsing them routed `search "send email"` into a request for an
     install literally named "send email".
     """
-    key = id(client)
-    if key in _AUTH_CONFIG_CACHE:
-        return _AUTH_CONFIG_CACHE[key]
+    memoized = getattr(client, _AUTH_CONFIG_MEMO, _NOT_CACHED)
+    if memoized is not _NOT_CACHED:
+        return memoized  # type: ignore[return-value]
     try:
         data = to_plain(client.connectors.auth_configs.list(limit=200))
     except Exception:  # noqa: BLE001 — resolution degrades, never blocks
@@ -54,7 +80,12 @@ def _auth_config_items(client: Any) -> list[dict] | None:
         items = [item for item in data.get("items", []) if isinstance(item, dict)]
     else:
         items = None
-    _AUTH_CONFIG_CACHE[key] = items
+    try:
+        setattr(client, _AUTH_CONFIG_MEMO, items)
+    except AttributeError, TypeError:
+        # A client that refuses attributes (`__slots__`) still gets the right
+        # answer; only the memoization is lost.
+        pass
     return items
 
 
@@ -121,7 +152,8 @@ def _resolve_auth_config(client: Any, selector: str | None) -> str:
     by_connector = [
         item
         for item in items
-        if str(item.get("connector_id") or item.get("app_id") or "").casefold() == needle
+        if str(item.get("connector_id") or item.get("app_id") or "").casefold()
+        == needle
     ]
     if by_connector:
         preferred = next(
@@ -198,7 +230,9 @@ def _strip_body_fields(obj: Any) -> Any:
             if not (
                 isinstance(v, str)
                 and len(v) > 500
-                and any(tag in v.lower() for tag in ("<html", "<div", "<table", "<body"))
+                and any(
+                    tag in v.lower() for tag in ("<html", "<div", "<table", "<body")
+                )
             )
         }
     if isinstance(obj, list):
@@ -412,7 +446,7 @@ def create_account(
         lambda client, s: (
             client.connectors.accounts.create(
                 auth_config or auth_config_id or "",
-                AccountCreateSchema.from_dict(request_data),
+                build_request(AccountCreateSchema, request_data, context="account"),
             )
             if hasattr(client.connectors, "accounts")
             else client.connectors.create_account(
@@ -602,7 +636,9 @@ def refresh_auth_config_operations(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, _s: client.connectors.auth_configs.refresh_operations(auth_config),
+        lambda client, _s: client.connectors.auth_configs.refresh_operations(
+            auth_config
+        ),
     )
     emit(state, result if result is not None else {"ok": True})
 
@@ -638,7 +674,9 @@ def _search_operations(
     client: Any, state: Any, auth_config: str, query: str | None, limit: int
 ) -> Any:
     if hasattr(client.connectors, "operations"):
-        return client.connectors.operations.search(auth_config, query=query, limit=limit)
+        return client.connectors.operations.search(
+            auth_config, query=query, limit=limit
+        )
     return client.connectors.search_operations(
         auth_config,
         organization_id=org_for(client, state),
@@ -647,7 +685,9 @@ def _search_operations(
     )
 
 
-def _operation_batch(client: Any, state: Any, auth_config: str, names: list[str]) -> Any:
+def _operation_batch(
+    client: Any, state: Any, auth_config: str, names: list[str]
+) -> Any:
     if hasattr(client.connectors, "operations"):
         return client.connectors.operations.batch(auth_config, names)
     return client.connectors.get_operation_details_batch(
@@ -1027,7 +1067,9 @@ def get_trigger(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _get_trigger(client, s, auth_config=auth_config, trigger=trigger),
+        lambda client, s: _get_trigger(
+            client, s, auth_config=auth_config, trigger=trigger
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -1091,7 +1133,7 @@ def _render_overview(rows: list[dict]) -> None:
     console.print(view)
     console.print(
         "[dim]Pass the Auth Config name to operations/triggers, e.g. "
-        "`lemma connectors operations search <auth-config> \"<query>\"`.[/dim]"
+        '`lemma connectors operations search <auth-config> "<query>"`.[/dim]'
     )
 
 
@@ -1101,18 +1143,63 @@ def _render_overview(rows: list[dict]) -> None:
 # it. Used to bias resolution and to gate execution of an inferred write.
 _MUTATING_OP_TOKENS = frozenset(
     {
-        "add", "append", "archive", "assign", "cancel", "create", "delete",
-        "disable", "draft", "enable", "forward", "insert", "invite", "label",
-        "modify", "move", "patch", "post", "publish", "put", "remove", "rename",
-        "reply", "send", "set", "share", "star", "trash", "unarchive", "update",
-        "upload", "upsert", "write",
+        "add",
+        "append",
+        "archive",
+        "assign",
+        "cancel",
+        "create",
+        "delete",
+        "disable",
+        "draft",
+        "enable",
+        "forward",
+        "insert",
+        "invite",
+        "label",
+        "modify",
+        "move",
+        "patch",
+        "post",
+        "publish",
+        "put",
+        "remove",
+        "rename",
+        "reply",
+        "send",
+        "set",
+        "share",
+        "star",
+        "trash",
+        "unarchive",
+        "update",
+        "upload",
+        "upsert",
+        "write",
     }
 )
 _READ_INTENT_TOKENS = frozenset(
     {
-        "browse", "check", "download", "fetch", "find", "get", "inspect", "list",
-        "load", "look", "read", "recent", "retrieve", "review", "search", "see",
-        "show", "summarize", "summarise", "view",
+        "browse",
+        "check",
+        "download",
+        "fetch",
+        "find",
+        "get",
+        "inspect",
+        "list",
+        "load",
+        "look",
+        "read",
+        "recent",
+        "retrieve",
+        "review",
+        "search",
+        "see",
+        "show",
+        "summarize",
+        "summarise",
+        "view",
     }
 )
 
@@ -1160,9 +1247,12 @@ def _resolve_operation(
     except Exception:  # noqa: BLE001 — an unknown id just means "search instead"
         pass
 
-    hits = to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
-        "items"
-    ) or []
+    hits = (
+        to_plain(_search_operations(client, state, auth_config, selector, 5)).get(
+            "items"
+        )
+        or []
+    )
     if not hits:
         raise typer.BadParameter(
             f"No operation on '{auth_config}' matches '{selector}'. Browse them "
@@ -1273,9 +1363,7 @@ def run_connector_operation(
                     err=True,
                 )
             if required and not gave_payload and not dry_run:
-                typer.echo(
-                    f"{name} needs input: {', '.join(required)}", err=True
-                )
+                typer.echo(f"{name} needs input: {', '.join(required)}", err=True)
             typer.echo(
                 f"next: lemma connectors run {connector} {name} -d '{{...}}'",
                 err=True,
@@ -1438,6 +1526,7 @@ def describe_connector(
         try:
             from rich.console import Console
             from rich.markdown import Markdown
+
             Console().print(Markdown(markdown))
         except ImportError:
             typer.echo(markdown)

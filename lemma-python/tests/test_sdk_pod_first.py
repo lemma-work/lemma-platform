@@ -7,6 +7,9 @@ import pytest
 
 from lemma_sdk import Lemma, Pod
 from lemma_sdk.errors import LemmaAPIError, LemmaConfigError
+from lemma_sdk.openapi_client.models.datastore_count_response import (
+    DatastoreCountResponse,
+)
 from lemma_sdk.openapi_client.models.function_run_response import FunctionRunResponse
 from lemma_sdk.openapi_client.models.operation_execution_response import (
     OperationExecutionResponse,
@@ -14,6 +17,7 @@ from lemma_sdk.openapi_client.models.operation_execution_response import (
 from lemma_sdk.openapi_client.models.record_create_response_record_create import (
     RecordCreateResponseRecordCreate,
 )
+from lemma_sdk.openapi_client.models.record_list_response import RecordListResponse
 from lemma_sdk.openapi_client.models.schedule_run_response import ScheduleRunResponse
 from lemma_sdk.transport import LemmaTransport
 
@@ -37,6 +41,12 @@ class StubTransport:
             return RecordCreateResponseRecordCreate.from_dict(
                 {"id": "rec-1", **body["data"]}
             )
+        if ".record_bulk_" in endpoint.__name__:
+            # Every bulk endpoint answers with an affected-row count. Without
+            # this branch the stub returns None and the facades all report 0,
+            # which would let a broken delegation pass.
+            counted = body.get("records") or body.get("record_ids") or []
+            return DatastoreCountResponse.from_dict({"count": len(counted)})
         if endpoint.__name__.endswith("function_run"):
             return FunctionRunResponse.from_dict(
                 {
@@ -85,7 +95,11 @@ class StubTransport:
 
 def test_pod_table_create_binds_pod_and_returns_typed_record():
     transport = StubTransport()
-    lemma = Lemma(token="token", base_url="https://api.example.test", org_id="11111111-1111-4111-8111-111111111111")
+    lemma = Lemma(
+        token="token",
+        base_url="https://api.example.test",
+        org_id="11111111-1111-4111-8111-111111111111",
+    )
     lemma._transport = transport
     pod = lemma.pod("22222222-2222-4222-8222-222222222222")
 
@@ -102,6 +116,83 @@ def test_pod_table_create_binds_pod_and_returns_typed_record():
         "body_model": "CreateRecordRequest",
         "kwargs": {},
     }
+
+
+def _bound_pod(transport: StubTransport) -> Pod:
+    lemma = Lemma(
+        token="token",
+        base_url="https://api.example.test",
+        org_id="11111111-1111-4111-8111-111111111111",
+    )
+    lemma._transport = transport
+    return lemma.pod("22222222-2222-4222-8222-222222222222")
+
+
+def test_pod_table_bulk_create_writes_every_row_in_one_call():
+    """The reason this method exists.
+
+    Without it the only batch path was ``pod.records.bulk_create``, so a caller
+    holding a table handle wrote N rows as N ``create`` calls -- N round trips
+    from wherever the code runs back to the API. A benchmark probe did exactly
+    that and spent 17 of its 17.3 seconds on them.
+    """
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+    rows = [{"title": f"row-{index}"} for index in range(50)]
+
+    count = pod.table("tickets").bulk_create(rows)
+
+    assert count == 50
+    assert len(transport.calls) == 1, "50 rows must cost one round trip, not 50"
+    assert transport.calls[0] == {
+        "endpoint": "lemma_sdk.openapi_client.api.records.record_bulk_create",
+        "path_args": (UUID("22222222-2222-4222-8222-222222222222"), "tickets"),
+        "body": {"records": rows, "upsert": False},
+        "body_model": "BulkCreateRecordsRequest",
+        "kwargs": {},
+    }
+
+
+def test_pod_table_bulk_create_forwards_upsert():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    pod.table("tickets").bulk_create([{"id": "rec-1", "title": "again"}], upsert=True)
+
+    assert transport.calls[0]["body"]["upsert"] is True
+
+
+def test_pod_table_bulk_update_binds_the_table_it_was_opened_on():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    count = pod.table("tickets").bulk_update(
+        [{"id": "rec-1", "status": "resolved"}, {"id": "rec-2", "status": "open"}]
+    )
+
+    assert count == 2
+    assert (
+        transport.calls[0]["endpoint"]
+        == "lemma_sdk.openapi_client.api.records.record_bulk_update"
+    )
+    assert transport.calls[0]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        "tickets",
+    )
+
+
+def test_pod_table_bulk_delete_binds_the_table_it_was_opened_on():
+    transport = StubTransport()
+    pod = _bound_pod(transport)
+
+    count = pod.table("tickets").bulk_delete(["rec-1", "rec-2", "rec-3"])
+
+    assert count == 3
+    assert (
+        transport.calls[0]["endpoint"]
+        == "lemma_sdk.openapi_client.api.records.record_bulk_delete"
+    )
+    assert transport.calls[0]["body"] == {"record_ids": ["rec-1", "rec-2", "rec-3"]}
 
 
 def test_pod_records_list_serializes_structured_filter_and_sort_clauses():
@@ -270,11 +361,7 @@ def test_pod_surfaces_use_generated_models():
             "default_agent_name": "triage",
             "credential_mode": "SYSTEM",
             "account_id": "33333333-3333-4333-8333-333333333333",
-            "config": {
-                "channels": [
-                    {"channel_id": "C123", "agent_name": "triage"}
-                ]
-            },
+            "config": {"channels": [{"channel_id": "C123", "agent_name": "triage"}]},
         }
     )
     assert transport.calls[0]["endpoint"].endswith("agent_surface_create")
@@ -312,15 +399,10 @@ def test_pod_surfaces_use_generated_models():
     assert transport.calls[3]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
     )
-    assert (
-        transport.calls[3]["body_model"]
-        == "TelegramManagedBotSetupRequest"
-    )
+    assert transport.calls[3]["body_model"] == "TelegramManagedBotSetupRequest"
 
     pod.surfaces.get_telegram_bot_setup("setup-123")
-    assert transport.calls[4]["endpoint"].endswith(
-        "agent_surface_telegram_managed_get"
-    )
+    assert transport.calls[4]["endpoint"].endswith("agent_surface_telegram_managed_get")
     assert transport.calls[4]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
         "setup-123",
@@ -360,7 +442,7 @@ def test_pod_from_env_requires_pod_id(monkeypatch, tmp_path):
 
 
 def test_transport_raises_typed_api_error():
-    error = LemmaTransport._error_from_response(
+    error = LemmaTransport.error_from_response(
         LemmaTransport.__new__(LemmaTransport),
         400,
         None,
@@ -371,3 +453,86 @@ def test_transport_raises_typed_api_error():
     assert error.status_code == 400
     assert error.code == "BAD"
     assert error.details == {"field": "x"}
+
+
+class PagedRecordTransport:
+    """Answers ``record_list`` with fixed-size pages, the way the API does."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, page_size: int) -> None:
+        self._rows = rows
+        self._page_size = page_size
+        self.calls: list[dict[str, Any]] = []
+        self.generated = object()
+
+    def call(self, endpoint, *path_args, body=None, body_model=None, **kwargs):
+        self.calls.append({"endpoint": endpoint.__name__, "kwargs": kwargs})
+        token = kwargs.get("page_token")
+        start = int(token) if isinstance(token, str) and token.isdigit() else 0
+        page = self._rows[start : start + self._page_size]
+        nxt = start + self._page_size
+        return RecordListResponse.from_dict(
+            {
+                "items": page,
+                "limit": self._page_size,
+                "next_page_token": str(nxt) if nxt < len(self._rows) else None,
+            }
+        )
+
+    def close(self) -> None:
+        pass
+
+
+def _paged_pod(transport: PagedRecordTransport) -> Pod:
+    pod = Pod(
+        "22222222-2222-4222-8222-222222222222",
+        org_id="11111111-1111-4111-8111-111111111111",
+        token="token",
+        base_url="https://api.example.test",
+    )
+    pod._transport = transport
+    pod.records._transport = transport
+    return pod
+
+
+def test_records_list_all_pages_to_exhaustion():
+    rows = [{"id": f"rec-{n}"} for n in range(7)]
+    transport = PagedRecordTransport(rows, page_size=3)
+    pod = _paged_pod(transport)
+
+    everything = pod.records.list_all("tickets", page_size=3)
+
+    assert [row["id"] for row in everything] == [row["id"] for row in rows]
+    # 3 + 3 + 1: the last page carries no token and ends the walk.
+    assert len(transport.calls) == 3
+    assert transport.calls[0]["kwargs"]["limit"] == 3
+
+
+def test_table_list_all_is_the_same_walk_bound_to_one_table():
+    rows = [{"id": f"rec-{n}"} for n in range(5)]
+    transport = PagedRecordTransport(rows, page_size=2)
+    pod = _paged_pod(transport)
+
+    everything = pod.table("tickets").list_all()
+
+    assert len(everything) == 5
+
+
+def test_records_list_all_carries_filter_and_sort_into_every_page():
+    rows = [{"id": f"rec-{n}"} for n in range(4)]
+    transport = PagedRecordTransport(rows, page_size=2)
+    pod = _paged_pod(transport)
+
+    pod.records.list_all(
+        "tickets",
+        page_size=2,
+        filter=[{"field": "status", "op": "eq", "value": "open"}],
+        sort=[{"field": "updated_at", "direction": "desc"}],
+    )
+
+    # A predicate dropped after page one would silently widen the result set.
+    assert len(transport.calls) == 2
+    for call in transport.calls:
+        assert call["kwargs"]["filter_"] == [
+            '{"field":"status","op":"eq","value":"open"}'
+        ]
+        assert call["kwargs"]["sort"] == ['{"field":"updated_at","direction":"desc"}']

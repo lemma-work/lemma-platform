@@ -21,6 +21,11 @@ describe('normaliseRedirectUri', () => {
 
     expect(normaliseRedirectUri('/pod/p1')).toBe('https://app.lemma.work/pod/p1');
     expect(normaliseRedirectUri('https://app.lemma.work/home')).toBe('https://app.lemma.work/home');
+    // The site root, which is what Lemma Desktop sends on launch. The portal
+    // continues an existing session only when it has somewhere to go, so a
+    // null here is the difference between opening the workspace and stopping
+    // on a "Continue" button every single launch.
+    expect(normaliseRedirectUri('/')).toBe('https://app.lemma.work/');
   });
 
   it('rejects external redirects by default', async () => {

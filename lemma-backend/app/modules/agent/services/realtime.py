@@ -9,8 +9,17 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+
+#: Every token, message and terminal frame a watching client sees goes through
+#: `publish_conversation_event`. When the channel is down the user-visible
+#: symptom is "the agent never answers" while runs complete normally in the
+#: database -- and at `logger.debug`, production (LOG_LEVEL=INFO) had nothing at
+#: all to distinguish that from a quiet day. One degraded/recovered pair, which
+#: is what the volume exemption in `docs/development.md` actually permits.
+_publish_incident = DependencyIncident("agent.realtime.publish", logger=logger)
 
 
 def conversation_channel(conversation_id: UUID) -> str:
@@ -30,10 +39,13 @@ async def publish_conversation_event(
         await service.publish(conversation_channel(conversation_id), payload)
     except Exception as exc:
         logger.debug(
-            'agent.realtime.publishing_agent_realtime_event.diagnostic',
+            "agent.realtime.publishing_agent_realtime_event.diagnostic",
             conversation_id=str(conversation_id),
             error_type=type(exc).__name__,
         )
+        _publish_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _publish_incident.record_success()
 
 
 def input_added_payload(
@@ -73,12 +85,19 @@ def status_payload(
 
 
 def message_payload(
-    agent_run_id: UUID,
+    agent_run_id: UUID | None,
     message: dict[str, object],
 ) -> dict[str, object]:
+    """A message frame. Optional run id, unlike the run-scoped frames here.
+
+    A message can exist without a run -- a tool return closed by the MCP bridge
+    outside one, a superseded return replayed from an older turn. Frames are
+    routed by conversation, so those still belong on the stream; the field just
+    has nothing to say, and used to say the string ``"None"``.
+    """
     return {
         "type": "message",
-        "agent_run_id": str(agent_run_id),
+        "agent_run_id": str(agent_run_id) if agent_run_id is not None else None,
         "data": message,
     }
 

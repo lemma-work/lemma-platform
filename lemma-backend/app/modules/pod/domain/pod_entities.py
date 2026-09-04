@@ -2,7 +2,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Mapping, Optional
 from uuid import UUID
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.identity.contracts import OrganizationRole, UserEntity
@@ -127,6 +134,7 @@ class PodEntity(AggregateRoot):
                 deleted_by_user_id=getattr(actor, "user_id", None),
             )
         )
+
 
 class PodUpdateEntity(BaseModel):
     """Pod update entity."""

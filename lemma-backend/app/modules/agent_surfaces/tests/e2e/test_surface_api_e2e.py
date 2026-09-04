@@ -68,7 +68,9 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         pod_id,
         config={"type": "TELEGRAM"},
     )
-    assert default_agent_surface["agent_id"] is None
+    # A surface always has an owner; naming no agent means the assistant,
+    # whose row id is its pod's.
+    assert default_agent_surface["agent_id"] == pod_id
     assert default_agent_surface["uses_default_agent"] is True
 
     listed = await authenticated_client.get(f"/pods/{pod_id}/surfaces")
@@ -113,7 +115,9 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
         json={"default_agent_name": None},
     )
     assert reset_to_default.status_code == 200, reset_to_default.text
-    assert reset_to_default.json()["agent_id"] is None
+    # Clearing the name hands the surface back to the pod's own assistant,
+    # whose row id is the pod's -- not to nobody.
+    assert reset_to_default.json()["agent_id"] == pod_id
     assert reset_to_default.json()["uses_default_agent"] is True
 
     # Disable rides on the same PATCH via is_enabled (distinct from delete).
@@ -149,9 +153,7 @@ async def test_surface_http_lifecycle_openapi_and_no_per_surface_webhook(
 
     # The pre-creation guide works with no surface (platform-level, not
     # surface-scoped) and needs no `exists`/live-state fields.
-    teams_guide = await authenticated_client.get(
-        f"/pods/{pod_id}/surface-setup/teams"
-    )
+    teams_guide = await authenticated_client.get(f"/pods/{pod_id}/surface-setup/teams")
     assert teams_guide.status_code == 200, teams_guide.text
     assert teams_guide.json()["platform"] == "TEAMS"
     # And is a 404 on the per-surface endpoint until a Teams surface exists.
@@ -273,8 +275,6 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
             },
         },
     )
-    route_agent = await _create_agent(authenticated_client, pod_id)
-
     created = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
         json={
@@ -282,9 +282,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
             "account_id": str(account.id),
             "config": {
                 "identity": {"allowed_domains": ["Lemma.Test "]},
-                "channels": [
-                    {"channel_id": "C-ROUTED", "agent_name": route_agent["name"]}
-                ],
+                "channels": [{"channel_id": "C-ROUTED"}],
                 "dm_conversation_reset_after_hours": 6,
             },
         },
@@ -304,16 +302,11 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
-    # Routes mirror the input exactly: agent referenced by name, presence means active.
+    # A channel is a place, not a choice: the surface's one agent answers
+    # everywhere it is allowed, so a route carries no agent to mirror.
     # Channels are always mention-gated (no per-route requires_mention toggle).
-    assert set(route) == {
-        "channel_id",
-        "channel_name",
-        "agent_name",
-        "use_pod_assistant",
-    }
+    assert set(route) == {"channel_id", "channel_name"}
     assert route["channel_id"] == "C-ROUTED"
-    assert route["agent_name"] == route_agent["name"]
 
     # A partial update (only one config field) leaves identity + channels intact.
     partial = await authenticated_client.patch(
@@ -380,9 +373,7 @@ async def test_delete_surface_removes_row_provider_webhook_and_releases_account(
         f"https://api.example.test/surfaces/{surface['id']}/webhook"
     )
 
-    deleted = await authenticated_client.delete(
-        f"/pods/{pod_id}/surfaces/telegram"
-    )
+    deleted = await authenticated_client.delete(f"/pods/{pod_id}/surfaces/telegram")
     assert deleted.status_code == 204, deleted.text
 
     fetched = await authenticated_client.get(f"/pods/{pod_id}/surfaces/telegram")
@@ -679,7 +670,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     assert created.status_code == 200, created.text
 
     # Lemma's own Slack app: webhook is wired up centrally → nothing to do.
-    system_setup = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")).json()
+    system_setup = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
+    ).json()
     assert system_setup["ready"] is True
     assert system_setup["actions"] == []
 
@@ -688,7 +681,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     auth_config.config_source = "ORG_CUSTOM"
     await db_session.commit()
 
-    custom_setup = (await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")).json()
+    custom_setup = (
+        await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
+    ).json()
     assert custom_setup["ready"] is False
     assert custom_setup["status"] == "NEEDS_SETUP"
     assert {action["key"] for action in custom_setup["actions"]} == {
@@ -703,7 +698,10 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
     assert action["key"] == "slack_event_subscriptions"
     assert action["steps"]
     assert action["link"] == "https://api.slack.com/apps"
-    assert any(field["value"].endswith("/surfaces/webhooks/slack") for field in action["fields"])
+    assert any(
+        field["value"].endswith("/surfaces/webhooks/slack")
+        for field in action["fields"]
+    )
 
     auth_config.config = {
         **(auth_config.config or {}),
@@ -849,8 +847,6 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         "TEAMS",
         "WHATSAPP",
         "TELEGRAM",
-        "GMAIL",
-        "OUTLOOK",
         "RESEND",
     }
     assert by_platform["TELEGRAM"]["supported_credential_modes"] == [
@@ -883,9 +879,7 @@ async def test_available_catalog_channel_discovery_and_teams_consent_journey(
         json={"platform": "SLACK", "account_id": str(slack_account.id)},
     )
     assert slack.status_code == 200, slack.text
-    channels = await authenticated_client.get(
-        f"/pods/{pod_id}/surfaces/slack/channels"
-    )
+    channels = await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/channels")
     assert channels.status_code == 200, channels.text
     assert channels.json()["channels"] == [
         {"id": "C-SUPPORT", "name": "support", "is_member": True},
@@ -1010,3 +1004,53 @@ async def test_slack_view_submission_is_acknowledged_with_an_empty_body(
     )
     assert response.status_code == 200
     assert response.content == b""
+
+
+async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+):
+    """A surface somebody configured before GMAIL stopped being a platform.
+
+    No migration deletes these -- that is a deployment's decision, and the PR
+    that removed the platform says so. But `surface_type` is a plain string
+    column and `SurfacePlatform` is a StrEnum, so mapping the row raised a bare
+    ValueError, which is not a DomainError and so came back as a 500. And
+    `list_by_pod` maps a whole page, so the pod lost every surface it had, not
+    just this one -- along with all agent-to-human notification delivery, and
+    the owner's cross-pod list.
+    """
+    from sqlalchemy import text as sql_text
+
+    pod_id = test_pod["id"]
+    live = await _create_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "TELEGRAM"},
+        name="telegram-live",
+    )
+
+    # Written the way an older release wrote it, since nothing can create one
+    # through the API any more.
+    await db_session.execute(
+        sql_text(
+            "INSERT INTO agent_surfaces "
+            "(id, pod_id, agent_id, name, surface_type, mode, event_mode,"
+            " credential_mode, config, status, created_at, updated_at) "
+            # `agent_id` is the pod's own, which is the assistant's row id --
+            # every surface has an owner.
+            "VALUES (gen_random_uuid(), :pod_id, :pod_id, 'legacy-gmail',"
+            " 'GMAIL', 'DM', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
+            " now(), now())"
+        ),
+        {"pod_id": pod_id},
+    )
+    await db_session.commit()
+
+    listed = await authenticated_client.get(f"/pods/{pod_id}/surfaces")
+    assert listed.status_code == 200, listed.text
+    names = {item["name"] for item in listed.json()["items"]}
+    assert "telegram-live" in names, "the live surface survived the retired row"
+    assert "legacy-gmail" not in names, "and the retired one is simply absent"
+    assert live["id"] in {item["id"] for item in listed.json()["items"]}

@@ -11,7 +11,6 @@ from collections.abc import Sequence
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import structlog
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +26,7 @@ from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.workflow.infrastructure.models import WorkflowModel
+from app.core.domain.errors import BadRequestError
 
 logger = structlog.get_logger(__name__)
 
@@ -39,7 +39,12 @@ _NAME_REGISTRY = {
         FunctionModel.name,
         (),
     ),
-    ResourceType.WORKFLOW: (WorkflowModel.id, WorkflowModel.pod_id, WorkflowModel.name, ()),
+    ResourceType.WORKFLOW: (
+        WorkflowModel.id,
+        WorkflowModel.pod_id,
+        WorkflowModel.name,
+        (),
+    ),
     ResourceType.APP: (AppModel.id, AppModel.pod_id, AppModel.name, ()),
     ResourceType.DATASTORE_TABLE: (
         DatastoreTable.id,
@@ -156,8 +161,8 @@ async def resolve_resource_ids_by_names(
                 Connector.is_active.is_(True),
             )
             for connector_id in (await session.execute(stmt)).scalars():
-                resolved[(resource_type, connector_id)] = (
-                    connector_resource_id(connector_id)
+                resolved[(resource_type, connector_id)] = connector_resource_id(
+                    connector_id
                 )
             continue
         if resource_type == ResourceType.CONNECTOR_ACCOUNT:
@@ -168,13 +173,11 @@ async def resolve_resource_ids_by_names(
                 except ValueError:
                     continue
             if account_ids_by_name:
-                stmt = select(Account.id).where(
-                    Account.id.in_(account_ids_by_name)
-                )
+                stmt = select(Account.id).where(Account.id.in_(account_ids_by_name))
                 for account_id in (await session.execute(stmt)).scalars():
-                    resolved[
-                        (resource_type, account_ids_by_name[account_id])
-                    ] = account_id
+                    resolved[(resource_type, account_ids_by_name[account_id])] = (
+                        account_id
+                    )
             continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
@@ -199,12 +202,10 @@ async def resolve_resource_ids_by_names(
             resolved[(resource_type, name)] = resource_id
 
     if unsupported:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Resource type(s) do not support name-based grants: "
-                f"{', '.join(sorted(t.value for t in unsupported))}"
-            ),
+        raise BadRequestError(
+            "Resource type(s) do not support name-based grants: "
+            f"{', '.join(sorted(t.value for t in unsupported))}",
+            code="UNSUPPORTED_GRANT_RESOURCE_TYPE",
         )
     missing = sorted(
         f"{resource_type.value}:{name}"
@@ -212,9 +213,9 @@ async def resolve_resource_ids_by_names(
         if (resource_type, name) not in resolved
     )
     if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown resource name(s): {', '.join(missing)}",
+        raise BadRequestError(
+            f"Unknown resource name(s): {', '.join(missing)}",
+            code="UNKNOWN_RESOURCE_NAME",
         )
     return resolved
 

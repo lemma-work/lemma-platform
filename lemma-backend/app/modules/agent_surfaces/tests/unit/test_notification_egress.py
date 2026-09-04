@@ -87,10 +87,17 @@ def _link_for(surface: AgentSurfaceEntity) -> AgentSurfaceConversationLink:
     )
 
 
-def _email_surface() -> AgentSurfaceEntity:
+def _email_surface(pod_id: UUID | None = None) -> AgentSurfaceEntity:
+    """The pod's own mailbox, which belongs to its assistant.
+
+    `agent_id == pod_id` is not a coincidence: the assistant's row id *is* its
+    pod's, which is what lets a surface name it through an ordinary foreign key.
+    """
+    pod_id = pod_id or uuid4()
     return AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id,
+        agent_id=pod_id,
         name="resend",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
@@ -120,10 +127,27 @@ def _egress_double() -> AgentSurfaceIngressService:
     return double
 
 
-def _conversation_service(conversation_id: UUID):
-    service = AsyncMock()
-    service.create_conversation = AsyncMock(return_value=_Conversation(conversation_id))
-    return service
+#: Where `agent` publishes the conversation operations delivery calls.
+_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+
+
+@pytest.fixture(autouse=True)
+def conversations(monkeypatch):
+    """`agent`'s conversation operations, doubled where they are published.
+
+    Autouse because every delivery path here opens or continues a conversation
+    and the real operations reach a database. Doubled at their source rather
+    than on the modules that call them: they are another module's contract, not
+    a part of the unit under test.
+    """
+    operations = SimpleNamespace(
+        surface_conversation=AsyncMock(return_value=None),
+        open_surface_conversation=AsyncMock(return_value=_Conversation(uuid4())),
+        append_notification_message=AsyncMock(),
+    )
+    for name, double in vars(operations).items():
+        monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
+    return operations
 
 
 def _links():
@@ -157,7 +181,9 @@ def _thread_for(
 # ------------------------------------------------------------------- the bugs
 
 
-async def test_the_conversation_is_opened_under_the_surface_agents_name():
+async def test_the_conversation_is_opened_under_the_surface_agents_name(
+    conversations,
+):
     """Direct regression for the reported crash.
 
     ``agent_name_for_surface`` was private, and delivery called it as though it
@@ -167,11 +193,14 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name():
     surface = _email_surface()
     notification = _notification()
     conversation_id = uuid4()
+    conversations.open_surface_conversation.return_value = _Conversation(
+        conversation_id
+    )
     egress_port = _egress_double()
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 
@@ -182,7 +211,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name():
 
     assert opened == conversation_id
     egress_port.agent_name_for_surface.assert_awaited_once_with(surface)
-    _, kwargs = egress.conversation_service.create_conversation.call_args
+    _, kwargs = conversations.open_surface_conversation.call_args
     assert kwargs["agent_name"] == "Ops"
     # The recipient owns the conversation, never the asker — their reply has to
     # run under their own permissions.
@@ -210,7 +239,7 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -236,7 +265,7 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
 
 
 async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
-    """Outlook and Composio-backed Gmail reply through a message id they lack.
+    """A platform that replies through a provider message id it does not have.
 
     They are still offered as channels because ``can_cold_open`` is a property
     of email, not of the credential behind it. A clean False is what turns that
@@ -246,7 +275,7 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
     links = _links()
     egress = NotificationEgress(
         egress=_egress_double(),  # open_cold_email_thread returns None
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -274,7 +303,7 @@ async def test_no_link_is_written_when_the_send_raises():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -313,7 +342,7 @@ async def test_redelivering_the_same_notification_reuses_its_thread():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(uuid4()),
+        uow=AsyncMock(),
         conversation_link_repository=links,
     )
 
@@ -342,7 +371,7 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 
     egress = NotificationEgress(
         egress=egress_port,
-        conversation_service=_conversation_service(conversation_id),
+        uow=AsyncMock(),
         conversation_link_repository=_links(),
     )
 
@@ -397,7 +426,9 @@ def _notification_service(
     # surface into a deliverable channel and makes "they never messaged the bot"
     # untestable.
     external_users = create_autospec(ExternalSurfaceUserRepository, instance=True)
-    external_users.get_by_resolved_user.return_value = external_user
+    external_users.list_by_resolved_users.return_value = (
+        [external_user] if external_user is not None else []
+    )
 
     return NotificationService(
         uow=AsyncMock(),
@@ -405,7 +436,6 @@ def _notification_service(
         surface_repository=surface_repo,
         conversation_link_repository=_links(),
         external_user_repository=external_users,
-        conversation_service=_conversation_service(uuid4()),
         ingress_service=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
@@ -481,8 +511,11 @@ async def test_the_pod_assistant_gets_a_mailbox_even_when_agents_have_theirs(
     # Its own, not one borrowed from a named agent: sending from another agent's
     # bot puts the wrong name on the message.
     assert [c.surface.id for c in channels] == [assistant_mailbox.id]
-    _, agent_id, _ = provisioner.await_args.args
-    assert agent_id is None
+    # Named by its row's id, which is its pod's -- callers used to say "the
+    # assistant" by passing nothing, and the resolver now normalises that to
+    # the id before anything looks a surface up.
+    pod_id, agent_id, _ = provisioner.await_args.args
+    assert agent_id == pod_id
 
 
 async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
@@ -514,7 +547,7 @@ async def test_an_agent_from_before_per_agent_mailboxes_gets_one(monkeypatch):
 async def test_a_chat_only_agent_falls_back_to_email_it_does_not_yet_have(
     monkeypatch,
 ):
-    """"Email always works" was not true when the agent had no mailbox.
+    """ "Email always works" was not true when the agent had no mailbox.
 
     An agent whose only surface is a Slack bot the recipient never wrote to
     could reach nobody, and reported NEVER_INTERACTED — which reads as the
@@ -621,16 +654,20 @@ async def test_a_failed_provision_is_undeliverable_not_an_exception(monkeypatch)
 # --------------------------------------------------- routing follows the agent
 
 
-def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM):
-    surface = AgentSurfaceEntity(
+def _surface_for(agent_id, platform=SurfacePlatform.TELEGRAM, *, pod_id=None):
+    """One surface, owned by one agent -- there is no other kind.
+
+    ``pod_id`` matters when the owner is meant to be the pod's own assistant,
+    whose row id *is* its pod's: pass the same value for both.
+    """
+    return AgentSurfaceEntity(
         id=uuid4(),
-        pod_id=uuid4(),
+        pod_id=pod_id or uuid4(),
         name=platform.value.lower(),
         surface_type=platform,
         config=SurfaceConfig(),
         agent_id=agent_id,
     )
-    return surface
 
 
 async def test_an_agent_never_reaches_out_through_another_agents_bot():
@@ -694,15 +731,19 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     Inbound routing still honours a user's default surface — that question is
     genuinely "which of our surfaces did this person mean to talk to".
     """
-    service = _notification_service(surfaces=(_surface_for(None, SurfacePlatform.RESEND),))
+    pod_id = uuid4()
+    service = _notification_service(
+        surfaces=(_surface_for(pod_id, SurfacePlatform.RESEND, pod_id=pod_id),)
+    )
 
     # Autospecced against the Protocol: reading a method it no longer declares
     # raises, so this is what proves the lookup is gone rather than just unused.
     with pytest.raises(AttributeError):
-        service.membership.get_user_default_surface_ids
+        # The expression is the assertion: the attribute must not exist.
+        service.membership.get_user_default_surface_ids  # noqa: B018
 
     channels, _ = await service.resolve_channels(
-        pod_id=uuid4(), recipient_user_id=uuid4(), actor_agent_id=None
+        pod_id=pod_id, recipient_user_id=uuid4(), actor_agent_id=None
     )
 
     assert channels, "pod-assistant delivery still resolves without preferences"
@@ -741,7 +782,9 @@ async def test_the_daily_email_cap_stops_the_send_but_not_the_notification(
     service.ingress.open_cold_email_thread.assert_not_awaited()
 
 
-async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
+async def test_a_chat_channel_does_not_spend_the_email_budget(
+    monkeypatch, conversations
+):
     """The budget exists to protect one shared domain.
 
     A notification delivered on Slack costs that domain nothing, so charging it
@@ -758,7 +801,7 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123"),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
@@ -766,8 +809,8 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(monkeypatch):
     )
     # A live conversation on that thread, so delivery continues it rather than
     # opening a new one — the DM-reset check compares real timestamps.
-    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
-        return_value=_Conversation(link.conversation_id)
+    conversations.surface_conversation.return_value = _Conversation(
+        link.conversation_id
     )
     service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=redis)
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
@@ -792,18 +835,22 @@ async def test_the_pod_assistant_mailbox_is_named_for_the_pod_not_the_assistant(
     """
     _email_configured(monkeypatch)
 
-    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    pod_id = uuid4()
+    provisioner = AsyncMock(return_value=(_email_surface(pod_id), None))
     service = _notification_service(provisioner=provisioner, surfaces=())
 
     await service.resolve_channels(
-        pod_id=uuid4(),
+        pod_id=pod_id,
         recipient_user_id=uuid4(),
-        actor_agent_id=None,
+        actor_agent_id=pod_id,
         agent_name="pod_default",
     )
 
-    _, agent_id, agent_name = provisioner.await_args.args
-    assert agent_id is None
+    pod_id, agent_id, agent_name = provisioner.await_args.args
+    assert agent_id == pod_id
+    # The name is what the address is built from, and the assistant's stored
+    # name is `pod_default` -- an internal identifier. None keeps the mailbox
+    # the pod's own: `acme@`, not `pod-default.acme@`.
     assert agent_name is None
 
 
@@ -827,7 +874,9 @@ async def test_a_named_agent_still_gets_its_own_name_in_the_address(monkeypatch)
     assert agent_name == "curator"
 
 
-async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
+async def test_the_connection_is_released_before_the_platform_send(
+    monkeypatch, conversations
+):
     """Commit has to happen before the send, not after the whole delivery.
 
     Two things ride on the ordering. "Persist before send" only means anything
@@ -845,14 +894,14 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     chat_surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(chat_surface,),
-        external_user=SimpleNamespace(external_user_id="U123"),
+        external_user=SimpleNamespace(external_user_id="U123", tenant_id=None),
     )
     link = _link_for(chat_surface)
     service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
         return_value=link
     )
-    service.conversation_service.conversation_repository.get_conversation = AsyncMock(
-        return_value=_Conversation(link.conversation_id)
+    conversations.surface_conversation.return_value = _Conversation(
+        link.conversation_id
     )
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
 
@@ -874,3 +923,322 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
     assert order.index("commit") < order.index("send"), (
         f"connection held across the send; call order was {order}"
     )
+
+
+async def test_a_cold_open_carries_both_names_to_the_platform():
+    """Email puts the attribution in the From line, so it has to travel.
+
+    ``attribute()`` writes "On behalf of Deepak" into the body, which is
+    invisible until the message is opened — and it never names the agent, so the
+    From line is the only place "Priya" appears at all. The sender column is
+    what a person scans in a list, and it named the deployment rather than the
+    agent.
+    """
+    surface = _email_surface()
+    notification = _notification()
+    conversation_id = uuid4()
+    seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+
+    egress_port = _egress_double()
+    egress_port.open_cold_email_thread.return_value = _thread_for(
+        surface, seed, "bob@example.com"
+    )
+
+    egress = NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, email_address="bob@example.com"),
+        conversation_id=conversation_id,
+        notification=notification,
+        message="What did you ship?",
+        agent_name="Priya",
+        actor_display_name="Deepak Jha",
+    )
+
+    metadata = egress_port.open_cold_email_thread.await_args.kwargs["metadata"]
+    assert metadata["agent_display_name"] == "Priya"
+    assert metadata["actor_display_name"] == "Deepak Jha"
+
+
+async def test_an_unknown_agent_name_is_absent_rather_than_None():
+    """A present key beats ``setdefault``, and would unname every chat bot.
+
+    ``_egress_metadata_with_agent_name`` fills ``agent_display_name`` from the
+    surface with ``setdefault``, so writing an explicit None here does not mean
+    "we don't know" — it wins, and the reply goes out with no name and no icon
+    on a platform that had both.
+    """
+    surface = _email_surface()
+    link = _link_for(surface)
+    conversation_id = uuid4()
+    egress_port = _egress_double()
+
+    egress = NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        conversation_link_repository=_links(),
+    )
+
+    await egress.send(
+        DeliveryChannel(surface=surface, external_user_id="U123", link=link),
+        conversation_id=conversation_id,
+        notification=_notification(),
+        message="What did you ship?",
+        agent_name=None,
+        actor_display_name=None,
+    )
+
+    kwargs = egress_port.send_agent_message_for_conversation.await_args.kwargs
+    assert "agent_display_name" not in kwargs["metadata"]
+    assert "actor_display_name" not in kwargs["metadata"]
+
+
+# ------------------------------------------- the channel the agent chose
+
+
+def _identity(external_user_id: str, *, user_id=None):
+    """One cached platform identity. ``tenant_id`` is what scopes it."""
+    return SimpleNamespace(
+        external_user_id=external_user_id, tenant_id=None, resolved_user_id=user_id
+    )
+
+
+async def test_a_named_channel_beats_the_ranking_that_would_have_won():
+    """The whole point of the argument: the agent knows something we do not.
+
+    Left alone, chat outranks email and the Telegram thread wins — the right
+    default, because it is where they last spoke to us. An agent told "she is
+    off this week, put it in writing" has a reason that no signal in the
+    database carries, so naming a channel has to beat the ranking outright
+    rather than nudge it.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    service = _notification_service(
+        surfaces=(chat, mailbox), external_user=_identity("U123")
+    )
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        return_value=_link_for(chat)
+    )
+    recipient = uuid4()
+
+    by_default, _ = await service.resolve_channels(
+        pod_id=chat.pod_id, recipient_user_id=recipient, actor_agent_id=agent_id
+    )
+    chosen, reason = await service.resolve_channels(
+        pod_id=chat.pod_id,
+        recipient_user_id=recipient,
+        actor_agent_id=agent_id,
+        channel="email",
+    )
+
+    assert [c.surface.id for c in by_default] == [chat.id, mailbox.id]
+    assert reason == ""
+    assert [c.surface.id for c in chosen] == [mailbox.id]
+
+
+async def test_an_unreachable_named_channel_is_refused_not_rerouted():
+    """Sending it on email anyway would be worse than not sending it.
+
+    The agent asked for Telegram for a reason it does not restate, and it never
+    finds out the message went somewhere else — it reads DELIVERED and carries
+    on. So the send stops, and the refusal names both facts the agent needs:
+    that nothing went out, and what would have worked instead.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    # Nobody has written to the bot, so there is no thread to reply into.
+    service = _notification_service(surfaces=(chat, mailbox))
+
+    channels, reason = await service.resolve_channels(
+        pod_id=chat.pod_id,
+        recipient_user_id=uuid4(),
+        actor_agent_id=agent_id,
+        channel="telegram",
+    )
+
+    assert channels == []
+    assert "have not messaged this agent on Telegram" in reason
+    assert "Nothing was sent elsewhere" in reason
+    assert "email would reach them" in reason
+
+
+async def test_asking_for_a_channel_the_agent_does_not_have_says_so():
+    """A different fix to a different person: connect one, or pick another."""
+    agent_id = uuid4()
+    service = _notification_service(
+        surfaces=(_surface_for(agent_id, SurfacePlatform.RESEND),)
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=agent_id,
+        channel="slack",
+    )
+
+    assert channels == []
+    assert "no Slack surface" in reason
+    assert "email would reach them" in reason
+
+
+async def test_asking_for_chat_mints_no_mailbox_but_still_offers_one(monkeypatch):
+    """Two halves of the same judgement about a pod that has no surface yet.
+
+    A mailbox is what "reach them somehow" falls back to. Minting one to answer
+    "reach them on Telegram" hands out an address nobody asked for, and an
+    address handed out is one that has to keep working forever. But the refusal
+    still has to name email, because dropping the argument *would* mint one and
+    the message would go — an agent told nothing can reach them gives up on
+    someone who was one argument away.
+    """
+    _email_configured(monkeypatch)
+    provisioner = AsyncMock(return_value=(_email_surface(), None))
+    service = _notification_service(provisioner=provisioner, surfaces=())
+
+    channels, reason = await service.resolve_channels(
+        pod_id=uuid4(),
+        recipient_user_id=uuid4(),
+        actor_agent_id=uuid4(),
+        channel="telegram",
+    )
+
+    assert channels == []
+    provisioner.assert_not_awaited()
+    assert "no Telegram surface" in reason
+    assert "email would reach them" in reason
+
+
+async def test_the_workspace_they_actually_use_is_found_among_their_identities():
+    """A pod with two Slack workspaces had one of them permanently unreachable.
+
+    Slack ids are per workspace, so this person is two rows, and delivery used
+    to take whichever was seen most recently and look for a thread under it. On
+    the other surface that id matches nothing — so the surface they are actively
+    chatting on yielded no channel, and the reason handed back said they had
+    never messaged us.
+    """
+    agent_id = uuid4()
+    seen_last = _surface_for(agent_id, SurfacePlatform.SLACK)
+    where_they_talk = _surface_for(agent_id, SurfacePlatform.SLACK)
+    service = _notification_service(surfaces=(seen_last, where_they_talk))
+    service.channels.external_users.list_by_resolved_users = AsyncMock(
+        # Freshest first, which is the order the repository returns.
+        return_value=[_identity("U-OTHER"), _identity("U-THEIRS")]
+    )
+    thread = AgentSurfaceConversationLink(
+        surface_id=where_they_talk.id,
+        conversation_id=uuid4(),
+        platform="SLACK",
+        external_thread_id="C1",
+        external_user_id="U-THEIRS",
+        last_inbound_at=datetime.now(timezone.utc),
+    )
+    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
+        side_effect=lambda *, surface_id, external_user_id: (
+            thread
+            if surface_id == where_they_talk.id and external_user_id == "U-THEIRS"
+            else None
+        )
+    )
+
+    channels, reason = await service.resolve_channels(
+        pod_id=seen_last.pod_id, recipient_user_id=uuid4(), actor_agent_id=agent_id
+    )
+
+    assert reason == ""
+    assert [c.surface.id for c in channels] == [where_they_talk.id]
+
+
+async def test_reachability_says_what_the_agent_can_choose_between():
+    """What `list_pod_members` shows, so that choosing is a read not a guess.
+
+    Per person, because reachability is per person: the same agent can hold a
+    Telegram thread with one colleague and nothing but an address for another.
+    """
+    agent_id = uuid4()
+    chat = _surface_for(agent_id, SurfacePlatform.TELEGRAM)
+    mailbox = _surface_for(agent_id, SurfacePlatform.RESEND)
+    priya, bob = uuid4(), uuid4()
+    service = _notification_service(surfaces=(chat, mailbox))
+    service.channels.external_users.list_by_resolved_users = AsyncMock(
+        return_value=[_identity("U-PRIYA", user_id=priya)]
+    )
+    service.channels.links.list_latest_by_surface_and_external_users = AsyncMock(
+        return_value={"U-PRIYA": _link_for(chat)}
+    )
+
+    reach = await service.reachable_channels(
+        pod_id=chat.pod_id,
+        recipients={priya: "priya@example.com", bob: None},
+        actor_agent_id=agent_id,
+    )
+
+    assert reach == {priya: ["email", "telegram"], bob: []}
+
+
+# ------------------------------------------------- what the header ends up saying
+
+
+async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user_id):
+    """Deliver one cold email and hand back the body that went out."""
+    _email_configured(monkeypatch)
+
+    surface = _email_surface()
+    service = _notification_service(surfaces=(surface,))
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+    service.membership.get_user_email.return_value = "bob@example.com"
+
+    notification = _notification(
+        pod_id=surface.pod_id,
+        recipient_user_id=recipient_user_id,
+        actor_user_id=actor_user_id,
+    )
+    service.ingress.open_cold_email_thread.return_value = _thread_for(
+        surface,
+        cold_thread_seed_id(notification_id=notification.id, surface=surface),
+        "bob@example.com",
+    )
+
+    await service.deliver(
+        notification, agent_name="Priya", actor_display_name="Deepak Jha"
+    )
+    return service.ingress.open_cold_email_thread.await_args.kwargs
+
+
+async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
+    """ "On behalf of Deepak" told Deepak nothing, and read as a third party.
+
+    The header exists to resolve one ambiguity: under a bot you trust, whose
+    authority is this? When the reader *is* that authority there is nothing to
+    resolve. The From line still names them -- an inbox list has to say
+    something, and their own name is the true thing to say.
+    """
+    same_person = uuid4()
+    kwargs = await _deliver_and_read_header(
+        monkeypatch, actor_user_id=same_person, recipient_user_id=same_person
+    )
+
+    assert kwargs["message"] == "What did you ship yesterday?"
+    assert kwargs["metadata"]["actor_display_name"] == "Deepak Jha"
+
+
+async def test_a_colleagues_authority_is_still_named(monkeypatch):
+    """The phishing case, and the reason the line is not simply deleted.
+
+    One bot, one name, one avatar: an agent acting for Deepak and the same agent
+    acting for someone else are indistinguishable without this.
+    """
+    kwargs = await _deliver_and_read_header(
+        monkeypatch, actor_user_id=uuid4(), recipient_user_id=uuid4()
+    )
+
+    assert kwargs["message"].startswith("On behalf of Deepak Jha:")
+    # Never the agent: the bot it arrives from is already the answer to that.
+    assert "Priya" not in kwargs["message"]

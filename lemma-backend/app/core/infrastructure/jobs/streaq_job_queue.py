@@ -31,6 +31,36 @@ def job_context_key(job_id: str) -> str:
     return f"{_JOB_CONTEXT_PREFIX}{job_id}"
 
 
+async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
+    """Best-effort read of the rolling-deployment-compatible sidecar.
+
+    Beside the ``enqueue`` that writes it and the key builder it is written
+    under, so the two halves of one Redis key cannot drift apart in separate
+    files.
+    """
+    try:
+        raw = await redis.get(job_context_key(job_id))
+        parsed = json.loads(raw) if raw else {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in parsed.items()
+            if isinstance(key, str) and isinstance(value, str | int)
+        }
+    except Exception:
+        # Still best-effort -- correlation is never worth failing a job over --
+        # but not silent. A sidecar that has stopped being readable makes every
+        # job in the deployment lose its parent trace, and the symptom of that
+        # is an absence, which nobody notices.
+        logger.warning(
+            "infrastructure.streaq_job_queue.job_context_read_failed.degraded",
+            job_id=job_id,
+            exc_info=True,
+        )
+        return {}
+
+
 def create_streaq_client(*, queue_name: str = "default") -> Worker[None]:
     """Create a lightweight streaq client for enqueuing and aborting tasks."""
     return Worker(
@@ -142,11 +172,7 @@ class SharedStreaqJobQueue(JobQueuePort):
         ttl_seconds = _JOB_CONTEXT_MIN_TTL_SECONDS
         if defer_until is not None:
             task.start(schedule=defer_until)
-            now = (
-                datetime.now(defer_until.tzinfo)
-                if defer_until.tzinfo
-                else datetime.now()
-            )
+            now = datetime.now(defer_until.tzinfo)
             ttl_seconds = max(
                 ttl_seconds,
                 int((defer_until - now).total_seconds()) + _JOB_CONTEXT_MIN_TTL_SECONDS,

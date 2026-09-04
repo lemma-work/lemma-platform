@@ -84,11 +84,19 @@ def test_normalize_function_payload_strips_server_fields():
         "input_schema": {},
         "allowed_actions": ["run"],
     }
-    assert _normalize_function_payload(function) == {"name": "hello", "code": "print('hi')"}
+    assert _normalize_function_payload(function) == {
+        "name": "hello",
+        "code": "print('hi')",
+    }
 
 
 def test_normalize_agent_payload_makes_schemas_explicit():
-    agent = {"id": "a1", "name": "helper", "instruction": "hi", "output_schema": {"x": 1}}
+    agent = {
+        "id": "a1",
+        "name": "helper",
+        "instruction": "hi",
+        "output_schema": {"x": 1},
+    }
     payload = _normalize_agent_payload(agent)
     assert payload["output_schema"] == {"x": 1}
     assert payload["input_schema"] is None
@@ -195,11 +203,15 @@ def test_normalize_app_payload_strips_server_fields():
 def test_split_and_attach_permissions_payload():
     payload = {
         "name": "helper",
-        "permissions": {"grants": [{"resource_type": "function", "resource_name": "f1"}]},
+        "permissions": {
+            "grants": [{"resource_type": "function", "resource_name": "f1"}]
+        },
     }
     resource, permissions = _split_resource_permissions_payload(payload)
     assert "permissions" not in resource
-    assert permissions == {"grants": [{"resource_type": "function", "resource_name": "f1"}]}
+    assert permissions == {
+        "grants": [{"resource_type": "function", "resource_name": "f1"}]
+    }
 
     reattached = _attach_permissions_payload(resource, permissions)
     assert reattached["permissions"] == permissions
@@ -207,7 +219,9 @@ def test_split_and_attach_permissions_payload():
     with pytest.raises(ValueError):
         _split_resource_permissions_payload({"permissions": "nope"})
     with pytest.raises(ValueError):
-        _split_resource_permissions_payload({"permissions": {"grants": [{"resource_type": "x"}]}})
+        _split_resource_permissions_payload(
+            {"permissions": {"grants": [{"resource_type": "x"}]}}
+        )
 
 
 def test_validate_function_payload_happy_path(tmp_path: Path):
@@ -248,3 +262,86 @@ def test_validate_function_payload_reports_problems(tmp_path: Path):
         tmp_path, "hello", {"code": code, "config_schema": {"type": "object"}}
     )
     assert [i.message for i in issues] == ["Missing required header #config_type_name."]
+
+
+def test_normalize_schedule_payload_drops_the_source_orgs_provider_trigger():
+    """A `provider_trigger_id` names a subscription the exporting organization
+    owns. Webhook matching applies no tenant filter, so a bundle that carried it
+    into another org produced a schedule answering to the first org's events."""
+    schedule = {
+        "name": "on_ticket",
+        "schedule_type": "WEBHOOK",
+        "connector_trigger_id": "jira_new_issue",
+        "config": {"source": "composio", "provider_trigger_id": "ti_abc123"},
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {"source": "composio"}
+    # The rest of the config is untouched.
+    assert payload["connector_trigger_id"] == "jira_new_issue"
+
+
+def test_normalize_schedule_payload_drops_the_source_orgs_installation():
+    """For a GitHub App, `installation_id` *is* the tenant filter.
+
+    Webhook matching is containment against `{source, installation_id, event}`,
+    so a bundle that carried it gave the importer schedules wired to the
+    publisher's installation -- answering to the publisher's repositories, in
+    the importer's pod. Observed on a real round trip, where the bundle asked
+    for the account as a variable and baked the installation in beside it.
+
+    It needs no carrying: the importing pod's account provisions the trigger and
+    the installation is re-derived from that account.
+    """
+    schedule = {
+        "name": "on_pull_request",
+        "schedule_type": "WEBHOOK",
+        "connector_trigger_id": "github:http:pull_request",
+        "account_id": "${on_pull_request_account}",
+        "config": {
+            "source": "github",
+            "installation_id": "158040062",
+            "event": "pull_request",
+            "actions": ["opened"],
+        },
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {
+        "source": "github",
+        "event": "pull_request",
+        "actions": ["opened"],
+    }
+    # What the author chose survives; only the tenant does not.
+    assert payload["connector_trigger_id"] == "github:http:pull_request"
+    assert payload["account_id"] == "${on_pull_request_account}"
+
+
+def test_normalize_schedule_payload_drops_both_tenant_keys_at_once():
+    """A schedule can carry both, and one surviving is as bad as both."""
+    schedule = {
+        "name": "on_issue",
+        "schedule_type": "WEBHOOK",
+        "config": {
+            "source": "github",
+            "installation_id": "158040062",
+            "provider_trigger_id": "ti_abc123",
+            "event": "issues",
+        },
+    }
+
+    payload = _normalize_schedule_payload(schedule)
+
+    assert payload["config"] == {"source": "github", "event": "issues"}
+
+
+def test_normalize_schedule_payload_leaves_a_clean_config_alone():
+    schedule = {
+        "name": "nightly",
+        "schedule_type": "TIME",
+        "config": {"cron": "0 9 * * *"},
+    }
+
+    assert _normalize_schedule_payload(schedule)["config"] == {"cron": "0 9 * * *"}

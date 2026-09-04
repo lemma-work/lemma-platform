@@ -39,9 +39,10 @@ def _test_now() -> datetime:
     return datetime.now(timezone.utc) + _CLOCK_SKEW
 
 
-
 @pytest.fixture
-async def workflow_run(authenticated_client, fixed_test_org, fixed_test_user, db_session):
+async def workflow_run(
+    authenticated_client, fixed_test_org, fixed_test_user, db_session
+):
     """A real pod, flow and run.
 
     The wait row carries foreign keys to all three, so inventing UUIDs here
@@ -66,9 +67,7 @@ async def workflow_run(authenticated_client, fixed_test_org, fixed_test_user, db
     flow = WorkflowModel(id=uuid4(), pod_id=pod_id, name=f"flow-{uuid4().hex[:6]}")
     db_session.add(flow)
     await db_session.flush()
-    run = WorkflowRunModel(
-        id=uuid4(), flow_id=flow.id, pod_id=pod_id, user_id=user_id
-    )
+    run = WorkflowRunModel(id=uuid4(), flow_id=flow.id, pod_id=pod_id, user_id=user_id)
     db_session.add(run)
     await db_session.commit()
     return run.id, flow.id, pod_id
@@ -94,7 +93,9 @@ async def _insert_wait(session, workflow_run, *, due_at, lease_until=None):
     return wait.id, wait.external_ref
 
 
-async def test_a_due_timer_is_claimed_and_leased(db_manager, db_session, workflow_run) -> None:
+async def test_a_due_timer_is_claimed_and_leased(
+    db_manager, db_session, workflow_run
+) -> None:
     now = _test_now()
     wait_id, external_ref = await _insert_wait(
         db_session, workflow_run, due_at=now - timedelta(seconds=5)
@@ -158,7 +159,9 @@ async def test_an_expired_lease_lets_the_timer_be_retried(
     assert external_ref in [str(c.timer_id) for c in claimed]
 
 
-async def test_a_timer_that_is_not_due_is_left_alone(db_manager, db_session, workflow_run) -> None:
+async def test_a_timer_that_is_not_due_is_left_alone(
+    db_manager, db_session, workflow_run
+) -> None:
     now = _test_now()
     _, external_ref = await _insert_wait(
         db_session, workflow_run, due_at=now + timedelta(minutes=5)
@@ -179,9 +182,7 @@ async def test_the_fire_time_is_the_due_instant_not_the_poll_time(
     _, external_ref = await _insert_wait(db_session, workflow_run, due_at=due)
 
     async with db_manager.session_factory() as session:
-        claimed = await claim_due_workflow_waits(
-            session, now=_test_now()
-        )
+        claimed = await claim_due_workflow_waits(session, now=_test_now())
         await session.commit()
 
     mine = [c for c in claimed if str(c.timer_id) == external_ref]

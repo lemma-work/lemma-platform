@@ -15,6 +15,7 @@ from app.modules.agent.api.controllers.shared import (
     conversation_channel,
     encode_stream_chunk,
     iter_subscription,
+    with_keepalive,
 )
 from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.errors import (
@@ -42,6 +43,9 @@ async def start_and_stream_run(
             with anyio.CancelScope(shield=True):
                 await subscription.__aexit__(exc_type, exc, traceback)
         except Exception:
+            logger.warning(
+                "agent.streaming.subscription_close_failed.degraded", exc_info=True
+            )
             return
 
     subscription = channel_service.subscribe([conversation_channel(conversation_id)])
@@ -56,8 +60,21 @@ async def start_and_stream_run(
         raise
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        # First frame, before anything the run publishes: a message sent while a
+        # run was already working joins that run, and the only route that told
+        # anyone so was `agent.conversation.message.append`. On the chat path a
+        # person watched an apparently unanswered message instead
+        # (`PS-AGENT-015`). `TurnCoordinator.start` already decided this; it was
+        # only ever thrown away here.
+        yield encode_stream_chunk(
+            event_type="status",
+            data={"started_new_run": result.started_new_run},
+            agent_run_id=result.agent_run_id,
+        )
         try:
-            async for chunk in iter_subscription(iterator, result.agent_run_id):
+            async for chunk in with_keepalive(
+                iter_subscription(iterator, result.agent_run_id)
+            ):
                 yield chunk
         except Exception:
             logger.error(
@@ -66,8 +83,17 @@ async def start_and_stream_run(
                 agent_run_id=str(result.agent_run_id),
                 exc_info=True,
             )
+            # `stream_error`, not `error`. The two say opposite things about
+            # the run: `error` is the run failing, and a client that sees one
+            # is right to stop and offer a retry. This is the *transport*
+            # giving up — the subscription was evicted or Redis dropped it —
+            # while the run carries on writing messages nobody is listening
+            # for. Sent under the same name, the sentence "Reconnect to
+            # continue" reached a client that had just decided the run was
+            # over, so the one frame that asks for a reconnect was the one
+            # frame that guaranteed there would not be one.
             yield encode_stream_chunk(
-                event_type="error",
+                event_type="stream_error",
                 data="Realtime stream interrupted. Reconnect to continue.",
                 agent_run_id=result.agent_run_id,
             )
@@ -85,7 +111,7 @@ async def load_authorized_agent_run(
     user_id: UUID,
     pod_id: UUID,
 ) -> AgentRun:
-    conversation = await service.get_conversation(
+    conversation = await service.queries.get_conversation(
         conversation_id=conversation_id,
         user_id=user_id,
         pod_id=pod_id,

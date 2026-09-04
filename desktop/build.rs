@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "control_snapshot",
     "agent_host_action",
     "agent_host_status",
+    "sandbox_image_status",
     "agent_host_start",
     "agent_host_pair",
     "agent_host_refresh",
@@ -36,9 +37,22 @@ const COMMANDS: &[&str] = &[
     "close_local_settings",
     "confirm_destructive_action",
     "open_developer_tools",
+    "local_recovery_options",
+    "reset_local_data",
+    "reset_full_reinstall",
+    "check_for_app_update",
+    "install_app_update",
 ];
 
 fn main() {
+    // `main.rs` reads these with `option_env!`, which is resolved at compile
+    // time -- and cargo does not rebuild a crate because an environment
+    // variable changed. Both release jobs restore a warm cache, so without
+    // these a build that first sets the channel would reuse an object file
+    // compiled without it and ship a release that reports itself as `dev` and
+    // refuses to self-update.
+    println!("cargo:rerun-if-env-changed=LEMMA_RELEASE_CHANNEL");
+    println!("cargo:rerun-if-env-changed=LEMMA_BUILD_SHA");
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

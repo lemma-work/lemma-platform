@@ -6,21 +6,21 @@ They are distinct from the builder-facing Toolsets table in `agents.md`: that ta
 *which* toolsets to enable on an agent; this doc says *how those tools behave* and how a
 UI handles their round-trip.
 
-Two toolsets gate them (grant them in the agent's `toolsets`, see `agents.md`):
+Three toolsets carry them, and only one of them is a decision:
 
-| Toolset | Tools |
-| --- | --- |
-| `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` |
-| `SPEECH` | `say`, `listen` |
-| `SNOOZE` | `snooze` |
+| Toolset | Tools | On by default? |
+| --- | --- | --- |
+| `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` | **always on** — withholding `request_approval` doesn't make an agent safer, it removes the seam where a human gets to say no |
+| `SNOOZE` | `snooze` | **always on**, but *deferred* — found via `search_tools`, not in the prompt prefix |
+| `SPEECH` | `say`, `listen` | **declared** — put `"SPEECH"` in the agent's `toolsets` |
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
 failed tool returns `success:false` with `error`, it does not crash the run); the
 tool-specific fields are listed per tool below.
 
-> The pod-default assistant has both toolsets. A user-created agent gets a tool only if
-> its `toolsets` include the gating toolset — and for grant-checked actions, only on
-> resources it has been granted (`agents.md` → Workload grants).
+> Grant-checked actions are still scoped to the resources the agent holds grants for,
+> and to what the invoking person could do themselves (`agents.md` → Workload grants).
+> A **sub-agent** keeps `USER_INTERACTION` but loses `SNOOZE`.
 
 ---
 
@@ -30,20 +30,30 @@ The same tool call renders differently depending on where the conversation runs.
 agent does not branch on this — it calls the tool the same way everywhere; the backend
 delivers it per surface.
 
-| Tool | Web app / custom app | Chat surface (Slack/Teams) | Chat surface (Telegram/WhatsApp) | Email (Gmail/Outlook) |
-| --- | --- | --- | --- | --- |
-| `ask_user` | card rendered from the tool call | **native tappable options** | options as a formatted message; user types their pick | (not used — agent asks in prose in the reply) |
-| `display_resource` (FILE) | rendered from the tool result | native file attachment / download link | native file / link | **not delivered** — attach via the email reply tool |
-| `display_resource` (WIDGET) | embedded iframe | link to the served widget | link to the served widget | not delivered |
-| `display_resource` (TABLE/AGENT/…) | inline resource view | delivered as a link/summary | link/summary | not delivered |
-| `say` | audio player | **native voice note** (MP3) | **native voice note** (OGG voice bubble) | not delivered |
-| `request_approval` | approval card | approval card | approval card | (asks in prose) |
-| `snooze` | conversation reads as snoozed until it wakes | same — nothing is asked of the user | same | works, but see the 24h cap below |
+| Tool | Web app / custom app | Slack | Teams | Telegram / WhatsApp | Email (Resend) |
+| --- | --- | --- | --- | --- | --- |
+| `ask_user` | card rendered from the tool call | **native tappable options** (Block Kit) | **native** (Adaptive Card) | **native** (inline keyboard / reply buttons) | question goes into the one reply; the person **answers by replying** and the run resumes |
+| `request_approval` | approval card | **native Approve / Deny** (+ Approve-for-session when the call carries permissions) | **native** | **native** | in the one reply; an emailed decision resolves it |
+| `display_resource` (FILE) | rendered from the tool result | native attachment, link over the size cap | **always a link** — Teams has no outbound file upload | native attachment, link over the cap | **attached to the one reply**, download link over the cap |
+| `display_resource` (WIDGET) | embedded iframe | link to the served widget | link | link | **not carried** — the tool says so; write the link into the reply yourself |
+| `display_resource` (TABLE/AGENT/…) | inline resource view | link/summary | link/summary | link/summary | **not carried** — same |
+| `say` | audio player | **native voice note** (MP3) | MP3 audio | **native voice note** (OGG voice bubble) | not available — don't call it |
+| `snooze` | conversation reads as snoozed until it wakes | same — nothing is asked of the user | same | same | works, but see the 24h cap below |
+
+Native rendering is **first, with a formatted-text fallback**: a platform with no native
+support — or a native render that fails — gets a formatted prompt rather than nothing.
 
 Ground truth: `agent_surfaces/platforms/platform_capabilities.py` (per-platform
 capabilities) and `agent/tools/user_interaction/pydantic_adapter.py`
-(`_maybe_deliver_to_surface`). **On email surfaces, `display_resource` does not reach the
-recipient** — share files through the reply tool's `attachment_paths`.
+(`_maybe_deliver_to_surface`).
+
+**Email delivers exactly one message per turn** (`DeliveryCardinality.ONE`). Everything
+the agent produces this turn is composed into a single reply and sent when the turn ends,
+so a file becomes an *attachment on that reply* rather than a second send, nothing written
+mid-turn goes out separately, and a question is a whole round trip through somebody's
+inbox — ask when the answer changes what you do, otherwise decide and say what you
+assumed. A resource that cannot ride along (a widget, a table view) comes back with the
+tool telling the model so, instead of a cheerful "ready for display" nobody sees.
 
 ## The pause / resume model
 
@@ -57,10 +67,13 @@ What differs is *who resolves it*. `ask_user` and `request_approval` wait on a p
 they stay `WAITING` until someone answers. `snooze` resolves itself when its timer
 elapses, and needs nobody. Both take the same path back into the run.
 
-Daemon harnesses (Codex / Claude Code / OpenCode) own their own session and **cannot
-pause mid tool-call**; there, all three return `success:false` with a message telling the
-agent what to do instead (ask in prose and end the turn). Build agents so that fallback
-still works.
+A **remote harness** (an agent running on Agent Host rather than in-process) reaches
+these tools over MCP and cannot end its own turn from inside a tool call. It doesn't need
+to: the call is **parked**, not refused — it returns `success:true` with a
+`parked_tool_call_id`, and the harness bridge holds the MCP response open until the
+person answers on whichever surface they're using. There is no prose fallback to design
+around any more; the question still renders as a real interaction card with its options
+and native buttons.
 
 `display_resource`, `say`, and `listen` do **not** pause — they return immediately.
 
@@ -71,15 +84,34 @@ by a different route entirely — the recipient's own agent handles their reply 
 thread, under their own permissions, guided by the `background_instruction` the sender
 wrote, and records it with `respond_to_notification`.
 
-So an agent that needs answers sends every message, `snooze`s once for a realistic
-interval, then calls `check_messages`. Compare:
+So an agent that needs answers sends every message it needs, says who it is waiting on,
+and **ends the turn**. It must not `snooze` on them and must not poll: when the **last**
+outstanding answer is recorded, the backend starts a *fresh turn* in the asking
+conversation on its own, and the agent reads what everyone said with `check_messages`
+there. (Waiting for the last rather than the first is deliberate — an agent that
+messaged four people would otherwise replay the whole conversation four times to learn
+"three still pending" three times over.) Compare:
 
 | | Who it reaches | Pauses the run | Where the answer lands |
 | --- | --- | --- | --- |
 | `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
-| `message_user` | any pod member, wherever they are | **no** | on the notification, read later with `check_messages` |
+| `message_user` | any pod member, wherever they are | **no** | on the notification — a new turn starts once the last one is answered, read with `check_messages` |
 
-`MESSAGING` is opt-in and withheld from sub-agents; holding it is the whole grant. Every
+`to` takes a **pod member id, user id, or email address** — a human name does not
+resolve. `background_instruction` is what makes an answer come back at all: omit it and
+nothing does. `expects_response: false` sends a pure FYI; a request expires after 72h
+unless `expires_in_seconds` says otherwise.
+
+By default it reaches someone wherever they last spoke to *this* agent, falling back to
+the agent's mailbox. An agent with a reason to choose passes `channel` — `email`, `slack`,
+`teams`, `telegram` or `whatsapp` — and a channel it names is used or refused, never
+swapped for another; `list_pod_members` reports each member's `reachable_on` so the choice
+is a read rather than a guess.
+
+`MESSAGING` is on for every top-level agent (and withheld from sub-agents); holding it is
+the whole grant. It is **deferred**, though — the tools are not in the prompt prefix, so
+the agent finds them with `search_tools`, which in practice means an agent that should
+chase people needs its instruction to say so. Every
 delivered message names both the agent and the human whose authority the run carries — the
 recipient sees the pod's bot and extends it the trust they extend to Lemma, so an
 unattributed message would be a phishing primitive.
@@ -101,8 +133,8 @@ the turn so the user's next message can answer.
       "header": "Environment",            // short label; also the answer key
       "question": "Which environment should I deploy to?",
       "options": [
-        { "label": "Staging", "description": "safe, resets nightly", "recommended": true },
-        { "label": "Production", "description": "live traffic" }
+        { "label": "Staging", "description": "safe, resets nightly", "recommended": true, "icon": "🧪" },
+        { "label": "Production", "description": "live traffic", "icon": "🚀" }
       ],
       "multi_select": false               // optional, default false
     }
@@ -113,6 +145,8 @@ the turn so the user's next message can answer.
 - 2–4 `options` per question. The client **always** adds an "Other" free-form choice —
   do not add one yourself.
 - `recommended: true` highlights your suggested option.
+- `icon` is an optional single emoji shown before the option's label. Omit it when no
+  glyph genuinely fits.
 
 **Response** — `{ success, message?, error?, answers }`. `answers` is keyed by each
 question's `header`; each value is the chosen `label`(s) or the custom "Other" text:
@@ -136,7 +170,7 @@ Show a user-facing resource or a rich interaction instead of prose. One tool, ma
 | `name` | string? | resource types | unique pod resource name; omit to show all of that type |
 | `path` | string? | FILE | full pod-visible path (e.g. `/me/reports/q3.pdf`); never a private workspace path (`/tmp`, `/private`, `/Users`) |
 | `public_url` | string? | WIDGET | URL to embed/open — exactly one of `public_url`/`content` |
-| `content` | string? | WIDGET | inline SVG/HTML fragment (no `<!doctype>`/`<html>`/`<head>`/`<body>`) |
+| `content` | string? | WIDGET | inline HTML fragment: raw markup, body-level tags only; a standalone SVG is a pod file shown with `type=FILE` |
 | `loading_messages` | string[]? | WIDGET | ≤4, shown while the widget renders |
 | `filters` | RecordFilter[]? | TABLE | `[{ field, op, value }]` — record-API shape |
 | `query` | string? | TABLE | read-only SQL, RLS-disabled tables only; mutually exclusive with `filters` |

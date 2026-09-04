@@ -15,11 +15,11 @@ KEY = b"k" * 32
 
 
 def _grant(**overrides) -> PortGrant:
-    defaults = dict(
-        sandbox_id=uuid4(),
-        port=4848,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
-    )
+    defaults = {
+        "sandbox_id": uuid4(),
+        "port": 4848,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+    }
     defaults.update(overrides)
     return PortGrant(**defaults)  # type: ignore[arg-type]
 
@@ -40,7 +40,9 @@ def test_the_signature_covers_the_sandbox_so_a_port_cannot_be_repointed() -> Non
     mine = signer.sign(_grant(sandbox_id=uuid4()))
     _, _, signature = mine.partition(".")
 
-    forged_payload = PortAccessSigner(key=KEY).sign(_grant(sandbox_id=uuid4())).split(".")[0]
+    forged_payload = (
+        PortAccessSigner(key=KEY).sign(_grant(sandbox_id=uuid4())).split(".")[0]
+    )
     with pytest.raises(PortAccessInvalid):
         signer.verify(f"{forged_payload}.{signature}")
 

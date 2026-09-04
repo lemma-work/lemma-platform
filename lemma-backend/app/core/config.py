@@ -275,6 +275,17 @@ class Settings(BaseSettings):
             "``LOOP_STALL_SAMPLE_SECONDS``."
         ),
     )
+    loop_stall_tick_seconds: float = Field(
+        default=0.05,
+        description=(
+            "How often the loop publishes liveness for the stall sampler to "
+            "watch. This is the sampler's resolution: it can only report a "
+            "stall as 'time since the last tick', so the tick interval is a "
+            "floor under every stall it measures. Kept far below "
+            "``LOOP_STALL_SAMPLE_SECONDS`` so the threshold means what it "
+            "says. Env: ``LOOP_STALL_TICK_SECONDS``."
+        ),
+    )
     loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(
@@ -324,12 +335,14 @@ class Settings(BaseSettings):
     worker_shutdown_grace_period_seconds: int = Field(
         default=10,
         description=(
-            "Seconds the streaq worker waits for in-flight tasks to finish on "
-            "SIGTERM/SIGINT before forcing cancellation (streaq grace_period). "
-            "Gives an interrupted agent run time to finalize its status in the "
-            "DB before the engine is disposed, avoiding runs stuck in RUNNING. "
-            "Keep below the orchestrator's termination grace period (e.g. "
-            "Kubernetes terminationGracePeriodSeconds, default 30s)."
+            "Seconds the streaq worker waits for in-flight tasks on SIGTERM "
+            "(streaq grace_period). It stops claiming new work the moment it "
+            "sees the signal, so this is the drain window, not a delay before "
+            "one: enough for an interrupted agent run to finalize its status "
+            "rather than stick in RUNNING. Keep below the orchestrator's "
+            "termination grace period (Kubernetes defaults to 30s) — past that "
+            "the platform SIGKILLs regardless. A longer task is not saved by a "
+            "bigger number here; the job heartbeat recovers it in ~90s."
         ),
     )
     worker_queue_name: str = Field(
@@ -524,11 +537,36 @@ class Settings(BaseSettings):
             "for a self-hosted instance, brave for Brave Search, or auto."
         ),
     )
+    usage_org_monthly_limit_usd: float | None = Field(
+        default=None,
+        description=(
+            "Deployment-wide monthly system-spend limit per organization, in "
+            "USD. None means unlimited; work that would exceed it is refused "
+            "with USAGE_LIMIT_EXCEEDED. See PS-OPS-012."
+        ),
+    )
+    usage_user_weekly_limit_usd: float | None = Field(
+        default=None,
+        description="Deployment-wide weekly system-spend limit per user, in USD.",
+    )
+    usage_user_monthly_limit_usd: float | None = Field(
+        default=None,
+        description="Deployment-wide monthly system-spend limit per user, in USD.",
+    )
+    usage_org_limit_overrides_json: str = Field(
+        default="",
+        description=(
+            "JSON list of per-organization monthly limits overriding the "
+            'deployment-wide one, e.g. [{"slug": "acme", "monthly_limit_usd": '
+            "5.0}]. Slugs are organization handles; 0 refuses all model work "
+            "for that organization."
+        ),
+    )
     searxng_url: Optional[str] = Field(
         default=None,
         description="SearXNG instance URL used when WEB_SEARCH_PROVIDER=searxng.",
     )
-    brave_search_api_key: Optional[str] = Field(
+    brave_search_api_key: Optional[SecretStr] = Field(
         default=None,
         description="Brave Search API key used when WEB_SEARCH_PROVIDER=brave.",
     )
@@ -592,13 +630,13 @@ class Settings(BaseSettings):
     google_client_id: Optional[str] = Field(
         default=None, description="Google OAuth Client ID"
     )
-    google_client_secret: Optional[str] = Field(
+    google_client_secret: Optional[SecretStr] = Field(
         default=None, description="Google OAuth Client Secret"
     )
     microsoft_client_id: Optional[str] = Field(
         default=None, description="Microsoft OAuth Client ID"
     )
-    microsoft_client_secret: Optional[str] = Field(
+    microsoft_client_secret: Optional[SecretStr] = Field(
         default=None, description="Microsoft OAuth Client Secret"
     )
 
@@ -627,7 +665,7 @@ class Settings(BaseSettings):
             "unless a GCP KMS key or Secret Manager secret is configured."
         ),
     )
-    secret_encryption_key: Optional[str] = Field(
+    secret_encryption_key: Optional[SecretStr] = Field(
         default=None,
         description=(
             "Primary Fernet key (urlsafe base64) for the static provider. Falls "
@@ -662,7 +700,9 @@ class Settings(BaseSettings):
     smtp_host: str = Field(default="smtp.gmail.com", description="SMTP server hostname")
     smtp_port: int = Field(default=587, description="SMTP server port")
     smtp_user: Optional[str] = Field(default=None, description="SMTP username")
-    smtp_password: Optional[str] = Field(default=None, description="SMTP password")
+    smtp_password: Optional[SecretStr] = Field(
+        default=None, description="SMTP password"
+    )
     smtp_from_email: Optional[str] = Field(
         default=None, description="From email address"
     )
@@ -812,7 +852,17 @@ class Settings(BaseSettings):
             "dev stack sets it. Env: ``API_DOCS_ENABLED``."
         ),
     )
-    debug: bool = Field(default=True, description="Debug mode")
+    debug: bool = Field(
+        default=False,
+        description=(
+            "Debug mode. Off by default, and refused outside local/testing by "
+            "``_refuse_debug_outside_local``. Starlette's ServerErrorMiddleware "
+            "checks this *before* the application's own exception handler, so a "
+            "true value replaces the ``{message, code, details}`` envelope with "
+            "a source-annotated HTML traceback on every unhandled error -- and "
+            "``handle_unexpected_exception`` becomes unreachable. Env: ``DEBUG``."
+        ),
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         description="Application log level",
@@ -890,6 +940,20 @@ class Settings(BaseSettings):
             "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
         ),
     )
+    storage_endpoint_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "storage_endpoint_url",
+            "STORAGE_ENDPOINT_URL",
+        ),
+        description=(
+            "S3-compatible endpoint to use instead of AWS S3 — MinIO, R2, "
+            "Wasabi. Only read when the backend is 's3'; leave unset for AWS, "
+            "which resolves its own region endpoint. Addressing is path-style, "
+            "and plain HTTP is permitted only for an explicit http:// URL. "
+            "Env: ``STORAGE_ENDPOINT_URL``."
+        ),
+    )
     storage_bucket: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -942,6 +1006,14 @@ class Settings(BaseSettings):
         default=None,
         description="Optional cookie domain for sharing auth sessions across subdomains",
     )
+    session_cookie_older_domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "The cookie domain this deployment is migrating away from. Set it "
+            "for one release after changing session_cookie_domain so the old "
+            "cookies are cleared instead of colliding with the new ones."
+        ),
+    )
     session_cookie_secure: Optional[bool] = Field(
         default=None,
         description="Override the secure flag for auth session cookies",
@@ -951,6 +1023,12 @@ class Settings(BaseSettings):
         description="Override SameSite for auth session cookies",
     )
 
+    # Deliberately NOT including `session_cookie_older_domain`: an empty string
+    # is a meaningful value there. SuperTokens reads `older_cookie_domain=""`
+    # as "the previous cookies were host-only, clear those", which is exactly
+    # the migration desktop is making (v0.7.0 rendered SESSION_COOKIE_DOMAIN=""
+    # and main renders `.lemma.localhost`). Folding blank to None would turn the
+    # one setting that fixes that install into no setting at all.
     @field_validator(
         "session_cookie_domain",
         "cli_api_url",
@@ -973,6 +1051,28 @@ class Settings(BaseSettings):
         if any(segment in {".", ".."} for segment in segments):
             raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
         return "/" + "/".join(segments) if segments else "/"
+
+    @model_validator(mode="after")
+    def _refuse_debug_outside_local(self) -> "Settings":
+        # `debug` is not a verbosity setting. Starlette installs the
+        # application's `Exception` handler as `ServerErrorMiddleware.handler`
+        # and checks `self.debug` first, so a true value here means every
+        # unhandled error answers with a source-annotated traceback -- file
+        # paths, framework versions, local variable names -- instead of the one
+        # envelope every client parses, and `handle_unexpected_exception` never
+        # runs at all.
+        #
+        # Refused at startup rather than merely defaulted off, because the
+        # failure mode this closes is a deployment that sets it deliberately and
+        # forgets. `docs/configuration.md` lists `DEBUG=false` in its production
+        # block; nothing enforced it.
+        if not self.is_local_mode() and self.debug:
+            raise ValueError(
+                "DEBUG must be false in development/production: it makes every "
+                "unhandled error answer with a stack trace instead of the "
+                "standard error envelope. It is permitted only in local/testing."
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":
@@ -1003,6 +1103,19 @@ class Settings(BaseSettings):
             "loopback apps domain (e.g. apps.lemma.localhost:8711); in cloud it is "
             "the real apps domain behind the ingress. Empty disables host-based "
             "app routing and is rejected at startup in development/production."
+        ),
+    )
+    app_api_via_app_origin: bool = Field(
+        default=False,
+        description=(
+            "Serve an app's API calls through the app's own origin (a reserved "
+            "/_lemma prefix) instead of the API host, and widen the refresh "
+            "cookie's path to match. Needed only where the app host and the API "
+            "host are different *sites* to a browser -- on desktop, where both "
+            "are under `.localhost` and no registrable domain can be derived, so "
+            "an app's cross-origin calls are third-party and carry no session. "
+            "Off elsewhere: on a real domain the two are same-site already, and "
+            "this would widen the refresh cookie for nothing."
         ),
     )
     app_branding_enabled: bool = Field(
@@ -1605,10 +1718,6 @@ class Settings(BaseSettings):
                 self.microsoft_client_secret,
             ]
         )
-
-    def is_teams_bot_configured(self) -> bool:
-        """Check if the Teams bot credentials are configured."""
-        return bool(self.microsoft_bot_app_id and self.microsoft_bot_app_password)
 
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""

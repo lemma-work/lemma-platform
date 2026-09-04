@@ -28,3 +28,54 @@ def seconds_until(deadline_at: datetime, *, now: datetime | None = None) -> floa
     moment = now or datetime.now(timezone.utc)
     remaining = (deadline_at - moment).total_seconds()
     return max(MINIMUM_PROCESS_SECONDS, remaining)
+
+
+def watch_for_exit(output, watchers: set, process_id: str, handle) -> None:
+    """Record the outcome when an E2B process finishes.
+
+    Nothing else can. E2B reports completion by resolving the handle, not by any
+    state a later poll could read, so without this a finished command reads as
+    still running forever: the caller sees no exit code, never treats it as
+    complete, and polls until its deadline.
+
+    The distinction that matters here is between the command failing and us
+    losing the ability to watch it. Only the first carries an exit code.
+    """
+    import asyncio
+
+    import anyio
+
+    from app.core.request_context import create_inherited_task
+
+    async def watch() -> None:
+        try:
+            outcome = await handle.wait()
+            exit_code = getattr(outcome, "exit_code", None)
+        except Exception as exc:
+            # A command that exits non-zero raises in some SDK versions; the
+            # exit code is still the thing the caller needs.
+            exit_code = getattr(exc, "exit_code", None)
+            if exit_code is None:
+                # No exit code on the exception means this is not the command
+                # reporting failure, it is us losing the stream. Recording it
+                # as an exit reported a running build as failed and unpinned
+                # its sandbox for the idle sweep.
+                await output.record_unknown(process_id)
+                return
+        except asyncio.CancelledError:
+            # `wait()` awaits an SDK-internal task, so a cancellation anywhere
+            # in that chain (a disconnect, a sandbox release) arrives here --
+            # and `except Exception` does not catch it. Skipping the record
+            # leaves the process reading as "still running" for the rest of the
+            # sandbox's life, and the agent polls a corpse until its own
+            # deadline. Record what we know, then let the cancellation continue.
+            with anyio.CancelScope(shield=True):
+                await output.record_unknown(process_id)
+            raise
+        await output.record_exit(process_id, exit_code=exit_code)
+
+    task = create_inherited_task(watch(), name=f"e2b-process-watch:{process_id}")
+    # Held so the task is not garbage collected mid-flight, and discarded once
+    # it has recorded the outcome.
+    watchers.add(task)
+    task.add_done_callback(watchers.discard)

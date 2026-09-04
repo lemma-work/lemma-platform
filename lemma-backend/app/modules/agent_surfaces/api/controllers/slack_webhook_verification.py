@@ -27,7 +27,9 @@ def slack_api_app_id(payload: dict) -> str | None:
 async def slack_candidates_for_workspace(
     *, service: AgentSurfaceService, team_id: str | None
 ) -> list[SlackWebhookVerificationCandidate]:
-    if not team_id:
+    # No resolver, no credentials to verify a signature against -- the same
+    # reading `list_channels` gives it, and the reason this is `| None` at all.
+    if not team_id or service._credential_resolver is None:
         return []
     surfaces = await service.surface_repository.list_active_by_type(
         SurfacePlatform.SLACK.value
@@ -41,9 +43,9 @@ async def slack_candidates_for_workspace(
         )
         if not credentials.app_id or not credentials.signing_secret:
             continue
-        grouped.setdefault(
-            (credentials.app_id, credentials.signing_secret), []
-        ).append(surface.id)
+        grouped.setdefault((credentials.app_id, credentials.signing_secret), []).append(
+            surface.id
+        )
     return [
         SlackWebhookVerificationCandidate(
             app_id=app_id,

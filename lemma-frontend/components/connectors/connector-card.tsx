@@ -60,7 +60,13 @@ export function ConnectorRow({
                 ) : null}
             </div>
 
-            {hasAdvanced && !isConnected ? (
+            {/* Not gated on `isConnected`. Advanced is where an org brings its
+                own app, and having connected once is no reason to be done: a
+                workspace may run a second Slack app, or replace the one whose
+                credentials it is holding. Hiding this after the first connect
+                made "make your own bot" a thing you could only ever reach
+                before you had anything working. */}
+            {hasAdvanced ? (
                 <Button
                     variant="quiet"
                     size="sm"

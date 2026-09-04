@@ -80,7 +80,23 @@ describe("declared events are emitted or named as gaps", () => {
         // Same ratchet as the backend's KNOWN_GAPS: a declared event nothing
         // raises is a permanently-zero dashboard, and the bad version is the one
         // nobody knows about.
-        const emitted = ["share_link.viewed", "import.started"];
+        // `client.error` is raised by app/global-error.tsx, the root error
+        // boundary — the only place that can see an error which escaped
+        // everything below it.
+        const emitted = [
+            "share_link.viewed",
+            // Both raised by app/s/[kind]/[...path]/contact-landing.tsx.
+            "share_link.contact_opened",
+            "share_link.contact_saved",
+            "import.started",
+            "client.error",
+            // lib/analytics/onboarding.ts is the only emitter of these five.
+            "onboarding.step_viewed",
+            "onboarding.pod_ready",
+            "activation.surface_connected",
+            "activation.app_opened",
+            "activation.member_joined",
+        ];
         const accounted = new Set([...emitted, ...KNOWN_UNEMITTED]);
         const unaccounted = Object.keys(CLIENT_CATALOG).filter((n) => !accounted.has(n as never));
         expect(unaccounted).toEqual([]);

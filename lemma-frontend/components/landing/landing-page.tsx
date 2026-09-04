@@ -13,7 +13,7 @@ import { JourneySection } from "./landing-journey";
 import {
   BuildSection,
   ExamplesSection,
-  GapSection,
+  SharedSection,
 } from "./landing-story";
 import { PodSystemSection } from "./landing-pod-system";
 import { SurfacePreview } from "./landing-surfaces";
@@ -94,22 +94,21 @@ export default function LandingPage() {
                 <GithubLogo aria-hidden className="lp-gh-icon" />
                 Open source
               </span>
-              The runtime for agent-built software
+              Multiplayer AI and Apps
             </p>
             <h1 className="lp-hero-headline" id="hero-title">
-              The software you need
-              <span className="lp-hl-line">
-                <span className="lp-hl-accent">doesn&apos;t exist yet.</span>
-              </span>
+              Shared Apps and Agents.
             </h1>
             <p className="lp-subhead">
-              Your coding agent can write it. Lemma turns it into something
-              your team can actually use — and run anywhere.
+              Your team, your agents, one context layer, scoped to each
+              person.
             </p>
+
+            <WorkSurfaceStrip />
 
             <div className="lp-actions">
               <Link className="lp-button primary" href="/auth">
-                Start building
+                Get started
               </Link>
               <a
                 className="lp-button secondary"
@@ -121,8 +120,6 @@ export default function LandingPage() {
                 View on GitHub
               </a>
             </div>
-
-            <WorkSurfaceStrip />
           </div>
 
           <section
@@ -133,8 +130,8 @@ export default function LandingPage() {
           </section>
         </section>
 
-        {/* §2 — why generated code isn't team software */}
-        <GapSection />
+        {/* §2 — what "shared" means, demonstrated */}
+        <SharedSection />
 
         {/* §3 — build, deploy, invite, scope, use */}
         <JourneySection />
@@ -156,8 +153,8 @@ export default function LandingPage() {
                 <span>the same pod.</span>
               </h2>
               <p className="lp-section-subhead">
-                Nine surfaces, including ChatGPT and Claude. Each one knows who
-                is asking, and writes to the same records.
+                Every surface knows who is asking, and writes to the same
+                records.
               </p>
             </div>
 
@@ -210,7 +207,7 @@ export default function LandingPage() {
                 </ul>
 
                 <p className="lp-surface-effect-foot">
-                  A surface, not a copy. The records, workflows, permissions,
+                  A surface onto one system. The records, workflows, permissions,
                   and audit trail stay in one place.
                 </p>
               </aside>
@@ -236,7 +233,7 @@ export default function LandingPage() {
             </p>
             <div className="lp-actions">
               <Link className="lp-button primary" href="/auth">
-                Start building
+                Get started
               </Link>
               <a
                 className="lp-button secondary"

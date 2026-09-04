@@ -118,9 +118,44 @@ describe("consent", () => {
         expect(banner).toContain("config.ANALYTICS_KEY");
     });
 
+    /**
+     * The server has no localStorage, so `consentServerSnapshot()` answers
+     * "unanswered" — the one value that renders the card. Ungated, the banner is
+     * prerendered into the HTML of every document regardless of what anyone
+     * chose, and hydration then removes it: invisible on client-side navigation,
+     * a full slide-up flash on every hard refresh, for people who accepted long
+     * ago. It must render nothing until hydration has supplied the real answer.
+     */
+    it("renders nothing until hydration, so an answered banner never flashes", () => {
+        const banner = read("components/analytics/consent-banner.tsx");
+        expect(banner).toContain("useHydrated()");
+        expect(banner).toMatch(/if \(!hydrated \|\|/);
+    });
+
     it("is described on the privacy page, by vendor name", () => {
         const legal = read("lib/data/legal.ts");
         expect(legal).toContain("PostHog");
-        expect(legal).toContain("Product Analytics");
+        expect(legal).toContain("Product analytics");
+    });
+
+    /**
+     * The policy tells people that turning analytics off "removes the identifier
+     * stored in this browser", which only stays true while the withdrawal path
+     * changes persistence *before* resetting. Reversed, `reset()` mints a fresh
+     * id into localStorage and the page is making a promise the code breaks.
+     */
+    it("clears the device when consent is withdrawn, in that order", () => {
+        const source = read("lib/analytics/client.ts");
+        const memory = source.indexOf('ph.set_config({ persistence: "memory" })');
+        const reset = source.indexOf("ph.reset()");
+        expect(memory).toBeGreaterThan(-1);
+        expect(reset).toBeGreaterThan(memory);
+    });
+
+    it("can be changed after the banner is gone", () => {
+        const control = read("components/legal/analytics-preference.tsx");
+        expect(control).toContain("recordConsentDecision");
+        expect(control).toContain("applyAnalyticsPersistence");
+        expect(read("app/privacy/page.tsx")).toContain("AnalyticsPreference");
     });
 });

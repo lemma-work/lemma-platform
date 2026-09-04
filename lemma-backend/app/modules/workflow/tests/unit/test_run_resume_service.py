@@ -14,7 +14,9 @@ from app.modules.workflow.services.run_resume_service import RunResumeService
 pytestmark = pytest.mark.asyncio
 
 
-def _wait(wait_type: WorkflowRunWaitType, external_ref: str) -> WorkflowRunWaitEntity:
+def _wait(
+    wait_type: WorkflowRunWaitType, external_ref: str | None
+) -> WorkflowRunWaitEntity:
     return WorkflowRunWaitEntity(
         run_id=uuid4(),
         flow_id=uuid4(),
@@ -43,6 +45,9 @@ class FakeEngine:
                 "output": output,
             }
         )
+
+    async def fail_for_wait(self, wait, *, error, output=None):
+        await self.fail_internal(wait.wait_type, wait.external_ref, error, output)
 
 
 async def test_failed_agent_status_fails_workflow_with_adapter_error(monkeypatch):
@@ -145,11 +150,17 @@ async def test_resume_for_function_run_trusts_event_output(monkeypatch):
     # Output came from the event, so the adapter is never consulted.
     assert engine.adapter_calls == 0
     assert engine.resumed == [
-        {"wait_type": WorkflowRunWaitType.FUNCTION, "external_ref": fr_id, "output": {"x": 1}}
+        {
+            "wait_type": WorkflowRunWaitType.FUNCTION,
+            "external_ref": fr_id,
+            "output": {"x": 1},
+        }
     ]
 
 
-async def test_resume_for_function_run_falls_back_to_adapter_when_output_none(monkeypatch):
+async def test_resume_for_function_run_falls_back_to_adapter_when_output_none(
+    monkeypatch,
+):
     fr_id = str(uuid4())
     engine = _ResumeEngine(_wait(WorkflowRunWaitType.FUNCTION, fr_id))
     service = RunResumeService(engine)
@@ -355,4 +366,83 @@ async def test_time_waits_are_exempt_from_the_ceiling():
     )
 
     assert handled is False
+    assert engine.failures == []
+
+
+async def test_a_form_wait_gets_the_human_ceiling_not_the_machine_one():
+    """A form is answered by a person, so the machine ceiling must not apply.
+
+    The reason it needs saying: the human ceiling used to be reachable only
+    through an *agent conversation's* `wait_reason`, never through the wait
+    type a FORM node creates.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.HUMAN, None)
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is False, "a form waiting two days is ordinary, not a fault"
+    assert engine.failures == []
+
+
+async def test_an_abandoned_form_wait_is_eventually_resolved():
+    """PS-FLOW-011: resolve a stuck run rather than leaving it waiting forever.
+
+    A form assigned to someone who leaves used to hold its run WAITING with no
+    ceiling at all — and the inbox notification expires at 72h, so the only
+    visible trace of it disappeared while the run stayed open.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.HUMAN, None)
+    wait.created_at = datetime.now(timezone.utc) - timedelta(days=90)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is True
+    assert len(engine.failures) == 1
+    assert "Nobody answered" in engine.failures[0]["error"]
+
+
+async def test_the_sweep_asks_for_human_waits_and_polls_nothing_for_them():
+    """The batch must include HUMAN, and must not try to reconcile one.
+
+    There is no source of truth to ask: a form is resolved by somebody
+    answering it. Selecting the type without this would send a form wait into
+    the function adapter with a null external ref.
+    """
+    engine = FakeEngine()
+    requested: list[list] = []
+
+    class _WaitRepo:
+        async def list_active_older_than(self, *, wait_types, created_before, limit):
+            requested.append(list(wait_types))
+            wait = _wait(WorkflowRunWaitType.HUMAN, None)
+            wait.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
+            return [wait]
+
+    class _NeverCalled:
+        async def get_run_status(self, run_id):
+            raise AssertionError("a form wait has nothing to poll")
+
+    engine.wait_repo = _WaitRepo()
+    engine.function_adapter = _NeverCalled()
+    engine.agent_adapter = _NeverCalled()
+
+    acted = await RunResumeService(engine).reconcile_stale_waits()
+
+    assert acted == 0
+    assert WorkflowRunWaitType.HUMAN in requested[0]
     assert engine.failures == []

@@ -75,6 +75,9 @@ class AgentToolset(str, Enum):
     CONNECTORS = "CONNECTORS"
     SNOOZE = "SNOOZE"
     MESSAGING = "MESSAGING"
+    # Carries no tools: memory is pod files, read and written with the file
+    # tools the agent already has. See `memory_is_active`.
+    MEMORY = "MEMORY"
     # Reserved: never persisted on Agent.toolsets. Auto-appended at run time for
     # any agent whose resolved model declares VISION capability, regardless of
     # its configured toolsets — see `agent_runner_service.py`.
@@ -242,13 +245,12 @@ class AgentRunFinishResult:
     status: AgentRunStatus
     conversation_status: ConversationStatus
     updated: bool
+    #: An already-terminal run whose conversation this call put back in step.
+    conversation_repaired: bool = False
 
 
 ACTIVE_AGENT_RUN_STATUSES = frozenset(
-    {
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.STOP_REQUESTED,
-    }
+    {AgentRunStatus.RUNNING, AgentRunStatus.STOP_REQUESTED}
 )
 
 TERMINAL_AGENT_RUN_STATUSES = frozenset(
@@ -259,18 +261,16 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
     }
 )
 
-# Compaction trigger. Lowered from 100k when the token count became real: the
-# old figure was measured with a chars/4 estimate that under-counts code, logs
-# and JSON by 25-65%, so "100k" was routinely 140k+ of actual prompt and the
-# provider rejected the request before compaction ever ran.
-DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 70_000
+# Fallbacks only, for a caller building `HarnessOptions` by hand: a run resolves
+# both from its own model's window (`services/context_budget`). These match the
+# default 128k window at 80% and 92%.
+DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT = 102_400
 # Raised from 20: at ~6-10 tool rounds, 20 messages threw away the working
 # context of a coding session immediately after summarizing it.
 DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES = 40
-# Absolute ceiling. If compaction is skipped or fails, the history is trimmed
-# deterministically to fit rather than sent oversized — a failed summary must
-# never turn into a provider rejection.
-DEFAULT_HISTORY_HARD_TOKEN_CEILING = 110_000
+# Absolute ceiling: if compaction is skipped or fails, the history is trimmed to
+# fit rather than sent oversized.
+DEFAULT_HISTORY_HARD_TOKEN_CEILING = 117_760
 
 
 class MessageRole(str, Enum):
@@ -466,7 +466,9 @@ class ConversationAgentSelection(Generic[ConversationAgentValue]):
         if self.scope is ConversationAgentScope.NAMED and not has_value:
             raise ValueError("NAMED conversation selection requires a value")
         if self.scope is not ConversationAgentScope.NAMED and has_value:
-            raise ValueError(f"{self.scope.value} conversation selection cannot have a value")
+            raise ValueError(
+                f"{self.scope.value} conversation selection cannot have a value"
+            )
 
     @property
     def named_value(self) -> ConversationAgentValue:
@@ -480,10 +482,14 @@ class ConversationAgentSelection(Generic[ConversationAgentValue]):
     ) -> ConversationAgentSelection[ResolvedConversationAgentValue]:
         if self.scope is ConversationAgentScope.NAMED:
             if value is None:
-                raise ValueError("NAMED conversation selection requires a resolved value")
+                raise ValueError(
+                    "NAMED conversation selection requires a resolved value"
+                )
             return ConversationAgentSelection.named(value)
         if value is not None:
-            raise ValueError(f"{self.scope.value} conversation selection cannot resolve a value")
+            raise ValueError(
+                f"{self.scope.value} conversation selection cannot resolve a value"
+            )
         return ConversationAgentSelection(scope=self.scope)
 
     @classmethod
@@ -525,7 +531,6 @@ class HarnessOptions:
     usage_limits: object | None = None
     output_type: object | None = None
     model_settings: JsonObject | None = None
-    history_processors: list[object] = field(default_factory=list)
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
     history_summarization_keep_messages: int = (

@@ -14,6 +14,9 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.email_one_reply import (
+    EmailOneReplyMixin,
+)
 from app.modules.agent_surfaces.platforms.common import provider_failure
 from app.modules.agent_surfaces.platforms.resend.parser import (
     ResendInboundParser,
@@ -24,7 +27,7 @@ from app.modules.agent_surfaces.platforms.resend.service import ResendPlatformSe
 logger = get_logger(__name__)
 
 
-class ResendSurfaceAdapter(BaseSurfaceAdapter):
+class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
     platform = "RESEND"
 
     def __init__(self) -> None:
@@ -141,17 +144,18 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
             metadata=metadata,
         )
 
-    async def send_display_resource(
+    async def _render_resource(
         self,
         *,
         credentials: dict[str, Any],
         event: ParsedInboundSurfaceEvent,
         render_plan: SurfaceDisplayRenderPlan,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await ResendPlatformService(credentials).send_display_resource(
+    ) -> bool:
+        await ResendPlatformService(credentials)._render_resource(
             event, render_plan, metadata
         )
+        return True
 
     async def add_processing_indicator(
         self,
@@ -160,7 +164,9 @@ class ResendSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await ResendPlatformService(credentials).add_processing_indicator(event, metadata)
+        await ResendPlatformService(credentials).add_processing_indicator(
+            event, metadata
+        )
 
 
 __all__ = ["ResendSurfaceAdapter", "ResendInboundParser", "ResendPlatformService"]

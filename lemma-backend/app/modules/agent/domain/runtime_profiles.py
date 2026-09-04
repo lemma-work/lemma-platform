@@ -70,26 +70,6 @@ class RuntimeProfileAvailability(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
-class _UnsetType:
-    """Distinguishes "the caller did not mention this field" from "null".
-
-    A PATCH that omits ``api_key`` must keep the stored one; a PATCH that sends
-    ``null`` must clear it. Both arrive as absent-or-None without a sentinel,
-    and defaulting either way silently destroys or ignores a credential.
-    """
-
-    __slots__ = ()
-
-    def __bool__(self) -> bool:
-        return False
-
-    def __repr__(self) -> str:
-        return "UNSET"
-
-
-UNSET = _UnsetType()
-
-
 class RuntimeModelCapability(str, Enum):
     TEXT = "TEXT"
     TOOLS = "TOOLS"
@@ -258,7 +238,8 @@ class AgentRuntimeProfile(BaseModel):
         elif self.harness_id is not None:
             raise ValueError("Only a HARNESS profile may bind a harness_id")
         if (
-            self.scope in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
+            self.scope
+            in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
             and self.organization_id is None
         ):
             raise ValueError(f"{self.scope.value} profile requires organization_id")

@@ -84,10 +84,10 @@ class WorkspaceSandboxService:
         tuple[int, UUID, str, int, str], asyncio.Task[SandboxInfo]
     ] = {}
     # Directories already created, by the same key. The singleflight above only
-    # collapses concurrent callers, so every tool call re-ran the mkdir round
-    # trip -- 833ms at p50, on a directory that had existed since the first
-    # command. The key carries the storage generation, so a disk reset misses
-    # while a mere container recreate keeps what is still on the volume.
+    # collapses concurrent callers, so every tool call paid a full sandbox round
+    # trip to mkdir a directory that had existed since the first command. The
+    # key carries the storage generation, so a disk reset misses while a mere
+    # container recreate keeps what is still on the volume.
     _ready_directories: dict[tuple[int, UUID, str, int, str], float] = {}
     _stopping: dict[tuple[int, UUID], asyncio.Event] = {}
 
@@ -303,9 +303,11 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, str]:
-        from app.composition.workspace_identity import mint_workspace_token
+        from app.modules.identity.contracts.delegated_tokens import (
+            mint_delegated_token,
+        )
 
-        token = await mint_workspace_token(
+        token = await mint_delegated_token(
             user_id=user_id,
             workload_type=workload_type,
             workload_id=workload_id,
@@ -321,9 +323,7 @@ class WorkspaceSandboxService:
             or settings.cli_auth_frontend_url
             or settings.auth_frontend_url
         )
-        host_origin = (
-            settings.workspace_callback_frontend_url or settings.frontend_url
-        )
+        host_origin = settings.workspace_callback_frontend_url or settings.frontend_url
 
         resolved_org_id = (
             str(organization_id)
@@ -345,11 +345,12 @@ class WorkspaceSandboxService:
     async def _resolve_organization_id(self, pod_id: UUID | None) -> str | None:
         if pod_id is None:
             return None
-        from app.composition.workspace_identity import (
-            resolve_workspace_organization_id,
+        from app.modules.pod.contracts.detached_reads import (
+            pod_organization_id_detached,
         )
 
-        return await resolve_workspace_organization_id(pod_id)
+        organization_id = await pod_organization_id_detached(pod_id)
+        return str(organization_id) if organization_id else None
 
     async def get_session(
         self,
@@ -392,7 +393,9 @@ class WorkspaceSandboxService:
         workspace_recreated = False
         if session_id and sandbox_info.storage_generation is not None:
             try:
-                with _tracer.start_as_current_span("lemma.workspace.storage_generation"):
+                with _tracer.start_as_current_span(
+                    "lemma.workspace.storage_generation"
+                ):
                     workspace_recreated = (
                         await self.storage_generation_store.observe_storage_generation(
                             session_id=session_id,
@@ -496,9 +499,7 @@ class WorkspaceSandboxService:
                     deadline_at=deadline_at,
                 )
             except SandboxUnavailable as exc:
-                remaining = (
-                    deadline_at - datetime.now(timezone.utc)
-                ).total_seconds()
+                remaining = (deadline_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining <= 0:
                     break
                 delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
@@ -506,9 +507,7 @@ class WorkspaceSandboxService:
                 force_reconcile = True
                 continue
             return sandbox_info
-        raise TimeoutError(
-            f"workspace sandbox {user_id} did not become usable"
-        )
+        raise TimeoutError(f"workspace sandbox {user_id} did not become usable")
 
     def _directory_cache_key(
         self,

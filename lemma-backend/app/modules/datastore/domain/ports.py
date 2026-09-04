@@ -19,6 +19,7 @@ from app.modules.datastore.domain.document_processing import (
     IndexingMetrics,
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
+from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -32,6 +33,15 @@ if TYPE_CHECKING:
 
 
 class DatastoreTableRepositoryPort(Protocol):
+    async def commit(self) -> None:
+        """Make the staged metadata changes durable now.
+
+        Table metadata and the physical pod table live in different databases,
+        so a schema change has to choose which one commits first. See the
+        ordering rule on ``TableService`` for why the metadata goes first, and
+        why that needs a commit the request's own boundary cannot supply.
+        """
+
     async def create(self, entity: DatastoreTableEntity) -> DatastoreTableEntity: ...
 
     async def get(self, id: UUID) -> Optional[DatastoreTableEntity]: ...
@@ -43,6 +53,13 @@ class DatastoreTableRepositoryPort(Protocol):
     async def get_by_datastore_and_name(
         self, pod_id: UUID, table_name: str, ctx: Context | None = None
     ) -> Optional[DatastoreTableEntity]: ...
+
+    async def get_many_by_datastore_and_names(
+        self,
+        pod_id: UUID,
+        table_names: Sequence[str],
+        ctx: Context | None = None,
+    ) -> dict[str, DatastoreTableEntity]: ...
 
     async def list_by_datastore(
         self, pod_id: UUID, limit: int = 100, cursor: Optional[str] = None
@@ -67,6 +84,8 @@ class DatastoreTableRepositoryPort(Protocol):
 
 class DatastoreFileRepositoryPort(Protocol):
     async def acquire_path_lock(self, pod_id: UUID, path: str) -> None: ...
+
+    async def count_active_for_pod(self, pod_id: UUID) -> int: ...
 
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity: ...
 
@@ -119,6 +138,22 @@ class DatastoreFileRepositoryPort(Protocol):
         pod_id: UUID,
         paths: Sequence[str],
     ) -> Sequence[DatastoreFileEntity]: ...
+
+    async def visible_file_ids(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> set[UUID]: ...
+
+    async def file_visibility_split(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+    ) -> tuple[set[UUID], set[UUID]]: ...
 
     async def filter_visible_ids(
         self,
@@ -189,6 +224,16 @@ class DatastoreSchemaPort(Protocol):
         primary_key_column: str,
         columns: list[ColumnSchema],
         enable_rls: bool = True,
+    ) -> None: ...
+
+    async def ensure_record_index(
+        self,
+        schema_name: str,
+        table_name: str,
+        *,
+        primary_key_column: str,
+        has_created_at: bool,
+        enable_rls: bool,
     ) -> None: ...
 
     async def drop_table(self, pod_id: UUID, table_name: str) -> None: ...
@@ -280,7 +325,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         enable_rls: bool = True,
         is_pod_admin: bool = False,
-    ) -> Tuple[list[dict], int]: ...
+    ) -> Tuple[list[dict], int, bool]: ...
 
     async def list_records(
         self,
@@ -304,6 +349,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         *,
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
+        expected_updated_at: datetime | None = None,
     ): ...
 
     async def delete_record(
@@ -359,7 +405,7 @@ class DocumentProcessorPort(Protocol):
         ``content_path`` lets the caller stream a large file to a temp file and
         hand the path down, so the extractor can stream it (Kreuzberg) rather than
         holding the whole file — plus a multipart copy — in memory. Processors
-        that must work in-process (markitdown/docling) read the path into bytes.
+        that must work in-process (xberg/docling) read the path into bytes.
         Exactly one of ``content`` / ``content_path`` is provided.
         """
         ...
@@ -414,7 +460,8 @@ class DatastoreSearchPort(Protocol):
         method: SearchMethod = SearchMethod.HYBRID,
         scope_path: str | None = None,
         include_descendants: bool = True,
-        visible_file_ids: set[UUID] | None = None,
+        *,
+        visibility: FileVisibilityFilter,
     ) -> list[DatastoreFileSearchResult]: ...
 
 

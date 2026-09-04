@@ -9,13 +9,13 @@ the bundle layout, resource manifests, and ``data.csv`` seeding.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from uuid import uuid4
 
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.waiters import wait_for_status
 from lemma_pod_bundle import extract_bundle
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
@@ -27,19 +27,28 @@ async def _wait_for_export_ready(
     export_id: str,
     timeout_seconds: int = 60,
 ) -> dict:
-    for _ in range(timeout_seconds):
+    async def probe() -> dict:
         res = await authenticated_client.get(
             f"/pods/{pod_id}/bundle/exports/{export_id}"
         )
         assert res.status_code == status.HTTP_200_OK, res.text
-        body = res.json()
-        if body["status"] in ("READY", "FAILED"):
-            return body
-        await asyncio.sleep(1)
-    raise AssertionError(f"Export did not finish in {timeout_seconds}s")
+        return res.json()
+
+    # failed=set(): every caller here asserts status == "READY" itself
+    # afterward -- return on either terminal state, same as the original.
+    return await wait_for_status(
+        label=f"pod {pod_id} bundle export {export_id}",
+        probe=probe,
+        expected={"READY", "FAILED"},
+        failed=set(),
+        timeout_seconds=timeout_seconds,
+        interval_seconds=0.15,
+    )
 
 
-async def _create_table_with_rows(authenticated_client, pod_id: str, table_name: str) -> None:
+async def _create_table_with_rows(
+    authenticated_client, pod_id: str, table_name: str
+) -> None:
     create = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -195,7 +204,9 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
     return buf.getvalue()
 
 
-async def _create_app_with_source(authenticated_client, pod_id: str, app_name: str) -> None:
+async def _create_app_with_source(
+    authenticated_client, pod_id: str, app_name: str
+) -> None:
     """Create an app and upload a (static) source+dist bundle, so the export path
     has real stored source bytes to download."""
     create = await authenticated_client.post(
@@ -208,8 +219,16 @@ async def _create_app_with_source(authenticated_client, pod_id: str, app_name: s
     upload = await authenticated_client.post(
         f"/pods/{pod_id}/apps/{app_name}/bundle",
         files={
-            "source_archive": ("source.zip", _zip_bytes({"index.html": html}), "application/zip"),
-            "dist_archive": ("dist.zip", _zip_bytes({"index.html": html}), "application/zip"),
+            "source_archive": (
+                "source.zip",
+                _zip_bytes({"index.html": html}),
+                "application/zip",
+            ),
+            "dist_archive": (
+                "dist.zip",
+                _zip_bytes({"index.html": html}),
+                "application/zip",
+            ),
         },
     )
     assert upload.status_code == status.HTTP_200_OK, upload.text
@@ -250,7 +269,9 @@ async def test_export_includes_app_source_and_tokenizes_slug(
     assert pod["variables"][var_name]["type"] == "app_slug", pod["variables"]
 
 
-async def test_export_status_expired_returns_410(authenticated_client, test_pod, worker):
+async def test_export_status_expired_returns_410(
+    authenticated_client, test_pod, worker
+):
     pod_id = test_pod["id"]
     missing_export_id = str(uuid4())
     res = await authenticated_client.get(
@@ -260,7 +281,9 @@ async def test_export_status_expired_returns_410(authenticated_client, test_pod,
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 
 
-async def test_export_without_data_omits_data_csv(authenticated_client, test_pod, worker, tmp_path):
+async def test_export_without_data_omits_data_csv(
+    authenticated_client, test_pod, worker, tmp_path
+):
     pod_id = test_pod["id"]
     table_name = f"nodata_{uuid4().hex[:8]}"
     await _create_table_with_rows(authenticated_client, pod_id, table_name)

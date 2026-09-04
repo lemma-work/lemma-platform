@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 
 from app.core.api.dependencies import UoWDep
+from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
     list_grantee_resource_grants,
     normalize_pod_resource_grants,
@@ -91,6 +92,13 @@ async def create_pod_role(
     pod = await uow.session.get(Pod, pod_id)
     if pod is None:
         raise HTTPException(status_code=404, detail="Pod not found")
+    # Before the role exists, not after: `pod.role.manage` says you may define
+    # roles, not that you may define one carrying authority you lack.
+    assert_can_confer(
+        ctx,
+        data.permission_ids,
+        action="put permissions you do not hold into a role",
+    )
     try:
         await role_service.create_role(
             pod_id=pod_id,
@@ -100,14 +108,21 @@ async def create_pod_role(
     except HTTPException as exc:
         if exc.status_code != status.HTTP_409_CONFLICT:
             raise
-    role = await AuthorizationDataService(uow.session).create_or_update_role(
-        organization_id=pod.organization_id,
-        pod_id=pod_id,
-        name=data.name,
-        description=data.description,
-        permission_ids=data.permission_ids,
-        created_by_user_id=ctx.user_id,
-    )
+    try:
+        role = await AuthorizationDataService(uow.session).create_or_update_role(
+            organization_id=pod.organization_id,
+            pod_id=pod_id,
+            name=data.name,
+            description=data.description,
+            permission_ids=data.permission_ids,
+            created_by_user_id=ctx.user_id,
+        )
+    except ValueError as exc:
+        # A typo in a permission id is a mistake in the request, not a fault in
+        # the platform -- the message already names what was wrong.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -143,14 +158,24 @@ async def update_pod_role(
     pod = await uow.session.get(Pod, pod_id)
     if pod is None:
         raise HTTPException(status_code=404, detail="Pod not found")
-    role = await AuthorizationDataService(uow.session).create_or_update_role(
-        organization_id=pod.organization_id,
-        pod_id=pod_id,
-        name=role_name,
-        description=data.description,
-        permission_ids=data.permission_ids,
-        created_by_user_id=ctx.user_id,
+    assert_can_confer(
+        ctx,
+        data.permission_ids,
+        action="put permissions you do not hold into a role",
     )
+    try:
+        role = await AuthorizationDataService(uow.session).create_or_update_role(
+            organization_id=pod.organization_id,
+            pod_id=pod_id,
+            name=role_name,
+            description=data.description,
+            permission_ids=data.permission_ids,
+            created_by_user_id=ctx.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return PodRoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -218,6 +243,19 @@ async def replace_pod_role_permissions(
 ) -> PodRolePermissionsResponse:
     role = await _get_core_pod_role(uow, pod_id=pod_id, role_name=role_name)
     validate_pod_resource_grant_permissions(data.grants)
+    # Bounded by what the caller holds pod-wide, deliberately: someone who can
+    # only write one table may not hand that table's write access to a role.
+    # Widening this to "any permission the caller can exercise on this resource"
+    # would let a chain of resource grants bootstrap itself.
+    assert_can_confer(
+        ctx,
+        [
+            permission_id
+            for grant in data.grants
+            for permission_id in grant.permission_ids
+        ],
+        action="grant permissions you do not hold",
+    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,

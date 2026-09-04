@@ -13,7 +13,6 @@ from app.modules.test_support.e2e.runtime import (
 
 pytestmark = pytest.mark.e2e
 
-test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
 redis_container = e2e_fixtures.redis_container
@@ -70,7 +69,6 @@ def execute_approval_jobs_inline(monkeypatch, request):
         approval_reconciliation, "queue_approval_reconciliation", _inline
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_service"
-        ".queue_approval_reconciliation",
+        "app.modules.agent.services.conversation_approvals.queue_approval_reconciliation",
         _inline,
     )

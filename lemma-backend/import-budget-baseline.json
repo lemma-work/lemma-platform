@@ -1,13 +1,13 @@
 {
-  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. Last raised by a dependency sweep: anthropic 0.111 -> 0.122 alone accounts for most of it and is now the largest single tree at 1,090 modules, arriving through pydantic-ai-slim[anthropic]. Not avoidable without dropping Anthropic model support. See scripts/check_import_budget.py.",
+  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py. Last raised for the GitHub App work: 8 first-party modules and zero third-party ones -- the App auth and installation services, the credential presenters, the shared webhook signature module, and the source-plugin port. Measured main at 4630/6407 against this 4585/6372 baseline before that, i.e. #598 had already spent 45 of the 50-module tolerance without raising it, so the number here had stopped describing anything.",
   "tolerance": 50,
   "entrypoints": {
     "app.app": {
-      "modules": 5491,
+      "modules": 4636,
       "rss_mib": null
     },
     "app.events": {
-      "modules": 6479,
+      "modules": 6413,
       "rss_mib": null
     }
   }

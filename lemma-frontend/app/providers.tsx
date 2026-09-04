@@ -4,13 +4,18 @@ import { QueryClient, QueryClientProvider, keepPreviousData } from '@tanstack/re
 import { ThemeProvider as NextThemesProvider } from 'next-themes';
 import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
+import { isUnauthorized } from '@/lib/sdk/is-unauthorized';
 import { Toaster } from 'sonner';
 import { OrganizationProvider } from '@/components/dashboard/org-context';
 import { AnalyticsProvider } from '@/components/analytics/analytics-provider';
 import { AnalyticsIdentity } from '@/components/analytics/analytics-identity';
 import { ConsentBanner } from '@/components/analytics/consent-banner';
+import { useSandboxImageToasts } from '@/lib/desktop/sandbox-images';
 
 export function Providers({ children }: { children: ReactNode }) {
+    // Desktop only, and only while there is an answer that can still change.
+    // A no-op in a browser, and on a warm install it never shows anything.
+    useSandboxImageToasts();
     const [queryClient] = useState(
         () =>
             new QueryClient({
@@ -32,6 +37,22 @@ export function Providers({ children }: { children: ReactNode }) {
                          * to keep, so they still get the skeleton.
                          */
                         placeholderData: keepPreviousData,
+                        /**
+                         * Never retry a rejection. Retrying assumes the next
+                         * attempt could be authorized, and by this point the
+                         * session layer has already refreshed and retried on
+                         * its own -- so a 401 here means that did not work.
+                         *
+                         * Retrying anyway multiplies it: react-query's default
+                         * is three more attempts, each of which re-enters the
+                         * refresh-and-retry path underneath. One unusable
+                         * session became a sustained ~10 requests a second
+                         * across every query a workspace screen makes, forever,
+                         * because nothing in the stack treated "still 401 after
+                         * a successful refresh" as an answer.
+                         */
+                        retry: (failureCount, error) =>
+                            !isUnauthorized(error) && failureCount < 3,
                     },
                 },
             })
@@ -66,9 +87,14 @@ export function Providers({ children }: { children: ReactNode }) {
                 <AnalyticsProvider />
                 <ConsentBanner />
                 {appTree}
+                {/* No close button: a toast dismisses itself, and a dismiss
+                    control on a thing that leaves on its own is chrome for
+                    nothing -- it also reserved a gutter across every toast in
+                    the product to hold it. What can appear instead is one
+                    action (Undo), which is the only reason to reach for a
+                    toast rather than say nothing at all. */}
                 <Toaster
                     position="bottom-right"
-                    closeButton
                     offset={18}
                     toastOptions={{
                         duration: 4200,
@@ -77,7 +103,7 @@ export function Providers({ children }: { children: ReactNode }) {
                             title: 'lemma-toast-title',
                             description: 'lemma-toast-description',
                             icon: 'lemma-toast-icon',
-                            closeButton: 'lemma-toast-close',
+                            actionButton: 'lemma-toast-action',
                             success: 'lemma-toast-success',
                             error: 'lemma-toast-error',
                             warning: 'lemma-toast-warning',

@@ -157,7 +157,9 @@ async def process_datastore_file_task(
         )
         await service.process_file_async(file_uuid, metadata or {})
     except Exception:
-        logger.debug('datastore.handlers.process_datastore_file_task_s.propagated', exc_info=True)
+        logger.debug(
+            "datastore.handlers.process_datastore_file_task_s.propagated", exc_info=True
+        )
         raise
 
 
@@ -197,13 +199,14 @@ async def cleanup_deleted_datastore_paths_task(
             "datastore.handlers.finished_cleanup_deleted_datastore_paths.observed"
         )
     except Exception:
-        logger.debug('datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated', exc_info=True)
+        logger.debug(
+            "datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated",
+            exc_info=True,
+        )
         raise
 
 
-@streaq_cron(
-    "* * * * *", name="dispatch_pending_datastore_files", lane=Lane.BULK
-)
+@streaq_cron("* * * * *", name="dispatch_pending_datastore_files", lane=Lane.BULK)
 async def dispatch_pending_datastore_files() -> None:
     """Meter the PENDING backlog into the bulk queue, fairly across pods.
 
@@ -235,7 +238,7 @@ async def dispatch_pending_datastore_files() -> None:
         )
 
 
-@streaq_cron("*/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
+@streaq_cron("8-59/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
 async def recover_stuck_processing_files() -> None:
     """
     Find files stuck in PENDING or PROCESSING and make sure they get queued.
@@ -260,7 +263,6 @@ async def recover_stuck_processing_files() -> None:
                 now=datetime.now(timezone.utc)
             )
 
-
         if summary.terminal_count:
             logger.warning(
                 "datastore.handlers.datastore_file_recovery_terminally_d.degraded",
@@ -272,4 +274,6 @@ async def recover_stuck_processing_files() -> None:
             return
 
     except Exception:
-        logger.error("datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True)
+        logger.error(
+            "datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True
+        )

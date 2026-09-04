@@ -24,7 +24,9 @@ class FunctionFileManager:
 
         self.function_id = function_id
         self.prefix = f"functions/{function_id}/"
-        self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
+        self._local_base: Path | None = (
+            Path(root_path) / self.prefix if root_path else None
+        )
 
         if root_path is not None:
             self.store = LocalStore(prefix=self._local_base, mkdir=True)
@@ -48,6 +50,23 @@ class FunctionFileManager:
             return bytes_data.decode("utf-8")
         except UnicodeDecodeError:
             return bytes_data
+
+    async def read_bytes(self, path: str) -> bytes:
+        """Read a file the caller already knows is binary.
+
+        ``read_file`` above guesses, by attempting a UTF-8 decode of the whole
+        buffer and falling back on failure. That is right for a caller that
+        might get either, and wrong for one that cannot: fetching a function's
+        artifact ran a full decode over a multi-megabyte zip, failed, and the
+        caller immediately re-encoded the result back to the bytes it started
+        with. Two whole-buffer passes to arrive where it began.
+        """
+        try:
+            result = await obs.get_async(self.store, path)
+        except ObstoreNotFoundError:
+            raise FileNotFoundError(f"File {path} not found")
+        data = await result.bytes_async()
+        return data.to_bytes()
 
     async def write_file(self, path: str, content: bytes | str) -> None:
         if isinstance(content, str):

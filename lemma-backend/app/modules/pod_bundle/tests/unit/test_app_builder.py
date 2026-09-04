@@ -199,6 +199,24 @@ async def test_artifacts_vite_builds_in_sandbox(tmp_path):
     assert sandbox.call == {"app_slug": "app-x", "pod_id": _POD}
 
 
+async def test_artifacts_single_html_file_is_its_own_source(tmp_path):
+    """`html.html` is the CLI bundle format's one-file no-build app. The server
+    importer used to see no source/ and no dist.zip and fail a bundle the CLI
+    imports happily."""
+    resource = tmp_path / "apps" / "page"
+    resource.mkdir(parents=True)
+    (resource / "html.html").write_text("<h1>hi</h1>")
+
+    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "page", app_slug="page", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert source_bytes == dist_bytes
+    with zipfile.ZipFile(io.BytesIO(dist_bytes)) as zf:
+        assert zf.namelist() == ["index.html"]
+        assert zf.read("index.html").decode() == "<h1>hi</h1>"
+
+
 async def test_artifacts_dist_zip_fallback_when_no_source(tmp_path):
     resource = tmp_path / "apps" / "widget"
     resource.mkdir(parents=True)
