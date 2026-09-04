@@ -9,7 +9,7 @@
  * columns cost nothing to return: they ride along in the query that found the
  * pod, so the response grows with the number of pods and not with what is
  * inside them. Apps, agents and roles are the other side of that line, and
- * live on ``/organizations/{org_id}/home``.
+ * live on ``/organizations/{organization_id}/home``.
  */
 export type NavigationPodResponse = {
     description?: (string | null);

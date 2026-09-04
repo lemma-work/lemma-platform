@@ -15,7 +15,7 @@ from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     include_disabled: bool | Unset = False,
 ) -> dict[str, Any]:
@@ -28,8 +28,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/organizations/{org_id}/agent-runtime/profiles".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/agent-runtime/profiles".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
         "params": params,
     }
@@ -68,7 +68,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     include_disabled: bool | Unset = False,
@@ -76,7 +76,7 @@ def sync_detailed(
     """List Available Agent Runtime Profiles
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         include_disabled (bool | Unset):  Default: False.
 
     Raises:
@@ -88,7 +88,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         include_disabled=include_disabled,
     )
 
@@ -100,7 +100,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     include_disabled: bool | Unset = False,
@@ -108,7 +108,7 @@ def sync(
     """List Available Agent Runtime Profiles
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         include_disabled (bool | Unset):  Default: False.
 
     Raises:
@@ -120,14 +120,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         include_disabled=include_disabled,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     include_disabled: bool | Unset = False,
@@ -135,7 +135,7 @@ async def asyncio_detailed(
     """List Available Agent Runtime Profiles
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         include_disabled (bool | Unset):  Default: False.
 
     Raises:
@@ -147,7 +147,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         include_disabled=include_disabled,
     )
 
@@ -157,7 +157,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     include_disabled: bool | Unset = False,
@@ -165,7 +165,7 @@ async def asyncio(
     """List Available Agent Runtime Profiles
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         include_disabled (bool | Unset):  Default: False.
 
     Raises:
@@ -178,7 +178,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             include_disabled=include_disabled,
         )

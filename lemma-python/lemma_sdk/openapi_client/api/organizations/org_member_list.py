@@ -13,7 +13,7 @@ from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
@@ -34,8 +34,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/organizations/{org_id}/members".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/members".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
         "params": params,
     }
@@ -74,7 +74,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
@@ -85,7 +85,7 @@ def sync_detailed(
      Get all members of an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
 
@@ -98,7 +98,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         limit=limit,
         page_token=page_token,
     )
@@ -111,7 +111,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
@@ -122,7 +122,7 @@ def sync(
      Get all members of an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
 
@@ -135,7 +135,7 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         limit=limit,
         page_token=page_token,
@@ -143,7 +143,7 @@ def sync(
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
@@ -154,7 +154,7 @@ async def asyncio_detailed(
      Get all members of an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
 
@@ -167,7 +167,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         limit=limit,
         page_token=page_token,
     )
@@ -178,7 +178,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
@@ -189,7 +189,7 @@ async def asyncio(
      Get all members of an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
 
@@ -203,7 +203,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             limit=limit,
             page_token=page_token,

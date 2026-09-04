@@ -14,7 +14,7 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     body: UpdateMemberRoleRequest,
@@ -23,8 +23,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "patch",
-        "url": "/organizations/{org_id}/members/{member_id}/role".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/members/{member_id}/role".format(
+            organization_id=quote(str(organization_id), safe=""),
             member_id=quote(str(member_id), safe=""),
         ),
     }
@@ -68,7 +68,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -79,7 +79,7 @@ def sync_detailed(
      Update a member's role in the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
         body (UpdateMemberRoleRequest): Update member role request schema.
 
@@ -92,7 +92,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
         body=body,
     )
@@ -105,7 +105,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -116,7 +116,7 @@ def sync(
      Update a member's role in the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
         body (UpdateMemberRoleRequest): Update member role request schema.
 
@@ -129,7 +129,7 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
         client=client,
         body=body,
@@ -137,7 +137,7 @@ def sync(
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -148,7 +148,7 @@ async def asyncio_detailed(
      Update a member's role in the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
         body (UpdateMemberRoleRequest): Update member role request schema.
 
@@ -161,7 +161,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         member_id=member_id,
         body=body,
     )
@@ -172,7 +172,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     member_id: UUID,
     *,
     client: AuthenticatedClient | Client,
@@ -183,7 +183,7 @@ async def asyncio(
      Update a member's role in the organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         member_id (UUID):
         body (UpdateMemberRoleRequest): Update member role request schema.
 
@@ -197,7 +197,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             member_id=member_id,
             client=client,
             body=body,

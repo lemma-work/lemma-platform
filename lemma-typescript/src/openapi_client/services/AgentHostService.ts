@@ -36,7 +36,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostEventAck> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/events:append',
+            url: '/agent-host/events/append',
             headers: {
                 'authorization': authorization,
             },
@@ -84,7 +84,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostPairingCompleted> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/pairings:complete',
+            url: '/agent-host/pairings/complete',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

@@ -8931,7 +8931,7 @@
         "type": "object"
       },
       "NavigationPodResponse": {
-        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{org_id}/home``.",
+        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{organization_id}/home``.",
         "properties": {
           "description": {
             "anyOf": [
@@ -17836,7 +17836,7 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/agent-host/events:append": {
+    "/agent-host/events/append": {
       "post": {
         "description": "Append one ordered batch to the run's stream.\n\nThere is no second lane to publish on: every event type travels the one\nordered stream, and the ack watermark is the stream's last entry.",
         "operationId": "agent.host.events.append",
@@ -17976,7 +17976,7 @@
         }
       }
     },
-    "/agent-host/pairings:complete": {
+    "/agent-host/pairings/complete": {
       "post": {
         "description": "Consume a pairing code and issue the host secret, shown exactly once.",
         "operationId": "agent.host.pairing.complete",
@@ -19176,18 +19176,18 @@
         }
       }
     },
-    "/organizations/{org_id}": {
+    "/organizations/{organization_id}": {
       "get": {
         "description": "Get organization details",
         "operationId": "org.get",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19232,11 +19232,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19289,17 +19289,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles": {
+    "/organizations/{organization_id}/agent-runtime/profiles": {
       "get": {
         "operationId": "agent.runtime.profiles.list",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19353,11 +19353,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19429,17 +19429,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}": {
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}": {
       "delete": {
         "operationId": "agent.runtime.profiles.archive",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19488,11 +19488,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19545,11 +19545,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19630,17 +19630,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore": {
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore": {
       "post": {
         "operationId": "agent.runtime.profiles.restore",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19689,467 +19689,6 @@
           "resource": "agent.runtime.profiles",
           "result": "entity",
           "verb": "restore"
-        }
-      }
-    },
-    "/organizations/{org_id}/home": {
-      "get": {
-        "description": "One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.",
-        "operationId": "org.home",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationHomeResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Organization Home",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "org",
-          "result": "entity",
-          "verb": "home"
-        }
-      }
-    },
-    "/organizations/{org_id}/invitations": {
-      "get": {
-        "description": "Get all pending invitations for an organization",
-        "operationId": "org.invitation.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/OrganizationInvitationStatus",
-              "default": "PENDING"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationInvitationListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Organization Invitations",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "org.invitation",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "description": "Invite a user to join the organization",
-        "operationId": "org.invitation.invite",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OrganizationInvitationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationInvitationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Invite Member",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.invitation"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.invitation",
-          "result": "entity",
-          "verb": "invite"
-        }
-      }
-    },
-    "/organizations/{org_id}/join": {
-      "post": {
-        "description": "Join an organization when the current user's email domain is allowed to auto-join",
-        "operationId": "org.join_auto_join",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Join Auto-Join Organization",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org",
-          "result": "entity",
-          "verb": "join_auto_join"
-        }
-      }
-    },
-    "/organizations/{org_id}/members": {
-      "get": {
-        "description": "Get all members of an organization",
-        "operationId": "org.member.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationMemberListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Organization Members",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "org.member",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/organizations/{org_id}/members/{member_id}": {
-      "delete": {
-        "description": "Remove a member from the organization",
-        "operationId": "org.member.remove",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "member_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Member Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Remove Member",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.member"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.member",
-          "result": "void",
-          "verb": "remove"
-        }
-      }
-    },
-    "/organizations/{org_id}/members/{member_id}/role": {
-      "patch": {
-        "description": "Update a member's role in the organization",
-        "operationId": "org.member.update_role",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "member_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Member Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateMemberRoleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationMemberResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Member Role",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.member"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.member",
-          "result": "entity",
-          "verb": "update_role"
         }
       }
     },
@@ -21553,6 +21092,544 @@
         }
       }
     },
+    "/organizations/{organization_id}/home": {
+      "get": {
+        "description": "One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.",
+        "operationId": "org.home",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationHomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Organization Home",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "home"
+        }
+      }
+    },
+    "/organizations/{organization_id}/invitations": {
+      "get": {
+        "description": "Get all pending invitations for an organization",
+        "operationId": "org.invitation.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationInvitationStatus",
+              "default": "PENDING"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationInvitationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organization Invitations",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "org.invitation",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Invite a user to join the organization",
+        "operationId": "org.invitation.invite",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationInvitationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Invite Member",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.invitation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.invitation",
+          "result": "entity",
+          "verb": "invite"
+        }
+      }
+    },
+    "/organizations/{organization_id}/join": {
+      "post": {
+        "description": "Join an organization when the current user's email domain is allowed to auto-join",
+        "operationId": "org.join_auto_join",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join Auto-Join Organization",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "join_auto_join"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members": {
+      "get": {
+        "description": "Get all members of an organization",
+        "operationId": "org.member.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemberListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organization Members",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "org.member",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members/{member_id}": {
+      "delete": {
+        "description": "Remove a member from the organization",
+        "operationId": "org.member.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.member",
+          "result": "void",
+          "verb": "remove"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members/{member_id}/role": {
+      "patch": {
+        "description": "Update a member's role in the organization",
+        "operationId": "org.member.update_role",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemberRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemberResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Member Role",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.member",
+          "result": "entity",
+          "verb": "update_role"
+        }
+      }
+    },
+    "/organizations/{organization_id}/pods": {
+      "get": {
+        "description": "List all pods in an organization",
+        "operationId": "pod.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods by Organization",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "pod",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods": {
       "post": {
         "description": "Create a new pod",
@@ -21647,83 +21724,6 @@
           "resource": "pod.bundle",
           "result": "entity",
           "verb": "download"
-        }
-      }
-    },
-    "/pods/organization/{organization_id}": {
-      "get": {
-        "description": "List all pods in an organization",
-        "operationId": "pod.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organization_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Organization Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PodListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List PodS by Organization",
-        "tags": [
-          "Pods"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "pod",
-          "result": "collection",
-          "verb": "list"
         }
       }
     },

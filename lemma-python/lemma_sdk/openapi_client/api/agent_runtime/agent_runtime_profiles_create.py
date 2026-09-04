@@ -22,7 +22,7 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
@@ -32,8 +32,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/organizations/{org_id}/agent-runtime/profiles".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/agent-runtime/profiles".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
     }
 
@@ -81,7 +81,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
@@ -91,7 +91,7 @@ def sync_detailed(
     """Create Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
             CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
@@ -105,7 +105,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -117,7 +117,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
@@ -127,7 +127,7 @@ def sync(
     """Create Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
             CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
@@ -141,14 +141,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         body=body,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
@@ -158,7 +158,7 @@ async def asyncio_detailed(
     """Create Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
             CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
@@ -172,7 +172,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -182,7 +182,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
@@ -192,7 +192,7 @@ async def asyncio(
     """Create Agent Runtime Profile
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
             CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
@@ -207,7 +207,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             body=body,
         )
