@@ -739,7 +739,8 @@ async def test_the_recipients_own_preference_no_longer_steers_delivery():
     # Autospecced against the Protocol: reading a method it no longer declares
     # raises, so this is what proves the lookup is gone rather than just unused.
     with pytest.raises(AttributeError):
-        service.membership.get_user_default_surface_ids
+        # The expression is the assertion: the attribute must not exist.
+        service.membership.get_user_default_surface_ids  # noqa: B018
 
     channels, _ = await service.resolve_channels(
         pod_id=pod_id, recipient_user_id=uuid4(), actor_agent_id=None
