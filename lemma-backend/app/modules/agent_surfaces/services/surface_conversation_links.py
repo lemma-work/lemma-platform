@@ -7,7 +7,7 @@ the conversation's surface metadata in step.
 
 from __future__ import annotations
 
-from app.core.authorization.delegation import effective_agent_id
+from app.core.authorization.delegation import agent_display_name, effective_agent_id
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -260,7 +260,13 @@ class SurfaceConversationLinkMixin:
             "route_key": route_key,
             "conversation_kind": conversation_kind,
             "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            "agent_display_name": await self.agent_name_for_surface(surface) or "Lemma",
+            # `agent_name_for_surface` answers with the *row* name, so the pod's
+            # own agent answers `pod_default`. The `or "Lemma"` that used to sit
+            # here never caught it: a stored name is not falsy, and that guard
+            # was written when the agent had no row and the name really was null.
+            "agent_display_name": agent_display_name(
+                await self.agent_name_for_surface(surface)
+            ),
             "surface_event_metadata": (
                 surface_event_metadata.model_dump(mode="json")
                 if surface_event_metadata

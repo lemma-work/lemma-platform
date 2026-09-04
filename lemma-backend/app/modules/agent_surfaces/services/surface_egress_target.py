@@ -7,6 +7,7 @@ every one of them starts here and none of them needs the others.
 
 from __future__ import annotations
 
+from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import AgentKind
 from app.modules.agent_surfaces.services.surface_route_types import (
     SurfaceEgressTarget,
@@ -103,11 +104,15 @@ class SurfaceEgressTargetMixin:
             if agent_id
             else None
         )
-        # Not `agent.name`: the pod's own assistant is stored as `pod_default`,
+        # Not `agent.name`: the pod's own agent is stored as `pod_default`,
         # an internal identifier that used to be absent entirely, so every
-        # caller wrote `or "Lemma"` and the null did the work.
+        # caller wrote `or "Lemma"` and the null did the work. It has a name of
+        # its own now, and it is not the product's — see `DEFAULT_RESPONDER_NAME`.
         is_default = agent is None or agent.kind is AgentKind.POD_DEFAULT
-        resolved.setdefault("agent_display_name", "Lemma" if is_default else agent.name)
+        resolved.setdefault(
+            "agent_display_name",
+            DEFAULT_RESPONDER_NAME if is_default else agent.name,
+        )
         icon_url = getattr(agent, "icon_url", None)
         if icon_url:
             resolved.setdefault("agent_icon_url", str(icon_url))

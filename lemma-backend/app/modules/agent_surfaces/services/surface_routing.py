@@ -6,6 +6,7 @@ name the agent that answers, and identify who sent it. Nothing here writes.
 
 from __future__ import annotations
 
+from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import AgentKind
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -363,11 +364,14 @@ class SurfaceRoutingMixin:
     async def _agent_display_name(self, agent_id: UUID | None) -> str:
         """What this agent calls itself in front of a person.
 
-        Not `agent.name`. The pod's own assistant is stored as `pod_default`,
+        Not `agent.name`. The pod's own agent is stored as `pod_default`,
         which is an internal identifier -- it used to have no row at all, so
         every caller wrote `agent_name or "Lemma"` and the null did the work.
-        Now that it has one, that expression would put `pod_default` on the
-        message.
+        Now that it has one, that expression puts `pod_default` on the message.
+
+        The name it falls back to is `Lem`, not `Lemma`: the pod's agent is an
+        actor with a name of its own, and the product is what the bot and the
+        sending domain already say. See `agent_display_name`.
         """
         agent = (
             await self.conversation_service.agent_repository.get(agent_id)
@@ -375,7 +379,7 @@ class SurfaceRoutingMixin:
             else None
         )
         if agent is None or agent.kind is AgentKind.POD_DEFAULT:
-            return "Lemma"
+            return DEFAULT_RESPONDER_NAME
         return agent.name
 
     async def _agent_name_for_agent_id(
