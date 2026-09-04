@@ -12,7 +12,8 @@ from pathlib import Path
 
 import typer
 
-from ..state import console
+from ..io import emit
+from ..state import console, state_from_ctx
 
 
 def grant_resource(
@@ -42,11 +43,29 @@ def grant_resource(
     console.print("[dim]next:[/dim] `lemma pods import .` to apply")
 
 
-def print_resource_schema(resource_type: str) -> None:
-    """Print the JSONC scaffold/example for a resource type (same shape `init` writes)."""
+def print_resource_schema(ctx: typer.Context, resource_type: str) -> None:
+    """Print the JSONC scaffold/example for a resource type (same shape `init` writes).
+
+    The scaffold is JSON *with comments* — that is the point of it, and it is
+    what `init` writes to a file. But it is not parseable JSON, so under
+    `--output json` this was handing a `| jq` a syntax error on every one of
+    the resource types. In that mode the template travels as a string value
+    instead, which keeps the comments and satisfies the promise.
+
+    The context is passed rather than fetched: typer vendors its own click, so
+    a top-level `click.get_current_context()` looks at a different context
+    stack and answers `None` — the same vendoring that makes a `TyperGroup`
+    fail an `isinstance(cmd, click.Group)` check.
+    """
     from ...cli_app.scaffold import ScaffoldError, resource_example
 
     try:
-        typer.echo(resource_example(resource_type))
+        example = resource_example(resource_type)
     except ScaffoldError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+    state = state_from_ctx(ctx)
+    if state.output == "json":
+        emit(state, {"resource_type": resource_type, "template": example})
+        return
+    typer.echo(example)

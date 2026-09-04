@@ -44,11 +44,11 @@ def init_surface(
 
 
 @app.command("schema")
-def schema_surface() -> None:
+def schema_surface(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a surface bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("surface")
+    print_resource_schema(ctx, "surface")
 
 
 def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
