@@ -80,16 +80,15 @@
   },
   "composition_deep_imports": {},
   "core_module_imports": {
-    "core->agent": 3,
-    "core->agent_surfaces": 5,
+    "core->agent": 2,
     "core->apps": 2,
     "core->connectors": 4,
     "core->datastore": 4,
-    "core->function": 6,
+    "core->function": 2,
     "core->identity": 5,
     "core->pod": 3,
-    "core->schedule": 3,
-    "core->workflow": 3
+    "core->schedule": 2,
+    "core->workflow": 2
   },
   "forbidden_imports": {
     "agent->connectors": 4,
@@ -111,7 +110,7 @@
     "app/app.py": 999,
     "app/core/authorization/service.py": 1925,
     "app/core/config.py": 1756,
-    "app/core/infrastructure/jobs/streaq_runtime.py": 973,
+    "app/core/infrastructure/jobs/streaq_runtime.py": 882,
     "app/core/log/log.py": 894,
     "app/core/observability/telemetry.py": 1002,
     "app/core/test_utils.py": 962,
