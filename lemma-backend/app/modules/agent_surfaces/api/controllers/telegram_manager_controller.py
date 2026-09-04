@@ -103,7 +103,7 @@ async def start_telegram_managed_bot_setup(
 
     surface_config = surface_config_from_input(
         request.config,
-        channel_routes=[],
+        channel_ids=[],
     )
     surface_config.telegram = await resolve_telegram_config(
         uow=uow,
