@@ -23,13 +23,19 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
 # conversation_id -> pod file paths displayed but not yet sent, in the order the
 # agent showed them.
-_pending_paths: dict[UUID, list[str]] = {}
+#
+# Bounded on the outer key too: the inner lists are capped, but an entry is only
+# removed when the run that owns it finishes or fails. An observer that never
+# fires leaves its conversation behind permanently.
+_MAX_PENDING_CONVERSATIONS = 2048
+_pending_paths: BoundedDict[UUID, list[str]] = BoundedDict(_MAX_PENDING_CONVERSATIONS)
 
 # A run that shows a hundred files is a runaway, and the reply would be refused
 # by the provider anyway. Bound it rather than letting the dict grow.

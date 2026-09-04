@@ -153,6 +153,20 @@ class DatastoreEventHandler:
             return False
         if config is None or not config.when:
             return True
+        if event.payload_truncated:
+            # The body was too large to carry, so the conditions cannot be
+            # evaluated against it. Firing on an empty payload would match the
+            # wrong rows in both directions, so the event is dropped and said
+            # out loud -- a schedule that is silently 4 days behind is the
+            # failure this codebase has already been bitten by. The durable fix
+            # is to re-read the row here; until then this is visible, not quiet.
+            logger.warning(
+                "schedule.datastore_event_handler.truncated_payload.degraded",
+                schedule_id=str(schedule.id),
+                table_name=event.table_name,
+                record_id=event.record_id,
+            )
+            return False
         return evaluate_match_conditions(
             config.when,
             operation=operation,

@@ -13,6 +13,12 @@ _DEFAULT_STREAM_MAXLEN_OVERRIDES = {
     "usage_events": 10_000,
 }
 
+#: Dead-letter streams are named `{stream}:dead` at runtime, so they match no
+#: static override and inherited the 50,000 default. Their entries carry up to
+#: 64KB of quarantined body each, which is a 3.2GB ceiling per stream that
+#: nothing consumes and nothing was watching.
+_DEAD_LETTER_SUFFIX = ":dead"
+
 
 class EventTransportSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -93,6 +99,53 @@ class EventTransportSettings(BaseSettings):
         default_factory=lambda: dict(_DEFAULT_STREAM_MAXLEN_OVERRIDES),
         description="Per-stream MAXLEN overrides encoded as a JSON object.",
     )
+    redis_stream_max_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        ge=0,
+        description=(
+            "Byte budget per stream, enforced by a periodic trim rather than on "
+            "publish. The MAXLEN cap counts entries, and entries are not what "
+            "runs out: the same 50,000 meant 9MB for one stream and 831MB for "
+            "another. Only fully-consumed entries are removed, so this can "
+            "never destroy unread work. 0 disables it. Env: "
+            "``REDIS_STREAM_MAX_BYTES``."
+        ),
+    )
+    redis_stream_pending_hold_seconds: int = Field(
+        default=900,
+        ge=0,
+        description=(
+            "How long one unacked message may hold a stream's size cap open. "
+            "Past this the entry has already failed its consumer and the "
+            "reclaimer, so it stops being a reason to retain everything behind "
+            "it. Quarantine only fires after 12 deliveries, which a message "
+            "nobody retries never reaches -- that is how a single entry with "
+            "two deliveries disabled trimming on a production stream for hours. "
+            "0 disables the escape hatch. Env: "
+            "``REDIS_STREAM_PENDING_HOLD_SECONDS``."
+        ),
+    )
+    redis_stream_dead_letter_maxlen: int = Field(
+        default=1_000,
+        ge=0,
+        description=(
+            "Cap for `{stream}:dead` quarantine streams, which carry up to 64KB "
+            "of message body per entry and have no consumer. Env: "
+            "``REDIS_STREAM_DEAD_LETTER_MAXLEN``."
+        ),
+    )
+    redis_stream_hard_maxlen_multiplier: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "How far a stream may overshoot its MAXLEN while a consumer group "
+            "is behind. Protecting unread work used to mean publishing with no "
+            "cap at all, so one unacked message disabled trimming for the whole "
+            "stream and it grew until Redis was OOM-killed. A stuck consumer "
+            "must degrade to retaining more, never to retaining everything. "
+            "Env: ``REDIS_STREAM_HARD_MAXLEN_MULTIPLIER``."
+        ),
+    )
     redis_stream_snapshot_interval_seconds: float = Field(default=300.0, ge=0)
     redis_stream_stale_consumer_seconds: int = Field(default=900, ge=1)
     consumer_group_reconcile_interval_seconds: float = Field(default=30.0, ge=0)
@@ -130,10 +183,22 @@ class EventTransportSettings(BaseSettings):
     )
 
     def stream_maxlen_for(self, stream: str) -> int | None:
-        configured = self.redis_stream_maxlen_overrides.get(
-            stream, self.redis_stream_maxlen
-        )
+        default = self.redis_stream_maxlen
+        if stream.endswith(_DEAD_LETTER_SUFFIX):
+            default = min(default, self.redis_stream_dead_letter_maxlen)
+        configured = self.redis_stream_maxlen_overrides.get(stream, default)
         return configured if configured > 0 else None
+
+    def stream_hard_maxlen_for(self, stream: str) -> int | None:
+        """The ceiling a stream may never pass, however far behind a group is.
+
+        ``None`` only when trimming is switched off outright, which is the one
+        case where "no cap" is a deliberate choice rather than an accident.
+        """
+        configured = self.stream_maxlen_for(stream)
+        if configured is None:
+            return None
+        return configured * self.redis_stream_hard_maxlen_multiplier
 
 
 event_transport_settings = EventTransportSettings()

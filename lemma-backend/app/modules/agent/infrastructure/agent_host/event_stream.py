@@ -55,6 +55,20 @@ _PAYLOAD_FIELD = "event"
 # reaches a terminal state.
 _STREAM_TTL_SECONDS = 24 * 60 * 60
 
+# The TTL was the only bound here: a run's stream could hold every event it ever
+# emitted, and an agent event can carry a base64 image. A run may last four
+# hours, so "expires in a day" is not a size limit. Entries past this are the
+# ones a reader has long since passed; the durable record is the run's own
+# storage, not this feed.
+_STREAM_MAXLEN = 10_000
+
+#: ARGV slots before the (sequence, payload) pairs begin: the TTL and the
+#: MAXLEN. The Lua loop starts at `_LEADING_ARGV + 1`, substituted into the
+#: script below rather than written twice -- adding a leading argument without
+#: moving the loop reads the first payload as a sequence number and silently
+#: drops the batch.
+_LEADING_ARGV = 2
+
 _START_ID = "0-0"
 
 # The sequence is written as its own stream field as well as inside the payload
@@ -79,6 +93,7 @@ _SEQUENCE_FIELD = "sequence"
 _APPEND_SCRIPT = """
 local key = KEYS[1]
 local ttl = tonumber(ARGV[1])
+local maxlen = tonumber(ARGV[2])
 
 local last = 0
 local newest = redis.call('XREVRANGE', key, '+', '-', 'COUNT', 1)
@@ -108,7 +123,8 @@ local expected = last + 1
 local appended = 0
 local resynced_from = 0
 
-for index = 2, #ARGV, 2 do
+-- Events start after the leading ARGV slots; see `_LEADING_ARGV`.
+for index = __EVENT_START__, #ARGV, 2 do
   local sequence = tonumber(ARGV[index])
   local payload = ARGV[index + 1]
   -- A resend after a lost acknowledgement replays what we already hold.
@@ -121,7 +137,7 @@ for index = 2, #ARGV, 2 do
         return {1, last, expected, sequence, 0}
       end
     end
-    redis.call('XADD', key, '*', 'sequence', sequence, 'event', payload)
+    redis.call('XADD', key, 'MAXLEN', '~', maxlen, '*', 'sequence', sequence, 'event', payload)
     appended = appended + 1
     expected = expected + 1
   end
@@ -140,6 +156,8 @@ return {0, expected - 1, 0, 0, resynced_from}
 _SOCKET_TIMEOUT_SECONDS = 15.0
 # The blocking read is a normal command as far as the socket is concerned, so
 # its server-side block must stay well inside the socket timeout above.
+_APPEND_SCRIPT = _APPEND_SCRIPT.replace("__EVENT_START__", str(_LEADING_ARGV + 1))
+
 _MAX_BLOCK_MS = 5_000
 
 
@@ -222,7 +240,7 @@ class AgentHostEventStream:
         if not events:
             return AppendOutcome(watermark=await self.last_sequence(run_id=run_id))
         redis = self._client()
-        arguments: list[object] = [_STREAM_TTL_SECONDS]
+        arguments: list[object] = [_STREAM_TTL_SECONDS, _STREAM_MAXLEN]
         for event in events:
             arguments.append(integer(event.get("sequence")))
             arguments.append(json.dumps(event))

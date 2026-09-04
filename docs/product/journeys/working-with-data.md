@@ -82,6 +82,10 @@ put it there having to think about it on every operation.
   refuse and shall name the column.
 - If a person adds a record with a value outside a column's fixed set of
   choices, then the system shall refuse and shall list the choices.
+- If a person adds a record whose value, or whose record as a whole, is larger
+  than the system allows, then the system shall refuse, shall name the column
+  and the limit, and shall say that content of that size belongs in a file the
+  record points at.
 
 **Contracts:** `record.create`, `record.get`
 

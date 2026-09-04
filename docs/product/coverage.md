@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 382.
+Scenario tests declaring a promise: 383.
 
 ## Contract coverage
 
@@ -254,7 +254,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-DATA-001` A person creates a table by declaring its columns | `covered` | `test_a_table_is_created_from_its_columns`, `test_a_duplicate_table_name_is_refused`, `test_a_bad_column_name_is_refused` |
 | `PS-DATA-002` A table's shape can change without losing what is in it | `covered` | `test_a_tables_settings_can_change`, `test_adding_and_removing_columns_keeps_the_records`, `test_the_primary_key_column_cannot_be_removed`, `test_a_duplicate_column_is_refused` |
 | `PS-DATA-003` Deleting a table is destructive and says so | `covered` | `test_deleting_a_table_takes_its_records` |
-| `PS-DATA-010` A person adds records and the system holds them to the shape | `covered` | `test_the_python_sdk_writes_a_record`, `test_a_record_goes_in_and_comes_back`, `test_a_wrongly_typed_value_is_refused`, `test_a_missing_required_value_is_refused` |
+| `PS-DATA-010` A person adds records and the system holds them to the shape | `covered` | `test_the_python_sdk_writes_a_record`, `test_a_record_goes_in_and_comes_back`, `test_a_wrongly_typed_value_is_refused`, `test_a_missing_required_value_is_refused`, `test_an_oversized_value_is_refused` |
 | `PS-DATA-011` A person finds the records they want without reading all of them | `covered` | `test_the_cli_reads_tables_and_records`, `test_paging_returns_every_record_once`, `test_records_can_be_sorted`, `test_a_page_is_bounded` |
 | `PS-DATA-012` A person changes and removes records | `covered` | `test_an_update_leaves_untouched_columns_alone`, `test_deleting_one_record_leaves_the_others` |
 | `PS-DATA-013` Bulk changes either all happen or none do | `covered` | `test_many_records_change_at_once`, `test_many_records_go_at_once`, `test_a_bulk_write_lands`, `test_a_bulk_write_is_all_or_nothing` |

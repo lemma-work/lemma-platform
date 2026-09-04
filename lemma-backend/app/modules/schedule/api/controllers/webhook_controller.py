@@ -106,7 +106,7 @@ async def handle_webhook(
         # hook, so a shrug has to look like success.
         return {"message": "Webhook received"}
 
-    # No fan-out here. This used to publish a `RawWebhookReceivedEvent` on
+    # No fan-out here. This used to publish a raw-webhook event on
     # `webhook_events` "for other modules to listen to" and nothing ever did --
     # no module declares a consumer group on that stream -- so every delivery
     # paid an outbox insert, a Redis XADD and a header redaction for a message

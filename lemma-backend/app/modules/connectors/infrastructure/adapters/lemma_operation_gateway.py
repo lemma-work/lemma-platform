@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.domain.errors import (
     OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
@@ -103,13 +104,20 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         return redacted_upstream_text(str(exc))
 
     async def list_operations(self, connector_id: str) -> list[str]:
-        info_client = create_lemma_info_client(connector_id)
+        # Importing the connector's generated client costs 63-169ms of
+        # filesystem and bytecode work, on the loop, the first time per
+        # process per connector.
+        info_client = await run_blocking(
+            create_lemma_info_client, connector_id, limiter="cpu_bound"
+        )
         return [descriptor.name for descriptor in await info_client.list_operations()]
 
     async def get_operation_details(
         self, connector_id: str, operation_name: str
     ) -> OperationDetailsPort:
-        info_client = create_lemma_info_client(connector_id)
+        info_client = await run_blocking(
+            create_lemma_info_client, connector_id, limiter="cpu_bound"
+        )
         operation = await info_client.get_operation(operation_name)
         descriptor = operation.descriptor
         return LemmaOperationDetails(
@@ -159,8 +167,11 @@ class LemmaOperationGateway(AppOperationGatewayPort):
             operation_name=operation_name,
         )
         try:
-            client = create_lemma_execution_client(
-                connector_id, third_party_credentials
+            client = await run_blocking(
+                create_lemma_execution_client,
+                connector_id,
+                third_party_credentials,
+                limiter="cpu_bound",
             )
             operation = await client.get_operation(operation_name)
             prepared_payload = self._prepare_payload(

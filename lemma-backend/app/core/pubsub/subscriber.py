@@ -1,12 +1,21 @@
+import asyncio
 import json
 from typing import Any, AsyncIterator
 
 from faststream.redis.parser import BinaryMessageFormatV1
 
+from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+#: One raw stream entry as the Redis client hands it back: keys are `bytes` on
+#: the `decode_responses=False` pool this reader uses, values are wire scalars.
+StreamEntry = dict[Any, Any]
+
+#: One decoded entry, ready to hand to a client.
+DecodedEntry = dict[str, Any]
 
 
 class RedisStreamReader:
@@ -60,19 +69,26 @@ class RedisStreamReader:
 
         Pass a concrete id (e.g. the last id a client saw) to resume and replay
         missed entries.
+
+        A resume is the dangerous shape: it replays a backlog as fast as Redis
+        can serve it, and every entry is JSON on the way through. Read in small
+        batches, hand a large entry to a worker thread, and give the loop a turn
+        between entries -- a batch of 64 multi-megabyte entries decoded inline
+        is how this stalled the API for seconds at a time and got the pod
+        restarted by its liveness probe.
         """
         redis = get_redis(decode_responses=False, blocking=True)
         last_id: Any = start_id
         while True:
             streams = await redis.xread(
-                {self.channel_or_stream: last_id}, count=64, block=1000
+                {self.channel_or_stream: last_id}, count=_READ_BATCH, block=1000
             )
             if not streams:
                 continue
             for _stream_name, messages in streams:
                 for message_id, data in messages:
                     last_id = message_id
-                    payload = _decode_entry(data)
+                    payload = await _decode_entry_async(data)
                     if payload is None:
                         logger.warning("pubsub.message.dropped")
                         continue
@@ -82,6 +98,35 @@ class RedisStreamReader:
                         else str(message_id)
                     )
                     yield payload
+                    # One entry per turn: a replay must not monopolise the loop
+                    # just because Redis had a batch ready.
+                    await asyncio.sleep(0)
+
+
+#: Small enough that one batch of worst-case entries cannot own the loop, large
+#: enough that a live tail still costs one round trip per burst.
+_READ_BATCH = 16
+
+#: Above this, decoding moves to a worker thread. Below it the hand-off costs
+#: more than the parse.
+_OFFLOAD_DECODE_BYTES = 64 * 1024
+
+
+def _entry_size(data: StreamEntry) -> int:
+    binary = data.get(b"__data__") or data.get("__data__")
+    return len(binary) if isinstance(binary, (bytes, bytearray)) else 0
+
+
+def _should_offload(data: StreamEntry) -> bool:
+    """Whether this entry is big enough that the thread hand-off pays for itself."""
+    return _entry_size(data) >= _OFFLOAD_DECODE_BYTES
+
+
+async def _decode_entry_async(data: StreamEntry) -> DecodedEntry | None:
+    """Decode one entry, off the loop when it is big enough to be worth it."""
+    if _should_offload(data):
+        return await run_blocking(_decode_entry, data, limiter="cpu_bound")
+    return _decode_entry(data)
 
 
 def _decode_entry(data: dict[Any, Any]) -> dict | None:

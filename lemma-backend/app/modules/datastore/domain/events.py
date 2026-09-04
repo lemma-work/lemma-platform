@@ -129,6 +129,14 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
     # rows without a database read: a ``None`` owner fans out to every member
     # who can read the table, while a set owner is delivered only to that user.
     owner_user_id: UUID | None = None
+    # Set when the body was too large to carry and was dropped. The row is
+    # still in Postgres, so a consumer that needs it reads it; what it must not
+    # do is assume an absent body means an empty row. Carrying the body
+    # unconditionally is how one table column put 3.4MB entries into a Redis
+    # stream capped by entry count, and how the API event loop came to spend
+    # seconds decoding them.
+    payload_truncated: bool = False
+    previous_truncated: bool = False
 
     @classmethod
     def create(
@@ -143,6 +151,8 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
         previous: dict | None = None,
         actor_id: UUID | None = None,
         owner_user_id: UUID | None = None,
+        payload_truncated: bool = False,
+        previous_truncated: bool = False,
     ) -> "DatastoreRecordEvent":
         return cls(
             # Event-type names follow the lowercase dotted convention; the
@@ -157,4 +167,6 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
             previous=previous,
             actor_id=actor_id,
             owner_user_id=owner_user_id,
+            payload_truncated=payload_truncated,
+            previous_truncated=previous_truncated,
         )
