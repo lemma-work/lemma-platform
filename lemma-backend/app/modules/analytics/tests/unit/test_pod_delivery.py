@@ -16,7 +16,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.pod_delivery import AUTONOMOUS_ORIGINS, DeliveryVia, qualifies
+from app.modules.analytics.services.pod_delivery import (
+    AUTONOMOUS_ORIGINS,
+    DeliveryVia,
+    qualifies,
+)
 from app.core.origin import Origin, OriginKind
 
 BUILDER = uuid4()

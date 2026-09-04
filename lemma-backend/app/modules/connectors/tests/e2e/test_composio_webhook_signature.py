@@ -48,9 +48,7 @@ async def test_composio_webhook_signature_verification(monkeypatch):
         connector_settings, "composio_webhook_secret", secret, raising=False
     )
 
-    from app.composition.schedule_connectors import (
-        ComposioWebhookVerifier,
-    )
+    from app.modules.connectors.contracts.triggers import verify_webhook
 
     payload = json.dumps(
         {
@@ -75,12 +73,12 @@ async def test_composio_webhook_signature_verification(monkeypatch):
         "webhook-signature": signature,
     }
 
-    verifier = ComposioWebhookVerifier()
-    # `verify` is a coroutine, and deliberately so -- the SDK call it makes is
-    # blocking and has to be offloaded, which `test_the_verifier_port_is_async`
-    # pins. This test predates that and has been skipping ever since, so nothing
-    # noticed it was still calling it synchronously.
-    result = await verifier.verify(payload, headers)
+    # `verify_webhook` is a coroutine, and deliberately so -- the SDK call it
+    # makes is blocking and has to be offloaded, which
+    # `test_the_published_verification_is_async_so_it_can_offload` pins. This
+    # test predates that and has been skipping ever since, so nothing noticed it
+    # was still calling it synchronously.
+    result = await verify_webhook(payload, headers)
     assert result["raw_payload"]["connection_id"] == "ca_test_connection"
 
     # A tampered signature is rejected. Asserting on the message rather than on
@@ -92,7 +90,7 @@ async def test_composio_webhook_signature_verification(monkeypatch):
         "webhook-signature": "v1," + base64.b64encode(b"wrong").decode(),
     }
     with pytest.raises(Exception) as rejected:
-        await verifier.verify(payload, bad_headers)
+        await verify_webhook(payload, bad_headers)
     assert "signature" in str(rejected.value).lower(), (
         f"rejected for the wrong reason: {rejected.value!r}"
     )

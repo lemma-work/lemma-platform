@@ -7,8 +7,9 @@ meantime. The agent sends, finishes its turn, and the conversation goes quiet.
 What was missing was the other half — nothing brought it back. This is that
 half, and it is deliberately *not* a wait. The asking run declares nothing and
 holds nothing open; the replies are simply input, and input starts a turn. Same
-rule as a person typing, and the same one ``composition.workflow_agent`` already
-uses to hand a system-triggered run its prompt.
+rule as a person typing, and the same one this module's own
+``infrastructure.adapters.workflow_control`` already uses to hand a
+system-triggered run its prompt.
 
 Which is why an agent no longer has any reason to ``snooze`` after
 ``message_user``. Snooze is a timer for work with a real gap in it — a build, a

@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -129,19 +129,24 @@ class WorkflowRunWaitRepository(ABC):
 
 
 class AgentPort(ABC):
-    """Port for interacting with the Agent module."""
+    """Port for interacting with the Agent module.
+
+    Payloads are `dict[str, object]`: what a workflow hands an agent, and what
+    it reads back, is JSON whose shape belongs to the workflow's author. `Any`
+    said the same thing while letting every caller index into it unchecked.
+    """
 
     @abstractmethod
     async def run_agent(
         self,
         agent_name: str,
-        input_data: Dict[str, Any],
+        input_data: dict[str, object],
         pod_id: UUID,
         user_id: UUID,
         conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
-        conversation_metadata: Dict[str, Any] | None = None,
+        conversation_metadata: dict[str, object] | None = None,
         instructions: str | None = None,
     ) -> UUID:
         """Starts an agent conversation execution and returns the conversation ID.
@@ -153,7 +158,29 @@ class AgentPort(ABC):
         ...
 
     @abstractmethod
-    async def get_conversation_status(self, conversation_id: UUID) -> Dict[str, Any]:
+    async def run_agent_by_id(
+        self,
+        agent_id: UUID,
+        input_data: dict[str, object],
+        pod_id: UUID,
+        user_id: UUID,
+        conversation_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+        source: str = "WORKFLOW_RUN",
+        conversation_metadata: dict[str, object] | None = None,
+        instructions: str | None = None,
+    ) -> UUID:
+        """The same start, for a target named by id rather than by name.
+
+        On the port because `schedule_start_service` has always called it
+        through `engine.agent_adapter`. Left off, the type said the engine used
+        four methods and the code used five, so a stand-in that satisfied the
+        port failed at the fifth.
+        """
+        ...
+
+    @abstractmethod
+    async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
         """Gets status and output from the latest internal run in a conversation."""
         ...
 
@@ -188,6 +215,42 @@ class FunctionPort(ABC):
     @abstractmethod
     async def cancel_run(self, function_run_id: UUID) -> None:
         """Cancels a dispatched function run. Best effort; see stop_conversation."""
+
+
+class WorkflowNotificationPort(Protocol):
+    """What the engine tells a person's inbox about a run.
+
+    A Protocol rather than an ABC because the notifier is the one collaborator
+    the engine holds that has no domain of its own here: it exists so that a
+    form waiting on someone, a form they just answered, and a run that was
+    cancelled under them all reach the same inbox. Named at all so the engine's
+    constructor says what it needs instead of taking whatever it is handed.
+    """
+
+    async def notify_form_assignee(
+        self,
+        *,
+        pod_id: UUID,
+        run_id: UUID,
+        flow_id: UUID,
+        node_id: str,
+        assigned_pod_member_id: UUID,
+        flow_name: str | None,
+        schema: dict[str, object] | None,
+        actor_user_id: UUID | None,
+    ) -> None: ...
+
+    async def close_form_notification(
+        self,
+        *,
+        pod_id: UUID,
+        run_id: UUID,
+        node_id: str,
+        summary: str,
+        data: dict[str, object] | None = None,
+    ) -> None: ...
+
+    async def cancel_for_run(self, *, run_id: UUID) -> None: ...
 
 
 class SchedulePort(ABC):

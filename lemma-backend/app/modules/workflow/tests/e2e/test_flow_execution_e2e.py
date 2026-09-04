@@ -30,7 +30,7 @@ from app.modules.workflow.api.workflow_run_controller import MAX_RUN_PAGE_SIZE
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.events import handlers as wf_handlers
-from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.services.run_resume_service import RunResumeService
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
@@ -307,7 +307,7 @@ class _InlineResumeJobQueue:
     async def enqueue(self, job_name: str, **kwargs):
         self.enqueued.append((job_name, kwargs))
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = RunResumeService(WorkflowEngine(uow))
+            service = RunResumeService(build_workflow_engine(uow))
             if job_name == "resume_workflow_run_for_function":
                 await service.resume_for_function_run(
                     function_run_id=kwargs["function_run_id"],
@@ -934,7 +934,7 @@ async def test_scheduled_single_api_function_workflow_completes_inline(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         flow = await engine.flow_repo.get_by_name(UUID(pod_id), workflow["name"])
         assert flow is not None
         assert flow.user_id is not None
@@ -1237,7 +1237,7 @@ async def test_triggered_run_reads_start_namespace_only(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         flow = await engine.flow_repo.get_by_name(UUID(pod_id), workflow["name"])
         run = await engine.start_run(
             flow.id,
@@ -1616,7 +1616,9 @@ async def test_reconciliation_recovers_lost_agent_completion(
     rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(WorkflowEngine(uow)).reconcile_stale_waits()
+            acted = await RunResumeService(
+                build_workflow_engine(uow)
+            ).reconcile_stale_waits()
     finally:
         rrs.RECONCILE_AFTER = original
     assert acted == 1
@@ -1679,7 +1681,9 @@ async def test_reconciliation_recovers_lost_function_completion(
     rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(WorkflowEngine(uow)).reconcile_stale_waits()
+            acted = await RunResumeService(
+                build_workflow_engine(uow)
+            ).reconcile_stale_waits()
     finally:
         rrs.RECONCILE_AFTER = original
     assert acted == 1

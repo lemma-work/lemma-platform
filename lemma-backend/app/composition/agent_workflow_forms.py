@@ -41,10 +41,10 @@ async def submit_workflow_form(
         WorkflowAccessDeniedError,
         WorkflowDomainError,
     )
-    from app.modules.workflow.execution.engine import WorkflowEngine
+    from app.modules.workflow.api.dependencies import build_workflow_engine
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        engine = WorkflowEngine(uow)
+        engine = build_workflow_engine(uow)
         try:
             await engine.submit_form(
                 run_id,

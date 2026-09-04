@@ -33,12 +33,12 @@ SCHEDULE_E2E_TIMEOUT_SECONDS = 90
 
 
 def _returns_async(fn):
-    """Adapt a sync stub to the now-async ``WebhookVerifier.verify`` port.
+    """Adapt a sync stub to the now-async ``verify_webhook`` operation.
 
-    The port became a coroutine so implementations are forced to offload the
-    blocking Composio SDK off the event loop. A sync stub still type-checks as
-    a callable, so without this the route awaits a dict, raises, and answers
-    403 -- which is what these tests started doing.
+    Verification became a coroutine so the blocking Composio SDK is forced off
+    the event loop. A sync stub still type-checks as a callable, so without this
+    the route awaits a dict, raises, and answers 403 -- which is what these
+    tests started doing.
     """
 
     async def _call(*args, **kwargs):
@@ -1031,9 +1031,9 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
     )
 
     monkeypatch.setattr(
-        "app.composition.schedule_connectors.ComposioWebhookVerifier.verify",
+        "app.modules.connectors.contracts.triggers.verify_webhook",
         _returns_async(
-            lambda self, payload_text, headers: {
+            lambda payload_text, headers: {
                 "version": "V3",
                 "payload": {
                     "id": provider_id,

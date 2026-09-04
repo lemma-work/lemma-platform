@@ -12,13 +12,37 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.composition.icons import create_icon_service
+from app.composition.workflow_function import FunctionControlAdapter
+from app.composition.workflow_notifications import WorkflowNotificationAdapter
+from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
+from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 
 def get_workflow_service(uow: UoWDep) -> WorkflowService:
     """Provide workflow service."""
     return WorkflowService(uow, icon_service=create_icon_service())
+
+
+def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
+    """An engine with its four collaborators bound, for this transaction.
+
+    The one place that chooses them. `WorkflowEngine.__init__` used to default
+    each to `None` and resolve it, so twelve call sites wrote `WorkflowEngine(uow)`
+    and the binding lived at the bottom of the module rather than at its edge --
+    which is how the engine came to import three other modules' adapters to run
+    a workflow.
+    """
+    return WorkflowEngine(
+        uow,
+        agent_adapter=build_agent_control_adapter(uow),
+        function_adapter=FunctionControlAdapter(uow),
+        schedule_adapter=ScheduleControlAdapter(uow),
+        notification_adapter=WorkflowNotificationAdapter(uow),
+    )
 
 
 WorkflowServiceDep = Annotated[WorkflowService, Depends(get_workflow_service)]

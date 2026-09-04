@@ -1,4 +1,9 @@
-"""Agent adapter output normalization for the workflow resume path."""
+"""Agent adapter output normalization for the workflow resume path.
+
+The adapter belongs to `agent`, which owns every collaborator it drives; this
+file stays here because what it pins down is `workflow`'s side of the bargain --
+the shapes `run_resume_service` reads back out of `AgentPort`.
+"""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,8 +12,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.workflow_agent import AgentControlAdapter
-from app.composition import workflow_agent
+from app.modules.agent.infrastructure.adapters import workflow_control
+from app.modules.agent.infrastructure.adapters.workflow_control import (
+    AgentControlAdapter,
+)
 from app.modules.agent.domain.value_objects import ConversationStatus
 
 
@@ -43,7 +50,7 @@ async def test_reserved_id_returns_existing_conversation_without_side_effects(
     )
     existing = SimpleNamespace(id=uuid4())
     create_reserved = AsyncMock(return_value=(existing, False))
-    monkeypatch.setattr(workflow_agent, "create_conversation_for_id", create_reserved)
+    monkeypatch.setattr(workflow_control, "create_conversation_for_id", create_reserved)
     adapter.conversation_repo = Mock(
         create_agent_run=AsyncMock(),
         append_message=AsyncMock(),

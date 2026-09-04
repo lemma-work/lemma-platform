@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.composition import schedule_connectors as schedule_connectors_module
 from app.composition.webhook_sources.composio import (
     _reshape as _normalize_composio_payload,
 )
@@ -120,8 +119,8 @@ async def test_composio_webhook_verification_does_not_run_on_the_event_loop(
     """
     import threading
 
-    from app.composition import schedule_connectors
     from app.modules.connectors.config import connector_settings
+    from app.modules.connectors.infrastructure import composio_triggers
 
     loop_thread = threading.current_thread()
     ran_on: list[threading.Thread] = []
@@ -132,7 +131,7 @@ async def test_composio_webhook_verification_does_not_run_on_the_event_loop(
             return {"payload": {"id": "ti_1"}}
 
     monkeypatch.setattr(
-        schedule_connectors,
+        composio_triggers,
         "_webhook_verification_client",
         lambda: SimpleNamespace(triggers=_Triggers()),
     )
@@ -140,9 +139,7 @@ async def test_composio_webhook_verification_does_not_run_on_the_event_loop(
         connector_settings, "composio_webhook_secret", "shh", raising=False
     )
 
-    result = await schedule_connectors.ComposioWebhookVerifier().verify(
-        "{}", {"webhook-id": "wh_1"}
-    )
+    result = await composio_triggers.verify_webhook("{}", {"webhook-id": "wh_1"})
 
     assert result == {"payload": {"id": "ti_1"}}
     (thread,) = ran_on
@@ -152,13 +149,10 @@ async def test_composio_webhook_verification_does_not_run_on_the_event_loop(
     )
 
 
-def test_the_verifier_port_is_async_so_implementations_must_offload() -> None:
-    """A sync `verify` cannot offload, so the port forbids writing one."""
+def test_the_published_verification_is_async_so_it_can_offload() -> None:
+    """A sync `verify_webhook` could not offload, and callers cannot make it."""
     import inspect
 
-    from app.modules.schedule.domain.interfaces import WebhookVerifier
+    from app.modules.connectors.contracts.triggers import verify_webhook
 
-    assert inspect.iscoroutinefunction(WebhookVerifier.verify)
-    assert inspect.iscoroutinefunction(
-        schedule_connectors_module.ComposioWebhookVerifier.verify
-    )
+    assert inspect.iscoroutinefunction(verify_webhook)

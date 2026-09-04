@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.composition.analytics_consumer import WIRED_EVENTS
+from app.modules.analytics.events import WIRED_EVENTS
 from app.core.analytics.event_catalog import ANALYTICS_CATALOG
 
 

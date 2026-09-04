@@ -19,7 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
+from app.modules.schedule.services.run_recovery_service import (
+    ScheduleRunRecoveryService,
+)
 
 NOW = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
 

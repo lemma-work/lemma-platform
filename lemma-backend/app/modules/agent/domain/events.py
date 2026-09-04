@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
 
@@ -66,3 +67,19 @@ class AgentRunCompletedEvent(AgentDomainEvent):
     agent_run_id: UUID
     status: AgentRunStatus
     data: JsonObject | None = None
+    #: Where the run happened, and when it began. A run is scoped to a
+    #: conversation, so a consumer holding only `conversation_id` had to load the
+    #: conversation to learn any of this -- which made a projection over this
+    #: event a reader of this module's repositories. The finalizer already holds
+    #: all five on the `RunIdentity` it is finishing, so they are captured rather
+    #: than re-derived.
+    #:
+    #: Optional because two paths finish a run without one: the stop-request
+    #: handler and the status sweeps end a run from a row. A consumer that needs
+    #: these must handle their absence, and `agent.contracts.conversations`
+    #: answers for those events and for any still in flight across a rollout.
+    pod_id: UUID | None = None
+    organization_id: UUID | None = None
+    agent_id: UUID | None = None
+    user_id: UUID | None = None
+    started_at: datetime | None = None
