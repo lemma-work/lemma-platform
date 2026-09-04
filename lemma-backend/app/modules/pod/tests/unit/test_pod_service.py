@@ -118,7 +118,7 @@ async def test_create_pod_gives_the_pod_assistant_its_mailbox(
     # The assistant's row is minted on the same path and is *not* best-effort,
     # so it has to be stubbed too or this exercises a real repository.
     monkeypatch.setattr(
-        "app.composition.pod_default_agent.provision_pod_default_agent",
+        "app.modules.agent.contracts.provisioning.provision_pod_default_agent",
         AsyncMock(),
     )
     uow = object()
@@ -167,7 +167,7 @@ async def test_create_pod_survives_a_mailbox_that_cannot_be_minted(
     # The assistant's row is minted on the same path and is *not* best-effort,
     # so it has to be stubbed too or this exercises a real repository.
     monkeypatch.setattr(
-        "app.composition.pod_default_agent.provision_pod_default_agent",
+        "app.modules.agent.contracts.provisioning.provision_pod_default_agent",
         AsyncMock(),
     )
     service = PodService(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Awaitable, Callable
 from uuid import UUID
 
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
@@ -29,6 +30,11 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.ports import AgentRepository
+
+#: What `create_agent` does besides making the row. Both default to the real
+#: thing; both are here so a test can watch one without patching this module.
+MemoryGrantDeriver = Callable[..., Awaitable[None]]
+EmailSurfaceProvisioner = Callable[..., Awaitable[object]]
 
 
 def _normalize_agent_visibility(value: ResourceVisibility | str | None) -> str:
@@ -66,10 +72,18 @@ class AgentService:
         uow: SqlAlchemyUnitOfWork,
         agent_repository: AgentRepository,
         authorization_service: object,
+        memory_grant_deriver: MemoryGrantDeriver | None = None,
+        email_surface_provisioner: EmailSurfaceProvisioner | None = None,
     ):
         self.uow = uow
         self.agent_repository = agent_repository
         self.authorization_service = authorization_service
+        # Two things that happen when an agent is made, taken as collaborators
+        # rather than resolved by name at the call site: a test that wants to
+        # watch either one used to patch it inside this module, which is a
+        # double in front of half of this service's own behaviour.
+        self._derive_memory_grant_for = memory_grant_deriver
+        self._provision_email_surface = email_surface_provisioner
 
     async def _require_action(
         self,
@@ -155,9 +169,13 @@ class AgentService:
         # Give it a mailbox so the UI can offer "email this agent at …" from the
         # moment it exists. Best-effort by design: a deployment with no mail
         # domain still gets a perfectly good agent, just not an emailable one.
-        from app.composition.agent_email_surface import provision_agent_email_surface
+        provision = self._provision_email_surface
+        if provision is None:
+            from app.composition.agent_email_surface import (
+                provision_agent_email_surface as provision,
+            )
 
-        await provision_agent_email_surface(
+        await provision(
             self.uow,
             pod_id=pod_id,
             agent_id=agent.id,
@@ -182,11 +200,13 @@ class AgentService:
         """
         if ctx is None:
             return
-        from app.modules.agent.services.agent_memory_grant import (
-            derive_agent_memory_grant,
-        )
+        derive = self._derive_memory_grant_for
+        if derive is None:
+            from app.modules.agent.services.agent_memory_grant import (
+                derive_agent_memory_grant as derive,
+            )
 
-        await derive_agent_memory_grant(
+        await derive(
             self.uow,
             pod_id=pod_id,
             agent_id=agent.id,

@@ -50,22 +50,26 @@ def _settled_event() -> dict:
     ).model_dump(mode="json")
 
 
-@pytest.fixture
-def delivery(monkeypatch):
-    delivered: list[tuple] = []
+class _Delivery:
+    """A stand-in for the handler's reply delivery, and what it was asked to do."""
 
-    class _Replies:
-        def __init__(self, uow):
-            self.uow = uow
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
 
-        async def deliver(self, *, conversation_id, pod_id):
-            delivered.append((conversation_id, pod_id))
+    def factory(self, uow):
+        del uow
+
+        async def _deliver(*, conversation_id, pod_id):
+            self.calls.append((conversation_id, pod_id))
             return True
 
-    monkeypatch.setattr(
-        "app.modules.agent.events.notification_settled.MessageReplyService", _Replies
-    )
-    return delivered
+        return _deliver
+
+
+@pytest.fixture
+def delivery():
+    """Injected, not patched: the handler takes its delivery as a dependency."""
+    return _Delivery()
 
 
 @pytest.mark.asyncio
@@ -78,9 +82,10 @@ async def test_a_settled_conversation_gets_its_next_turn(delivery):
         fs_logger=SimpleNamespace(),
         uow_factory=lambda: uow,
         inbox=_PassThroughInbox(),
+        deliver_replies=delivery.factory,
     )
 
-    assert delivery == [
+    assert delivery.calls == [
         (
             NotificationSettledEvent.model_validate(event).conversation_id,
             NotificationSettledEvent.model_validate(event).pod_id,
@@ -97,13 +102,14 @@ async def test_another_event_on_the_same_stream_is_ignored(delivery):
         fs_logger=SimpleNamespace(),
         uow_factory=lambda: _Uow(),
         inbox=_PassThroughInbox(),
+        deliver_replies=delivery.factory,
     )
 
-    assert delivery == []
+    assert delivery.calls == []
 
 
 @pytest.mark.asyncio
-async def test_a_failed_delivery_is_raised_so_the_event_is_redelivered(monkeypatch):
+async def test_a_failed_delivery_is_raised_so_the_event_is_redelivered():
     """The behaviour change this event was made for.
 
     The call this replaced swallowed the failure, so an answer whose asker could
@@ -111,16 +117,14 @@ async def test_a_failed_delivery_is_raised_so_the_event_is_redelivered(monkeypat
     on the stream.
     """
 
-    class _Explodes:
-        def __init__(self, uow):
-            pass
+    def _explodes(uow):
+        del uow
 
-        async def deliver(self, *, conversation_id, pod_id):
+        async def _deliver(*, conversation_id, pod_id):
             raise RuntimeError("the run could not be started")
 
-    monkeypatch.setattr(
-        "app.modules.agent.events.notification_settled.MessageReplyService", _Explodes
-    )
+        return _deliver
+
     uow = _Uow()
 
     with pytest.raises(RuntimeError, match="could not be started"):
@@ -129,6 +133,7 @@ async def test_a_failed_delivery_is_raised_so_the_event_is_redelivered(monkeypat
             fs_logger=SimpleNamespace(),
             uow_factory=lambda: uow,
             inbox=_PassThroughInbox(),
+            deliver_replies=_explodes,
         )
 
     assert not uow.committed
@@ -147,9 +152,10 @@ async def test_an_event_the_inbox_has_already_seen_delivers_nothing(delivery):
         fs_logger=SimpleNamespace(),
         uow_factory=lambda: _Uow(),
         inbox=_AlreadySeen(),
+        deliver_replies=delivery.factory,
     )
 
-    assert delivery == []
+    assert delivery.calls == []
 
 
 def test_the_handler_is_typed_for_the_event_it_parses():

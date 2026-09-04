@@ -59,9 +59,7 @@ async def pod_datastore_access(
     current context rather than taking one. Commits on a clean exit.
     """
     async with pod_services(deps) as services:
-        yield PodDatastoreAccess(
-            uow=services.uow, ctx=services.ctx, pod_id=deps.pod_id
-        )
+        yield PodDatastoreAccess(uow=services.uow, ctx=services.ctx, pod_id=deps.pod_id)
 
 
 __all__ = ["PodDatastoreAccess", "is_pod_datastore_path", "pod_datastore_access"]

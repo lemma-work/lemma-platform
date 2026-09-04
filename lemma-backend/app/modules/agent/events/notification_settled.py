@@ -7,6 +7,8 @@ this module consumes for one reason can be its own file.
 
 from __future__ import annotations
 
+from typing import Awaitable, Callable, Protocol
+
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
@@ -28,11 +30,29 @@ from app.modules.agent_surfaces.contracts import (
     NotificationSettledEvent,
 )
 
+
+class ReplyDelivery(Protocol):
+    """Given a unit of work, the call that delivers a conversation's replies."""
+
+    def __call__(self, uow) -> Callable[..., Awaitable[bool]]: ...
+
+
 router = RedisRouter()
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
+
+
+def provide_reply_delivery() -> ReplyDelivery:
+    """The thing that starts the asking conversation's next turn.
+
+    A dependency rather than a name resolved inside the handler, so a test can
+    watch a delivery without patching this module -- a double inside the subject
+    proves the half you did not write, and survives a rename that should have
+    failed.
+    """
+    return lambda uow: MessageReplyService(uow).deliver
 
 
 @reliable_redis_stream_subscriber(
@@ -46,6 +66,7 @@ async def on_notification_settled(
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    deliver_replies: ReplyDelivery = Depends(provide_reply_delivery),
 ) -> None:
     """Start the next turn of a conversation that has stopped waiting on people.
 
@@ -67,7 +88,7 @@ async def on_notification_settled(
     async def process() -> None:
         parsed = NotificationSettledEvent.model_validate(event)
         async with uow_factory() as uow:
-            await MessageReplyService(uow).deliver(
+            await deliver_replies(uow)(
                 conversation_id=parsed.conversation_id,
                 pod_id=parsed.pod_id,
             )

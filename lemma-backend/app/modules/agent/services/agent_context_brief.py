@@ -49,7 +49,7 @@ from app.modules.datastore.contracts.agent_tools import (
     build_file_service,
     build_table_service,
 )
-from app.modules.function.contracts.agent_tools import list_pod_functions
+from app.modules.function.contracts import agent_tools as function_tools
 from app.core.authorization.factory import create_authorization_data_service
 
 _MAX_TABLES = 50
@@ -262,7 +262,7 @@ class AgentContextBriefBuilder:
 
         # Functions (plain query).
         async with self.uow_factory() as uow:
-            functions, function_total = await list_pod_functions(
+            functions, function_total = await function_tools.list_pod_functions(
                 uow, pod_id, limit=_MAX_RESOURCES
             )
         if functions:

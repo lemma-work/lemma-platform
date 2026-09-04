@@ -51,9 +51,7 @@ async def agent_name_for_id(session, agent_id: UUID) -> str | None:
     listing with one unlabelled row.
     """
     return (
-        await session.execute(
-            select(AgentModel.name).where(AgentModel.id == agent_id)
-        )
+        await session.execute(select(AgentModel.name).where(AgentModel.id == agent_id))
     ).scalar_one_or_none()
 
 

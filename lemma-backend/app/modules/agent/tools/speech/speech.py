@@ -205,7 +205,9 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     )
 
     if platform_delivers_one_reply(platform):
-        from app.modules.agent_surfaces.contracts.egress import hold_display_for_one_reply
+        from app.modules.agent_surfaces.contracts.egress import (
+            hold_display_for_one_reply,
+        )
 
         # Attached to the reply rather than sent as a second one: a surface that
         # gets one message gets one message, audio included.

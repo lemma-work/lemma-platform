@@ -38,11 +38,7 @@ from app.modules.function.contracts import (
     FunctionStatus,
     FunctionType,
 )
-from app.modules.function.contracts.agent_tools import (
-    execute_function_for_agent,
-    get_function_by_id,
-    get_function_run,
-)
+from app.modules.function.contracts import agent_tools as function_tools
 
 
 logger = get_logger(__name__)
@@ -155,7 +151,7 @@ class AgentCallableToolFactory:
             function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
             for function_id in function_ids:
-                function = await get_function_by_id(uow, function_id)
+                function = await function_tools.get_function_by_id(uow, function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 with suppress(Exception):
@@ -271,7 +267,7 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            run = await execute_function_for_agent(
+            run = await function_tools.execute_function_for_agent(
                 self.uow_factory,
                 pod_id=function.pod_id,
                 name=function.name,
@@ -418,7 +414,7 @@ class AgentCallableToolFactory:
         attempt = 0
         while True:
             async with self.uow_factory() as uow:
-                run = await get_function_run(uow, run_id)
+                run = await function_tools.get_function_run(uow, run_id)
             if run is not None and run.status in terminal:
                 return run
             if loop.time() >= deadline:
