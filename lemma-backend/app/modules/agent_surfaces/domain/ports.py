@@ -428,19 +428,29 @@ class SurfaceUserDirectoryPort(Protocol):
     of that decision has to be able to say who the directory answers with.
     """
 
-    async def user_id_by_email(self, email: str) -> UUID | None: ...
+    async def user_id_by_email(self, email: str) -> UUID | None:
+        """The live user with this address, or nobody."""
 
-    async def user_id_by_telegram_username(self, username: str) -> UUID | None: ...
+    async def user_id_by_telegram_username(self, username: str) -> UUID | None:
+        """The live user holding this handle, or nobody.
+
+        A handle freed by a deactivated account must answer nobody: it can be
+        taken by someone else, and a surface resolving it is choosing whose
+        authority a run executes with.
+        """
 
     async def user_ids_by_mobile_numbers(
         self, numbers: list[str], *, verified: bool
-    ) -> list[UUID]: ...
+    ) -> list[UUID]:
+        """The live users reachable on any of these numbers."""
 
-    async def preferences(self, user_id: UUID) -> "UserPreferences": ...
+    async def preferences(self, user_id: UUID) -> "UserPreferences":
+        """This person's surface preferences, defaults included."""
 
     async def set_preferences(
         self, user_id: UUID, preferences: "UserPreferences"
-    ) -> None: ...
+    ) -> None:
+        """Record this person's surface preferences."""
 
 
 class SurfacePodMembershipPort(Protocol):
