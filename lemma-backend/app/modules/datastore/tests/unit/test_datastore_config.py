@@ -22,6 +22,13 @@ EXPECTED = [
         "DATASTORE_MARKDOWN_BATCH_MAX_BYTES",
         50 * 1024 * 1024,
     ),
+    ("datastore_cell_max_bytes", "DATASTORE_CELL_MAX_BYTES", 256 * 1024),
+    ("datastore_row_max_bytes", "DATASTORE_ROW_MAX_BYTES", 1024 * 1024),
+    (
+        "datastore_event_payload_max_bytes",
+        "DATASTORE_EVENT_PAYLOAD_MAX_BYTES",
+        32 * 1024,
+    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
     (
         "datastore_query_statement_timeout_ms",

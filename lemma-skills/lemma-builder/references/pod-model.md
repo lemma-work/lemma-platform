@@ -65,7 +65,7 @@ resource). The full model, with payloads and a decoder table, is in
 
 ## Data layer — tables
 
-Tables are typed-column row stores. Columns: `TEXT, FILE_PATH, INTEGER, FLOAT,
+Tables are typed-column row stores, and are for tabular data: one value is capped at 256KB and one record at 1MB. Documents belong in files, with the path in a `FILE_PATH` column. Columns: `TEXT, FILE_PATH, INTEGER, FLOAT,
 BOOLEAN, JSON, DATE, DATETIME, UUID, USER, VECTOR, SERIAL, ENUM`.
 
 **System columns are auto-managed — you never define or write them:**

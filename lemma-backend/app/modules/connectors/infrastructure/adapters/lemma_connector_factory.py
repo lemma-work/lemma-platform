@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.concurrency.offload import run_blocking
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.errors import (
@@ -23,14 +24,24 @@ class LemmaConnectorBinding:
 
 
 class AsyncLemmaInfoClientAdapter:
+    """Async face over the generated client, whose methods are anything but.
+
+    `list_operations` builds every generated tool, importing that connector's
+    API and pydantic model modules as it goes -- 1.4 seconds for jira, which is
+    over the loop-stall threshold on its own. `async def` around a synchronous
+    call does not move the work off the loop; `run_blocking` does.
+    """
+
     def __init__(self, client: Any):
         self._client = client
 
     async def list_operations(self) -> Any:
-        return self._client.list_operations()
+        return await run_blocking(self._client.list_operations, limiter="cpu_bound")
 
     async def get_operation(self, operation_name: str) -> Any:
-        return self._client.get_operation(operation_name)
+        return await run_blocking(
+            self._client.get_operation, operation_name, limiter="cpu_bound"
+        )
 
 
 class AsyncLemmaExecutionClientAdapter:
@@ -38,11 +49,13 @@ class AsyncLemmaExecutionClientAdapter:
         self._client = client
 
     async def list_operations(self) -> Any:
-        return self._client.list_operations()
+        return await run_blocking(self._client.list_operations, limiter="cpu_bound")
 
     async def get_operation(self, operation_name: str) -> Any:
         try:
-            return self._client.get_operation(operation_name)
+            return await run_blocking(
+                self._client.get_operation, operation_name, limiter="cpu_bound"
+            )
         except Exception as exc:
             if type(exc).__name__ == "OperationNotFoundError":
                 raise OperationNotFoundError(operation_name) from exc

@@ -70,6 +70,11 @@ from app.core.request_context import create_inherited_task
 
 logger = get_logger(__name__)
 
+#: Events buffered between the model-streaming driver and its consumer. Large
+#: enough that an ordinary consumer never waits, small enough that a stalled one
+#: stops the producer rather than growing without limit.
+_STREAM_QUEUE_ITEMS = 256
+
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (  # noqa: E402
     STOP_WHILE_BUSY,
     next_event_or_stop,
@@ -367,7 +372,13 @@ class PydanticAIHarness:
         # corrupts that shared scope stack and crashes the whole worker with
         # "Attempted to exit a cancel scope that isn't the current task's current
         # cancel scope". Events stream out through a queue.
-        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        # Bounded so a slow consumer applies backpressure to model streaming
+        # instead of accumulating every token and tool result in memory.
+        # `channel_service` bounds its client queues for the same reason; this
+        # one carries larger items.
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue(
+            maxsize=_STREAM_QUEUE_ITEMS
+        )
         max_stream_attempts = max(1, agent_settings.agent_model_stream_max_attempts)
         streamer = ModelRequestStreamer(
             emit_tokens=self.emit_tokens,

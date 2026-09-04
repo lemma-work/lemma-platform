@@ -13,6 +13,7 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreDataType,
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.services.record_size_policy import configured_size_errors
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
 
@@ -68,6 +69,63 @@ class RecordValidator:
         return (
             pk_col.auto or pk_col.default is not None or pk_col.type in _PK_AUTO_TYPES
         )
+
+    def validate_update(self, data: dict[str, Any]) -> None:
+        """Refuse an update payload, or return.
+
+        The create-side rules live in :meth:`validate`, which reports rather
+        than raises because a creator wants every problem at once. An update is
+        checked column by column against what was actually submitted, so it
+        raises on the first set of findings. Both go through
+        :func:`configured_size_errors`, so "too large" cannot mean two
+        different things depending on which way a row is written.
+        """
+        ctx = self.ctx
+        errors: list[str] = []
+        error_details: list[dict[str, Any]] = []
+
+        for key, value in data.items():
+            column = ctx.get_column(key)
+            if column is None:
+                continue
+            if key == ctx.primary_key_column:
+                errors.append(f"Cannot modify primary key column '{key}'")
+                error_details.append({"field": key, "reason": "primary_key"})
+            elif column.computed:
+                errors.append(f"Cannot provide value for computed column '{key}'")
+                error_details.append({"field": key, "reason": "computed"})
+            elif column.system and not self.allows_creation_override(column):
+                errors.append(f"Cannot provide value for system-managed column '{key}'")
+                error_details.append({"field": key, "reason": "system_managed"})
+            elif (
+                column.type == DatastoreDataType.ENUM
+                and column.options
+                and value is not None
+                and value not in column.options
+            ):
+                allowed = ", ".join(column.options)
+                errors.append(
+                    f"Value '{value}' is not allowed for column '{key}'. "
+                    f"Allowed values: {allowed}"
+                )
+                error_details.append(
+                    {
+                        "field": key,
+                        "reason": "enum",
+                        "value": value,
+                        "allowed_values": column.options,
+                    }
+                )
+
+        size_messages, size_details = configured_size_errors(data)
+        errors.extend(size_messages)
+        error_details.extend(size_details)
+
+        if errors:
+            raise DatastoreValidationError(
+                f"Invalid record data: {'; '.join(errors)}",
+                details={"errors": error_details},
+            )
 
     def validate(
         self,
@@ -152,5 +210,9 @@ class RecordValidator:
                         "allowed_values": col.options,
                     }
                 )
+
+        size_messages, size_details = configured_size_errors(data)
+        errors.extend(size_messages)
+        details.extend(size_details)
 
         return (len(errors) == 0, errors, details)

@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.bounded import BoundedSet
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,
@@ -40,7 +41,10 @@ class SchemaManager:
         self._engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
         self._query_role = QueryRoleGrants(self._engine)
-        self._ensured_record_indexes: set[tuple[str, str]] = set()
+        # Bounded: this manager is a process-wide singleton, so an unbounded
+        # memo holds one entry per (pod schema, table) ever touched. Re-ensuring
+        # an index is idempotent, so an evicted entry costs a round trip.
+        self._ensured_record_indexes: BoundedSet[tuple[str, str]] = BoundedSet(4096)
 
     async def ensure_query_role(self) -> None:
         return await self._query_role.ensure_role()

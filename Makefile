@@ -1835,6 +1835,7 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
 	@echo "→ In-subject test doubles…"

@@ -64,7 +64,7 @@ Keep the note short (half a page). Name every resource in it — those names bec
 | Field is filtered, sorted, or displayed in queues | Typed column (`ENUM`, `TEXT`, `DATETIME`, …) |
 | Flexible payloads, model outputs, app metadata, no SQL filtering yet | `JSON` column |
 | Child rows with their own lifecycle, permissions, or audit needs (line items, comments) | Separate table with a `foreign_key` |
-| Large document content | Never in the table — file + `FILE_PATH` column |
+| Large document content | Never in the table — file + `FILE_PATH` column (a value over 256KB, or a record over 1MB, is refused) |
 
 ### Where data lives, and who sees it
 

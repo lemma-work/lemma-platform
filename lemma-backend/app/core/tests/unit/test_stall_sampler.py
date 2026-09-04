@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from app.core.observability.stall_sampler import (
+    _MAX_STACK_CHARS,
     LoopStallSampler,
     format_stall_stack,
 )
@@ -215,3 +216,39 @@ async def test_threads_parked_waiting_for_work_are_not_reported() -> None:
         parked.join(timeout=2.0)
 
     assert "parked-worker" not in (other_threads or "")
+
+
+def _frame(filename: str, name: str = "f", lineno: int = 1):
+    return traceback.FrameSummary(filename, lineno, name, line="pass")
+
+
+def test_a_deep_library_chain_still_names_our_call() -> None:
+    """The `importlib` case: twelve frames of machinery, none of them ours.
+
+    In production every import stall reported only `_find_and_load` /
+    `_path_stat` frames, because the tail is all the trim kept. That says an
+    import was slow and nothing about which one, which is the whole question.
+    """
+    frames = [
+        _frame("/app/lemma-platform/lemma-backend/app/modules/x/gateway.py", "build"),
+        *[_frame("<frozen importlib._bootstrap>", "_find_and_load") for _ in range(20)],
+    ]
+
+    rendered = format_stall_stack(frames)
+
+    assert "gateway.py" in rendered
+    assert "_find_and_load" in rendered
+
+
+def test_trimming_keeps_both_ends() -> None:
+    """A long stack loses its middle, not its head."""
+    frames = [
+        _frame("/app/lemma-platform/lemma-backend/app/entry.py", "outermost"),
+        *[_frame(f"/very/long/library/path/mod_{i}.py", "x" * 200) for i in range(400)],
+        _frame("/app/lemma-platform/lemma-backend/app/inner.py", "innermost"),
+    ]
+
+    rendered = format_stall_stack(frames)
+
+    assert len(rendered) <= _MAX_STACK_CHARS
+    assert "innermost" in rendered

@@ -75,16 +75,16 @@ async def test_publish_ensures_declared_groups_before_stream_write(monkeypatch):
 @pytest.mark.parametrize(
     ("groups", "stream_last_id", "expected"),
     [
-        ([], "100-0", None),
+        ([], "100-0", 400),
         (
             [{"name": "workers", "pending": 1, "lag": 0, "last-delivered-id": "100-0"}],
             "100-0",
-            None,
+            400,
         ),
         (
             [{"name": "workers", "pending": 0, "lag": 60, "last-delivered-id": "40-0"}],
             "100-0",
-            None,
+            400,
         ),
         (
             # Redis may report historical lag for a group created at `$`.
@@ -120,11 +120,11 @@ async def test_publish_ensures_declared_groups_before_stream_write(monkeypatch):
                 },
             ],
             "100-0",
-            None,
+            400,
         ),
     ],
 )
-async def test_grouped_stream_maxlen_fails_safe_and_handles_phantom_lag(
+async def test_grouped_stream_relaxes_to_hard_ceiling_and_handles_phantom_lag(
     monkeypatch,
     groups,
     stream_last_id,
@@ -147,7 +147,7 @@ async def test_grouped_stream_maxlen_fails_safe_and_handles_phantom_lag(
 
 
 @pytest.mark.asyncio
-async def test_undeclared_observed_group_still_blocks_trimming(monkeypatch) -> None:
+async def test_undeclared_observed_group_relaxes_but_still_caps(monkeypatch) -> None:
     monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
     monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
     monkeypatch.setattr(
@@ -168,4 +168,119 @@ async def test_undeclared_observed_group_still_blocks_trimming(monkeypatch) -> N
 
     bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
 
-    assert await bus._safe_publish_maxlen(client, "events") is None
+    # Never `None`: an obsolete group protecting one unacked message used to
+    # switch trimming off entirely, and the stream grew until Redis died.
+    assert await bus._safe_publish_maxlen(client, "events") == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "groups",
+    [
+        [],
+        [{"name": "workers", "pending": 1, "lag": 0, "last-delivered-id": "1-0"}],
+        [{"name": "workers", "pending": 0, "lag": 10_000, "last-delivered-id": "1-0"}],
+        [{"name": "ghost", "pending": 99, "lag": 99, "last-delivered-id": "1-0"}],
+        [{"name": "workers", "pending": None, "lag": None, "last-delivered-id": None}],
+    ],
+)
+async def test_trimming_is_never_switched_off_while_it_is_enabled(
+    monkeypatch, groups
+) -> None:
+    """No consumer state may produce an uncapped publish.
+
+    This is the invariant the outage broke. `_safe_publish_maxlen` returned
+    `None` -- XADD with no MAXLEN -- whenever a group looked behind, so a single
+    unacked message in one of four groups switched trimming off for
+    `datastore.events`. The stream then tracked `50000 + lag` upward for hours
+    until Redis exceeded its container limit and login went down.
+
+    A backlog may raise the ceiling. Nothing may remove it.
+    """
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+    client = AsyncMock()
+    client.xinfo_groups.return_value = groups
+    client.xinfo_stream.return_value = {"last-generated-id": "100-0"}
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(client, "events") is not None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_group_state_on_an_existing_stream_still_caps(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+    client = AsyncMock()
+    client.xinfo_groups.side_effect = RuntimeError("no group state")
+    client.exists.return_value = True
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(client, "events") == 400
+
+
+@pytest.mark.asyncio
+async def test_trimming_disabled_by_config_stays_disabled(monkeypatch) -> None:
+    """`maxlen = 0` is the one place "no cap" is a choice, not an accident."""
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 0)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(AsyncMock(), "events") is None
+
+
+@pytest.mark.asyncio
+async def test_an_entry_stuck_past_the_hold_window_stops_blocking_the_cap(
+    monkeypatch,
+) -> None:
+    """The production fault, in one test.
+
+    One `datastore.file.created` message went unacked in one of four groups. It
+    had two deliveries -- far short of quarantine's twelve -- so nothing ever
+    took it away, and `pending != 0` disabled trimming for the whole stream.
+    The stream grew past its cap for hours and no signal said so.
+
+    An entry idle beyond the reclaim window has already failed its consumer and
+    the reclaimer. It stops being a reason to retain everything behind it.
+    """
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+    monkeypatch.setattr(
+        event_transport_settings, "redis_stream_pending_hold_seconds", 900
+    )
+    client = AsyncMock()
+    client.xinfo_groups.return_value = [
+        {"name": "workers", "pending": 1, "lag": 0, "last-delivered-id": "100-0"}
+    ]
+    client.xinfo_stream.return_value = {"last-generated-id": "100-0"}
+    # Idle for 3.86 hours, as the stuck production entry was.
+    client.xpending_range.return_value = [{"time_since_delivered": 13_901_828}]
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(client, "events") == 100
+
+
+@pytest.mark.asyncio
+async def test_a_freshly_pending_entry_still_protects_the_stream(monkeypatch) -> None:
+    """The guard's intent is kept: real in-flight work is never trimmed through."""
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen", 100)
+    monkeypatch.setattr(event_transport_settings, "redis_stream_maxlen_overrides", {})
+    monkeypatch.setattr(
+        event_transport_settings, "redis_stream_pending_hold_seconds", 900
+    )
+    client = AsyncMock()
+    client.xinfo_groups.return_value = [
+        {"name": "workers", "pending": 1, "lag": 0, "last-delivered-id": "100-0"}
+    ]
+    client.xinfo_stream.return_value = {"last-generated-id": "100-0"}
+    client.xpending_range.return_value = [{"time_since_delivered": 1_000}]
+
+    bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
+
+    assert await bus._safe_publish_maxlen(client, "events") == 400

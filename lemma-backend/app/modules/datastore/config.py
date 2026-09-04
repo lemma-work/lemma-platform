@@ -31,6 +31,41 @@ class DatastoreSettings(BaseSettings):
     datastore_markdown_image_max_bytes: int = Field(default=10 * 1024 * 1024)
     datastore_markdown_batch_max_bytes: int = Field(default=50 * 1024 * 1024)
 
+    # Record value limits. Tables hold tabular data; a document belongs in a pod
+    # file with its path in a FILE_PATH column. Until these existed, every byte
+    # arriving as a file passed a ceiling and every byte arriving as a record
+    # cell passed none -- which is how a multi-megabyte column filled Redis (the
+    # whole row is copied into `datastore.events`, capped by entry count rather
+    # than bytes) and stalled the API event loop decoding it. Production rows
+    # have averaged ~2KB, so 256KB is roughly 100x real use and still makes a
+    # megabyte document impossible. 0 disables the bound.
+    datastore_cell_max_bytes: int = Field(
+        default=256 * 1024,
+        description=(
+            "Largest encoded size (bytes) of a single record value. Exceeding it "
+            "refuses the write. Env: ``DATASTORE_CELL_MAX_BYTES``."
+        ),
+    )
+    datastore_row_max_bytes: int = Field(
+        default=1024 * 1024,
+        description=(
+            "Largest encoded size (bytes) of one record across all its columns, "
+            "so a row of just-legal cells is still bounded. Env: "
+            "``DATASTORE_ROW_MAX_BYTES``."
+        ),
+    )
+    datastore_event_payload_max_bytes: int = Field(
+        default=32 * 1024,
+        description=(
+            "Largest encoded size (bytes) of the row body carried on a record "
+            "change event. Above it the body is dropped and the event is flagged "
+            "truncated; consumers read the row instead. Deliberately far below "
+            "the row limit: a row is stored once, while its event is retained "
+            "50,000 times over in a Redis stream capped by entry count. Env: "
+            "``DATASTORE_EVENT_PAYLOAD_MAX_BYTES``."
+        ),
+    )
+
     # Ad-hoc SQL query guardrails
     datastore_query_role: str = Field(
         default="lemma_datastore_query",

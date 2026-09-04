@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from app.core.infrastructure.events.config import event_transport_settings
+from app.core.infrastructure.events.quarantine import dead_letter_stream
 from app.core.infrastructure.events.stream_subscriber import registered_stream_groups
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -43,10 +44,20 @@ def _streaq_lane_queues() -> set[str]:
 
 
 def observable_streams() -> set[str]:
-    """Static names only: never emit tenant or dynamic Redis key names."""
-    return {
+    """Static names only: never emit tenant or dynamic Redis key names.
+
+    Dead-letter streams are included because they were the one place bytes could
+    accumulate entirely unwatched: no consumer group, no dashboard row, and a
+    64KB-per-entry body. `{stream}:dead` is derived from a registered name, so
+    it is as static as the stream it quarantines.
+    """
+    streams = {
         *(stream for stream, _group in registered_stream_groups()),
         *event_transport_settings.redis_stream_maxlen_overrides,
+    }
+    return {
+        *streams,
+        *(dead_letter_stream(stream) for stream in streams),
         *_streaq_lane_queues(),
     }
 
