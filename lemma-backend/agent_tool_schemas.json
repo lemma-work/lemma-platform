@@ -141,6 +141,1509 @@
     }
   },
   {
+    "tool_name": "browser_act",
+    "toolset": "BROWSER",
+    "description": "Click, fill, press, select or scroll, then return the page as it now is.\n\nAddress elements by the `@eN` ref from the most recent result. **Refs go\nstale the moment the page changes**, which is why every call returns a new\nsnapshot \u2014 use those refs for the next step, never ones from an earlier\nresult.\n\nWhen the action navigates or submits, say what to wait for with\n`wait_for_url` or `wait_for_text`. Without it the snapshot can describe the\nold page.\n\nIf a click seems to do nothing, a modal or cookie banner is usually\nintercepting it \u2014 find it in the snapshot and dismiss it first.",
+    "input_schema": {
+      "description": "Act on one element, then return the page as it now is.",
+      "properties": {
+        "action": {
+          "description": "What to do.",
+          "enum": [
+            "click",
+            "fill",
+            "type",
+            "press",
+            "select",
+            "check",
+            "uncheck",
+            "hover",
+            "scroll"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The element, as an `@eN` ref from the most recent snapshot. A CSS selector works too but is a last resort. Not needed for `press` (which goes to the focused element) or `scroll`."
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Text for `fill` (clears first) and `type` (appends), or the option label for `select`."
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Key for `press`, e.g. `Enter`, `Escape`, `Tab`."
+        },
+        "scroll_direction": {
+          "default": "down",
+          "description": "Direction for `scroll`.",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string"
+        },
+        "scroll_amount": {
+          "default": 500,
+          "description": "Pixels to scroll.",
+          "maximum": 20000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "wait_for_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Glob to wait for after acting, e.g. `**/dashboard`. Use it whenever the action navigates or submits."
+        },
+        "wait_for_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Text to wait for after acting, e.g. a success message."
+        },
+        "max_snapshot_tokens": {
+          "default": 4000,
+          "description": "Truncate the returned snapshot past this many tokens.",
+          "maximum": 40000,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "BrowserActRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's URL after the call."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's title after the call."
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the command returned, for reads and diagnostics."
+        },
+        "truncated": {
+          "default": false,
+          "description": "Whether the snapshot or output was cut short by the limit.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "browser_login",
+    "toolset": "BROWSER",
+    "description": "Get signed in to a site, without ever handling the person's password.\n\nCall it when a page turns out to need a login \u2014 before filling a login form\nyourself, and instead of asking anybody for a password. You never see the\ncredential either way.\n\nThree things can come back:\n\n- `signed_in: true` \u2014 a saved session was loaded. Open the page and check it\n  took before going on.\n- `use_connector_instead` \u2014 this site is already connected properly. Use that\n  connector; do not drive its login form.\n- `needs_person: true` with a `takeover_url` \u2014 nobody is signed in yet. Send\n  the person that link, say what you were doing, and wait. It opens the very\n  browser you are using so they can sign in themselves, and it only opens for\n  them. Once they are done, call this again.\n\nNever ask anyone to type a password to you, and never put one in a command.",
+    "input_schema": {
+      "properties": {
+        "origin": {
+          "description": "The site to be signed in to, e.g. `https://app.example.com`. The page you happen to be on does not matter \u2014 a login belongs to the site.",
+          "maxLength": 255,
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "description": "What you were trying to do. Shown to the person if they are asked to sign in, so say the task, not the mechanics.",
+          "maxLength": 500,
+          "type": "string"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "origin"
+      ],
+      "title": "BrowserLoginRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The site this is about, normalised."
+        },
+        "signed_in": {
+          "default": false,
+          "description": "Whether the browser now holds a session for this site.",
+          "type": "boolean"
+        },
+        "needs_person": {
+          "default": false,
+          "description": "True when somebody has to sign in themselves. Ask them, using the link \u2014 do not ask for their password.",
+          "type": "boolean"
+        },
+        "takeover_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the person signs in. Send it to them as it is; it only opens for them."
+        },
+        "use_connector_instead": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A connector already covers this site. Use it rather than a browser login."
+        }
+      },
+      "title": "BrowserLoginResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "browser_open",
+    "toolset": "BROWSER",
+    "description": "Open a page in the workspace's real Chromium and return what is on it.\n\nUse it for anything a page renders: JS-heavy sites, logins, forms, scraping,\nand apps running inside this sandbox (`http://127.0.0.1:<port>` \u2014 never a\npublic preview URL). The browser starts itself on the first call.\n\nThe result carries the page's `@eN` element refs. Act on them with\n`browser_act`, read from them with `browser_read`, and look at the page with\n`browser_screenshot`.\n\nWhen opening triggers a redirect, name where you expect to land with\n`wait_for_url` rather than opening and hoping \u2014 a snapshot taken mid-redirect\ndescribes a page that is already gone.",
+    "input_schema": {
+      "properties": {
+        "url": {
+          "description": "Absolute URL to open, e.g. `https://example.com`. For an app running inside this sandbox use `http://127.0.0.1:<port>`, never a public preview URL.",
+          "type": "string"
+        },
+        "wait_for_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Glob to wait for after loading, e.g. `**/dashboard`. Use it when opening triggers a redirect you need to land on before reading."
+        },
+        "wait_for_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Text to wait for on the page before returning."
+        },
+        "max_snapshot_tokens": {
+          "default": 4000,
+          "description": "Truncate the returned snapshot past this many tokens.",
+          "maximum": 40000,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "BrowserOpenRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's URL after the call."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's title after the call."
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the command returned, for reads and diagnostics."
+        },
+        "truncated": {
+          "default": false,
+          "description": "Whether the snapshot or output was cut short by the limit.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "browser_read",
+    "toolset": "BROWSER",
+    "description": "Read text, an attribute, the URL, the title, or the console and network logs.\n\nUse `console` and `network` when a page misbehaves \u2014 a blank screen is\nusually a failed request or a thrown error, and stopping at the visual\nfailure means guessing at it.",
+    "input_schema": {
+      "properties": {
+        "what": {
+          "description": "What to read from the page.",
+          "enum": [
+            "text",
+            "html",
+            "url",
+            "title",
+            "attr",
+            "console",
+            "network"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Element `@eN` ref for `text` and `attr`. Omit for `html` to get the whole document. Ignored by `url`, `title`, `console` and `network`."
+        },
+        "attribute": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Attribute name for `attr`, e.g. `href`."
+        },
+        "max_output_tokens": {
+          "default": 4000,
+          "description": "Truncate the result past this many tokens.",
+          "maximum": 200000,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "what"
+      ],
+      "title": "BrowserReadRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's URL after the call."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's title after the call."
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the command returned, for reads and diagnostics."
+        },
+        "truncated": {
+          "default": false,
+          "description": "Whether the snapshot or output was cut short by the limit.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "browser_screenshot",
+    "toolset": "BROWSER",
+    "description": "Capture the page as an image and return it as binary tool content.\n\nUse it to see what a snapshot cannot describe: layout, charts, broken\nstyles, error overlays. `annotate` draws numbered labels matching the `@eN`\nrefs, which is how you tell two identical-looking buttons apart.\n\nAlways set `instructions` \u2014 if this agent's model cannot see images, that is\nthe question a vision model answers on your behalf.",
+    "input_schema": {
+      "properties": {
+        "full_page": {
+          "default": false,
+          "description": "Capture the whole scroll height rather than the viewport.",
+          "type": "boolean"
+        },
+        "annotate": {
+          "default": false,
+          "description": "Draw numbered labels on interactive elements, keyed to the `@eN` refs a snapshot returns. Use it when you need to see which element is which.",
+          "type": "boolean"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What you need from the screenshot \u2014 'is the chart rendered', 'read the error banner', 'does the layout break'. Always set it: if this agent's model cannot see images, this is the question a vision model answers on your behalf, and a vague question gets a vague answer."
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "title": "BrowserScreenshotRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "AudioUrl": {
+          "description": "A URL to an audio file.",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "force_download": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "const": "allow-local",
+                  "type": "string"
+                }
+              ],
+              "default": false
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "audio-url",
+              "default": "audio-url",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
+              "readOnly": true,
+              "type": "string"
+            },
+            "identifier": {
+              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "media_type",
+            "identifier"
+          ],
+          "title": "AudioUrl",
+          "type": "object"
+        },
+        "BinaryContent": {
+          "description": "Binary content, e.g. an audio or image file.",
+          "properties": {
+            "data": {
+              "format": "base64url",
+              "type": "string"
+            },
+            "media_type": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "audio/wav",
+                    "audio/mpeg",
+                    "audio/ogg",
+                    "audio/flac",
+                    "audio/aiff",
+                    "audio/aac"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/gif",
+                    "image/webp"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "application/pdf",
+                    "text/plain",
+                    "text/csv",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "text/html",
+                    "text/markdown",
+                    "application/msword",
+                    "application/vnd.ms-excel"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "binary",
+              "default": "binary",
+              "type": "string"
+            },
+            "identifier": {
+              "description": "Identifier for the binary content, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `BinaryContent`.\n\nThis identifier is only automatically passed to the model when the `BinaryContent` is returned by a tool.\nIf you're passing the `BinaryContent` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `BinaryContent`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "media_type",
+            "identifier"
+          ],
+          "title": "BinaryContent",
+          "type": "object"
+        },
+        "BrowserScreenshotResponse": {
+          "properties": {
+            "success": {
+              "default": false,
+              "description": "Whether the tool completed successfully.",
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Human-readable error details when the tool fails."
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Human-readable status or follow-up information for the tool call."
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page the screenshot was taken of."
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page's title."
+            },
+            "media_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "MIME type of the returned image."
+            },
+            "size_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Size of the captured image in bytes."
+            },
+            "full_page": {
+              "default": false,
+              "description": "Whether the whole scroll height was captured.",
+              "type": "boolean"
+            }
+          },
+          "title": "BrowserScreenshotResponse",
+          "type": "object"
+        },
+        "CachePoint": {
+          "description": "A cache point marker for prompt caching.\n\nCan be inserted into UserPromptPart.content to mark cache boundaries.\nModels that don't support caching will filter these out.\n\nSupported by:\n\n- Anthropic\n- Amazon Bedrock (Converse API)\n- OpenAI (GPT-5.6 models)\n- OpenRouter (Anthropic and Gemini models via `OpenRouterModel`, plus OpenAI GPT-5.6 models when\n  using `OpenAIChatModel` or `OpenAIResponsesModel` with `OpenRouterProvider`)",
+          "properties": {
+            "kind": {
+              "const": "cache-point",
+              "default": "cache-point",
+              "type": "string"
+            },
+            "ttl": {
+              "default": "5m",
+              "enum": [
+                "5m",
+                "1h"
+              ],
+              "type": "string"
+            }
+          },
+          "title": "CachePoint",
+          "type": "object"
+        },
+        "DocumentUrl": {
+          "description": "The URL of the document.",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "force_download": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "const": "allow-local",
+                  "type": "string"
+                }
+              ],
+              "default": false
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "document-url",
+              "default": "document-url",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
+              "readOnly": true,
+              "type": "string"
+            },
+            "identifier": {
+              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "media_type",
+            "identifier"
+          ],
+          "title": "DocumentUrl",
+          "type": "object"
+        },
+        "ImageUrl": {
+          "description": "A URL to an image.",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "force_download": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "const": "allow-local",
+                  "type": "string"
+                }
+              ],
+              "default": false
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "image-url",
+              "default": "image-url",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
+              "readOnly": true,
+              "type": "string"
+            },
+            "identifier": {
+              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "media_type",
+            "identifier"
+          ],
+          "title": "ImageUrl",
+          "type": "object"
+        },
+        "TextContent": {
+          "description": "String content that is tagged with additional metadata.\n\nThis is useful for including metadata that can be accessed programmatically by the application, but is not sent to the LLM.",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "metadata": {
+              "default": null
+            },
+            "kind": {
+              "const": "text-content",
+              "default": "text-content",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content"
+          ],
+          "title": "TextContent",
+          "type": "object"
+        },
+        "ToolReturn": {
+          "description": "A structured tool return that separates the tool result from additional content sent to the model.\n\nCan be parameterized with a type to enable return schema generation:\n- `ToolReturn[User]` \u2014 generates a return schema for `User`\n- `ToolReturn` (bare) \u2014 no return schema generated",
+          "properties": {
+            "return_value": {
+              "$ref": "#/$defs/ToolReturnContent"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/TextContent"
+                      },
+                      {
+                        "discriminator": {
+                          "mapping": {
+                            "audio-url": "#/$defs/AudioUrl",
+                            "binary": "#/$defs/BinaryContent",
+                            "document-url": "#/$defs/DocumentUrl",
+                            "image-url": "#/$defs/ImageUrl",
+                            "uploaded-file": "#/$defs/UploadedFile",
+                            "video-url": "#/$defs/VideoUrl"
+                          },
+                          "propertyName": "kind"
+                        },
+                        "oneOf": [
+                          {
+                            "$ref": "#/$defs/ImageUrl"
+                          },
+                          {
+                            "$ref": "#/$defs/AudioUrl"
+                          },
+                          {
+                            "$ref": "#/$defs/DocumentUrl"
+                          },
+                          {
+                            "$ref": "#/$defs/VideoUrl"
+                          },
+                          {
+                            "$ref": "#/$defs/BinaryContent"
+                          },
+                          {
+                            "$ref": "#/$defs/UploadedFile"
+                          }
+                        ]
+                      },
+                      {
+                        "$ref": "#/$defs/CachePoint"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "metadata": {
+              "default": null
+            },
+            "tools": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "tool-return",
+              "default": "tool-return",
+              "type": "string"
+            }
+          },
+          "required": [
+            "return_value"
+          ],
+          "title": "ToolReturn",
+          "type": "object"
+        },
+        "ToolReturnContent": {
+          "oneOf": [
+            {},
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ToolReturnContent"
+              },
+              "type": "object"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ToolReturnContent"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "UploadedFile": {
+          "description": "A reference to a file uploaded to a provider's file storage by ID.\n\nThis allows referencing files that have been uploaded via provider-specific file APIs\nrather than providing the file content directly.\n\nSupported by:\n\n- [`AnthropicModel`][pydantic_ai.models.anthropic.AnthropicModel]\n- [`OpenAIChatModel`][pydantic_ai.models.openai.OpenAIChatModel]\n- [`OpenAIResponsesModel`][pydantic_ai.models.openai.OpenAIResponsesModel]\n- [`BedrockConverseModel`][pydantic_ai.models.bedrock.BedrockConverseModel]\n- [`GoogleModel`][pydantic_ai.models.google.GoogleModel] (Gemini API: [Files API](https://ai.google.dev/gemini-api/docs/files) URIs, Google Cloud: GCS `gs://` URIs)\n- [`XaiModel`][pydantic_ai.models.xai.XaiModel]",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            },
+            "provider_name": {
+              "enum": [
+                "anthropic",
+                "openai",
+                "google",
+                "google-cloud",
+                "google-gla",
+                "google-vertex",
+                "bedrock",
+                "xai"
+              ],
+              "type": "string"
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "uploaded-file",
+              "default": "uploaded-file",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "Return the media type of the file, inferred from `file_id` if not explicitly provided.\n\nNote: Inference relies on the file extension in `file_id`.\nFor opaque file IDs (e.g., `'file-abc123'`), the media type will default to `'application/octet-stream'`.\nInference relies on Python's `mimetypes` module, whose results may vary across platforms.\n\nRequired by some providers (e.g., Bedrock) for certain file types.",
+              "readOnly": true,
+              "type": "string"
+            },
+            "identifier": {
+              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `UploadedFile`.\n\nThis identifier is only automatically passed to the model when the `UploadedFile` is returned by a tool.\nIf you're passing the `UploadedFile` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `UploadedFile`.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id",
+            "provider_name",
+            "media_type",
+            "identifier"
+          ],
+          "title": "UploadedFile",
+          "type": "object"
+        },
+        "VideoUrl": {
+          "description": "A URL to a video.",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "force_download": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "const": "allow-local",
+                  "type": "string"
+                }
+              ],
+              "default": false
+            },
+            "vendor_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "kind": {
+              "const": "video-url",
+              "default": "video-url",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
+              "readOnly": true,
+              "type": "string"
+            },
+            "identifier": {
+              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
+              "readOnly": true,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url",
+            "media_type",
+            "identifier"
+          ],
+          "title": "VideoUrl",
+          "type": "object"
+        },
+        "ViewImageResponse": {
+          "properties": {
+            "success": {
+              "default": false,
+              "description": "Whether the tool completed successfully.",
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Human-readable error details when the tool fails."
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Human-readable status or follow-up information for the tool call."
+            },
+            "file_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Resolved file path of the image that was loaded."
+            },
+            "media_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Detected MIME type for the returned image content."
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which store served the image: 'datastore' or 'workspace'."
+            },
+            "size_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Size of the image in bytes."
+            }
+          },
+          "title": "ViewImageResponse",
+          "type": "object"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrowserScreenshotResponse"
+        },
+        {
+          "$ref": "#/$defs/ViewImageResponse"
+        },
+        {
+          "$ref": "#/$defs/ToolReturn"
+        }
+      ]
+    }
+  },
+  {
+    "tool_name": "browser_snapshot",
+    "toolset": "BROWSER",
+    "description": "Re-read the current page's elements and their `@eN` refs.\n\n`browser_open` and `browser_act` already return a fresh snapshot, so reach\nfor this one when you need the page again without acting on it \u2014 after a\nbackground update, or to widen from interactive-only to the full tree.",
+    "input_schema": {
+      "properties": {
+        "interactive_only": {
+          "default": true,
+          "description": "Only elements you can act on. Turn it off only when you need page text you cannot get with `browser_read`, and expect a large result.",
+          "type": "boolean"
+        },
+        "include_urls": {
+          "default": false,
+          "description": "Include each link's href in the snapshot.",
+          "type": "boolean"
+        },
+        "max_snapshot_tokens": {
+          "default": 4000,
+          "description": "Truncate the returned snapshot past this many tokens.",
+          "maximum": 40000,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "title": "BrowserSnapshotRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's URL after the call."
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's title after the call."
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the command returned, for reads and diagnostics."
+        },
+        "truncated": {
+          "default": false,
+          "description": "Whether the snapshot or output was cut short by the limit.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserResult",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "check_messages",
     "toolset": "MESSAGING",
     "description": "Check whether the people you messaged have answered.\n\nCall it when a turn opens saying they have replied \u2014 that is what it is for.\nNot in a loop, and not to check on people who have not answered yet: each\ncall replays this whole conversation, and you are told when there is\nsomething to read. `RESPONDED` is the only status that means somebody\nanswered.\n\nIf some are still OPEN after you have genuinely waited, say who has not\nanswered and finish with what you have.",
