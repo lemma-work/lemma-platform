@@ -155,7 +155,6 @@ class AgentPort(ABC):
         the agent is for. It becomes the conversation's instructions, which the
         prompt layers after the agent's own.
         """
-        ...
 
     @abstractmethod
     async def run_agent_by_id(
@@ -177,12 +176,10 @@ class AgentPort(ABC):
         four methods and the code used five, so a stand-in that satisfied the
         port failed at the fifth.
         """
-        ...
 
     @abstractmethod
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
         """Gets status and output from the latest internal run in a conversation."""
-        ...
 
     @abstractmethod
     async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
@@ -210,7 +207,6 @@ class FunctionPort(ABC):
     @abstractmethod
     async def get_run_status(self, function_run_id: UUID) -> Dict[str, Any]:
         """Gets status and output of a function run (for reconciliation)."""
-        ...
 
     @abstractmethod
     async def cancel_run(self, function_run_id: UUID) -> None:
@@ -238,7 +234,8 @@ class WorkflowNotificationPort(Protocol):
         flow_name: str | None,
         schema: dict[str, object] | None,
         actor_user_id: UUID | None,
-    ) -> None: ...
+    ) -> None:
+        """Tell the assignee a form is waiting on them."""
 
     async def close_form_notification(
         self,
@@ -248,9 +245,11 @@ class WorkflowNotificationPort(Protocol):
         node_id: str,
         summary: str,
         data: dict[str, object] | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Close the form's notification once it has been answered."""
 
-    async def cancel_for_run(self, *, run_id: UUID) -> None: ...
+    async def cancel_for_run(self, *, run_id: UUID) -> None:
+        """Withdraw every notification this run raised, when it is cancelled."""
 
 
 class SchedulePort(ABC):
