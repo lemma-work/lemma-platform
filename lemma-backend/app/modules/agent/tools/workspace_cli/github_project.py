@@ -28,6 +28,7 @@ what is in the directory they share.
 from __future__ import annotations
 
 import shlex
+from collections.abc import Awaitable, Callable
 
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
@@ -117,6 +118,8 @@ async def prepare_project_directory(
     workspace_session,
     *,
     wanted: bool,
+    ensure_credentials: Callable[..., Awaitable[None]] | None = None,
+    ensure_checkout: Callable[..., Awaitable[str | None]] | None = None,
 ) -> str | None:
     """Put the conversation's project on disk before either tool looks for it.
 
@@ -130,13 +133,27 @@ async def prepare_project_directory(
     swallowed rather than blocking the work: the command or the code runs
     uncredentialed and fails with git's own native error, exactly as it would
     with no bridge at all.
+
+    The two steps are arguments so that swallow can be exercised for real: a
+    test replaces only the failing step and the exception still travels out of
+    it, through the handler below, and back to the tool that called this.
+
+    Defaulted to ``None`` and resolved here rather than in the signature, so
+    the two names still resolve at call time: a default argument binds at
+    import, which would silently make a double installed on this module's
+    ``ensure_github_credentials`` unreachable — and leave the test that
+    installed it passing.
     """
     if not wanted:
         return None
+    if ensure_credentials is None:
+        ensure_credentials = ensure_github_credentials
+    if ensure_checkout is None:
+        ensure_checkout = ensure_project_checkout
     try:
         with run_phase("tool.workspace.credentials"):
-            await ensure_github_credentials(ctx, workspace_session)
-            return await ensure_project_checkout(ctx, workspace_session)
+            await ensure_credentials(ctx, workspace_session)
+            return await ensure_checkout(ctx, workspace_session)
     except Exception:
         logger.warning(
             "agent.workspace_cli.github_credential_bridge_failed.degraded",

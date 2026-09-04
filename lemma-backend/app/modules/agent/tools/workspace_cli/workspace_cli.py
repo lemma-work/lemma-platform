@@ -140,9 +140,11 @@ async def get_workspace_session(
     *,
     session_id: str | None,
     close_on_exit: bool,
+    runtime=None,
 ):
     runtime_context = workspace_runtime_context(ctx)
-    runtime = get_workspace_tool_runtime()
+    if runtime is None:
+        runtime = get_workspace_tool_runtime()
     return await runtime.get_session(
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
@@ -251,9 +253,22 @@ async def resize_terminal_internal(
 async def exec_command_internal(
     ctx: BaseAgentContext,
     request: ExecCommandRequest,
+    *,
+    runtime=None,
+    prepare_project=None,
 ) -> ExecCommandResult:
+    # The workspace runtime and the project-preparation step are arguments so a
+    # test drives this function's own composition -- which session it opens,
+    # and the `wanted=` decision below -- rather than replacing those names
+    # inside this module and asserting against the replacement. Both default to
+    # None and are resolved here rather than in the signature: a default
+    # argument binds at import, which would make a double installed on either
+    # module-level name unreachable without failing the test that installed it.
     try:
-        runtime = get_workspace_tool_runtime()
+        if runtime is None:
+            runtime = get_workspace_tool_runtime()
+        if prepare_project is None:
+            prepare_project = prepare_project_directory
         runtime_context = workspace_runtime_context(ctx)
 
         with run_phase("tool.workspace.session"):
@@ -261,13 +276,14 @@ async def exec_command_internal(
                 ctx,
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
+                runtime=runtime,
             )
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
             # not just git-looking ones: the clone that puts the project on disk
             # has to happen before whatever the agent actually asked for, even
             # when that is `ls`.
-            project_notice = await prepare_project_directory(
+            project_notice = await prepare_project(
                 ctx,
                 workspace_session,
                 wanted=ctx.workspace_repo is not None

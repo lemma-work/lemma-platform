@@ -21,10 +21,16 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
+from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.context import Context
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 from app.core.config import settings
@@ -36,7 +42,37 @@ from app.modules.connectors.domain.errors import (
     ConnectorAccessDeniedError,
 )
 
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
 logger = get_logger(__name__)
+
+
+class _ResolvedAccount(Protocol):
+    """What account resolution hands back, as far as this bridge is concerned."""
+
+    credentials: object
+    display_name: str | None
+    email: str | None
+
+
+class _AccountResolution(Protocol):
+    """The single connector-side call this makes.
+
+    Named here rather than imported: `AccountResolutionService` lives inside
+    the connectors module, and the concrete factory for it is imported lazily
+    below to avoid an import cycle.
+    """
+
+    async def resolve_account(
+        self,
+        *,
+        user_id: UUID,
+        connector_id: str,
+        auth_actor: Context,
+        account_id: UUID | None,
+    ) -> _ResolvedAccount: ...
+
 
 _CONNECTOR_ID = "github"
 _CREDENTIALS_PATH = "/tmp/.git-credentials"
@@ -84,7 +120,16 @@ class _GithubCredential:
     email: str | None
 
 
-async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) -> None:
+async def ensure_github_credentials(
+    ctx: BaseAgentContext,
+    workspace_session,
+    *,
+    redis: "Redis | None" = None,
+    resolve_credential: Callable[
+        [BaseAgentContext], Awaitable["_GithubCredential | None"]
+    ]
+    | None = None,
+) -> None:
     """Provision a session-scoped GitHub credential file, once per session/TTL.
 
     Also configures a git commit identity (`user.name`/`user.email`) from the
@@ -107,7 +152,14 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
     if not session_id:
         return
 
-    redis = get_redis(url=settings.redis_url)
+    # Both collaborators are arguments so a test can watch this function's own
+    # decisions -- the marker key, which outcome is cacheable, what lands in
+    # the two files -- instead of replacing them inside it. Resolved after the
+    # session check, so no client is built for a call that does nothing.
+    if redis is None:
+        redis = get_redis(url=settings.redis_url)
+    if resolve_credential is None:
+        resolve_credential = _resolve_github_credential
     # The account is part of the marker: a conversation bound to a project names
     # the account it works as, and two conversations in one session must not
     # inherit each other's credential file.
@@ -116,7 +168,7 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
     if await redis.exists(marker_key):
         return
 
-    credential = await _resolve_github_credential(ctx)
+    credential = await resolve_credential(ctx)
     if credential is None:
         await redis.set(marker_key, "unavailable", ex=_UNAVAILABLE_TTL_SECONDS)
         return
@@ -165,20 +217,47 @@ async def ensure_github_credentials(ctx: BaseAgentContext, workspace_session) ->
     await redis.set(marker_key, "provisioned", ex=_PROVISIONED_TTL_SECONDS)
 
 
-async def _resolve_github_credential(ctx: BaseAgentContext) -> _GithubCredential | None:
-    from app.modules.connectors.api.dependencies import get_account_resolution_service
+async def _resolve_github_credential(
+    ctx: BaseAgentContext,
+    *,
+    uow_factory: Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]]
+    | None = None,
+    delegated_context: Callable[
+        [SqlAlchemyUnitOfWork, BaseAgentContext], Awaitable[Context]
+    ] = build_delegated_context,
+    account_resolution: Callable[[SqlAlchemyUnitOfWork], _AccountResolution]
+    | None = None,
+) -> _GithubCredential | None:
+    """Resolve the connected GitHub account's token for this conversation.
+
+    The unit of work and the two connector collaborators are arguments so this
+    can be exercised without a database: it used to build
+    ``SessionUnitOfWorkFactory(async_session_maker)()`` itself, and its tests
+    entered a real async session on the argument that nothing inside would
+    execute a query -- which is a property of the code under test, not
+    something the test could hold.
+    """
+    if account_resolution is None:
+        # Imported here rather than at module scope to avoid an import cycle.
+        from app.modules.connectors.api.dependencies import (
+            get_account_resolution_service,
+        )
+
+        account_resolution = get_account_resolution_service
+    if uow_factory is None:
+        uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 
     # A project names the account it is worked as. Without one, resolution picks
     # for a user who may have connected GitHub twice -- fine as a fallback, but
     # never the right answer when the caller actually knows.
     account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        auth_ctx = await build_delegated_context(uow, ctx)
+    async with uow_factory() as uow:
+        auth_ctx = await delegated_context(uow, ctx)
         token = set_current_context(auth_ctx)
         try:
-            account_resolution = get_account_resolution_service(uow)
+            resolution = account_resolution(uow)
             try:
-                account = await account_resolution.resolve_account(
+                account = await resolution.resolve_account(
                     user_id=ctx.user_id,
                     connector_id=_CONNECTOR_ID,
                     auth_actor=auth_ctx,
