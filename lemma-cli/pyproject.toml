@@ -62,6 +62,10 @@ dev = [
   # exist. Resolved from ../lemma-pod-bundle via [tool.uv.sources] for local
   # work and the test suite.
   "lemma-pod-bundle>=0.1.0",
+  # Same floor as lemma-backend, so the two trees are measured by the same
+  # checker at the same version. See [tool.basedpyright] at the foot of this
+  # file for what it is set to and why the gate that runs it is advisory.
+  "basedpyright>=1.39.9",
   "pytest",
   "pytest-asyncio",
   "textual-dev",
@@ -166,3 +170,32 @@ ignore = ["G201"]
 # command *results* to go through `cli_core/io.py:emit`; the exceptions in
 # cli_core carry a `# noqa: T201` naming why, rather than being ignored here.
 "tests/**" = ["T20"]
+
+# The CLI shipped without a type checker of any kind. `ruff check` above is a
+# linter -- it never reads a signature against a call site -- so the 356 `Any`
+# and bare-container annotations in this package were not lax typing, they were
+# the absence of typing, and nothing said so. Settings copied from
+# lemma-backend/pyproject.toml so that one habit works in both trees.
+#
+# `standard` rather than basedpyright's default `recommended`: the same choice
+# the backend made, and for the same reason. `recommended` turns on every
+# strict rule at once, which on a tree that has never been checked reports tens
+# of thousands of findings and buys nothing you can act on. `standard` is what
+# the backend is held to, and the point of this section is to measure the
+# clients against the backend's bar rather than against a new one.
+#
+# The gate that runs this (`make typecheck-clients-record`) is advisory. It
+# records a number; it does not yet defend one.
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+exclude = [
+    # Gitignored copies that setup.py mirrors in at build time. The canonical
+    # sources are ../lemma-pod-bundle and ../lemma-skills, and checking the copy
+    # would report the same finding twice -- against a path that does not exist
+    # on a fresh checkout.
+    "lemma_pod_bundle/**",
+    "lemma_cli/skills/**",
+    "build/**",
+    "tests/**",
+]

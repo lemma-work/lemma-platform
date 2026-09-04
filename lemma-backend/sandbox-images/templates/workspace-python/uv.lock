@@ -666,6 +666,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "ruff", specifier = ">=0.14.8,<0.16" },
@@ -695,6 +696,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },

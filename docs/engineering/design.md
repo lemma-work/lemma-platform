@@ -80,11 +80,17 @@ current counter-examples.
 Dependencies point inward. When a module imports `app.composition`, the root is
 no longer a root; it is a shared middle layer that every module is coupled to.
 
-*Check:*
-```bash
-grep -rn "from app.composition\|import app.composition" app/modules --include='*.py' | grep -v "/tests/" | wc -l
-```
+*Check:* `make architecture` — `module_composition_imports` in the baseline.
 *Today:* **195** — ratchet
+
+Until this rule had a check, the number was a `grep` in this document and nothing
+failed when it rose. Worse, the cycles those 195 edges carry were invisible too:
+`module_cycles` reads **0** because a file under `app/composition` is excluded
+from the dependency graph, so a cycle with a hop through the root is not a cycle
+as far as the gate is concerned. `induced_module_cycles` inlines that hop.
+It reports **one component of 13 of the 15 modules**, and that is the number
+this rule is really about — deleting the root without breaking those cycles
+first would turn the whole backend into one knot.
 
 ### DES-04 — `app/core/` must not import `app/modules/`
 

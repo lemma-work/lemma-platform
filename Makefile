@@ -38,7 +38,8 @@ SHELL := /bin/bash
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
-        lint lint-clients lint-lockfiles quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
+        quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -376,6 +377,7 @@ help:
 	@echo "    make pre-push           alias for quality — run this on every push"
 	@echo "    make quality            every gate the 'quality gates' CI job runs"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
+	@echo "    make measure-clients    ADVISORY: size/complexity/typing in lemma-cli + lemma-python"
 	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
@@ -1796,6 +1798,10 @@ quality:
 	@$(MAKE) --no-print-directory lint-clients
 	@echo "→ Lockfiles…"
 	@$(MAKE) --no-print-directory lint-lockfiles
+	@echo "→ Client structure (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-structure-record
+	@echo "→ Client types (ADVISORY — new, records only)…"
+	@$(MAKE) --no-print-directory client-typecheck-record
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
 	@echo "→ Connector package (ruff, excludes generated clients)…"
@@ -1844,6 +1850,40 @@ quality:
 # of them mentioned that it exists solely inside lemma-backend.
 architecture:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+
+# ── Client measurement (advisory) ─────────────────────────────────────────────
+#
+# `quality` runs twenty-odd gates and fifteen of them begin `cd lemma-backend`.
+# The two packages a user actually installs got three: `format-check`, a bare
+# `ruff check`, and the lockfile sweep. Nothing counted a file's length, a
+# function's branchiness or an annotation that gave up -- so all three grew with
+# no number attached, and the first measurement found nine CLI files over the
+# backend's 600-line ceiling and a command function scoring 103 against a
+# backend worst case of 56.
+#
+# Both targets below are ADVISORY: they compare against a recorded baseline,
+# print anything that grew, and exit 0. That is deliberate and temporary. A
+# baseline this size arms into a gate that fails a hundred unrelated branches on
+# the day it is taken, and a gate people have to route around teaches that gates
+# can be routed around. Drop `--advisory` from each line to arm the ratchet;
+# nothing else has to change.
+measure-clients: client-structure-record client-typecheck-record
+
+# Size, complexity and untyped escapes, at lemma-backend's own thresholds.
+# Through `uv run` from lemma-cli rather than a bare `python3`: it parses 3.14
+# source, and macOS's system interpreter reports valid PEP 758 syntax as a
+# SyntaxError.
+client-structure-record:
+	@cd $(CLI_DIR) && uv run python ../scripts/check_client_structure.py --advisory
+
+# basedpyright over lemma_cli and lemma_sdk. Runs in each project's own
+# environment -- outside it, every `typer`/`textual`/`httpx` import is an error
+# that says nothing about this code. That has a price worth stating: this is
+# the only step in `quality` that installs an environment other than the
+# backend's, so the CI job now syncs lemma-cli and lemma-python too. Locally
+# they are already synced and it costs about four seconds.
+client-typecheck-record:
+	@python3 scripts/check_client_types.py --advisory
 
 # The tight loop before pushing: the gates that catch the most per second.
 # `quality` is the full pre-PR pass, but two of its steps import the whole app

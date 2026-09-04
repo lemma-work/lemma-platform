@@ -15,7 +15,6 @@ import html
 import re
 from urllib.parse import urlencode
 
-from app.core.config import settings
 
 # Lemma ink.
 _BRAND = "11110F"
@@ -46,11 +45,16 @@ _LEMMA_MARK_SVG = (
 _DEFAULT_TAGLINE = "Apps, agents, workflows, and data — ready to run with your team."
 
 
-def _app_base_url() -> str:
-    base = getattr(settings, "frontend_base_url", None) or getattr(
-        settings, "app_base_url", None
-    )
-    return str(base).rstrip("/") if base else "https://lemma.work"
+# The install link is deliberately not this deployment's frontend. A bundle's
+# README is published to a public GitHub repo, so its reader is a stranger who
+# has no account anywhere -- the one-click import has to land somewhere they can
+# actually use, which is the hosted product.
+#
+# It used to read `frontend_base_url` then `app_base_url`, neither of which is a
+# field on Settings, so both `getattr`s returned None and the constant below was
+# always the answer. That reads as "configurable, with a fallback" and behaved as
+# "always lemma.work"; the widened settings gate is what surfaced it.
+_INSTALL_BASE_URL = "https://lemma.work"
 
 
 def _lemma_logo_data_uri() -> str:
@@ -72,7 +76,7 @@ def install_badge_url() -> str:
 
 
 def install_target(owner: str, repo: str) -> str:
-    return f"{_app_base_url()}/import/github/{owner}/{repo}"
+    return f"{_INSTALL_BASE_URL}/import/github/{owner}/{repo}"
 
 
 def install_badge(owner: str, repo: str) -> str:
