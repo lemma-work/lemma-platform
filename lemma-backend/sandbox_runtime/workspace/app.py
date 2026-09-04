@@ -6,8 +6,11 @@ import hmac
 import logging
 import os
 from pathlib import Path
+import json
 import struct
 from uuid import UUID
+
+import websockets
 
 from fastapi import (
     Body,
@@ -22,6 +25,7 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.websockets import WebSocketDisconnect
 
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
@@ -47,6 +51,13 @@ from .filesystem_manager import (
     FileConflictError,
     FilesystemManager,
     FileTooLargeError,
+)
+from .browser_cdp import (
+    BrowserNotRunning,
+    ensure_port,
+    live_port,
+    page_socket_url,
+    page_targets,
 )
 from .browser_guard import shed_browser_if_starved
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
@@ -287,6 +298,60 @@ def create_app(
                 await websocket.close(code=1000)
                 return
 
+    @app.get("/browser/cdp/targets")
+    async def list_browser_targets(
+        start: bool = False, _auth: None = Depends(authenticate)
+    ):
+        """The pages a person could be shown.
+
+        `start` is the difference between watching and taking the wheel. Without
+        it this reports what is there, and a shed browser is a 409 rather than a
+        failure -- that is the resting state of an idle workspace, and rendering
+        a card must not conjure a browser. With it, somebody has asked to drive,
+        and a browser is started if none is up.
+        """
+        try:
+            port = await (ensure_port() if start else live_port())
+            return {"targets": await page_targets(port=port)}
+        except BrowserNotRunning:
+            raise HTTPException(status_code=409, detail="the browser is not running")
+
+    @app.websocket("/browser/cdp/{target_id}")
+    async def relay_browser_cdp(websocket: WebSocket, target_id: str) -> None:
+        """Relay one page's debugging protocol, filtered to what a viewer needs.
+
+        **The filter is the point.** Raw CDP is total control of the session --
+        it reads every cookie, navigates anywhere, and evaluates arbitrary
+        script -- so handing it to a browser tab would mean any XSS on the page
+        holding it owns the whole logged-in browser. A viewer needs to see
+        frames and send input; that is all this passes.
+
+        Refusals are answered rather than dropped, so a client asking for
+        anything else learns why instead of waiting for a reply that is never
+        coming.
+        """
+        provided = websocket.headers.get("x-lemma-runtime-token", "").strip()
+        if not provided or not hmac.compare_digest(provided, runtime_token):
+            await websocket.close(code=4401)
+            return
+        try:
+            # `live_port`, not `ensure_port`: a viewer arrives here holding a
+            # target id it was just given, so the browser it names is either
+            # still up or has gone -- and starting a fresh one would attach to a
+            # page that does not exist.
+            upstream_url = page_socket_url(target_id, port=await live_port())
+        except BrowserNotRunning:
+            await websocket.close(code=4409)
+            return
+
+        await websocket.accept()
+        try:
+            async with websockets.connect(upstream_url, max_size=None) as upstream:
+                await _relay_cdp(websocket, upstream)
+        except OSError, websockets.exceptions.WebSocketException:
+            with suppress(RuntimeError):
+                await websocket.close(code=1011)
+
     @app.post("/processes/{operation_id}:input", status_code=204)
     async def send_process_input(
         operation_id: UUID,
@@ -460,6 +525,100 @@ def create_app(
         return Response(status_code=204)
 
     return app
+
+
+# What a person watching and driving a page actually needs, and nothing else.
+#
+# Deliberately a list of exact method names rather than a prefix match: `Page.`
+# alone would admit `Page.navigate`, and a viewer that can navigate can be
+# pointed at a page that harvests the session it is holding. Input is allowed
+# wholesale because every method on it is a keystroke, a click or a scroll.
+_CDP_VIEWER_METHODS = frozenset(
+    {
+        "Page.enable",
+        "Page.startScreencast",
+        "Page.stopScreencast",
+        "Page.screencastFrameAck",
+        "Page.getLayoutMetrics",
+    }
+)
+_CDP_VIEWER_DOMAINS = ("Input.",)
+
+
+def cdp_message_is_allowed(raw: str) -> bool:
+    """Whether a viewer may send this CDP message.
+
+    Unparseable is not allowed: a message we cannot read is one we cannot
+    judge, and the safe reading of "I don't know" is no.
+    """
+    try:
+        method = json.loads(raw).get("method")
+    except ValueError, AttributeError:
+        return False
+    if not isinstance(method, str):
+        return False
+    return method in _CDP_VIEWER_METHODS or method.startswith(_CDP_VIEWER_DOMAINS)
+
+
+async def _relay_cdp(client: WebSocket, upstream) -> None:
+    """Copy frames both ways, refusing anything a viewer has no business sending.
+
+    Two tasks rather than one loop: a screencast pushes frames continuously
+    while the viewer sends nothing for long stretches, so interleaving the
+    reads would stall the picture behind an input that never comes.
+    """
+
+    async def to_upstream() -> None:
+        while True:
+            message = await client.receive()
+            if message["type"] == "websocket.disconnect":
+                return
+            raw = message.get("text")
+            if raw is None:
+                continue
+            if not cdp_message_is_allowed(raw):
+                # Answered, not dropped: a client waiting on a reply that will
+                # never come looks like a hang rather than a refusal.
+                with suppress(ValueError, KeyError, TypeError):
+                    message_id = json.loads(raw).get("id")
+                    await client.send_text(
+                        json.dumps(
+                            {
+                                "id": message_id,
+                                "error": {
+                                    "code": -32601,
+                                    "message": "not permitted for a viewer",
+                                },
+                            }
+                        )
+                    )
+                continue
+            await upstream.send(raw)
+
+    async def to_client() -> None:
+        async for frame in upstream:
+            if isinstance(frame, str):
+                await client.send_text(frame)
+
+    tasks = [
+        create_inherited_task(to_upstream()),
+        create_inherited_task(to_client()),
+    ]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            with suppress(
+                WebSocketDisconnect,
+                websockets.exceptions.ConnectionClosed,
+                asyncio.CancelledError,
+            ):
+                task.result()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _require_process(
