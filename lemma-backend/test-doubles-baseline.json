@@ -1,10 +1,9 @@
 {
   "_comment": "Ceilings, not targets: a module installing more doubles inside its own subject than recorded fails. Regenerate with `uv run python scripts/check_test_doubles.py --write` only to record a reduction.",
-  "composition": 6,
   "core": 123,
   "lemma-cli": 175,
-  "modules/agent": 381,
-  "modules/agent_surfaces": 190,
+  "modules/agent": 320,
+  "modules/agent_surfaces": 189,
   "modules/apps": 8,
   "modules/connectors": 148,
   "modules/datastore": 50,
@@ -13,8 +12,8 @@
   "modules/identity": 63,
   "modules/pod": 32,
   "modules/pod_bundle": 62,
-  "modules/schedule": 15,
-  "modules/workflow": 29,
+  "modules/schedule": 10,
+  "modules/workflow": 15,
   "modules/workspace": 11,
   "tests": 28
 }
