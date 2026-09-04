@@ -42,6 +42,7 @@ import {
     getKindSpec,
     getTenantConfiguredConnectors,
     getTenantConfiguredKindSpec,
+    installUsesOAuth,
     isTenantConfigured,
     usesDirectCredentials,
     type ConnectorKindSpec,
@@ -209,6 +210,45 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         () => new Set(connections.map((install) => install.id)),
         [connections],
     );
+
+    /** The account a connection authenticates with, so its token can be rotated. */
+    const accountIdByInstallId = useMemo(() => {
+        const byInstall = new Map<string, string>();
+        for (const account of accounts || []) {
+            if (!connectionInstallIds.has(account.auth_config_id)) continue;
+            const held = byInstall.get(account.auth_config_id);
+            if (!held || account.is_default) byInstall.set(account.auth_config_id, account.id);
+        }
+        return byInstall;
+    }, [accounts, connectionInstallIds]);
+
+    /**
+     * Connections that sign in through a browser and have nobody signed in yet.
+     *
+     * An MCP install whose server described its own authorization is one of
+     * these, and until it was distinguishable from a token install it was
+     * created with an empty credential set and left unreachable — connected in
+     * appearance, 401 on every call, with no control anywhere that offered to
+     * fix it.
+     */
+    const installIdsNeedingSignIn = useMemo(() => {
+        const connected = new Set(
+            (accounts || [])
+                .filter((account) => !getAccountStatusMeta(account.status).needsAttention)
+                .map((account) => account.auth_config_id),
+        );
+        return new Set(
+            connections
+                .filter(
+                    (install) =>
+                        installUsesOAuth(
+                            install,
+                            getKindSpec(connectorsById.get(install.connector_id), install.kind),
+                        ) && !connected.has(install.id),
+                )
+                .map((install) => install.id),
+        );
+    }, [accounts, connections, connectorsById]);
 
     // A connection's account is the same fact as its connection row, so listing
     // both says everything twice. The exception is an account that needs
@@ -391,6 +431,20 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     config: submission.config,
                     name: submission.name,
                 });
+                // Creating the install is what asks the server how it wants to
+                // be authorized, so only now is this knowable. A server that
+                // answered with an authorization server is signed into, and
+                // posting an empty credential set to it produced an account
+                // that looked connected, held no token, and 401'd every call —
+                // with no way back, because nothing in this view offered a
+                // sign-in. The install stays either way: it is valid, and
+                // "Sign in" on its row is the way back if the window is closed.
+                if (installUsesOAuth(install, capability)) {
+                    setConnectionTarget(null);
+                    toast.success(`Added ${submission.name} · sign in to finish`);
+                    await startOAuth(target.connector.id, install.id);
+                    return;
+                }
                 try {
                     await createConnectorAccount.mutateAsync({
                         authConfigId: install.id,
@@ -493,7 +547,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             setAdvancedApp(null);
 
             const capability = getKindSpec(app, authConfig.kind);
-            if (usesDirectCredentials(capability)) {
+            if (!installUsesOAuth(authConfig, capability) && usesDirectCredentials(capability)) {
                 openCredentialDialog(app, capability, authConfig.id, 'connect');
                 return;
             }
@@ -517,7 +571,12 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
         // Credential accounts re-link via the form (delete + recreate). OAuth accounts
         // re-run the flow on the same account_id — the backend only blocks CONNECTED.
-        if (usesDirectCredentials(capability)) {
+        //
+        // The install is asked first, because `usesDirectCredentials` reads the
+        // catalog and the catalog is wrong for exactly one kind: every `mcp`
+        // install claims API_KEY there, so reconnecting one that signs in
+        // through a browser offered a bearer-token box instead of the flow.
+        if (!installUsesOAuth(authConfig, capability) && usesDirectCredentials(capability)) {
             openCredentialDialog(app, capability, authConfig.id, 'reconnect', account.id);
             return;
         }
@@ -691,6 +750,24 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                                 connector={connectorsById.get(install.connector_id) ?? null}
                                 organizationId={effectiveOrganizationId}
                                 isBusy={busyInstallName === install.name}
+                                needsSignIn={installIdsNeedingSignIn.has(install.id)}
+                                onSignIn={(target) => void startOAuth(target.connector_id, target.id)}
+                                onReplaceCredentials={
+                                    installIdsNeedingSignIn.has(install.id) ||
+                                    !accountIdByInstallId.has(install.id)
+                                        ? undefined
+                                        : (target) =>
+                                              openCredentialDialog(
+                                                  connectorsById.get(target.connector_id) as Connector,
+                                                  getKindSpec(
+                                                      connectorsById.get(target.connector_id),
+                                                      target.kind,
+                                                  ),
+                                                  target.id,
+                                                  'reconnect',
+                                                  accountIdByInstallId.get(target.id),
+                                              )
+                                }
                                 onEdit={(target) =>
                                     openConnectionDialog(
                                         connectorsById.get(target.connector_id) as Connector,

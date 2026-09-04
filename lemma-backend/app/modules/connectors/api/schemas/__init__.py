@@ -204,6 +204,18 @@ class AuthConfigResponseSchema(BaseSchema):
     status: str
     name: str
     is_default: bool = False
+    auth_scheme: Optional[str] = Field(
+        default=None,
+        description=(
+            "How this install authenticates, which is not always what the "
+            "connector's catalog entry says. `mcp` is one catalog entry "
+            "standing for every server a tenant may point at: the entry says "
+            "API_KEY, but an install whose server described its own "
+            "authorization when it was created signs in through a browser and "
+            "answers OAUTH2 here. Branch on this rather than on the "
+            "connector's kind when deciding how to connect an install."
+        ),
+    )
     config: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
     created_at: datetime.datetime

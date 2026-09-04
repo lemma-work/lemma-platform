@@ -70,6 +70,25 @@ class ConnectorRepository(
         found = {row.id: row.title for row in result}
         return {connector_id: found.get(connector_id) for connector_id in connector_ids}
 
+    async def kinds_for(
+        self, connector_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, object]]]:
+        """The kind specs for a set of connectors, in one query.
+
+        A sibling of `titles_for`, and for the same reason: the connectors page
+        needs one fact about the catalog entry behind every install it lists,
+        and fetching whole connector rows one `get()` at a time is a round trip
+        per install. This reads the capability list alone, which is what
+        deciding how an install authenticates actually needs.
+        """
+        if not connector_ids:
+            return {}
+        stmt = select(Connector.id, Connector.kinds).where(
+            Connector.id.in_(set(connector_ids))
+        )
+        result = await self.session.execute(stmt)
+        return {row.id: list(row.kinds or []) for row in result}
+
     async def list_active(
         self, limit: int = 100, cursor: Optional[str] = None
     ) -> Tuple[Sequence[ConnectorEntity], Optional[str]]:

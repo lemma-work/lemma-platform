@@ -196,7 +196,36 @@ export const supportsCustomConfig = (capability: ConnectorKindSpec | null): bool
     // describes the connection itself, so having fields is the whole condition
     // — gating those on an OAuth flag left sql/mcp/http with no way in at all.
     if (capability.auth_scheme !== 'OAUTH2') return true;
-    return Boolean(capability.supports_org_custom_oauth);
+    // Both halves, not just the flag. An org's client id and secret are useless
+    // without endpoints to send people to, and those come from the connector —
+    // so a catalog row that promises "bring your own app" while carrying no
+    // `oauth2_defaults` renders a form whose only outcome is a stranded install
+    // and "OAuth2 defaults are not configured" at sign-in. The importer no
+    // longer writes that combination; this is what protects a deployment whose
+    // catalog has not been re-imported yet.
+    return Boolean(capability.supports_org_custom_oauth && capability.oauth2_defaults);
+};
+
+/**
+ * True when *this install* is signed into rather than given a token.
+ *
+ * The kind spec cannot answer it. `mcp` is one catalog entry standing for every
+ * server a tenant may point at, and they do not agree: the entry says API_KEY,
+ * while an install whose server described its own authorization when it was
+ * created signs in through a browser. The backend resolves that per install and
+ * says so in `auth_scheme`; without it the UI created the install, posted an
+ * empty credential set, and showed a connected account holding no token against
+ * a server that refuses every call.
+ *
+ * Falls back to the kind spec for an install from a deployment that predates
+ * the field, which is the answer that was right for every kind but this one.
+ */
+export const installUsesOAuth = (
+    install: AuthConfig | null | undefined,
+    capability: ConnectorKindSpec | null,
+): boolean => {
+    if (install?.auth_scheme) return install.auth_scheme === 'OAUTH2';
+    return capability?.auth_scheme === 'OAUTH2';
 };
 
 /** True when this connector has any Advanced (non-default kind / custom config) option worth surfacing. */

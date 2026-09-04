@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select, update
 
 from app.modules.workspace.domain.sandbox import (
     SandboxDesiredState,
@@ -22,9 +24,11 @@ from app.modules.workspace.providers.base import (
 from app.modules.workspace.infrastructure.sandbox_repository import (
     SandboxRepository,
 )
+from app.modules.workspace.infrastructure.models import SandboxModel
 from app.modules.workspace.services.sandbox_service import SandboxService
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 from app.modules.workspace.tests.integration.test_sandbox_service import FakeProvider
+from sandbox_runtime.errors import SandboxUnavailable
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -680,3 +684,82 @@ async def test_the_warm_path_does_not_rewrite_a_row_that_is_already_right(
         after = await SandboxRepository(uow).get(sandbox.id)
 
     assert before.desired_state is after.desired_state is SandboxDesiredState.PRESENT
+
+
+class TestAnUnreachableSandboxStopsBeingRetriedForever:
+    """ "The next sweep will try it again" is the right answer to a blip and the
+    wrong one to a provider object that is never coming back.
+
+    One sandbox failed to release on every hourly sweep for as long as the logs
+    went back, warning identically each time and converging on nothing. Past a
+    long multiple of the idle cutoff the release is recorded locally instead,
+    which keeps the disk — so being wrong costs a cold start — and if the
+    compute really is still running, the orphan sweep destroys a provider object
+    with no live row behind it.
+    """
+
+    @staticmethod
+    def _unreachable(provider: SweepableProvider) -> None:
+        """Fail the *release*, which is where the real one failed.
+
+        Deliberately not `inspect`: `_is_busy` probes first and treats an
+        unreachable sandbox as busy, so a sandbox whose probe fails is skipped
+        before release is ever attempted. The sandbox that warned hourly in
+        production probed fine and would not stop.
+        """
+
+        async def _raise(instance, *, kind, deadline_at):
+            raise SandboxUnavailable("provider is not answering")
+
+        provider.release = _raise  # type: ignore[method-assign]
+
+    @staticmethod
+    async def _last_used_at(uow_factory, sandbox_id: UUID) -> object:
+        async with uow_factory() as uow:
+            row = await uow.session.execute(
+                select(SandboxModel.last_used_at, SandboxModel.desired_state).where(
+                    SandboxModel.id == sandbox_id
+                )
+            )
+            return row.first()
+
+    @staticmethod
+    async def _age(uow_factory, sandbox_id: UUID, *, seconds: int) -> None:
+        async with uow_factory() as uow:
+            await uow.session.execute(
+                update(SandboxModel)
+                .where(SandboxModel.id == sandbox_id)
+                .values(
+                    last_used_at=datetime.now(timezone.utc) - timedelta(seconds=seconds)
+                )
+            )
+            await uow.commit()
+
+    async def test_a_long_idle_sandbox_the_provider_will_not_answer_for_is_let_go(
+        self, sweeper, provider, service, sandbox_uow_factory
+    ) -> None:
+        sandbox = await _workspace(service)
+        await service.ensure(sandbox.id)
+        await self._age(sandbox_uow_factory, sandbox.id, seconds=7200)
+        self._unreachable(provider)
+
+        assert await sweeper.release_idle(idle_after_seconds=600) == 1
+
+        _, desired_state = await self._last_used_at(sandbox_uow_factory, sandbox.id)
+        assert desired_state == SandboxDesiredState.RELEASED.value
+
+    async def test_a_blip_is_still_left_for_the_next_sweep(
+        self, sweeper, provider, service, sandbox_uow_factory
+    ) -> None:
+        """Just past the idle cutoff is not evidence the provider is gone."""
+        sandbox = await _workspace(service)
+        await service.ensure(sandbox.id)
+        await self._age(sandbox_uow_factory, sandbox.id, seconds=700)
+        self._unreachable(provider)
+
+        assert await sweeper.release_idle(idle_after_seconds=600) == 0
+
+        _, desired_state = await self._last_used_at(sandbox_uow_factory, sandbox.id)
+        assert desired_state == SandboxDesiredState.PRESENT.value, (
+            "giving up early would stop compute that is probably still fine"
+        )

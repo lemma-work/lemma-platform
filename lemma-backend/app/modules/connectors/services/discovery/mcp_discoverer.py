@@ -1,4 +1,8 @@
-"""Discover connector operations from an external MCP server's tool list."""
+"""Discover connector operations from an external MCP server's tool list.
+
+The install's ``session_setup`` is replayed first, so tools a server only
+exposes after a session-scoped call are discovered like any other.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ from typing import Any
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.connectors.infrastructure.adapters.mcp_executor import (
     McpClientFactory,
+    apply_session_setup,
     build_mcp_headers,
     default_mcp_client_factory,
 )
@@ -40,6 +45,12 @@ async def discover_mcp(
 
     client = factory(server_url, headers, timeout_seconds)
     async with client:
+        # Before `list_tools`, not after: the install's setup calls are what
+        # unlock a server's session-gated tools, and a tool that is not in this
+        # list is never stored as an operation and so can never be called by
+        # name. Discovering against a virgin session is why those tools were
+        # unreachable even when the setup call itself was.
+        await apply_session_setup(client, connection_config)
         tools = await client.list_tools()
 
     operations: list[DiscoveredOperation] = []
