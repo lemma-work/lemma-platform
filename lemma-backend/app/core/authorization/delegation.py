@@ -96,6 +96,7 @@ DESTRUCTIVE_ACTIONS = {
     Permissions.APP_DELETE,
     Permissions.SCHEDULE_DELETE,
     Permissions.CONNECTOR_ACCOUNT_MANAGE,
+    Permissions.WEB_LOGIN_MANAGE,
 }
 
 

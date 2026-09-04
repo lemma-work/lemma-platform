@@ -49,6 +49,9 @@ from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  #
 # Workspace sandboxes (sandboxes, sandbox_instances)
 from app.modules.workspace.infrastructure import models as workspace_models  # noqa: F401
 
+# Saved site logins (web_logins, web_login_audit)
+from app.modules.web_login.infrastructure import models as web_login_models  # noqa: F401
+
 # Every import above exists for its side effect: importing a models module is
 # what registers its tables on Base.metadata, which is the whole input to
 # autogenerate. Naming them here makes that dependency something the reader and
@@ -71,6 +74,7 @@ REGISTERED_MODEL_MODULES = (
     usage_models,
     pod_bundle_models,
     workspace_models,
+    web_login_models,
 )
 
 config = context.config
