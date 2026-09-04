@@ -461,9 +461,10 @@ async def execute_function(
     user_email = getattr(user, "email", None)
     if user_email is None:
         async with uow_factory() as uow:
-            from app.composition.identity_notifications import resolve_user_email
+            from app.modules.identity.contracts.profiles import user_profile
 
-            user_email = await resolve_user_email(uow, user_id)
+            profile = await user_profile(uow.session, user_id)
+            user_email = profile.email if profile else None
 
     run = await use_cases.execute_function(
         pod_id=pod_id,

@@ -11,7 +11,7 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
-from app.composition.surface_identity import Pod
+from app.modules.pod.contracts.members import pod_name
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -165,8 +165,7 @@ class SurfaceConfigurationAuthorizationMixin:
     async def _surface_choice_labels(self, authorized) -> list[tuple[str, str]]:
         choices: list[tuple[str, str]] = []
         for surface, _ in authorized:
-            pod = await self.uow.session.get(Pod, surface.pod_id)
-            label = str(getattr(pod, "name", "") or surface.name)
+            label = await pod_name(self.uow.session, surface.pod_id) or surface.name
             choices.append((label, str(surface.id)))
         return choices
 

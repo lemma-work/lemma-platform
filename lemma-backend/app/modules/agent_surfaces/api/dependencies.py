@@ -27,6 +27,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.connection_owner_adapter
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
+    IdentityUserDirectoryAdapter,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
@@ -64,13 +67,7 @@ from app.modules.agent_surfaces.services.user_surfaces_service import (
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagerService,
 )
-from app.composition.surface_identity import create_surface_user_repository
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
-from app.composition.surface_connectors import get_connector_service
-from app.composition.surface_connectors import (
-    ConnectorTriggerRepository,
-)
-from app.composition.surface_schedule import get_schedule_service
 
 
 def surface_repository_factory(uow) -> SurfaceRepository:
@@ -82,14 +79,9 @@ def get_surface_service(uow: UoWDep) -> AgentSurfaceService:
     return AgentSurfaceService(
         surface_repository=surface_repository_factory(uow),
         account_binding_resolver=SurfaceAccountBindingResolver(account_adapter),
-        schedule_service=get_schedule_service(uow),
-        connector_trigger_repository=ConnectorTriggerRepository(uow=uow),
         account_port=account_adapter,
         auth_config_port=SqlAlchemySurfaceAuthConfigAdapter(uow),
-        credential_resolver=SurfaceCredentialResolver(
-            session=uow.session,
-            connector_service=get_connector_service(uow),
-        ),
+        credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
 
 
@@ -109,7 +101,6 @@ def get_surface_event_handler(
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         conversation_service=conversation_service,
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
@@ -173,10 +164,7 @@ def get_surface_webhook_security_service(
     """
 
     def _resolver(uow) -> SurfaceCredentialResolver:
-        return SurfaceCredentialResolver(
-            session=uow.session,
-            connector_service=get_connector_service(uow),
-        )
+        return SurfaceCredentialResolver(uow=uow)
 
     return SurfaceWebhookSecurityService(
         uow_factory=uow_factory, resolver_factory=_resolver
@@ -187,7 +175,7 @@ def get_user_surfaces_service(uow: UoWDep) -> UserSurfacesService:
     return UserSurfacesService(
         surface_repository=surface_repository_factory(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-        user_repository=create_surface_user_repository(uow),
+        user_directory=IdentityUserDirectoryAdapter(uow),
     )
 
 

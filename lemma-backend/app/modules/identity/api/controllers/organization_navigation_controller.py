@@ -27,7 +27,7 @@ from app.modules.identity.infrastructure.organization_home_cache import (
     get_cached_organization_home,
     set_cached_organization_home,
 )
-from app.composition.organization_navigation import (
+from app.modules.identity.services.organization_navigation import (
     load_navigation,
     load_organization_home,
 )

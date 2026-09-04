@@ -20,8 +20,7 @@ from fastapi import APIRouter, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser
-from app.composition.pod_bundle_pod import PodViewerDep
-from app.modules.pod_bundle.api.dependencies import ExportUseCasesDep
+from app.modules.pod_bundle.api.dependencies import ExportUseCasesDep, PodViewerDep
 from app.modules.pod_bundle.api.schemas import (
     ExportStartRequest,
     ExportStatusResponse,

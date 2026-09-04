@@ -72,7 +72,6 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     SurfaceFileIngestService,
     every_attachment_failed,
 )
-from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -98,14 +97,12 @@ class AgentSurfaceIngressService(
         surface_repository: SurfaceInstallationRepositoryPort | None = None,
         conversation_link_repository: SurfaceConversationLinkRepository | None = None,
         conversation_service: ConversationService | None = None,
-        connector_service: ConnectorService | None = None,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         pod_membership_port: SurfacePodMembershipPort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
         conversation_service_factory: Callable[[Any], ConversationService]
         | None = None,
-        connector_service_factory: Callable[[Any], ConnectorService] | None = None,
     ):
         # Two modes:
         #  - uow mode (request/egress/ingress callers): collaborators are bound
@@ -121,11 +118,9 @@ class AgentSurfaceIngressService(
         self.uow = uow
         self._uow_factory = uow_factory
         self._conversation_service_factory = conversation_service_factory
-        self._connector_service_factory = connector_service_factory
         self.surface_repository = surface_repository
         self.conversation_link_repository = conversation_link_repository
         self.conversation_service = conversation_service
-        self.connector_service = connector_service
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
@@ -139,10 +134,7 @@ class AgentSurfaceIngressService(
             self.identity_service = SurfaceIdentityResolutionService(
                 uow, self.external_user_repository
             )
-            self.credential_resolver = SurfaceCredentialResolver(
-                session=uow.session,
-                connector_service=connector_service,
-            )
+            self.credential_resolver = SurfaceCredentialResolver(uow=uow)
         else:
             self.external_user_repository = None
             self.identity_service = None

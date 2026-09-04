@@ -13,7 +13,7 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
-from app.composition.agent_datastore import create_agent_skill_file_service
+from app.modules.datastore.contracts.agent_tools import build_agent_skill_file_service
 from app.core.authorization.factory import create_authorization_data_service
 from functools import lru_cache
 
@@ -203,7 +203,7 @@ async def _default_file_service(
     user_id: UUID,
 ) -> AsyncIterator[_FileServiceScope]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        service = create_agent_skill_file_service(
+        service = build_agent_skill_file_service(
             uow,
             authorization_service=create_authorization_data_service(uow),
         )
