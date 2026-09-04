@@ -258,7 +258,8 @@ async def get_organization(
     """Get organization details."""
     user: UserEntity = request.state.user
     organization = await org_service.get_organization(
-        organization_id=organization_id,
+        # The service's parameter is `org_id`; only the wire renamed.
+        org_id=organization_id,
         requester_user_id=user.id,
     )
 
@@ -283,7 +284,8 @@ async def update_organization(
     """Update an organization (owner only)."""
     user: UserEntity = request.state.user
     organization = await org_service.update_organization(
-        organization_id=organization_id,
+        # The service's parameter is `org_id`; only the wire renamed.
+        org_id=organization_id,
         requester_user_id=user.id,
         name=data.name,
         join_policy=data.join_policy,

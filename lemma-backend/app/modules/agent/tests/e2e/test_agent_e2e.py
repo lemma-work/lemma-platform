@@ -3042,7 +3042,7 @@ class TestAgentOpenApi:
         schemas = openapi["components"]["schemas"]
 
         assert "/pods/{pod_id}/conversations" in paths
-        assert "/organizations/{org_id}/agent-runtime/profiles" in paths
+        assert "/organizations/{organization_id}/agent-runtime/profiles" in paths
         assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
         assert "/agent-runtime/profiles" not in paths
         assert "/agent-runtime/default" not in paths
@@ -3095,20 +3095,20 @@ class TestAgentOpenApi:
             == "agent.host.harnesses.list"
         )
         assert (
-            paths["/organizations/{org_id}/agent-runtime/profiles"]["get"][
+            paths["/organizations/{organization_id}/agent-runtime/profiles"]["get"][
                 "operationId"
             ]
             == "agent.runtime.profiles.list"
         )
         assert (
-            paths["/organizations/{org_id}/agent-runtime/profiles"]["post"][
+            paths["/organizations/{organization_id}/agent-runtime/profiles"]["post"][
                 "operationId"
             ]
             == "agent.runtime.profiles.create"
         )
-        create_profile_schema = paths["/organizations/{org_id}/agent-runtime/profiles"][
-            "post"
-        ]["requestBody"]["content"]["application/json"]["schema"]
+        create_profile_schema = paths[
+            "/organizations/{organization_id}/agent-runtime/profiles"
+        ]["post"]["requestBody"]["content"]["application/json"]["schema"]
         assert create_profile_schema["discriminator"]["propertyName"] == "source"
         assert set(create_profile_schema["discriminator"]["mapping"]) == {
             "AGENT_HOST",
@@ -3127,14 +3127,14 @@ class TestAgentOpenApi:
         )
 
         profile_path = paths[
-            "/organizations/{org_id}/agent-runtime/profiles/{profile_id}"
+            "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}"
         ]
         assert profile_path["get"]["operationId"] == "agent.runtime.profiles.get"
         assert profile_path["patch"]["operationId"] == "agent.runtime.profiles.update"
         assert profile_path["delete"]["operationId"] == "agent.runtime.profiles.archive"
         assert (
             paths[
-                "/organizations/{org_id}/agent-runtime/profiles/{profile_id}/restore"
+                "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore"
             ]["post"]["operationId"]
             == "agent.runtime.profiles.restore"
         )
