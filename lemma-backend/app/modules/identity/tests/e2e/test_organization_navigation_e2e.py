@@ -424,7 +424,7 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
         response = await authenticated_client.get("/organizations")
         assert response.status_code == status.HTTP_200_OK, response.text
         for org_id in org_ids:
-            response = await authenticated_client.get(f"/pods/organization/{org_id}")
+            response = await authenticated_client.get(f"/organizations/{org_id}/pods")
             assert response.status_code == status.HTTP_200_OK, response.text
         return response
 
@@ -448,7 +448,7 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
             f"\n  {'route':44} {'cold':>9} {'p50':>9} {'p95':>9}"
             f"\n  {'GET /organizations/navigation':44} {navigation_cold:7.1f}ms {navigation_p50:7.1f}ms {navigation_p95:7.1f}ms"
             f"\n  {'GET /organizations/{id}/home':44} {home_cold:7.1f}ms {home_p50:7.1f}ms {home_p95:7.1f}ms"
-            f"\n  {'was: /organizations + 5x /pods/organization':44} {'':9} {legacy_p50:7.1f}ms {legacy_p95:7.1f}ms"
+            f"\n  {'was: /organizations + 5x .../pods':44} {'':9} {legacy_p50:7.1f}ms {legacy_p95:7.1f}ms"
             f"\n  → the sidebar costs {legacy_p50 / navigation_p50:.1f}x less than the fan-out it replaces"
             f"\n  → home's p50 is a cache hit; {home_cold:.1f}ms is what building it costs"
         )
