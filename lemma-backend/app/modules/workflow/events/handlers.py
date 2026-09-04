@@ -262,7 +262,9 @@ async def expire_past_due_notifications():
     discipline, same "the timer may have been lost, the row is the truth" shape.
     A third invention here would drift from the other two.
     """
-    from app.composition.workflow_notifications import expire_past_due_notifications
+    from app.modules.agent_surfaces.contracts.workflow_notifications import (
+        expire_past_due_notifications,
+    )
 
     worker_ctx: AppWorkerContext = streaq_worker.context
     async with worker_ctx.uow() as uow:

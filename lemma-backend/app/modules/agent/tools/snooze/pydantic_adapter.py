@@ -26,11 +26,11 @@ point, and everything after it, is identical; see ``services/run_suspension``.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.composition.agent_snooze_scheduler import schedule_snooze_wake
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -108,11 +108,19 @@ async def snooze(
     seconds = min(request.seconds, MAX_SNOOZE_SECONDS)
     wake_at = now + timedelta(seconds=seconds)
 
-    timer_id = await schedule_snooze_wake(
-        conversation_id=deps.conversation_id,
-        user_id=deps.user_id,
-        wake_at=wake_at,
-    )
+    # The per-wait token the fired timer is resolved back to. Minted here
+    # rather than defaulted on the row because it has to exist before the row
+    # is written: `external_ref` is what `find_active_by_external_ref` joins on,
+    # and it is what keeps two sequential snoozes in one conversation from
+    # resuming each other.
+    #
+    # There is nothing to arm. The wait row below carries `scheduled_at` and
+    # `external_ref`, and the schedule poller claims from those columns -- the
+    # row *is* the timer. This used to call a one-shot scheduler through
+    # `app/composition/agent_snooze_scheduler.py`, which by the end minted a
+    # uuid and did nothing else, and existed only so that `agent` could reach
+    # `schedule` without importing it.
+    wait_ref = uuid4()
 
     wait = AgentConversationWaitEntity(
         conversation_id=deps.conversation_id,
@@ -120,7 +128,7 @@ async def snooze(
         pod_id=deps.pod_id,
         tool_call_id=ctx.tool_call_id,
         wait_type=AgentWaitType.TIME,
-        external_ref=str(timer_id),
+        external_ref=str(wait_ref),
         scheduled_at=wake_at,
         spec={
             "reason": request.reason,

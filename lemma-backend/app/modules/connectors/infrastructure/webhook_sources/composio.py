@@ -6,13 +6,22 @@ that the controller stops knowing which sources exist, and a behaviour change
 smuggled in alongside it would be indistinguishable from a regression in the
 tests that cover it.
 
-Verification is Composio's own, so it is asked of `connectors` rather than
-reimplemented behind a second port: `WebhookSourcePlugin.verify` below is the
-only port a source has to satisfy.
+Verification is Composio's own, and goes through this module's published
+`contracts.triggers.verify_webhook` even though the implementation now sits a
+directory away. Reaching the infrastructure function directly is cheaper — the
+contract pulls `ConnectorService` — but that import happens once per process,
+behind the `lru_cache` on `get_webhook_source_registry`, and never on the
+delivery path. What it would cost is worse: two e2e suites fake Composio's
+verification by doubling the published contract, which is connectors' answer to
+"is this delivery genuine", and a caller inside connectors taking a shortcut
+past it makes that answer untrue for everyone doubling it.
+
+`WebhookSourcePlugin.verify` below is the only port a source has to satisfy.
 """
 
 from __future__ import annotations
 
+from app.modules.connectors.contracts import triggers
 from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
@@ -27,13 +36,15 @@ class ComposioWebhookSource:
     source = "composio"
 
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
-        from app.modules.connectors.contracts.triggers import verify_webhook
-
         payload_text = delivery.raw_body.decode("utf-8", errors="replace")
         # No try/except: a verifier that raises anything at all is a delivery
         # that did not verify, and the controller says so once for every plugin
         # rather than each writing the same broad catch.
-        result = await verify_webhook(payload_text, dict(delivery.headers))
+        # Through the module, not the name: bound at import, a double on the
+        # published `verify_webhook` never reaches this call, which is what a
+        # `from ... import verify_webhook` here cost — the schedule e2e that
+        # fakes Composio's verification got the real SDK and a 403.
+        result = await triggers.verify_webhook(payload_text, dict(delivery.headers))
         return VerifiedDelivery(delivery=delivery, payload=_reshape(result))
 
     async def observe(self, verified: VerifiedDelivery) -> None:

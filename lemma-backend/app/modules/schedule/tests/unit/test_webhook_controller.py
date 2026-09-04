@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.composition.webhook_sources.composio import (
+from app.modules.connectors.infrastructure.webhook_sources.composio import (
     _reshape as _normalize_composio_payload,
 )
 from app.modules.schedule.api.controllers.webhook_controller import router

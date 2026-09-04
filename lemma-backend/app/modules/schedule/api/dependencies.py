@@ -49,10 +49,12 @@ def get_webhook_source_registry() -> WebhookSourceRegistry:
     """The sources this deployment accepts on `POST /webhooks/{source}`.
 
     Cached: the registry is a lookup table of stateless plugins, and rebuilding
-    it per delivery would import the composition root on a path whose rate an
+    it per delivery would reach the Composio SDK client on a path whose rate an
     external sender chooses.
     """
-    from app.composition.webhook_sources import default_webhook_sources
+    from app.modules.connectors.contracts.webhook_sources import (
+        default_webhook_sources,
+    )
 
     return default_webhook_sources()
 

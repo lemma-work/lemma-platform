@@ -6,23 +6,14 @@ from typing import List, Optional, Any, Dict, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.modules.schedule.contracts.targets import ScheduleTarget
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.domain.value_objects import DatastoreOperation
 
-
-@dataclass(frozen=True, slots=True)
-class ScheduleTarget:
-    id: UUID
-    pod_id: UUID
-    name: str
-    #: The target's *standing* instruction -- what it is for, as against what a
-    #: firing is for. A target without one has to be told by the schedule, which
-    #: is the rule `validate_target_instruction` enforces; the pod's own
-    #: assistant is the only agent that can have none.
-    instruction: str | None = None
-    is_global_workflow: bool = False
-    event_trigger_id: str | None = None
-    event_trigger_config: dict[str, object] | None = None
+# `ScheduleTarget` is declared in `contracts/targets.py` rather than here,
+# because `agent` and `workflow` are the two modules that can answer the lookups
+# below and neither of them may import this one. Imported back so every existing
+# reader of `schedule.domain.interfaces.ScheduleTarget` keeps working.
 
 
 class ScheduleTargetResolver(Protocol):

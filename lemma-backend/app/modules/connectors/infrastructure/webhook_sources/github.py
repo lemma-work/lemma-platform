@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
-from app.modules.connectors.contracts.github import connector_settings
+from app.modules.connectors.config import connector_settings
 from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
