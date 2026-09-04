@@ -250,18 +250,18 @@ def test_the_registry_refuses_a_resource_type_nobody_classified():
     Adding a member to `ResourceType` used to be enough to opt it out of the
     cross-pod clamp, silently. Now it fails loudly, naming the type.
     """
-    from app.core.authorization import service as authorization_service
+    from app.core.authorization import resource_tables
 
-    original = authorization_service._NOT_POD_SCOPED
+    original = resource_tables.NOT_POD_SCOPED
     try:
-        authorization_service._NOT_POD_SCOPED = frozenset()
+        resource_tables.NOT_POD_SCOPED = frozenset()
         with pytest.raises(RuntimeError, match="ORGANIZATION|ROLE"):
-            authorization_service._assert_every_resource_type_is_classified()
+            resource_tables.assert_every_resource_type_is_classified()
     finally:
-        authorization_service._NOT_POD_SCOPED = original
+        resource_tables.NOT_POD_SCOPED = original
 
     # And passes as shipped.
-    authorization_service._assert_every_resource_type_is_classified()
+    resource_tables.assert_every_resource_type_is_classified()
 
 
 @pytest.mark.parametrize(
@@ -281,16 +281,16 @@ def test_the_registry_refuses_a_resource_type_nobody_classified():
 def test_which_resources_a_pod_scoped_check_refuses_for_want_of_a_pod(
     resource_type, expected, why
 ):
-    from app.core.authorization.service import _pod_is_unknowable
+    from app.core.authorization.resource_tables import pod_is_unknowable
 
     ref = ResourceRef(resource_type=resource_type, resource_id=uuid4())
-    assert _pod_is_unknowable(ref) is expected, why
+    assert pod_is_unknowable(ref) is expected, why
 
 
 def test_a_resource_that_knows_its_pod_is_never_refused_for_want_of_one():
-    from app.core.authorization.service import _pod_is_unknowable
+    from app.core.authorization.resource_tables import pod_is_unknowable
 
     ref = ResourceRef(
         resource_type=ResourceType.AGENT, resource_id=uuid4(), pod_id=uuid4()
     )
-    assert _pod_is_unknowable(ref) is False
+    assert pod_is_unknowable(ref) is False
