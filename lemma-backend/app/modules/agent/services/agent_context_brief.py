@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.context_brief_repository import (
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     build_file_service,
     build_table_service,
 )

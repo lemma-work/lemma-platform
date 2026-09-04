@@ -23,7 +23,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.context import BaseAgentContext
-from app.composition.agent_datastore import (
+from app.modules.datastore.contracts.agent_tools import (
     DatastoreFileService,
     RecordService,
     TableService,
