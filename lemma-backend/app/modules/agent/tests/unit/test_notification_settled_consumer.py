@@ -100,7 +100,7 @@ async def test_another_event_on_the_same_stream_is_ignored(delivery):
     await on_notification_settled(
         {"event_type": "surface.connected", "surface_id": str(uuid4())},
         fs_logger=SimpleNamespace(),
-        uow_factory=lambda: _Uow(),
+        uow_factory=_Uow,
         inbox=_PassThroughInbox(),
         deliver_replies=delivery.factory,
     )
@@ -150,7 +150,7 @@ async def test_an_event_the_inbox_has_already_seen_delivers_nothing(delivery):
     await on_notification_settled(
         _settled_event(),
         fs_logger=SimpleNamespace(),
-        uow_factory=lambda: _Uow(),
+        uow_factory=_Uow,
         inbox=_AlreadySeen(),
         deliver_replies=delivery.factory,
     )
