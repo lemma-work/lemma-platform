@@ -89,7 +89,7 @@ async def test_listing_pods_holds_no_connection_across_slow_work(
     await _create_pod(authenticated_client, fixed_test_org["id"])
     org_id = fixed_test_org["id"]
     async with scoped_connection_guard():
-        response = await authenticated_client.get(f"/pods/organization/{org_id}")
+        response = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert response.status_code == 200, response.text
 
 

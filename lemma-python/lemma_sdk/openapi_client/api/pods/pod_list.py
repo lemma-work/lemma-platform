@@ -34,7 +34,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/pods/organization/{organization_id}".format(
+        "url": "/organizations/{organization_id}/pods".format(
             organization_id=quote(str(organization_id), safe=""),
         ),
         "params": params,
@@ -80,7 +80,7 @@ def sync_detailed(
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | PodListResponse]:
-    """List PodS by Organization
+    """List Pods by Organization
 
      List all pods in an organization
 
@@ -117,7 +117,7 @@ def sync(
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | PodListResponse | None:
-    """List PodS by Organization
+    """List Pods by Organization
 
      List all pods in an organization
 
@@ -149,7 +149,7 @@ async def asyncio_detailed(
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | PodListResponse]:
-    """List PodS by Organization
+    """List Pods by Organization
 
      List all pods in an organization
 
@@ -184,7 +184,7 @@ async def asyncio(
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | PodListResponse | None:
-    """List PodS by Organization
+    """List Pods by Organization
 
      List all pods in an organization
 

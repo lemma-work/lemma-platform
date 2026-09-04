@@ -2353,7 +2353,7 @@ async def test_public_runtime_profile_edit_archive_and_restore(
     )
     assert archived_item["status"] == "DISABLED"
 
-    restored = await authenticated_client.post(f"{base}/{profile_id}:restore")
+    restored = await authenticated_client.post(f"{base}/{profile_id}/restore")
     assert restored.status_code == status.HTTP_200_OK, restored.text
     assert restored.json()["status"] == "ACTIVE"
     # Archiving is reversible without re-entering the credential.

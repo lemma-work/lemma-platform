@@ -10734,7 +10734,7 @@ var LemmaClient = (() => {
     static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/events:append",
+        url: "/agent-host/events/append",
         headers: {
           "authorization": authorization
         },
@@ -10777,7 +10777,7 @@ var LemmaClient = (() => {
     static agentHostPairingComplete(requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/pairings:complete",
+        url: "/agent-host/pairings/complete",
         body: requestBody,
         mediaType: "application/json",
         errors: {
@@ -10925,17 +10925,17 @@ var LemmaClient = (() => {
   var AgentRuntimeService = class {
     /**
      * List Available Agent Runtime Profiles
-     * @param orgId
+     * @param organizationId
      * @param includeDisabled
      * @returns AgentRuntimeProfileListResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesList(orgId, includeDisabled = false) {
+    static agentRuntimeProfilesList(organizationId, includeDisabled = false) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{organization_id}/agent-runtime/profiles",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "include_disabled": includeDisabled
@@ -10947,17 +10947,17 @@ var LemmaClient = (() => {
     }
     /**
      * Create Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesCreate(orgId, requestBody) {
+    static agentRuntimeProfilesCreate(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{organization_id}/agent-runtime/profiles",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -10968,17 +10968,17 @@ var LemmaClient = (() => {
     }
     /**
      * Archive Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns void
      * @throws ApiError
      */
-    static agentRuntimeProfilesArchive(orgId, profileId) {
+    static agentRuntimeProfilesArchive(organizationId, profileId) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -10988,17 +10988,17 @@ var LemmaClient = (() => {
     }
     /**
      * Get Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileDetailResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesGet(orgId, profileId) {
+    static agentRuntimeProfilesGet(organizationId, profileId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -11008,18 +11008,18 @@ var LemmaClient = (() => {
     }
     /**
      * Update Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesUpdate(orgId, profileId, requestBody) {
+    static agentRuntimeProfilesUpdate(organizationId, profileId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         body: requestBody,
@@ -11031,17 +11031,17 @@ var LemmaClient = (() => {
     }
     /**
      * Restore Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesRestore(orgId, profileId) {
+    static agentRuntimeProfilesRestore(organizationId, profileId) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+        url: "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "profile_id": profileId
         },
         errors: {
@@ -13765,16 +13765,16 @@ var LemmaClient = (() => {
     /**
      * Get Organization
      * Get organization details
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgGet(orgId) {
+    static orgGet(organizationId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}",
+        url: "/organizations/{organization_id}",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13784,17 +13784,17 @@ var LemmaClient = (() => {
     /**
      * Update Organization
      * Update an organization's name or join policy (owner only)
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgUpdate(orgId, requestBody) {
+    static orgUpdate(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}",
+        url: "/organizations/{organization_id}",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -13806,16 +13806,16 @@ var LemmaClient = (() => {
     /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationHomeResponse Successful Response
      * @throws ApiError
      */
-    static orgHome(orgId) {
+    static orgHome(organizationId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/home",
+        url: "/organizations/{organization_id}/home",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13825,19 +13825,19 @@ var LemmaClient = (() => {
     /**
      * List Organization Invitations
      * Get all pending invitations for an organization
-     * @param orgId
+     * @param organizationId
      * @param status
      * @param limit
      * @param pageToken
      * @returns OrganizationInvitationListResponse Successful Response
      * @throws ApiError
      */
-    static orgInvitationList(orgId, status = "PENDING" /* PENDING */, limit = 100, pageToken) {
+    static orgInvitationList(organizationId, status = "PENDING" /* PENDING */, limit = 100, pageToken) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/invitations",
+        url: "/organizations/{organization_id}/invitations",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "status": status,
@@ -13852,17 +13852,17 @@ var LemmaClient = (() => {
     /**
      * Invite Member
      * Invite a user to join the organization
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationInvitationResponse Successful Response
      * @throws ApiError
      */
-    static orgInvitationInvite(orgId, requestBody) {
+    static orgInvitationInvite(organizationId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/invitations",
+        url: "/organizations/{organization_id}/invitations",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         body: requestBody,
         mediaType: "application/json",
@@ -13874,16 +13874,16 @@ var LemmaClient = (() => {
     /**
      * Join Auto-Join Organization
      * Join an organization when the current user's email domain is allowed to auto-join
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
-    static orgJoinAutoJoin(orgId) {
+    static orgJoinAutoJoin(organizationId) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/join",
+        url: "/organizations/{organization_id}/join",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         errors: {
           422: `Validation Error`
@@ -13893,18 +13893,18 @@ var LemmaClient = (() => {
     /**
      * List Organization Members
      * Get all members of an organization
-     * @param orgId
+     * @param organizationId
      * @param limit
      * @param pageToken
      * @returns OrganizationMemberListResponse Successful Response
      * @throws ApiError
      */
-    static orgMemberList(orgId, limit = 100, pageToken) {
+    static orgMemberList(organizationId, limit = 100, pageToken) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/members",
+        url: "/organizations/{organization_id}/members",
         path: {
-          "org_id": orgId
+          "organization_id": organizationId
         },
         query: {
           "limit": limit,
@@ -13918,17 +13918,17 @@ var LemmaClient = (() => {
     /**
      * Remove Member
      * Remove a member from the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @returns void
      * @throws ApiError
      */
-    static orgMemberRemove(orgId, memberId) {
+    static orgMemberRemove(organizationId, memberId) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/organizations/{org_id}/members/{member_id}",
+        url: "/organizations/{organization_id}/members/{member_id}",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "member_id": memberId
         },
         errors: {
@@ -13939,18 +13939,18 @@ var LemmaClient = (() => {
     /**
      * Update Member Role
      * Update a member's role in the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @param requestBody
      * @returns OrganizationMemberResponse Successful Response
      * @throws ApiError
      */
-    static orgMemberUpdateRole(orgId, memberId, requestBody) {
+    static orgMemberUpdateRole(organizationId, memberId, requestBody) {
       return request(OpenAPI, {
         method: "PATCH",
-        url: "/organizations/{org_id}/members/{member_id}/role",
+        url: "/organizations/{organization_id}/members/{member_id}/role",
         path: {
-          "org_id": orgId,
+          "organization_id": organizationId,
           "member_id": memberId
         },
         body: requestBody,
@@ -14453,6 +14453,31 @@ var LemmaClient = (() => {
   // src/openapi_client/services/PodsService.ts
   var PodsService = class {
     /**
+     * List Pods by Organization
+     * List all pods in an organization
+     * @param organizationId
+     * @param limit
+     * @param pageToken
+     * @returns PodListResponse Successful Response
+     * @throws ApiError
+     */
+    static podList(organizationId, limit = 100, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/pods",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Create Pod
      * Create a new pod
      * @param requestBody
@@ -14465,31 +14490,6 @@ var LemmaClient = (() => {
         url: "/pods",
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * List PodS by Organization
-     * List all pods in an organization
-     * @param organizationId
-     * @param limit
-     * @param pageToken
-     * @returns PodListResponse Successful Response
-     * @throws ApiError
-     */
-    static podList(organizationId, limit = 100, pageToken) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/organization/{organization_id}",
-        path: {
-          "organization_id": organizationId
-        },
-        query: {
-          "limit": limit,
-          "page_token": pageToken
-        },
         errors: {
           422: `Validation Error`
         }

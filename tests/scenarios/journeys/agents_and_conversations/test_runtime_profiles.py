@@ -125,7 +125,7 @@ async def test_a_provider_can_be_archived_and_restored(org, run):
     archived = await alice.opens_runtime_profile(profile_id, in_organization=organization)
     assert str(archived["status"]).upper() != "ACTIVE", archived
 
-    await alice.api.post(f"{base}:restore")
+    await alice.api.post(f"{base}/restore")
     restored = await alice.opens_runtime_profile(profile_id, in_organization=organization)
     assert str(restored["status"]).upper() == "ACTIVE", restored
 
