@@ -52,13 +52,16 @@ class _Uow:
         self.session = _Session(batches)
 
 
-def _bucket(key, *, inp, out, units=0.0, cost=0.0, count=1):
+def _bucket(key, *, inp, out, units=0.0, cost=0.0, count=1, cached=0, cache_write=0):
     return SimpleNamespace(
         key=key,
         input_tokens=inp,
         output_tokens=out,
         units=units,
-        cost_usd=cost,
+        cached_input_tokens=cached,
+        cache_write_tokens=cache_write,
+        total_cost_usd=cost,
+        system_cost_usd=cost,
         record_count=count,
     )
 

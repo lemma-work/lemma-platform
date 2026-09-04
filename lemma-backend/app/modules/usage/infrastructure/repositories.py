@@ -16,6 +16,10 @@ from app.modules.usage.domain.entities import (
     UsageSummary,
 )
 from app.modules.usage.domain.ports import UsageRepositoryPort
+from app.modules.usage.infrastructure.usage_aggregates import (
+    aggregate_row_to_dict,
+    token_and_cost_columns,
+)
 from app.modules.usage.infrastructure.usage_limit_reads import (
     reserved_costs,
     system_cost_by_window,
@@ -192,23 +196,18 @@ class UsageRepository(UsageRepositoryPort):
             for row in await self._grouped_totals(
                 column, start=start, end=end, filters=filters
             ):
-                target[row.key] = {
-                    "input_tokens": int(row.input_tokens or 0),
-                    "output_tokens": int(row.output_tokens or 0),
-                    "total_tokens": int(row.input_tokens or 0)
-                    + int(row.output_tokens or 0),
-                    "units": float(row.units or 0.0),
-                    "system_cost_usd": float(row.cost_usd or 0.0),
-                    "record_count": int(row.record_count or 0),
-                }
+                target[row.key] = aggregate_row_to_dict(row, with_record_count=True)
         # Overall totals come from one of the groupings rather than a fourth
         # query: every record lands in exactly one model bucket, so the bucket
         # sums are the window sums.
         for bucket in summary.total_by_model.values():
             summary.total_input_tokens += int(bucket["input_tokens"])
             summary.total_output_tokens += int(bucket["output_tokens"])
+            summary.total_cached_input_tokens += int(bucket["cached_input_tokens"])
+            summary.total_cache_write_tokens += int(bucket["cache_write_tokens"])
             summary.total_units += float(bucket["units"])
             summary.system_cost_usd += float(bucket["system_cost_usd"])
+            summary.total_cost_usd += float(bucket["total_cost_usd"])
         return summary
 
     async def _grouped_totals(
@@ -221,14 +220,7 @@ class UsageRepository(UsageRepositoryPort):
     ):
         stmt = select(
             group_column.label("key"),
-            func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
-            func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
-            func.sum(UsageRecordModel.units).label("units"),
-            # COALESCE, not SUM alone: an unpriced model meters tokens with a
-            # null cost, and summing nulls into the total would erase every
-            # priced row in the same bucket.
-            func.sum(func.coalesce(UsageRecordModel.cost_usd, 0.0)).label("cost_usd"),
-            func.count().label("record_count"),
+            *token_and_cost_columns(with_record_count=True),
         ).where(
             UsageRecordModel.occurred_at >= start,
             UsageRecordModel.occurred_at <= end,
@@ -524,15 +516,7 @@ class UsageRepository(UsageRepositoryPort):
         elif group_by == "source":
             group_column = UsageRecordModel.source_type.label("group")
 
-        columns = [
-            bucket,
-            func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
-            func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
-            func.sum(UsageRecordModel.units).label("units"),
-            func.coalesce(func.sum(UsageRecordModel.cost_usd), 0.0).label(
-                "system_cost_usd"
-            ),
-        ]
+        columns = [bucket, *token_and_cost_columns()]
         if group_column is not None:
             columns.insert(1, group_column)
         stmt = select(*columns).where(
@@ -559,16 +543,7 @@ class UsageRepository(UsageRepositoryPort):
         result = await self.session.execute(stmt)
         rows = []
         for row in result.all():
-            input_tokens = int(row.input_tokens or 0)
-            output_tokens = int(row.output_tokens or 0)
-            item = {
-                "bucket": row.bucket,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "total_tokens": input_tokens + output_tokens,
-                "units": float(row.units or 0.0),
-                "system_cost_usd": float(row.system_cost_usd or 0.0),
-            }
+            item = {"bucket": row.bucket, **aggregate_row_to_dict(row)}
             if group_column is not None:
                 item["group"] = str(row.group) if row.group is not None else None
             rows.append(item)

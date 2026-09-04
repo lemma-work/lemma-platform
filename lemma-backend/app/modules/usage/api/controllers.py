@@ -34,7 +34,7 @@ def _datetime_range(params: UsageQueryParams) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _usage_kind_value(value: object) -> str:
+def _enum_value(value: object) -> str:
     return value.value if hasattr(value, "value") else str(value)
 
 
@@ -51,18 +51,18 @@ def _record_response(record) -> UsageRecordResponse:
         source_type=record.source_type,
         source_id=record.source_id,
         profile_id=record.profile_id,
-        profile_scope=(
-            record.profile_scope.value
-            if hasattr(record.profile_scope, "value")
-            else str(record.profile_scope)
-        ),
+        profile_scope=_enum_value(record.profile_scope),
         model_name=record.model_name,
-        usage_kind=_usage_kind_value(record.usage_kind),
+        usage_kind=_enum_value(record.usage_kind),
         input_tokens=record.input_tokens,
         output_tokens=record.output_tokens,
         total_tokens=record.total_tokens,
+        cached_input_tokens=record.cached_input_tokens,
+        cache_write_tokens=record.cache_write_tokens,
+        uncached_input_tokens=record.uncached_input_tokens,
         units=record.units,
         cost_usd=record.cost_usd,
+        cost_source=_enum_value(record.cost_source),
         status=record.status,
         metadata=record.metadata,
         occurred_at=record.occurred_at,
@@ -81,8 +81,12 @@ def _summary_response(summary) -> UsageSummaryResponse:
         total_input_tokens=summary.total_input_tokens,
         total_output_tokens=summary.total_output_tokens,
         total_tokens=summary.total_tokens,
+        total_cached_input_tokens=summary.total_cached_input_tokens,
+        total_cache_write_tokens=summary.total_cache_write_tokens,
+        total_uncached_input_tokens=summary.total_uncached_input_tokens,
         total_units=summary.total_units,
         system_cost_usd=summary.system_cost_usd,
+        total_cost_usd=summary.total_cost_usd,
         total_by_profile=summary.total_by_profile,
         total_by_model=summary.total_by_model,
         total_by_kind=summary.total_by_kind,
@@ -115,6 +119,36 @@ async def _require_usage_org_access(
         raise UsageAccessDeniedError(
             "Only organization owners and editors can view usage"
         )
+
+
+async def _require_usage_org_membership(
+    *,
+    user: UserEntity,
+    organization_id: UUID,
+    uow: UoWDep,
+) -> None:
+    """Membership, not administration -- this is the gate for one's own usage.
+
+    `PS-OPS-002` says a person can see their own usage "without requiring
+    administrative access", and this endpoint was gated on the owner/editor check
+    that guards the whole organization's numbers. The effect was that the people
+    most likely to hit a spend limit were the ones who could not look up how much
+    of it they had used.
+
+    Still scoped to the caller: the query below filters on `user.id`, so this
+    only ever widens who may ask about *themselves*.
+
+    Any role at all, rather than a set of them: `organization_member_role`
+    answers `None` for somebody outside the organization, and every role inside
+    it may see their own figures.
+    """
+    role = await organization_member_role(
+        uow,
+        user_id=user.id,
+        organization_id=organization_id,
+    )
+    if role is None:
+        raise UsageAccessDeniedError("Only organization members can view their usage")
 
 
 @router.get(
@@ -266,7 +300,9 @@ async def get_my_usage(
     params: UsageQueryParams = Depends(),
 ) -> UsageSummaryResponse:
     user: UserEntity = request.state.user
-    await _require_usage_org_access(user=user, organization_id=organization_id, uow=uow)
+    await _require_usage_org_membership(
+        user=user, organization_id=organization_id, uow=uow
+    )
     start, end = _datetime_range(params)
     summary = await usage_service.get_organization_usage_summary(
         organization_id=organization_id,

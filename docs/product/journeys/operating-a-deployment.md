@@ -21,6 +21,11 @@ rather than degrading in a way that only shows up as confused users.
 
 - When someone entitled to it asks for an organization's usage, the system shall
   report what was spent over a period, broken down by what spent it.
+- The system shall report what a cost is made of, distinguishing input from
+  output and cached input from uncached, because cached input is billed at a
+  fraction of the rate and a total alone cannot explain the figure.
+- The system shall say where a price came from, so a best-effort estimate is not
+  mistaken for a rate the deployment configured.
 - The system shall record every model run, including runs it could not price.
 - Where a model's price is unknown, the system shall still record the run and
   shall mark the cost as unknown rather than recording it as zero.
@@ -45,7 +50,11 @@ rather than degrading in a way that only shows up as confused users.
 - The system shall attribute every record to the run, the model, and the person
   or workload behind it.
 - The system shall record a run's usage whether it succeeded or failed, because
-  a failed run still costs.
+  a failed run still costs. This holds however the run ended: an error, a
+  cancelled worker, or a run already marked finished by something else.
+- The system shall record the model work it does on someone's behalf outside a
+  run of their own — compacting a conversation's history, reading an image for a
+  model that cannot see — because that is spent on the same credentials.
 
 **Contracts:** `usage.organization.events.list`, `agent_run.completed`
 
@@ -73,14 +82,23 @@ rather than degrading in a way that only shows up as confused users.
 
 **Contracts:** `usage.organization.limits.get`, `agent_run.completed`
 
-### PS-OPS-012 — Exceeding a limit is refused clearly, not degraded
+### PS-OPS-012 — Exceeding a limit is refused clearly, never silently
 **Status:** covered
 
 - If work would exceed a configured limit, then the system shall refuse it and
   shall say which limit was reached.
-- The system shall not silently downgrade a model, shorten a run, or drop work
-  to stay inside a limit.
+- If work exhausts the allowance partway through, then the system shall stop it
+  and shall say that is why it stopped, keeping whatever was produced first.
+- The system shall not downgrade a model, shorten a run, or drop work without
+  saying so.
 - When a limit resets, the system shall allow work again without intervention.
+
+> Amended: this previously forbade shortening a run at all, which left admission
+> as the only control — and admission reserves a fixed few cents, so someone one
+> cent inside their limit could start a run costing hundreds and the promise of a
+> limit that holds was not kept. A run may now be stopped by its allowance. What
+> it may not do is stop *quietly*: the person is told the allowance ran out, and
+> the partial answer is theirs.
 
 **Contracts:** `usage.organization.limits.get`
 

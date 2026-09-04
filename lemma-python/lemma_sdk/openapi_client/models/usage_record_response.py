@@ -38,13 +38,17 @@ class UsageRecordResponse:
         user_id (UUID):
         agent_id (None | Unset | UUID):
         agent_run_id (None | Unset | UUID):
+        cache_write_tokens (int | Unset):  Default: 0.
+        cached_input_tokens (int | Unset):  Default: 0.
         conversation_id (None | Unset | UUID):
+        cost_source (str | Unset):  Default: 'UNKNOWN'.
         cost_usd (float | None | Unset):
         organization_id (None | Unset | UUID):
         parent_agent_run_id (None | Unset | UUID):
         pod_id (None | Unset | UUID):
         source_id (None | str | Unset):
         status (None | str | Unset):
+        uncached_input_tokens (int | Unset):  Default: 0.
     """
 
     created_at: datetime.datetime
@@ -63,13 +67,17 @@ class UsageRecordResponse:
     user_id: UUID
     agent_id: None | Unset | UUID = UNSET
     agent_run_id: None | Unset | UUID = UNSET
+    cache_write_tokens: int | Unset = 0
+    cached_input_tokens: int | Unset = 0
     conversation_id: None | Unset | UUID = UNSET
+    cost_source: str | Unset = "UNKNOWN"
     cost_usd: float | None | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
     parent_agent_run_id: None | Unset | UUID = UNSET
     pod_id: None | Unset | UUID = UNSET
     source_id: None | str | Unset = UNSET
     status: None | str | Unset = UNSET
+    uncached_input_tokens: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -117,6 +125,10 @@ class UsageRecordResponse:
         else:
             agent_run_id = self.agent_run_id
 
+        cache_write_tokens = self.cache_write_tokens
+
+        cached_input_tokens = self.cached_input_tokens
+
         conversation_id: None | str | Unset
         if isinstance(self.conversation_id, Unset):
             conversation_id = UNSET
@@ -124,6 +136,8 @@ class UsageRecordResponse:
             conversation_id = str(self.conversation_id)
         else:
             conversation_id = self.conversation_id
+
+        cost_source = self.cost_source
 
         cost_usd: float | None | Unset
         if isinstance(self.cost_usd, Unset):
@@ -167,6 +181,8 @@ class UsageRecordResponse:
         else:
             status = self.status
 
+        uncached_input_tokens = self.uncached_input_tokens
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -191,8 +207,14 @@ class UsageRecordResponse:
             field_dict["agent_id"] = agent_id
         if agent_run_id is not UNSET:
             field_dict["agent_run_id"] = agent_run_id
+        if cache_write_tokens is not UNSET:
+            field_dict["cache_write_tokens"] = cache_write_tokens
+        if cached_input_tokens is not UNSET:
+            field_dict["cached_input_tokens"] = cached_input_tokens
         if conversation_id is not UNSET:
             field_dict["conversation_id"] = conversation_id
+        if cost_source is not UNSET:
+            field_dict["cost_source"] = cost_source
         if cost_usd is not UNSET:
             field_dict["cost_usd"] = cost_usd
         if organization_id is not UNSET:
@@ -205,6 +227,8 @@ class UsageRecordResponse:
             field_dict["source_id"] = source_id
         if status is not UNSET:
             field_dict["status"] = status
+        if uncached_input_tokens is not UNSET:
+            field_dict["uncached_input_tokens"] = uncached_input_tokens
 
         return field_dict
 
@@ -275,6 +299,10 @@ class UsageRecordResponse:
 
         agent_run_id = _parse_agent_run_id(d.pop("agent_run_id", UNSET))
 
+        cache_write_tokens = d.pop("cache_write_tokens", UNSET)
+
+        cached_input_tokens = d.pop("cached_input_tokens", UNSET)
+
         def _parse_conversation_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -291,6 +319,8 @@ class UsageRecordResponse:
             return cast(None | Unset | UUID, data)
 
         conversation_id = _parse_conversation_id(d.pop("conversation_id", UNSET))
+
+        cost_source = d.pop("cost_source", UNSET)
 
         def _parse_cost_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -372,6 +402,8 @@ class UsageRecordResponse:
 
         status = _parse_status(d.pop("status", UNSET))
 
+        uncached_input_tokens = d.pop("uncached_input_tokens", UNSET)
+
         usage_record_response = cls(
             created_at=created_at,
             id=id,
@@ -389,13 +421,17 @@ class UsageRecordResponse:
             user_id=user_id,
             agent_id=agent_id,
             agent_run_id=agent_run_id,
+            cache_write_tokens=cache_write_tokens,
+            cached_input_tokens=cached_input_tokens,
             conversation_id=conversation_id,
+            cost_source=cost_source,
             cost_usd=cost_usd,
             organization_id=organization_id,
             parent_agent_run_id=parent_agent_run_id,
             pod_id=pod_id,
             source_id=source_id,
             status=status,
+            uncached_input_tokens=uncached_input_tokens,
         )
 
         usage_record_response.additional_properties = d

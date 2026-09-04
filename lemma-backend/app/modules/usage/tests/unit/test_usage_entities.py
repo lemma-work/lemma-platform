@@ -55,13 +55,47 @@ def test_summary_accumulates_all_dimensions_and_numeric_bucket_values():
         "input_tokens": 13,
         "output_tokens": 7,
         "total_tokens": 20,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
         "units": 3.5,
         "system_cost_usd": 0.25,
+        "total_cost_usd": 0.25,
         "record_count": 2,
     }
     assert summary.total_by_model["model-a"]["record_count"] == 2
     assert summary.total_by_kind["LLM"]["record_count"] == 1
     assert summary.total_by_kind["CUSTOM"]["record_count"] == 1
+
+
+def test_summary_keeps_system_spend_apart_from_bring_your_own_key_spend():
+    """`system_cost_usd` is what a plan limit is measured against.
+
+    A runtime profile someone added bills their own provider, so its cost belongs
+    in the total a person sees and *not* in the number their Lemma allowance is
+    checked against. Folding the two together would show an organization a bill
+    it does not owe.
+    """
+    summary = _summary()
+
+    summary.add_usage(_record(cost_usd=0.25))
+    summary.add_usage(
+        _record(profile_scope=UsageProfileScope.ORGANIZATION, cost_usd=4.00)
+    )
+
+    assert summary.system_cost_usd == pytest.approx(0.25)
+    assert summary.total_cost_usd == pytest.approx(4.25)
+
+
+def test_summary_tracks_the_cached_and_uncached_input_split():
+    summary = _summary()
+
+    summary.add_usage(
+        _record(input_tokens=1000, cached_input_tokens=600, cache_write_tokens=100)
+    )
+
+    assert summary.total_cached_input_tokens == 600
+    assert summary.total_cache_write_tokens == 100
+    assert summary.total_uncached_input_tokens == 300
 
 
 def test_numeric_bucket_converters_accept_scalars_and_reject_other_values():

@@ -121,6 +121,10 @@ function UsageMetricStrip({
         <ResourceMetricStrip className="lemma-index-tabs-left p-0">
             <ResourceMetric label="Cost" value={formatCurrency(summary?.system_cost_usd)} />
             <ResourceMetric label="Tokens" value={formatCompact(summary?.total_tokens)} />
+            {/* Why a cost is what it is. Cached input bills at a fraction of the
+                full rate, so without this two runs of identical token count can
+                differ tenfold in cost with nothing on screen to explain it. */}
+            <ResourceMetric label="Cached input" value={formatCached(summary)} />
             <ResourceMetric
                 label={scope === 'organization' ? 'Org monthly left' : 'Your weekly left'}
                 value={remaining == null ? 'No cap' : formatCurrency(remaining)}
@@ -132,6 +136,18 @@ function UsageMetricStrip({
             {resetAt ? <ResourceMetric label="Resets" value={formatDate(resetAt)} /> : null}
         </ResourceMetricStrip>
     );
+}
+
+/** Cached input as a share of all input, or undefined before the data lands.
+ *
+ * Never coerced to zero: `ResourceMetric` prints a dash for undefined, and
+ * "0% cached" is a claim about a number we have not fetched yet.
+ */
+function formatCached(summary?: UsageSummary): string | undefined {
+    if (!summary || summary.total_input_tokens == null) return undefined;
+    const cached = summary.total_cached_input_tokens ?? 0;
+    if (!summary.total_input_tokens) return '—';
+    return `${formatCompact(cached)} (${Math.round((cached / summary.total_input_tokens) * 100)}%)`;
 }
 
 function UsageTrend({ stats }: { stats?: UsageStats }) {
@@ -253,7 +269,10 @@ function RecentUsageList({ records }: { records: UsageRecord[] }) {
                                     {humanize(record.status)}
                                 </Badge>
                             ) : null}
-                            <span className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline">{formatCompact(record.total_tokens)} tokens</span>
+                            <span className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline">
+                                {formatCompact(record.total_tokens)} tokens
+                                {record.cached_input_tokens ? ` · ${formatCompact(record.cached_input_tokens)} cached` : ''}
+                            </span>
                             <span className="shrink-0 text-sm font-medium text-[var(--text-primary)]">{formatCurrency(record.cost_usd)}</span>
                         </div>
                     ))}

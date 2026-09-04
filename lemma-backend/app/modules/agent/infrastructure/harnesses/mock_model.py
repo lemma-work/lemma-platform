@@ -7,7 +7,8 @@ exercises the full pipeline against the (fake or real) sandbox; only the token
 source is deterministic.
 
 A test scripts the model by putting ``mock_llm_script`` on the conversation
-metadata: a list of turns, each a dict with optional ``text`` and ``tool_calls``
+metadata: a list of turns, each a dict with optional ``text``, ``usage`` and
+``tool_calls``
 (``[{"tool_name", "args", "tool_call_id"}]``). The agent loop really executes any
 tool calls and feeds results back, then asks the model again — so turn N of the
 script answers the Nth model request of the run. With no script, the model
@@ -24,7 +25,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -50,6 +52,7 @@ from pydantic_ai.models.function import (
     DeltaToolCall,
     FunctionModel,
 )
+from pydantic_ai.usage import RequestUsage
 
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -446,4 +449,91 @@ def build_mock_model(conversation: Any) -> FunctionModel:
         for delta in _streamed_deltas(thinking, text, tool_calls):
             yield delta
 
-    return FunctionModel(_fn, stream_function=_stream_fn, model_name="mock")
+    def _usage_for(messages: list[ModelMessage]) -> RequestUsage | None:
+        return _scripted_usage(messages, script)
+
+    return _UsageScriptedFunctionModel(
+        _fn,
+        stream_function=_stream_fn,
+        model_name="mock",
+        usage_for=_usage_for,
+    )
+
+
+class _UsageScriptedFunctionModel(FunctionModel):
+    """A ``FunctionModel`` that reports the token counts a script asked for.
+
+    Without this the mock reports pydantic-ai's *estimate* -- a flat 50 input
+    tokens per request and never a cached one -- so no test could assert what a
+    run cost, and the cached-input discount could not be exercised end to end at
+    all. The billing suite worked around it by reading `cost_usd` back out and
+    setting the plan limit to whatever it happened to be, which cannot catch a
+    pricing bug because it derives the expectation from the thing under test.
+
+    Both paths are overridden because the harness streams and the helper calls
+    (titles, compaction) do not. On the streaming path the usage is applied after
+    the stream is exhausted, which is where the accumulated estimate would
+    otherwise stand -- and still before the caller folds it into the run.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        usage_for: Callable[[list[ModelMessage]], RequestUsage | None],
+        **kwargs: object,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._usage_for = usage_for
+
+    async def request(self, messages, model_settings, model_request_parameters):
+        response = await super().request(
+            messages, model_settings, model_request_parameters
+        )
+        scripted = self._usage_for(messages)
+        if scripted is not None:
+            response.usage = scripted
+        return response
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages,
+        model_settings,
+        model_request_parameters,
+        run_context=None,
+    ) -> AsyncIterator[object]:
+        async with super().request_stream(
+            messages, model_settings, model_request_parameters, run_context
+        ) as stream:
+            yield stream
+            scripted = self._usage_for(messages)
+            if scripted is not None:
+                stream._usage = scripted
+
+
+def _scripted_usage(
+    messages: Sequence[ModelMessage],
+    script: list[dict[str, object]] | None,
+) -> RequestUsage | None:
+    """The usage this turn declared, if it declared any."""
+    if script is None:
+        return None
+    turn_index = _current_run_turn_index(messages)
+    if turn_index >= len(script):
+        return None
+    declared = script[turn_index].get("usage")
+    if not isinstance(declared, dict):
+        return None
+    return RequestUsage(
+        input_tokens=_usage_field(declared, "input_tokens"),
+        output_tokens=_usage_field(declared, "output_tokens"),
+        cache_read_tokens=_usage_field(declared, "cache_read_tokens"),
+        cache_write_tokens=_usage_field(declared, "cache_write_tokens"),
+    )
+
+
+def _usage_field(declared: dict[str, object], name: str) -> int:
+    try:
+        return max(0, int(declared.get(name) or 0))
+    except TypeError, ValueError:
+        return 0

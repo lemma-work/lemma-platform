@@ -48,7 +48,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FUNC-011` A long function is queued and reports progress | `sandbox` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `sandbox` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `sandbox` |
-| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `stack_lane` |
+| `PS-OPS-012` Exceeding a limit is refused clearly, never silently | `stack_lane` |
 | `PS-OPS-030` The platform reports its own health honestly | `stack_lane` |
 | `PS-PACK-010` A person sees the plan before anything changes | `sandbox` |
 | `PS-PACK-012` Applying an import either finishes or can be safely retried | `sandbox` |
@@ -168,7 +168,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too` |
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
 | `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
-| `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `covered` | `test_work_over_the_limit_is_refused_clearly` |
+| `PS-OPS-012` Exceeding a limit is refused clearly, never silently | `covered` | `test_work_over_the_limit_is_refused_clearly` |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `covered` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |

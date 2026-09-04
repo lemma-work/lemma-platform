@@ -283,6 +283,17 @@ class ConversationRepository(Protocol):
         output_data: JsonValue | None = None,
     ) -> AgentRunFinishResult | None: ...
 
+    async def store_usage_reservation(
+        self,
+        *,
+        agent_run_id: UUID,
+        reservation: JsonObject | None,
+    ) -> None: ...
+
+    async def claim_usage_reservation(
+        self, *, agent_run_id: UUID
+    ) -> JsonObject | None: ...
+
     async def record_approval_decision(
         self,
         *,

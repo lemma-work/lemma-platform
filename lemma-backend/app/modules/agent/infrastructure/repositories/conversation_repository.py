@@ -50,6 +50,7 @@ from app.modules.agent.infrastructure.repository_status import (
 )
 
 
+from app.modules.agent.infrastructure.repositories import agent_run_reservations
 from app.modules.agent.infrastructure.repositories.conversation_status_repair import (
     reconcile_conversation_to_terminal,
 )
@@ -464,6 +465,18 @@ class ConversationRepository(
             rows = rows[:limit]
         next_cursor = rows[-1].sequence if has_more and rows else None
         return [row.to_entity() for row in reversed(rows)], next_cursor
+
+    async def store_usage_reservation(
+        self, *, agent_run_id: UUID, reservation: JsonObject | None
+    ) -> None:
+        await agent_run_reservations.store_usage_reservation(
+            self.session, agent_run_id=agent_run_id, reservation=reservation
+        )
+
+    async def claim_usage_reservation(self, *, agent_run_id: UUID) -> JsonObject | None:
+        return await agent_run_reservations.claim_usage_reservation(
+            self.session, agent_run_id=agent_run_id
+        )
 
     async def finish_agent_run(
         self,

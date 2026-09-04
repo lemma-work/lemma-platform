@@ -23,11 +23,22 @@ class UsageRecordResponse(BaseModel):
     profile_scope: str
     model_name: str
     usage_kind: str
+    # `input_tokens` is the inclusive total the provider reported. The two cache
+    # buckets are subsets of it, and `uncached_input_tokens` is the remainder --
+    # the part billed at the full rate. Without the split, a heavily cached run
+    # and an uncached one of the same size look identical and cost 10x apart.
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    uncached_input_tokens: int = 0
     units: float
     cost_usd: float | None = None
+    # Which pricing layer produced `cost_usd`: REGISTERED (a rate this
+    # deployment configured), ESTIMATED (a public dataset), UNKNOWN (nothing
+    # could price it, and `cost_usd` is null rather than zero).
+    cost_source: str = "UNKNOWN"
     status: str | None = None
     metadata: dict[str, object]
     occurred_at: datetime
@@ -44,8 +55,15 @@ class UsageSummaryResponse(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     total_tokens: int
+    total_cached_input_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_uncached_input_tokens: int = 0
     total_units: float
+    # Spend on this deployment's credentials -- what a plan limit is measured
+    # against. `total_cost_usd` additionally includes runtime profiles someone
+    # added with their own key, which bill their provider rather than Lemma.
     system_cost_usd: float
+    total_cost_usd: float = 0.0
     total_by_profile: dict[str, dict[str, object]]
     total_by_model: dict[str, dict[str, object]]
     total_by_kind: dict[str, dict[str, object]]
@@ -89,8 +107,12 @@ class UsageStatsBucketResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    uncached_input_tokens: int = 0
     units: float
     system_cost_usd: float
+    total_cost_usd: float = 0.0
 
 
 class UsageStatsResponse(BaseModel):

@@ -72,7 +72,7 @@ class TestVisionModelResolution:
                 return_value=sentinel,
             ),
         ):
-            model = await vision_service._resolve_vision_model(
+            model, _profile = await vision_service._resolve_vision_model(
                 organization_id=None, user_id=uuid4()
             )
 
@@ -189,7 +189,7 @@ class TestVisionModelResolution:
                 return_value=sentinel,
             ),
         ):
-            model = await vision_service._resolve_vision_model(
+            model, _profile = await vision_service._resolve_vision_model(
                 organization_id=None, user_id=uuid4()
             )
 

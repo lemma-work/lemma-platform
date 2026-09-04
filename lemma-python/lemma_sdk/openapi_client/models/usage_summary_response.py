@@ -44,6 +44,10 @@ class UsageSummaryResponse:
         agent_id (None | Unset | UUID):
         organization_id (None | Unset | UUID):
         pod_id (None | Unset | UUID):
+        total_cache_write_tokens (int | Unset):  Default: 0.
+        total_cached_input_tokens (int | Unset):  Default: 0.
+        total_cost_usd (float | Unset):  Default: 0.0.
+        total_uncached_input_tokens (int | Unset):  Default: 0.
         user_id (None | Unset | UUID):
     """
 
@@ -61,6 +65,10 @@ class UsageSummaryResponse:
     agent_id: None | Unset | UUID = UNSET
     organization_id: None | Unset | UUID = UNSET
     pod_id: None | Unset | UUID = UNSET
+    total_cache_write_tokens: int | Unset = 0
+    total_cached_input_tokens: int | Unset = 0
+    total_cost_usd: float | Unset = 0.0
+    total_uncached_input_tokens: int | Unset = 0
     user_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -111,6 +119,14 @@ class UsageSummaryResponse:
         else:
             pod_id = self.pod_id
 
+        total_cache_write_tokens = self.total_cache_write_tokens
+
+        total_cached_input_tokens = self.total_cached_input_tokens
+
+        total_cost_usd = self.total_cost_usd
+
+        total_uncached_input_tokens = self.total_uncached_input_tokens
+
         user_id: None | str | Unset
         if isinstance(self.user_id, Unset):
             user_id = UNSET
@@ -142,6 +158,14 @@ class UsageSummaryResponse:
             field_dict["organization_id"] = organization_id
         if pod_id is not UNSET:
             field_dict["pod_id"] = pod_id
+        if total_cache_write_tokens is not UNSET:
+            field_dict["total_cache_write_tokens"] = total_cache_write_tokens
+        if total_cached_input_tokens is not UNSET:
+            field_dict["total_cached_input_tokens"] = total_cached_input_tokens
+        if total_cost_usd is not UNSET:
+            field_dict["total_cost_usd"] = total_cost_usd
+        if total_uncached_input_tokens is not UNSET:
+            field_dict["total_uncached_input_tokens"] = total_uncached_input_tokens
         if user_id is not UNSET:
             field_dict["user_id"] = user_id
 
@@ -239,6 +263,14 @@ class UsageSummaryResponse:
 
         pod_id = _parse_pod_id(d.pop("pod_id", UNSET))
 
+        total_cache_write_tokens = d.pop("total_cache_write_tokens", UNSET)
+
+        total_cached_input_tokens = d.pop("total_cached_input_tokens", UNSET)
+
+        total_cost_usd = d.pop("total_cost_usd", UNSET)
+
+        total_uncached_input_tokens = d.pop("total_uncached_input_tokens", UNSET)
+
         def _parse_user_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -271,6 +303,10 @@ class UsageSummaryResponse:
             agent_id=agent_id,
             organization_id=organization_id,
             pod_id=pod_id,
+            total_cache_write_tokens=total_cache_write_tokens,
+            total_cached_input_tokens=total_cached_input_tokens,
+            total_cost_usd=total_cost_usd,
+            total_uncached_input_tokens=total_uncached_input_tokens,
             user_id=user_id,
         )
 

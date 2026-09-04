@@ -15,9 +15,11 @@ of a 350-line method.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Callable
 from uuid import UUID
 
+
+from pydantic_ai.exceptions import UsageLimitExceeded
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.errors import DomainError
@@ -56,8 +58,13 @@ def is_usage_limit_error(exc: BaseException) -> bool:
     allows the `agent` module exactly one import of `usage.domain.errors`, and
     the module that already classifies run failures is the one that should have
     it. Callers ask the question; they do not need the type.
+
+    Covers both ends of the same condition: refused at admission
+    (``UsageLimitExceededError``) and stopped partway through by the token budget
+    the allowance was converted into (pydantic-ai's ``UsageLimitExceeded``).
+    Neither is a crash, and logging them as one is what buried the real errors.
     """
-    return isinstance(exc, UsageLimitExceededError)
+    return isinstance(exc, (UsageLimitExceededError, UsageLimitExceeded))
 
 
 def run_failure_message(exc: BaseException) -> str:
@@ -70,8 +77,19 @@ def run_failure_message(exc: BaseException) -> str:
     if isinstance(exc, UsageLimitExceededError):
         return (
             "This run was not started because the workspace has used its "
-            "available usage allowance. Usage resets with the billing period, "
-            "or the plan limit can be raised."
+            "available usage allowance. Usage resets at the start of the next "
+            "period, or the plan limit can be raised."
+        )
+    if isinstance(exc, UsageLimitExceeded):
+        # The run started inside its allowance and spent the rest of it partway
+        # through. Distinguished from the refusal above because the answer is
+        # different: nothing was wrong with the request, and what the person
+        # needs to know is that the reply is cut short rather than failed.
+        return (
+            "This run stopped partway through because the workspace used up its "
+            "available usage allowance. What the agent produced before that "
+            "point is saved. Usage resets at the start of the next period, or "
+            "the plan limit can be raised."
         )
     if is_retryable_stream_error(exc):
         # No mention of Retry. `ConversationRetryService.retry_failed_run`
@@ -133,9 +151,21 @@ def rejected_run_error_message(data: object) -> str:
 class RunFinalizer:
     """Terminal writes for one runner's runs."""
 
-    def __init__(self, uow_factory: Any, usage_recorder: Any) -> None:
+    def __init__(
+        self,
+        uow_factory: Any,
+        usage_recorder: Any,
+        repository_factory: Callable[[Any], ConversationRepository] | None = None,
+    ) -> None:
+        # `repository_factory` is a seam, not configuration: a test that has to
+        # stand the repository in should be handed the constructor rather than
+        # reaching into this module to swap the name out from under it. Left
+        # `None` rather than defaulting to the class, because a default argument
+        # binds at import and would freeze the name past anything that replaces
+        # it later.
         self.uow_factory = uow_factory
         self.usage_recorder = usage_recorder
+        self.repository_factory = repository_factory
 
     async def finish(
         self,
@@ -151,7 +181,8 @@ class RunFinalizer:
             event: AgentRunCompletedEvent | None = None
             event_data: JsonObject = {}
             async with self.uow_factory() as uow:
-                finish_result = await ConversationRepository(uow).finish_agent_run(
+                repository = (self.repository_factory or ConversationRepository)(uow)
+                finish_result = await repository.finish_agent_run(
                     agent_run_id=run.agent_run_id,
                     status=status,
                     conversation_status=conversation_status,
@@ -184,7 +215,18 @@ class RunFinalizer:
                     )
                     uow.collect_events([event])
             if finish_result is None or not finish_result.updated:
-                await self.usage_recorder.release(run.usage_reservation)
+                # The row was already terminal -- most often because the orphan
+                # reconciler reaped a long run that was in fact still alive, and
+                # then the worker finished it anyway. The status write is
+                # correctly a no-op; the *spend* is not. Those tokens were bought
+                # from the provider whatever the row says, so bill them and only
+                # fall back to releasing the reservation when there is genuinely
+                # nothing to record. See PS-OPS-003.
+                await self.publish_usage(
+                    status=status,
+                    usage_data=usage_data,
+                    run=run,
+                )
                 return
             assert event is not None
             if status == AgentRunStatus.FAILED:
@@ -213,7 +255,9 @@ class RunFinalizer:
                 exc_info=True,
             )
             try:
-                await self.usage_recorder.release(run.usage_reservation)
+                await self.usage_recorder.release(
+                    run.usage_reservation, agent_run_id=run.agent_run_id
+                )
             except Exception:
                 # A reservation that is never released permanently overstates
                 # usage against the customer's quota, and nothing self-heals it.
@@ -234,14 +278,18 @@ class RunFinalizer:
         usage_data: AgentRunUsage | None,
     ) -> None:
         if usage_data is None or run.pod_id is None or run.user_id is None:
-            await self.usage_recorder.release(run.usage_reservation)
+            await self.usage_recorder.release(
+                run.usage_reservation, agent_run_id=run.agent_run_id
+            )
             return
         if (
             usage_data.input_tokens <= 0
             and usage_data.output_tokens <= 0
             and usage_data.units <= 0
         ):
-            await self.usage_recorder.release(run.usage_reservation)
+            await self.usage_recorder.release(
+                run.usage_reservation, agent_run_id=run.agent_run_id
+            )
             return
         context = usage_context_from_agent_context(
             ConversationContext(

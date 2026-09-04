@@ -15300,6 +15300,16 @@
             ],
             "title": "Agent Run Id"
           },
+          "cache_write_tokens": {
+            "default": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -15311,6 +15321,11 @@
               }
             ],
             "title": "Conversation Id"
+          },
+          "cost_source": {
+            "default": "UNKNOWN",
+            "title": "Cost Source",
+            "type": "string"
           },
           "cost_usd": {
             "anyOf": [
@@ -15429,6 +15444,11 @@
             "title": "Total Tokens",
             "type": "integer"
           },
+          "uncached_input_tokens": {
+            "default": 0,
+            "title": "Uncached Input Tokens",
+            "type": "integer"
+          },
           "units": {
             "title": "Units",
             "type": "number"
@@ -15469,6 +15489,16 @@
             "title": "Bucket",
             "type": "string"
           },
+          "cache_write_tokens": {
+            "default": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
           "group": {
             "anyOf": [
               {
@@ -15492,8 +15522,18 @@
             "title": "System Cost Usd",
             "type": "number"
           },
+          "total_cost_usd": {
+            "default": 0.0,
+            "title": "Total Cost Usd",
+            "type": "number"
+          },
           "total_tokens": {
             "title": "Total Tokens",
+            "type": "integer"
+          },
+          "uncached_input_tokens": {
+            "default": 0,
+            "title": "Uncached Input Tokens",
             "type": "integer"
           },
           "units": {
@@ -15641,6 +15681,21 @@
             "title": "Total By Profile",
             "type": "object"
           },
+          "total_cache_write_tokens": {
+            "default": 0,
+            "title": "Total Cache Write Tokens",
+            "type": "integer"
+          },
+          "total_cached_input_tokens": {
+            "default": 0,
+            "title": "Total Cached Input Tokens",
+            "type": "integer"
+          },
+          "total_cost_usd": {
+            "default": 0.0,
+            "title": "Total Cost Usd",
+            "type": "number"
+          },
           "total_input_tokens": {
             "title": "Total Input Tokens",
             "type": "integer"
@@ -15651,6 +15706,11 @@
           },
           "total_tokens": {
             "title": "Total Tokens",
+            "type": "integer"
+          },
+          "total_uncached_input_tokens": {
+            "default": 0,
+            "title": "Total Uncached Input Tokens",
             "type": "integer"
           },
           "total_units": {

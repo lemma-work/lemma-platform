@@ -30,13 +30,14 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
     RecordSortDirection,
 )
 from app.modules.datastore.domain.events import DatastoreRecordOperation
-from app.modules.usage.domain.entities import UsageKind
+from app.modules.usage.domain.entities import CostSource, UsageKind
 from app.modules.workspace.domain.file_types import FileType as WorkspaceFileType
 
 # Internal-domain enums — values MUST be UPPERCASE.
 _INTERNAL_CAPS_ENUMS = [
     MessageKind,
     UsageKind,
+    CostSource,
     SurfaceConversationType,
     WorkloadPrincipalType,
     DatastoreRecordOperation,

@@ -13,9 +13,13 @@ export type UsageSummaryResponse = {
     total_by_kind: Record<string, Record<string, any>>;
     total_by_model: Record<string, Record<string, any>>;
     total_by_profile: Record<string, Record<string, any>>;
+    total_cache_write_tokens?: number;
+    total_cached_input_tokens?: number;
+    total_cost_usd?: number;
     total_input_tokens: number;
     total_output_tokens: number;
     total_tokens: number;
+    total_uncached_input_tokens?: number;
     total_units: number;
     user_id?: (string | null);
 };

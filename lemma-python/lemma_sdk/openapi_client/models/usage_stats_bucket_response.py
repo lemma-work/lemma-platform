@@ -23,7 +23,11 @@ class UsageStatsBucketResponse:
         system_cost_usd (float):
         total_tokens (int):
         units (float):
+        cache_write_tokens (int | Unset):  Default: 0.
+        cached_input_tokens (int | Unset):  Default: 0.
         group (None | str | Unset):
+        total_cost_usd (float | Unset):  Default: 0.0.
+        uncached_input_tokens (int | Unset):  Default: 0.
     """
 
     bucket: datetime.datetime
@@ -32,7 +36,11 @@ class UsageStatsBucketResponse:
     system_cost_usd: float
     total_tokens: int
     units: float
+    cache_write_tokens: int | Unset = 0
+    cached_input_tokens: int | Unset = 0
     group: None | str | Unset = UNSET
+    total_cost_usd: float | Unset = 0.0
+    uncached_input_tokens: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,11 +56,19 @@ class UsageStatsBucketResponse:
 
         units = self.units
 
+        cache_write_tokens = self.cache_write_tokens
+
+        cached_input_tokens = self.cached_input_tokens
+
         group: None | str | Unset
         if isinstance(self.group, Unset):
             group = UNSET
         else:
             group = self.group
+
+        total_cost_usd = self.total_cost_usd
+
+        uncached_input_tokens = self.uncached_input_tokens
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -66,8 +82,16 @@ class UsageStatsBucketResponse:
                 "units": units,
             }
         )
+        if cache_write_tokens is not UNSET:
+            field_dict["cache_write_tokens"] = cache_write_tokens
+        if cached_input_tokens is not UNSET:
+            field_dict["cached_input_tokens"] = cached_input_tokens
         if group is not UNSET:
             field_dict["group"] = group
+        if total_cost_usd is not UNSET:
+            field_dict["total_cost_usd"] = total_cost_usd
+        if uncached_input_tokens is not UNSET:
+            field_dict["uncached_input_tokens"] = uncached_input_tokens
 
         return field_dict
 
@@ -86,6 +110,10 @@ class UsageStatsBucketResponse:
 
         units = d.pop("units")
 
+        cache_write_tokens = d.pop("cache_write_tokens", UNSET)
+
+        cached_input_tokens = d.pop("cached_input_tokens", UNSET)
+
         def _parse_group(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -95,6 +123,10 @@ class UsageStatsBucketResponse:
 
         group = _parse_group(d.pop("group", UNSET))
 
+        total_cost_usd = d.pop("total_cost_usd", UNSET)
+
+        uncached_input_tokens = d.pop("uncached_input_tokens", UNSET)
+
         usage_stats_bucket_response = cls(
             bucket=bucket,
             input_tokens=input_tokens,
@@ -102,7 +134,11 @@ class UsageStatsBucketResponse:
             system_cost_usd=system_cost_usd,
             total_tokens=total_tokens,
             units=units,
+            cache_write_tokens=cache_write_tokens,
+            cached_input_tokens=cached_input_tokens,
             group=group,
+            total_cost_usd=total_cost_usd,
+            uncached_input_tokens=uncached_input_tokens,
         )
 
         usage_stats_bucket_response.additional_properties = d

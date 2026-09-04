@@ -46,7 +46,7 @@ class _JobQueue:
         return True
 
     async def enqueue(
-        self, task_name: str, *, context: dict, _job_id: str | None = None
+        self, task_name: str, *, context: dict[str, object], _job_id: str | None = None
     ):
         self.enqueued.append((task_name, context, _job_id))
         return object()
@@ -256,6 +256,8 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
     finished: list[object] = []
     realtime: list[tuple[object, dict]] = []
 
+    claimed: list = []
+
     class _Repo:
         def __init__(self, uow) -> None:
             self.uow = uow
@@ -280,6 +282,10 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
             finished.append(agent_run_id)
             # run2 was already terminal (race) -> not updated -> no events.
             return SimpleNamespace(updated=agent_run_id == run1, status=status)
+
+        async def claim_usage_reservation(self, *, agent_run_id):
+            claimed.append(agent_run_id)
+            return
 
         def collect_events(self, events: list[object]) -> None:
             self.uow.collect_events(events)

@@ -5,7 +5,10 @@
 export type UsageRecordResponse = {
     agent_id?: (string | null);
     agent_run_id?: (string | null);
+    cache_write_tokens?: number;
+    cached_input_tokens?: number;
     conversation_id?: (string | null);
+    cost_source?: string;
     cost_usd?: (number | null);
     created_at: string;
     id: string;
@@ -23,6 +26,7 @@ export type UsageRecordResponse = {
     source_type: string;
     status?: (string | null);
     total_tokens: number;
+    uncached_input_tokens?: number;
     units: number;
     usage_kind: string;
     user_id: string;

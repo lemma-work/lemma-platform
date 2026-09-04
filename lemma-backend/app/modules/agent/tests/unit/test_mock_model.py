@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import (
     ModelHTTPError,
@@ -181,3 +182,50 @@ async def test_a_scripted_structured_output_still_wins():
     result = await agent.run("capital of Japan?")
 
     assert result.output == Output(answer="Tokyo")
+
+
+async def test_a_scripted_turn_reports_the_token_counts_it_declared():
+    """The seam every cost assertion downstream depends on.
+
+    pydantic-ai's estimator reports a flat ~50 input tokens per request and never
+    a cached one, so without this no test could assert what a run cost or
+    exercise the cached-input discount end to end.
+    """
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from app.modules.test_support.e2e.scripted_model import script_text, with_usage
+
+    conversation = SimpleNamespace(
+        metadata={
+            "mock_llm_script": [
+                with_usage(
+                    script_text("hello"),
+                    input_tokens=1000,
+                    output_tokens=250,
+                    cache_read_tokens=800,
+                    cache_write_tokens=50,
+                )
+            ]
+        }
+    )
+    model = build_mock_model(conversation)
+    messages = [ModelRequest(parts=[UserPromptPart(content="hi")])]
+
+    response = await model.request(messages, None, ModelRequestParameters())
+
+    assert response.usage.input_tokens == 1000
+    assert response.usage.output_tokens == 250
+    assert response.usage.cache_read_tokens == 800
+    assert response.usage.cache_write_tokens == 50
+
+
+async def test_an_unscripted_turn_keeps_the_estimated_usage():
+    """Scripting usage is opt-in; every existing test keeps its old behaviour."""
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    model = build_mock_model(None)
+    messages = [ModelRequest(parts=[UserPromptPart(content="hi")])]
+
+    response = await model.request(messages, None, ModelRequestParameters())
+
+    assert response.usage.cache_read_tokens == 0

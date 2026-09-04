@@ -46,6 +46,35 @@ def script_inline_reasoning(reasoning: str, answer: str = "") -> ScriptTurn:
     return script_text(f"{body}\n\n{answer}" if answer else body)
 
 
+def with_usage(
+    turn: ScriptTurn,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> ScriptTurn:
+    """Declare the token counts this turn should report.
+
+    Without it the mock reports pydantic-ai's estimate -- ~50 input tokens per
+    request and never a cached one -- which is enough to prove a usage row got
+    written and not enough to assert what it cost. Anything checking a price, a
+    cached-input discount or a spend limit needs the numbers pinned here.
+
+    ``input_tokens`` is the inclusive total: the cache counts are subsets of it,
+    the way every provider reports them.
+    """
+    return {
+        **turn,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+    }
+
+
 def script_tool_result_ref(tool_call_id: str, path: str) -> str:
     """Refer to a field of an earlier tool call's result.
 
@@ -215,6 +244,7 @@ def script_progress(
 
 
 __all__ = [
+    "with_usage",
     "ScriptTurn",
     "script_ask_user",
     "script_display_resource",

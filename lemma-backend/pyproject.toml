@@ -48,6 +48,11 @@ dependencies = [
     "fastmcp>=3.4.2",
     # History compaction for providers with no native CompactionPart support.
     "summarization-pydantic-ai>=0.1.11",
+    # The pricing dataset behind the usage module's cost resolver. It already
+    # arrives via pydantic-ai (which uses it for usage extraction), but we import
+    # it directly, so it is declared directly -- a transitive dependency the
+    # parent is free to drop is not one to build billing on.
+    "genai-prices>=0.1.3",
     "websockets>=16.0",
     "uvicorn[standard]>=0.42.0",
     "supertokens-python==0.31.3",

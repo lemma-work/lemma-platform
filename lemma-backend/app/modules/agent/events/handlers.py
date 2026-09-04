@@ -42,6 +42,7 @@ from app.modules.datastore.contracts import (
     DatastoreFileDeletedEvent,
     DatastoreFileUpdatedEvent,
 )
+from app.modules.agent.events.orphan_reservations import release_orphaned_reservation
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
@@ -472,6 +473,7 @@ async def reconcile_orphaned_agent_runs() -> None:
                     error=_INTERRUPTED_RUN_ERROR,
                 )
                 if finish_result is not None and finish_result.updated:
+                    await release_orphaned_reservation(uow, repo, run.id)
                     event_data = {"error": _INTERRUPTED_RUN_ERROR}
                     repo.collect_events(
                         [

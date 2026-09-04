@@ -12,10 +12,21 @@ from app.modules.usage.domain.errors import (
 
 
 class ModelPricing(NamedTuple):
+    """Per-model rates, in USD per million tokens.
+
+    ``cached_input_per_million_usd`` and ``cache_write_per_million_usd`` are the
+    rates for the two cache buckets *inside* ``input_tokens`` -- providers report
+    input as the inclusive parent, not as a sibling, so both are subtracted from
+    it before the base rate applies. ``None`` on either means "no separate rate",
+    and those tokens bill at ``input_per_million_usd``: right for a provider that
+    does not charge for cache writes, and the reason Anthropic must set it.
+    """
+
     input_per_million_usd: float
     output_per_million_usd: float
     unit_usd: float = 0.0
     cached_input_per_million_usd: float | None = None
+    cache_write_per_million_usd: float | None = None
 
 
 class AgentRunUsage(BaseModel):

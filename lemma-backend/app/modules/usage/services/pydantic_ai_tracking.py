@@ -7,6 +7,7 @@ from uuid import UUID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.events.message_bus import get_message_bus
+from app.modules.usage.contracts import AgentRunUsage
 from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.usage_service import UsageService
@@ -47,6 +48,31 @@ async def release_usage_reservation(reservation: UsageReservation | None) -> Non
     async with async_session_maker() as session:
         uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
         await _usage_service(uow).release_reservation(reservation)
+        await uow.commit()
+
+
+async def record_agent_run_usage(
+    *,
+    ctx: UsageExecutionContext,
+    runtime_profile: dict[str, object | None] | None,
+    usage_data: AgentRunUsage,
+    status: str,
+    reservation: UsageReservation | None = None,
+) -> None:
+    """Record usage a caller already extracted, rather than a pydantic-ai result.
+
+    For the paths that hold a single `ModelResponse` instead of a finished run --
+    a wrapped model metering one request at a time.
+    """
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session, message_bus=get_message_bus())
+        await _usage_service(uow).record_agent_run_usage(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+            usage_data=usage_data,
+            status=status,
+            reservation=reservation,
+        )
         await uow.commit()
 
 

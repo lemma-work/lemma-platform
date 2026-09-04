@@ -48,6 +48,7 @@ from app.modules.agent.domain.value_objects import (
 from pydantic_ai.capabilities import ProcessHistory
 
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
+from app.modules.agent.services.metered_model import metered
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
@@ -315,6 +316,16 @@ class PydanticAIHarness:
                 organization_id=conversation.organization_id,
                 user_id=conversation.user_id,
                 fallback=model,
+            )
+            # Compaction runs on this deployment's credentials and the summarizer
+            # never reports what it spent, so the wrapper is the only thing that
+            # bills for it. Applied even when the model *is* this run's model:
+            # the summarizer's internal agent is a separate agent, and its tokens
+            # do not land in `run.usage` either way.
+            summarization_model = metered(
+                summarization_model,
+                runtime_profile=options.extra.get("runtime_profile"),
+                source_type="history_compaction",
             )
         history_processors = build_history_processors(
             options,

@@ -244,6 +244,13 @@ class AgentRunModel(UUIDAuditBase):
         nullable=False,
         default=default_agent_runtime,
     )
+    # The spend reservation this run is holding, so something other than the
+    # worker's own memory knows about it. Set when the run is admitted, cleared
+    # when it finalizes; a non-null value on a terminal run means the worker died
+    # holding it, which is what `reconcile_orphaned_agent_runs` releases.
+    usage_reservation: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

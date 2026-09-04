@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
@@ -25,10 +25,42 @@ from pydantic_ai import BinaryContent
 from pydantic_ai.messages import UserContent
 from pydantic_ai import UsageLimits
 
+from app.modules.usage.contracts.execution import (
+    UsageExecutionContext,
+    current_usage_context,
+    record_pydantic_ai_result_usage,
+    reserve_usage_for_runtime,
+)
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 
 logger = get_logger(__name__)
+
+
+def _vision_usage_context(
+    *, organization_id: UUID | None, user_id: UUID
+) -> UsageExecutionContext:
+    """Attribute a vision call to the run that asked for it, when there is one.
+
+    `view_image` and `pod_view_document_pages` are tools, so this almost always
+    executes inside an agent run whose context the runner already published --
+    reusing it puts the pod, the conversation and the run id on the record, which
+    is what makes the delegated call show up next to the run that caused it
+    rather than as an orphan.
+
+    Falling back to the bare org/user keeps the *cost* attributed even on the
+    paths that have no run around them.
+    """
+    current = current_usage_context()
+    if current is not None:
+        return replace(current, source_type="vision")
+    return UsageExecutionContext(
+        user_id=user_id,
+        organization_id=organization_id,
+        pod_id=None,
+        source_type="vision",
+    )
+
 
 # Generous relative to a normal tool call, because a multi-page render on a slow
 # provider is legitimately slow — but well under the sub-agent budget (300s), so
@@ -90,7 +122,7 @@ def vision_delegate_available() -> bool:
 
 
 async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
-    """A vision-capable pydantic-ai model, or raise.
+    """A vision-capable pydantic-ai model and the profile it came from, or raise.
 
     Asserts the resolved catalog entry actually declares VISION so a misconfigured
     `VISION_MODEL` fails here, with a message naming the setting, rather than as
@@ -130,15 +162,16 @@ async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
             "LEMMA_OPENAI_VISION_MODEL_NAMES or point VISION_MODEL at a model "
             "that does."
         )
+    runtime_profile = resolved.public_snapshot()
     model = pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.public_snapshot(),
+        runtime_profile=runtime_profile,
         runtime_credentials=resolved.credentials,
     )
     if model is None:
         raise VisionUnavailableError(
             f"VISION_MODEL '{model_name}' could not be built from the runtime profile."
         )
-    return model
+    return model, runtime_profile
 
 
 def _validate(images: Sequence[VisionImage]) -> None:
@@ -167,7 +200,7 @@ async def describe_images(
 ) -> str:
     """Return a text description of ``images`` from the configured vision model."""
     _validate(images)
-    model = await _resolve_vision_model(
+    model, runtime_profile = await _resolve_vision_model(
         organization_id=organization_id, user_id=user_id
     )
 
@@ -182,6 +215,15 @@ async def describe_images(
         prompt.append(BinaryContent(data=image.data, media_type=image.media_type))
 
     agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
+    usage_context = _vision_usage_context(
+        organization_id=organization_id, user_id=user_id
+    )
+    reservation = await reserve_usage_for_runtime(
+        organization_id=organization_id,
+        user_id=user_id,
+        runtime_profile=runtime_profile,
+    )
+    result = None
     try:
         async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
             result = await agent.run(
@@ -190,11 +232,35 @@ async def describe_images(
                     request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
                 ),
             )
+        await record_pydantic_ai_result_usage(
+            ctx=usage_context,
+            runtime_profile=runtime_profile,
+            result=result,
+            status="COMPLETED",
+            reservation=reservation,
+            metadata={"helper": "vision"},
+        )
     except TimeoutError as exc:
+        await record_pydantic_ai_result_usage(
+            ctx=usage_context,
+            runtime_profile=runtime_profile,
+            result=result,
+            status="FAILED",
+            reservation=reservation,
+            metadata={"helper": "vision"},
+        )
         raise VisionDescriptionError(
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
         ) from exc
     except Exception as exc:
+        await record_pydantic_ai_result_usage(
+            ctx=usage_context,
+            runtime_profile=runtime_profile,
+            result=result,
+            status="FAILED",
+            reservation=reservation,
+            metadata={"helper": "vision"},
+        )
         logger.warning(
             "agent.vision_service.description_failed.degraded", exc_info=True
         )

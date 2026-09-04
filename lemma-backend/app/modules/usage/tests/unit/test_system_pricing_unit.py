@@ -18,6 +18,8 @@ from app.modules.test_support.fakes import FakeUnitOfWork
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.domain.entities import UsageReservation
+from app.modules.usage.domain.entities import CostSource
+from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
 from app.modules.usage.services.usage_service import (
     ModelPricing,
     UsageService,
@@ -27,6 +29,34 @@ from app.modules.usage.services.usage_service import (
 pytestmark = pytest.mark.unit
 
 SYSTEM = "SYSTEM"
+
+
+def _cost(
+    model_name: str,
+    *,
+    provider_model_name: str | None = None,
+    base_url: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    units: float = 0.0,
+):
+    """Resolve one cost through the real layered resolver."""
+    return resolve_cost(
+        model_name=model_name,
+        provider_model_name=provider_model_name,
+        base_url=base_url,
+        tokens=UsageTokens(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            units=units,
+        ),
+        pricing_table=UsageService._SYSTEM_MODEL_PRICING,
+    )
+
 
 # Pricing fixture — mirrors the Fireworks rates registered in lemma-cloud.
 # Kept here so the cost-calculation tests remain hermetic without depending on
@@ -208,116 +238,172 @@ async def test_injected_limit_does_not_reject_unpriced_custom_model():
 
 
 def test_glm_cost_uses_glm_pricing():
-    cost, fallback = _service()._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="glm-5.2",
+    resolved = _cost(
+        "glm-5.2",
         provider_model_name="accounts/fireworks/models/glm-5p2",
         input_tokens=1000,
         output_tokens=500,
-        units=0.0,
     )
     # 1000/1e6*1.40 + 500/1e6*4.40
-    assert cost == pytest.approx(0.0036)
-    assert fallback is False
+    assert resolved.cost_usd == pytest.approx(0.0036)
+    assert resolved.source is CostSource.REGISTERED
 
 
 def test_glm_cost_resolves_by_provider_id_only():
-    cost, fallback = _service()._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="unknown-public-alias",
+    resolved = _cost(
+        "unknown-public-alias",
         provider_model_name="accounts/fireworks/models/glm-5p2",
         input_tokens=1_000_000,
-        output_tokens=0,
-        units=0.0,
     )
-    assert cost == pytest.approx(1.40)
-    assert fallback is False
+    assert resolved.cost_usd == pytest.approx(1.40)
+    assert resolved.source is CostSource.REGISTERED
 
 
 def test_kimi_k2_6_priced_at_corrected_rate():
     # Was mispriced at 0.50/2.00; Fireworks charges 0.95/4.00.
-    cost, fallback = _service()._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="kimi-k2.6",
+    resolved = _cost(
+        "kimi-k2.6",
         provider_model_name="accounts/fireworks/models/kimi-k2p6",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
-        units=0.0,
     )
-    assert cost == pytest.approx(0.95 + 4.00)
-    assert fallback is False
+    assert resolved.cost_usd == pytest.approx(0.95 + 4.00)
+    assert resolved.source is CostSource.REGISTERED
 
 
 def test_cost_applies_cached_token_discount():
-    service = _service()
-    no_cache, _ = service._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="glm-5.2",
-        provider_model_name=None,
-        input_tokens=1000,
-        output_tokens=0,
-        units=0.0,
-        cache_read_tokens=0,
-    )
-    with_cache, _ = service._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="glm-5.2",
-        provider_model_name=None,
-        input_tokens=1000,
-        output_tokens=0,
-        units=0.0,
-        cache_read_tokens=400,
-    )
+    no_cache = _cost("glm-5.2", input_tokens=1000)
+    with_cache = _cost("glm-5.2", input_tokens=1000, cache_read_tokens=400)
     # 600 uncached @ 1.40 + 400 cached @ 0.26
     expected = 600 / 1_000_000 * 1.40 + 400 / 1_000_000 * 0.26
-    assert with_cache == pytest.approx(expected)
-    assert with_cache < no_cache
+    assert with_cache.cost_usd == pytest.approx(expected)
+    assert with_cache.cost_usd < no_cache.cost_usd
 
 
 def test_cost_cache_read_capped_at_input():
     # cache_read exceeding input must never produce negative non-cached cost.
-    cost, _ = _service()._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="glm-5.2",
-        provider_model_name=None,
-        input_tokens=100,
-        output_tokens=0,
-        units=0.0,
-        cache_read_tokens=1000,
+    resolved = _cost("glm-5.2", input_tokens=100, cache_read_tokens=1000)
+    assert resolved.cost_usd == pytest.approx(100 / 1_000_000 * 0.26)
+    assert resolved.cost_usd >= 0
+
+
+def test_cache_write_tokens_bill_at_their_own_rate():
+    """Cache writes are a subset of input, priced separately when a rate exists.
+
+    Anthropic charges a premium to *create* a cache entry. The rate used to be
+    unrepresentable, so those tokens fell into the base-rate bucket and every
+    cache write was undercharged.
+    """
+    UsageService.register_model_pricing(
+        {
+            "cache-write-model": ModelPricing(
+                1.00,
+                2.00,
+                cached_input_per_million_usd=0.10,
+                cache_write_per_million_usd=1.25,
+            )
+        }
     )
-    assert cost == pytest.approx(100 / 1_000_000 * 0.26)
-    assert cost >= 0
+    try:
+        resolved = _cost(
+            "cache-write-model",
+            input_tokens=1000,
+            cache_read_tokens=400,
+            cache_write_tokens=200,
+        )
+        # 400 uncached @ 1.00 + 400 cached @ 0.10 + 200 written @ 1.25
+        expected = (
+            400 / 1_000_000 * 1.00 + 400 / 1_000_000 * 0.10 + 200 / 1_000_000 * 1.25
+        )
+        assert resolved.cost_usd == pytest.approx(expected)
+    finally:
+        UsageService._SYSTEM_MODEL_PRICING.pop("cache-write-model", None)
 
 
-def test_non_system_scope_has_no_cost():
-    cost, fallback = _service()._calculate_system_cost(
-        profile_scope="ORGANIZATION",
-        model_name="glm-5.2",
-        provider_model_name=None,
+def test_cache_write_without_a_rate_falls_back_to_the_base_input_rate():
+    """No cache-write rate means the provider does not charge one (Fireworks)."""
+    resolved = _cost("glm-5.2", input_tokens=1000, cache_write_tokens=200)
+    # 800 uncached @ 1.40 + 200 written, also @ 1.40
+    assert resolved.cost_usd == pytest.approx(1000 / 1_000_000 * 1.40)
+
+
+def test_non_system_scope_is_priced_too():
+    """A profile someone added with their own key still reports what it spent.
+
+    Cost used to be computed only for SYSTEM scope, so every bring-your-own-key
+    row carried a null forever and the person who added the profile could not see
+    what their agents cost. Keeping that spend out of a Lemma plan limit is the
+    job of the limit queries, which filter on profile_scope -- not of pricing.
+    """
+    resolved = _cost(
+        "glm-5.2",
+        provider_model_name="accounts/fireworks/models/glm-5p2",
         input_tokens=1000,
         output_tokens=1000,
-        units=0.0,
     )
-    assert cost is None
-    assert fallback is False
+    assert resolved.cost_usd is not None
+    assert resolved.cost_usd > 0
 
 
 def test_unpriced_model_has_no_synthetic_cost_and_does_not_raise():
-    service = _service()
-    pricing, missing = service._resolve_pricing("totally-unknown-model", None)
-    assert missing is True
-    assert pricing is None
+    resolved = _cost("totally-unknown-model-xyzzy", input_tokens=1000)
+    assert resolved.cost_usd is None
+    assert resolved.source is CostSource.UNKNOWN
 
-    cost, cost_missing = service._calculate_system_cost(
-        profile_scope=SYSTEM,
-        model_name="totally-unknown-model",
-        provider_model_name=None,
-        input_tokens=1000,
-        output_tokens=0,
-        units=0.0,
+
+def test_unregistered_model_is_estimated_from_the_public_dataset():
+    """The layer that makes bring-your-own-key profiles reportable.
+
+    Nothing registers a rate for `gpt-4o-mini`, and nobody should have to: the
+    dataset behind pydantic-ai already knows it. The row is marked ESTIMATED so a
+    best-effort number is never mistaken for a configured one.
+    """
+    resolved = _cost("gpt-4o-mini", input_tokens=1_000_000, output_tokens=0)
+    assert resolved.source is CostSource.ESTIMATED
+    assert resolved.cost_usd == pytest.approx(0.15)
+
+
+def test_a_profile_base_url_identifies_the_provider():
+    """A model reference alone is ambiguous; the profile's base URL is not."""
+    resolved = _cost(
+        "claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+        input_tokens=100_000,
     )
-    assert cost_missing is True
-    assert cost is None
+    assert resolved.source is CostSource.ESTIMATED
+    assert resolved.cost_usd == pytest.approx(0.30)  # 100k @ $3.00/MTok
+
+
+def test_estimated_pricing_honours_context_tiers():
+    """Something a four-field rate card cannot express, and Anthropic charges.
+
+    Sonnet's input rate doubles above a 200k-token context. The registered table
+    has one input rate per model, so a long-context run priced through it would
+    be undercharged by half; the dataset carries the tier and applies it.
+    """
+    under = _cost(
+        "claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+        input_tokens=100_000,
+    )
+    over = _cost(
+        "claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+        input_tokens=1_000_000,
+    )
+    assert under.cost_usd == pytest.approx(0.30)  # 100k @ $3.00
+    assert over.cost_usd == pytest.approx(6.00)  # 1M @ $6.00, the upper tier
+
+
+def test_a_registered_rate_beats_the_public_dataset():
+    """Explicit rates win, so a negotiated price is what gets charged."""
+    UsageService.register_model_pricing({"gpt-4o-mini": ModelPricing(999.0, 999.0)})
+    try:
+        resolved = _cost("gpt-4o-mini", input_tokens=1_000_000)
+        assert resolved.source is CostSource.REGISTERED
+        assert resolved.cost_usd == pytest.approx(999.0)
+    finally:
+        UsageService._SYSTEM_MODEL_PRICING.pop("gpt-4o-mini", None)
 
 
 async def test_record_persists_without_cost_when_pricing_is_missing():

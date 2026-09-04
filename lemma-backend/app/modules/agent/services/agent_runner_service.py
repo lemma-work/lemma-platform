@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import time
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
@@ -38,8 +37,6 @@ from app.modules.agent.domain.value_objects import (
     HarnessKind,
     HarnessOptions,
     JsonObject,
-    MessageKind,
-    MessageRole,
 )
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileProtocol,
@@ -69,6 +66,10 @@ from app.modules.agent.services.runtime_history import (
 from app.modules.agent.services.run_context_builder import build_run_context
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.run_inputs import (
+    profile_model_settings as _profile_model_settings,
+    run_input_text as _run_input_text,
+)
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
     RunFinalizer,
@@ -83,6 +84,7 @@ from app.modules.agent.services.run_observer_delivery import (
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import (
+    spend_bounded_usage_limits,
     usage_context_from_agent_context,
     usage_execution_context,
 )
@@ -98,40 +100,6 @@ logger = get_logger(__name__)
 # takes and comfortably inside the worker's shutdown grace period, so a healthy
 # run always finalizes and a wedged one still lets the process exit.
 _FINALIZATION_TIMEOUT_SECONDS = 8.0
-
-
-def _run_input_text(messages: Sequence[Message]) -> str | None:
-    """The prompt this run is answering: the last thing the user said.
-
-    The harness is handed the whole selected history, but a trace's input is the
-    turn, not the transcript -- the earlier turns are already their own traces in
-    the same session. Tool returns and thinking blocks are skipped for the same
-    reason: they are rows in the run, not the thing that started it.
-    """
-    for message in reversed(messages):
-        if message.role is not MessageRole.USER:
-            continue
-        if message.kind is not MessageKind.TEXT:
-            continue
-        text = (message.text or "").strip()
-        if text:
-            return text
-    return None
-
-
-def _profile_model_settings(
-    runtime_profile_snapshot: dict[str, object | None] | None,
-) -> JsonObject | None:
-    """Pull the model_settings dict out of a resolved runtime profile snapshot."""
-    if not isinstance(runtime_profile_snapshot, dict):
-        return None
-    config = runtime_profile_snapshot.get("config")
-    if not isinstance(config, dict):
-        return None
-    model_settings = config.get("model_settings")
-    return (
-        model_settings if isinstance(model_settings, dict) and model_settings else None
-    )
 
 
 class AgentRunObserver(Protocol):
@@ -172,16 +140,26 @@ class AgentRunnerService:
         harness_registry: HarnessRegistry,
         fallback_model_name: str | None = None,
         fixed_usage_limits: UsageLimits | None = None,
+        tool_assembler: RunToolAssembler | None = None,
+        usage_recorder: RunUsageRecorder | None = None,
+        finalizer: RunFinalizer | None = None,
+        event_pump: RunEventPump | None = None,
     ):
+        # Collaborators are built here by default and accepted as arguments so a
+        # test can stand one in rather than patch the attribute afterwards: a
+        # double installed inside the subject certifies the half the test did not
+        # write, and survives a rename that should have failed it.
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
         self.fixed_usage_limits = fixed_usage_limits or UsageLimits(request_limit=200)
-        self.tool_assembler = RunToolAssembler(uow_factory)
-        self.usage_recorder = RunUsageRecorder(uow_factory)
+        self.tool_assembler = tool_assembler or RunToolAssembler(uow_factory)
+        self.usage_recorder = usage_recorder or RunUsageRecorder(uow_factory)
         self.message_writer = RunMessageWriter(uow_factory)
-        self.finalizer = RunFinalizer(uow_factory, self.usage_recorder)
-        self.event_pump = RunEventPump(self.message_writer, self.finalizer)
+        self.finalizer = finalizer or RunFinalizer(uow_factory, self.usage_recorder)
+        self.event_pump = event_pump or RunEventPump(
+            self.message_writer, self.finalizer
+        )
 
     async def execute(
         self,
@@ -220,6 +198,9 @@ class AgentRunnerService:
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
+        # Above the `try`: the failure path bills for what the run spent before
+        # it died, so this must exist wherever the exception came from.
+        outcome = RunOutcome()
         try:
             resolved_runtime = await self._resolve_agent_runtime(
                 agent_run.agent_runtime,
@@ -227,7 +208,6 @@ class AgentRunnerService:
                 organization_id=conversation.organization_id,
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
-            outcome = RunOutcome()
             runtime_profile_snapshot = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
             ctx = await build_run_context(
@@ -282,11 +262,19 @@ class AgentRunnerService:
                 organization_id=conversation.organization_id,
                 user_id=user_id,
                 runtime_profile=runtime_profile_snapshot,
+                agent_run_id=agent_run_id,
             )
             run_with_usage = run.with_runtime_profile(
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
-            enforced_usage_limits = self.fixed_usage_limits
+            # The request cap bounds how many calls a run may make, not what
+            # they cost. This also caps it at what the caller can still afford.
+            # See PS-OPS-012.
+            enforced_usage_limits = spend_bounded_usage_limits(
+                self.fixed_usage_limits,
+                reservation=usage_reservation,
+                runtime_profile=runtime_profile_snapshot,
+            )
             # Compaction thresholds belong to the model, not to a global
             # constant: a 70k trigger on a million-token model compacts a run
             # that had 900k to spare, and a 110k "ceiling" on a 128k model is
@@ -430,7 +418,9 @@ class AgentRunnerService:
                     # takes its own, and holding both charges one conversation
                     # twice for a restart.
                     await finalize_safely(
-                        self.usage_recorder.release(usage_reservation),
+                        self.usage_recorder.release(
+                            usage_reservation, agent_run_id=agent_run_id
+                        ),
                         agent_run_id=agent_run_id,
                     )
                 else:
@@ -439,6 +429,12 @@ class AgentRunnerService:
                             run=identity,
                             status=AgentRunStatus.FAILED,
                             error=run_failure_message(exc),
+                            usage_data=outcome.usage_data,
+                            # A failed run still cost money, and by now `outcome`
+                            # holds it: the harness emits USAGE from a `finally`
+                            # before re-raising and the drain loop yields it ahead
+                            # of the error. Passing nothing here made every failed
+                            # run free. See PS-OPS-003.
                         ),
                         agent_run_id=agent_run_id,
                     )

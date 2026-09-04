@@ -33,6 +33,30 @@ class UsageKind(str, Enum):
         return None
 
 
+class CostSource(str, Enum):
+    """Which pricing layer produced a row's ``cost_usd``.
+
+    Persisted, because a best-effort number nobody can tell apart from an
+    authoritative one is worse than no number: ``ESTIMATED`` says a public
+    dataset priced a model this deployment never configured, and that is exactly
+    the figure an operator should sanity-check before invoicing anyone for it.
+    """
+
+    REGISTERED = "REGISTERED"
+    ESTIMATED = "ESTIMATED"
+    UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "CostSource | None":
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().upper()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return None
+
+
 class UsageRecord(Entity):
     """One measured model usage item."""
 
@@ -49,10 +73,14 @@ class UsageRecord(Entity):
     profile_scope: UsageProfileScope | str
     model_name: str
     usage_kind: UsageKind | str = UsageKind.LLM
+    # The inclusive parent count: both cache buckets below are subsets of it.
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
     units: float = Field(default=0.0, ge=0.0)
     cost_usd: float | None = Field(default=None, ge=0.0)
+    cost_source: CostSource | str = CostSource.UNKNOWN
     status: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -60,6 +88,18 @@ class UsageRecord(Entity):
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+    @property
+    def uncached_input_tokens(self) -> int:
+        """Input tokens billed at the full rate.
+
+        Derived rather than stored: it is exactly what the other three columns
+        already say, and a stored copy is one more thing that can disagree with
+        them.
+        """
+        return max(
+            0, self.input_tokens - self.cached_input_tokens - self.cache_write_tokens
+        )
 
 
 class UsageSummary(BaseModel):
@@ -72,8 +112,15 @@ class UsageSummary(BaseModel):
     period_days: int
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cached_input_tokens: int = 0
+    total_cache_write_tokens: int = 0
     total_units: float = 0.0
+    # Spend on the deployment's own credentials -- the number a plan limit is
+    # measured against. Deliberately not the same as `total_cost_usd`: a runtime
+    # profile someone added bills their provider, not Lemma, and folding the two
+    # together would show an organization a bill it does not owe.
     system_cost_usd: float = 0.0
+    total_cost_usd: float = 0.0
     total_by_profile: dict[str, dict[str, object]] = Field(default_factory=dict)
     total_by_model: dict[str, dict[str, object]] = Field(default_factory=dict)
     total_by_kind: dict[str, dict[str, object]] = Field(default_factory=dict)
@@ -82,12 +129,25 @@ class UsageSummary(BaseModel):
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
 
+    @property
+    def total_uncached_input_tokens(self) -> int:
+        return max(
+            0,
+            self.total_input_tokens
+            - self.total_cached_input_tokens
+            - self.total_cache_write_tokens,
+        )
+
     def add_usage(self, record: UsageRecord) -> None:
         self.total_input_tokens += record.input_tokens
         self.total_output_tokens += record.output_tokens
+        self.total_cached_input_tokens += record.cached_input_tokens
+        self.total_cache_write_tokens += record.cache_write_tokens
         self.total_units += record.units
         if record.cost_usd is not None:
-            self.system_cost_usd += record.cost_usd
+            self.total_cost_usd += record.cost_usd
+            if _is_system_scope(record.profile_scope):
+                self.system_cost_usd += record.cost_usd
 
         self._add_bucket(self.total_by_profile, record.profile_id, record)
         self._add_bucket(self.total_by_model, record.model_name, record)
@@ -110,8 +170,11 @@ class UsageSummary(BaseModel):
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "total_tokens": 0,
+                "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
                 "units": 0.0,
                 "system_cost_usd": 0.0,
+                "total_cost_usd": 0.0,
                 "record_count": 0,
             },
         )
@@ -120,12 +183,28 @@ class UsageSummary(BaseModel):
             _as_int(bucket["output_tokens"]) + record.output_tokens
         )
         bucket["total_tokens"] = _as_int(bucket["total_tokens"]) + record.total_tokens
+        bucket["cached_input_tokens"] = (
+            _as_int(bucket["cached_input_tokens"]) + record.cached_input_tokens
+        )
+        bucket["cache_write_tokens"] = (
+            _as_int(bucket["cache_write_tokens"]) + record.cache_write_tokens
+        )
         bucket["units"] = _as_float(bucket["units"]) + record.units
         bucket["record_count"] = _as_int(bucket["record_count"]) + 1
         if record.cost_usd is not None:
-            bucket["system_cost_usd"] = (
-                _as_float(bucket["system_cost_usd"]) + record.cost_usd
+            bucket["total_cost_usd"] = (
+                _as_float(bucket["total_cost_usd"]) + record.cost_usd
             )
+            if _is_system_scope(record.profile_scope):
+                bucket["system_cost_usd"] = (
+                    _as_float(bucket["system_cost_usd"]) + record.cost_usd
+                )
+
+
+def _is_system_scope(scope: UsageProfileScope | str) -> bool:
+    """Whether a row's spend lands on the deployment's own credentials."""
+    value = scope.value if isinstance(scope, UsageProfileScope) else str(scope)
+    return value == UsageProfileScope.SYSTEM.value
 
 
 def _as_int(value: object) -> int:
@@ -164,6 +243,12 @@ class UsageReservation(BaseModel):
     user_id: UUID
     amount_usd: float
     counter_ids: list[UUID] = Field(default_factory=list)
+    # What was left of the tightest applicable allowance when this was taken.
+    # Carried on the reservation because admission has already paid for the
+    # three reads that produce it, and the run about to start needs the number
+    # to bound itself -- asking again would double the statements on the path
+    # that gates every conversation. ``None`` means no limit applies.
+    remaining_usd: float | None = None
 
 
 class UsageLimitCounterScope(BaseModel):

@@ -6,7 +6,10 @@ one implementation instead of duplicating reserve/record/release plumbing.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
 from app.modules.agent.services.run_phase_spans import run_phase
@@ -27,6 +30,7 @@ class RunUsageRecorder:
         organization_id,
         user_id,
         runtime_profile: dict[str, object | None],
+        agent_run_id: UUID | None = None,
     ) -> UsageReservation | None:
         profile_id = runtime_profile.get("profile_id")
         profile_scope = runtime_profile.get("scope")
@@ -44,13 +48,36 @@ class RunUsageRecorder:
                     profile_scope=profile_scope,
                     model_name=model_name,
                 )
+                # Persisted in the same transaction that takes it, so the two can
+                # never disagree: if the reservation committed, something other
+                # than this worker's memory knows how to give it back.
+                if reservation is not None and agent_run_id is not None:
+                    await ConversationRepository(uow).store_usage_reservation(
+                        agent_run_id=agent_run_id,
+                        reservation={
+                            "counter_ids": [
+                                str(counter_id)
+                                for counter_id in reservation.counter_ids
+                            ],
+                            "amount_usd": reservation.amount_usd,
+                        },
+                    )
                 await uow.commit()
                 return reservation
 
-    async def release(self, reservation: UsageReservation | None) -> None:
+    async def release(
+        self,
+        reservation: UsageReservation | None,
+        *,
+        agent_run_id: UUID | None = None,
+    ) -> None:
         if reservation is None:
             return
         async with self.uow_factory() as uow:
+            if agent_run_id is not None:
+                await ConversationRepository(uow).claim_usage_reservation(
+                    agent_run_id=agent_run_id
+                )
             await self._service(uow).release_reservation(reservation)
             await uow.commit()
 
@@ -64,6 +91,13 @@ class RunUsageRecorder:
         reservation: UsageReservation | None,
     ) -> None:
         async with self.uow_factory() as uow:
+            # Clear the durable copy in the same transaction that consumes it,
+            # so the reconciler never finds a handle for a run that already
+            # settled up.
+            if ctx.agent_run_id is not None:
+                await ConversationRepository(uow).store_usage_reservation(
+                    agent_run_id=ctx.agent_run_id, reservation=None
+                )
             await self._service(uow).record_agent_run_usage(
                 ctx=ctx,
                 runtime_profile=runtime_profile,

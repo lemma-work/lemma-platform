@@ -10,9 +10,18 @@ from opentelemetry import metrics
 
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
+    CostSource,
     UsageLimitCounterScope,
     UsageRecord,
     UsageReservation,
+)
+from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
+from app.modules.usage.services.limit_windows import (
+    counter_scopes,
+    limit_scope,
+    month_start,
+    next_month_start,
+    week_start,
 )
 from app.modules.usage.domain.ports import (
     UsageLimitPort,
@@ -155,14 +164,33 @@ class UsageService(UsagePricing):
             user_id=user_id,
             amount_usd=amount,
             counter_ids=counter_ids,
+            remaining_usd=_tightest_remaining(limits),
         )
 
     async def release_reservation(self, reservation: UsageReservation | None) -> None:
         if reservation is None:
             return
-        await self.usage_repository.release_reservation(
+        await self.release_reservation_handle(
             counter_ids=reservation.counter_ids,
             amount_usd=reservation.amount_usd,
+        )
+
+    async def release_reservation_handle(
+        self,
+        *,
+        counter_ids: list[UUID],
+        amount_usd: float,
+    ) -> None:
+        """Give back a reservation from its stored handle alone.
+
+        For the caller that finds an abandoned reservation rather than holding
+        one -- the orphan reconciler reads it off the dead run's row, where the
+        surrounding `UsageReservation` (and the user it belonged to) is exactly
+        the context that did not survive the crash.
+        """
+        await self.usage_repository.release_reservation(
+            counter_ids=counter_ids,
+            amount_usd=amount_usd,
         )
 
     async def record_agent_run_usage(
@@ -187,27 +215,12 @@ class UsageService(UsagePricing):
         model_name = (
             self._profile_value(runtime_profile, "model_name") or usage_data.model_name
         )
-        provider_model_name = self._profile_value(
-            runtime_profile, "provider_model_name"
-        )
-        cache_read_tokens = self._coerce_token_count(
-            (usage_data.metadata or {}).get("cache_read_tokens")
-        )
-        self._load_environment_metadata()
-        cost_usd, pricing_missing = self._calculate_system_cost(
-            profile_scope=profile_scope,
+        priced = self._record_cost(
+            runtime_profile=runtime_profile,
             model_name=model_name,
-            provider_model_name=provider_model_name,
-            input_tokens=usage_data.input_tokens,
-            output_tokens=usage_data.output_tokens,
-            units=usage_data.units,
-            cache_read_tokens=cache_read_tokens,
+            usage_data=usage_data,
         )
-        metadata = dict(usage_data.metadata or {})
-        if provider_model_name:
-            metadata["provider_model_name"] = provider_model_name
-        if pricing_missing:
-            metadata["pricing_missing"] = True
+        cost_usd = priced.cost_usd
         record = UsageRecord(
             organization_id=ctx.organization_id,
             pod_id=ctx.pod_id,
@@ -224,10 +237,13 @@ class UsageService(UsagePricing):
             usage_kind=usage_data.usage_kind,
             input_tokens=usage_data.input_tokens,
             output_tokens=usage_data.output_tokens,
+            cached_input_tokens=priced.cache_read_tokens,
+            cache_write_tokens=priced.cache_write_tokens,
             units=usage_data.units,
             cost_usd=cost_usd,
+            cost_source=priced.cost_source,
             status=status,
-            metadata=metadata,
+            metadata=priced.metadata,
         )
         saved = await self.usage_repository.create(record)
         self._record_usage_metrics(
@@ -335,6 +351,11 @@ class UsageService(UsagePricing):
             or self._profile_value(runtime_profile, "provider_model_name")
             or "unknown"
         )
+        # Read off `run_usage`, not off the caller's metadata dict. Every helper
+        # path here (title, schedule filter, README) passed only a `helper` tag,
+        # so cache reads were invisible and each of those calls was priced as if
+        # nothing had been cached -- an overcharge on every one of them, on data
+        # the object in hand was already carrying.
         return AgentRunUsage(
             model_name=model_name,
             usage_kind=usage_kind,
@@ -343,7 +364,13 @@ class UsageService(UsagePricing):
             units=units,
             request_count=self._usage_value(run_usage, "requests"),
             tool_call_count=self._usage_value(run_usage, "tool_calls"),
-            metadata=metadata,
+            metadata={
+                **(metadata or {}),
+                "cache_read_tokens": self._usage_value(run_usage, "cache_read_tokens"),
+                "cache_write_tokens": self._usage_value(
+                    run_usage, "cache_write_tokens"
+                ),
+            },
         )
 
     async def get_organization_usage_summary(
@@ -434,13 +461,8 @@ class UsageService(UsagePricing):
         _limit_values: UsageLimitValues | None = None,
     ) -> dict[str, object]:
         now = now or datetime.now(timezone.utc)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        week_start = (now - timedelta(days=now.weekday())).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
+        window_month = month_start(now)
+        window_week = week_start(now)
         limit_values = _limit_values or await self._resolve_usage_limit_values(
             organization_id=organization_id, user_id=user_id
         )
@@ -467,55 +489,54 @@ class UsageService(UsagePricing):
             org_used = await self.usage_repository.get_system_cost(
                 organization_id=organization_id,
                 user_id=None,
-                start=month_start,
+                start=window_month,
                 end=now,
             )
         user_used = await self.usage_repository.get_system_cost_by_window(
             organization_id=user_limit_organization_id,
             user_id=user_id,
-            window_starts={"user_week": week_start, "user_month": month_start},
+            window_starts={"user_week": window_week, "user_month": window_month},
             end=now,
             exclude_organization_ids=excluded_organization_ids,
         )
         user_weekly_used = user_used["user_week"]
         user_monthly_used = user_used["user_month"]
 
-        reserved_scopes: list[tuple[UUID | None, UUID | None, str, datetime]] = [
-            (user_limit_organization_id, user_id, "user_week", week_start),
-            (user_limit_organization_id, user_id, "user_month", month_start),
-        ]
-        if organization_id is not None:
-            reserved_scopes.append((organization_id, None, "org_month", month_start))
         reserved = await self.usage_repository.get_reserved_costs(
-            scopes=reserved_scopes
+            scopes=counter_scopes(
+                organization_id=organization_id,
+                user_limit_organization_id=user_limit_organization_id,
+                user_id=user_id,
+                now=now,
+            )
         )
         org_reserved = reserved.get("org_month", 0.0)
         user_weekly_reserved = reserved["user_week"]
         user_monthly_reserved = reserved["user_month"]
-        org_scope = self._limit_scope(
+        org_scope = limit_scope(
             limit_usd=limit_values.org_monthly_limit_usd,
             used_usd=org_used,
             reserved_usd=org_reserved,
-            reset_at=self._next_month_start(now),
-            window_start=month_start,
+            reset_at=next_month_start(now),
+            window_start_at=window_month,
             scope="organization",
             counter_organization_id=organization_id,
         )
-        user_weekly_scope = self._limit_scope(
+        user_weekly_scope = limit_scope(
             limit_usd=limit_values.user_weekly_limit_usd,
             used_usd=user_weekly_used,
             reserved_usd=user_weekly_reserved,
-            reset_at=week_start + timedelta(days=7),
-            window_start=week_start,
+            reset_at=window_week + timedelta(days=7),
+            window_start_at=window_week,
             scope=limit_values.user_limit_scope,
             counter_organization_id=user_limit_organization_id,
         )
-        user_monthly_scope = self._limit_scope(
+        user_monthly_scope = limit_scope(
             limit_usd=limit_values.user_monthly_limit_usd,
             used_usd=user_monthly_used,
             reserved_usd=user_monthly_reserved,
-            reset_at=self._next_month_start(now),
-            window_start=month_start,
+            reset_at=next_month_start(now),
+            window_start_at=window_month,
             scope=limit_values.user_limit_scope,
             counter_organization_id=user_limit_organization_id,
         )
@@ -558,51 +579,6 @@ class UsageService(UsagePricing):
             (organization_id is not None and values.org_monthly_limit_usd is not None)
             or values.user_weekly_limit_usd is not None
             or values.user_monthly_limit_usd is not None
-        )
-
-    def _limit_scope(
-        self,
-        *,
-        limit_usd: float | None,
-        used_usd: float,
-        reserved_usd: float,
-        reset_at: datetime,
-        window_start: datetime,
-        scope: str,
-        counter_organization_id: UUID | None,
-    ) -> dict[str, object]:
-        consumed = used_usd + reserved_usd
-        remaining = None if limit_usd is None else max(0.0, limit_usd - consumed)
-        return {
-            "limit_usd": limit_usd,
-            "scope": scope,
-            "used_usd": used_usd,
-            "reserved_usd": reserved_usd,
-            "remaining_usd": remaining,
-            "allowed": limit_usd is None or consumed < limit_usd,
-            "reset_at": reset_at,
-            "window_start": window_start,
-            "counter_organization_id": counter_organization_id,
-        }
-
-    def _next_month_start(self, now: datetime) -> datetime:
-        if now.month == 12:
-            return now.replace(
-                year=now.year + 1,
-                month=1,
-                day=1,
-                hour=0,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-        return now.replace(
-            month=now.month + 1,
-            day=1,
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
         )
 
     def _collect_recorded_event(self, record: UsageRecord) -> None:
@@ -666,26 +642,50 @@ class UsageService(UsagePricing):
         )
 
 
+def _tightest_remaining(limits: dict[str, object]) -> float | None:
+    """The smallest remaining allowance across the windows that apply.
+
+    The binding constraint is whichever window runs out first, so a run must
+    bound itself by the minimum -- not by the organization's monthly figure that
+    a weekly per-user cap will stop it reaching.
+    """
+    remaining = [
+        scope["remaining_usd"]
+        for key in ("org_monthly", "user_weekly", "user_monthly")
+        for scope in [limits[key]]
+        if isinstance(scope, dict) and scope.get("remaining_usd") is not None
+    ]
+    return min(remaining) if remaining else None
+
+
 def assert_system_pricing_covers_catalog(
     model_names: Iterable[tuple[str, str | None]],
     *,
     pricing: Mapping[str, ModelPricing] | None = None,
+    base_url: str | None = None,
 ) -> list[str]:
-    """Return the system models that have no pricing entry (empty == all priced).
+    """Return the system models nothing can price (empty == all priceable).
 
-    A model is "covered" when either its public name or its provider id is present
-    in the pricing table, mirroring ``UsageService._resolve_pricing``'s
-    OR-resolution. Missing prices never prevent metering; callers may use this
-    helper to report catalog pricing completeness.
+    "Covered" now means *either* layer answers: a registered entry under the
+    public name or the provider id, or the public dataset recognising the model.
+    A model reaches this list only when both miss, and that is the case worth an
+    operator's attention -- it meters with a null cost, so it counts toward no
+    spend limit and is effectively free to run.
+
+    Missing prices still never prevent metering or refuse a run (`PS-OPS-011`);
+    this only reports completeness.
     """
     table = pricing if pricing is not None else UsageService._SYSTEM_MODEL_PRICING
+    probe = UsageTokens(input_tokens=1)
     uncovered: list[str] = []
     for public_name, provider_name in model_names:
-        candidates = [
-            candidate.strip()
-            for candidate in (public_name, provider_name)
-            if candidate and candidate.strip()
-        ]
-        if not any(candidate in table for candidate in candidates):
+        resolved = resolve_cost(
+            model_name=public_name,
+            provider_model_name=provider_name,
+            base_url=base_url,
+            tokens=probe,
+            pricing_table=dict(table),
+        )
+        if resolved.source is CostSource.UNKNOWN:
             uncovered.append(public_name or provider_name or "<unknown>")
     return uncovered

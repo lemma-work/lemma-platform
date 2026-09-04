@@ -44,8 +44,18 @@ class UsageRecord(UUIDAuditBase):
     )
     input_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    # Both are subsets of ``input_tokens``, not additions to it -- the parent
+    # count every provider reports. Promoted out of ``metadata`` so a summary can
+    # aggregate them in SQL instead of hydrating every row to read a JSON key.
+    # Not indexed: this table gains a row per model call and migration 0018
+    # dropped twelve indexes precisely because each one is paid on every insert.
+    cached_input_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
     units: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="UNKNOWN"
+    )
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     record_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata",
@@ -107,8 +117,11 @@ class UsageRecord(UUIDAuditBase):
             usage_kind=self.usage_kind,
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_write_tokens=self.cache_write_tokens,
             units=self.units,
             cost_usd=self.cost_usd,
+            cost_source=self.cost_source,
             status=self.status,
             metadata=self.record_metadata or {},
             occurred_at=self.occurred_at,
@@ -125,6 +138,11 @@ class UsageRecord(UUIDAuditBase):
             entity.profile_scope.value
             if hasattr(entity.profile_scope, "value")
             else str(entity.profile_scope)
+        )
+        cost_source = (
+            entity.cost_source.value
+            if hasattr(entity.cost_source, "value")
+            else str(entity.cost_source)
         )
         return cls(
             id=entity.id,
@@ -145,8 +163,11 @@ class UsageRecord(UUIDAuditBase):
             usage_kind=usage_kind,
             input_tokens=entity.input_tokens,
             output_tokens=entity.output_tokens,
+            cached_input_tokens=entity.cached_input_tokens,
+            cache_write_tokens=entity.cache_write_tokens,
             units=entity.units,
             cost_usd=entity.cost_usd,
+            cost_source=cost_source,
             status=entity.status,
             record_metadata=entity.metadata,
             occurred_at=entity.occurred_at,
