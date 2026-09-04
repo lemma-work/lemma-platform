@@ -55,12 +55,17 @@ class TestBoundedDict:
         held = BoundedDict[str, list](2)
         held["a"] = ["first"]
 
-        assert held.setdefault("a", ["second"]) == ["first"]
+        existing = held.setdefault("a", ["second"])
+
+        assert existing == ["first"]
 
     def test_pop_removes_and_returns(self) -> None:
         held = BoundedDict[str, int](2)
         held["a"] = 1
 
-        assert held.pop("a") == 1
+        popped = held.pop("a")
+        missing = held.pop("missing", -1)
+
+        assert popped == 1
         assert "a" not in held
-        assert held.pop("missing", -1) == -1
+        assert missing == -1
