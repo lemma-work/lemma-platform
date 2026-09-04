@@ -136,3 +136,43 @@ async def test_require_own_account_refuses_someone_elses_account():
 
     assert caught.value.status_code == 403
     assert "belongs to someone else" in str(caught.value.detail)
+
+
+def test_every_caller_builds_a_surface_config_the_way_it_is_declared():
+    """Regression: a keyword that does not exist is a 500 nobody sees first.
+
+    `publish_home_view` had `channel_routes` renamed to `channel_ids` when the
+    Home tab's list stopped carrying an agent per row. The rename swept up a
+    call to `surface_config_from_input`, whose own `channel_routes` is the
+    surface's stored `list[SurfaceChannelRoute]` and means something else
+    entirely -- so the Telegram managed-bot endpoint raised `TypeError` before
+    it reached Telegram.
+
+    Nothing caught it: `api/controllers/` is outside basedpyright's strict
+    list, and no test builds that endpoint's config. This binds each call's
+    keywords against the real signature, which is the check the type checker
+    would have made.
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from app.modules.agent_surfaces.api.schemas import surface_config_from_input
+
+    signature = inspect.signature(surface_config_from_input)
+    # The module that declares it, then the module tree that may call it.
+    package = Path(inspect.getfile(surface_config_from_input)).resolve().parents[1]
+
+    calls = [
+        (path, node)
+        for path in package.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "surface_config_from_input"
+    ]
+    assert calls, "the call sites moved; this test is checking nothing"
+
+    for path, call in calls:
+        keywords = [keyword.arg for keyword in call.keywords if keyword.arg]
+        # Positional args stand in as `None`: only the names are under test.
+        signature.bind_partial(*[None] * len(call.args), **dict.fromkeys(keywords))

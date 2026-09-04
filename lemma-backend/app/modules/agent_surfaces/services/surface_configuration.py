@@ -15,11 +15,9 @@ from __future__ import annotations
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent_surfaces.platforms.slack.blocks import (
-    DEFAULT_RESPONDER_NAME,
 )
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -245,11 +243,11 @@ class SurfaceConfigurationMixin(
                 user_id=external_user_id,
                 pod_name=name_of_pod or None,
                 agent_name=await self._surface_agent_name(surface),
-                # The channels this bot answers in. The second element used to
-                # be the agent routed to that channel; there is one agent now,
-                # so it is the same for every row and the Home tab says it once.
-                channel_routes=[
-                    (route.channel_id, None)
+                # The channels this bot answers in. Ids alone: each entry used
+                # to name the agent routed to that channel, and there is one
+                # agent now, so the Home tab states it once above the list.
+                channel_ids=[
+                    route.channel_id
                     for route in surface.config.channels
                     if route.channel_id
                 ],

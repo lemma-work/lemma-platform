@@ -212,7 +212,10 @@ async def test_the_pod_assistant_does_not_claim_to_be_an_agent_row(monkeypatch):
     The assistant has a row now, so the fix is no longer to send nothing: it is
     to send the row's id, which is the pod's own.
     """
-    from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+    from app.core.authorization.delegation import (
+        DEFAULT_POD_AGENT_ID,
+        DEFAULT_RESPONDER_NAME,
+    )
     from app.modules.agent.tools.messaging.models import MessageUserRequest
     from app.modules.agent.tools.messaging.pydantic_adapter import message_user
 
@@ -231,8 +234,10 @@ async def test_the_pod_assistant_does_not_claim_to_be_an_agent_row(monkeypatch):
 
     assert result.success is True
     assert sent["actor_agent_id"] == ctx.deps.pod_id
-    # Still attributed, so the recipient is not messaged by nobody.
-    assert sent["agent_name"] == "pod_default"
+    # Still attributed, so the recipient is not messaged by nobody -- under the
+    # name it answers to. `pod_default` is the row's, and this value becomes a
+    # chat bot's username and an email `From`.
+    assert sent["agent_name"] == DEFAULT_RESPONDER_NAME
 
 
 async def test_a_real_agent_still_reports_its_own_id(monkeypatch):

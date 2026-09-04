@@ -187,14 +187,35 @@ def test_is_past_due_only_applies_to_open_notifications():
 # ------------------------------------------------------------------ attribution
 
 
-def test_attribution_names_both_the_agent_and_the_human_behind_it():
-    """The recipient sees the pod's bot; without this they cannot tell who asked."""
-    rendered = attribute(
-        "Send me your update", agent_name="Ops Assistant", actor_display_name="Anukul"
-    )
-    assert "Ops Assistant" in rendered
+def test_attribution_names_the_human_whose_authority_the_message_carries():
+    """One bot, one agent, two possible askers — the asker is the ambiguous half."""
+    rendered = attribute("Send me your update", actor_display_name="Anukul")
     assert "Anukul" in rendered
     assert rendered.endswith("Send me your update")
+
+
+def test_attribution_never_names_the_agent():
+    """The bot a message arrives from already answers "which agent".
+
+    A surface belongs to exactly one agent, and where one Slack app serves
+    several the platform paints the agent's name and avatar on the message
+    itself. Repeating it in the body bought nothing — and it is how the stored
+    identifier `pod_default` reached people's phones.
+    """
+    rendered = attribute("Send me your update", actor_display_name="pod_default")
+    # The only name in the header is the actor's, whatever it happens to be.
+    assert rendered.startswith("On behalf of pod_default:")
+
+
+def test_attribution_is_absent_when_the_reader_is_the_asker():
+    """Naming you to yourself resolves no ambiguity and reads as a stranger.
+
+    The phishing case this header exists for is a *colleague's* authority
+    arriving under a bot you trust. Your own authority is not that case.
+    """
+    assert attribute("Send me your update", actor_display_name=None) == (
+        "Send me your update"
+    )
 
 
 # ------------------------------------------------------------- the reply window

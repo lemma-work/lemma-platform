@@ -326,6 +326,15 @@ test-connectors:
 # raised TypeError into a broad except and returned 502. Structural, not a test:
 # no amount of test writing catches a port that drifts from an implementation
 # nobody exercises.
+#
+# `app/modules/agent_surfaces/api/controllers` is the same argument one level
+# out: not a port, but a call site whose only reader is the type checker. A
+# rename of `publish_home_view`'s `channel_routes` swept up a call to
+# `surface_config_from_input` -- a different function that kept the parameter --
+# and `POST /surfaces/telegram/managed` raised `TypeError` before it reached
+# Telegram. A controller is exactly where that goes unnoticed: it is the layer
+# tests reach through a client rather than by calling, so a keyword nobody
+# passes in a test is a keyword nobody checks.
 typecheck-critical:
 	uv run basedpyright --level error \
 		app/core/domain/events.py \
@@ -336,6 +345,7 @@ typecheck-critical:
 		app/modules/agent/api/dependencies.py \
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \
+		app/modules/agent_surfaces/api/controllers \
 		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/connectors/domain/ports.py \
 		app/modules/connectors/api/dependencies.py \
