@@ -3,17 +3,27 @@
 from contextlib import asynccontextmanager
 
 from app.core.registry import LemmaModule
+from app.modules.workspace.api.host_routing import BrowserHostRoutingMiddleware
 
 
 def _routers():
     from app.modules.workspace.api.controllers.browser_controller import (
         router as browser,
     )
+    from app.modules.workspace.api.controllers.browser_stream_controller import (
+        router as browser_stream,
+    )
+    from app.modules.workspace.api.controllers.files_controller import (
+        router as files,
+    )
     from app.modules.workspace.api.controllers.port_proxy_controller import (
         router as port_proxy,
     )
+    from app.modules.workspace.api.controllers.takeover_controller import (
+        router as takeover,
+    )
 
-    return [browser, port_proxy]
+    return [browser, browser_stream, files, takeover, port_proxy]
 
 
 def _register_streaq() -> None:
@@ -44,6 +54,7 @@ async def _close_workspace_clients(app):
 module = LemmaModule(
     name="workspace",
     routers=_routers,
+    middlewares=(BrowserHostRoutingMiddleware,),
     register_streaq=_register_streaq,
     api_lifespans=(_close_workspace_clients,),
 )

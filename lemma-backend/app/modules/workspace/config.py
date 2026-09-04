@@ -83,6 +83,18 @@ class WorkspaceSettings(BaseSettings):
         ),
     )
 
+    browser_base_domain: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("WORKSPACE_BROWSER_BASE_DOMAIN"),
+        description=(
+            "Base domain for serving a sandbox browser at `<code>.<domain>`. "
+            "The dashboard is a Next.js app whose assets are all absolute, so "
+            "it cannot be served under a path prefix — it needs an origin. "
+            "Unset means the live browser view falls back to the path proxy, "
+            "which loads the shell but never hydrates."
+        ),
+    )
+
     # --- Reclamation -------------------------------------------------------
     process_max_lifetime_seconds: int = Field(
         default=3600,
