@@ -218,7 +218,7 @@ async def test_recording_an_app_session_cannot_fail_authentication() -> None:
     """
     from types import SimpleNamespace
 
-    from app.composition.app_session import maybe_record_app_session
+    from app.core.analytics.app_session import maybe_record_app_session
 
     class _Exploding:
         @property

@@ -27,7 +27,7 @@ from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.app_branding_provider import (
     build_app_branding_entitlement_port,
 )
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 
 
 def _get_app_storage_factory():
@@ -52,7 +52,7 @@ def build_app_service(uow) -> AppService:
     return AppService(
         app_repository=AppRepository(uow, message_bus=message_bus),
         file_manager_factory=_get_app_storage_factory(),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         app_branding_entitlement=build_app_branding_entitlement_port(uow),
     )
 

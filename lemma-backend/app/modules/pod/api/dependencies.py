@@ -21,7 +21,7 @@ from app.core.authorization.permissions import Permissions
 
 from app.modules.pod.domain.pod_entities import PodRole
 from app.modules.pod.services.pod_role_service import PodRoleService
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 
 
 def get_pod_service(
@@ -34,7 +34,7 @@ def get_pod_service(
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
         organization_repository=create_organization_repository(uow),
         pod_role_service=PodRoleService(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         icon_service=create_icon_service(),
         schedule_teardown=create_pod_schedule_teardown(uow),
         uow=uow,

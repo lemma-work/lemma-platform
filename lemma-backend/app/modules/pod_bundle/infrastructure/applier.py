@@ -28,13 +28,6 @@ from app.modules.pod_bundle.infrastructure.account_binding import (
     validate_account_binding,
 )
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
-from app.modules.pod_bundle.infrastructure.existing_resources import (
-    _flow_exists,
-    _get_agent,
-    _get_function,
-    _get_schedule,
-    _get_table,
-)
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
@@ -109,25 +102,32 @@ class BundleApplier:
     # --- tables ----------------------------------------------------------
 
     async def _apply_table(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import build_table_service
         from app.modules.datastore.contracts import ColumnSchema
+        from app.modules.datastore.contracts.provisioning import (
+            add_table_column,
+            create_table,
+            get_table,
+            remove_table_column,
+        )
 
-        service = build_table_service(self._uow)
         payload = self._load("tables", step.name)
         columns = [
             ColumnSchema.model_validate(c)
             for c in payload.get("columns") or []
             if not _is_system_column(c)
         ]
-        existing = await _get_table(service, self._pod_id, step.name, self._ctx)
+        existing = await get_table(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        )
         if existing is None:
-            await service.create_table(
-                self._pod_id,
-                step.name,
-                str(payload.get("primary_key_column") or "id"),
-                columns,
-                payload.get("config"),
-                bool(payload.get("enable_rls", True)),
+            await create_table(
+                self._uow,
+                pod_id=self._pod_id,
+                name=step.name,
+                primary_key_column=str(payload.get("primary_key_column") or "id"),
+                columns=columns,
+                config=payload.get("config"),
+                enable_rls=bool(payload.get("enable_rls", True)),
                 visibility=payload.get("visibility"),
                 ctx=self._ctx,
             )
@@ -138,20 +138,31 @@ class BundleApplier:
         desired_names = {c.name for c in columns}
         for column in columns:
             if column.name not in existing_names:
-                await service.add_column(self._pod_id, step.name, column, self._ctx)
+                await add_table_column(
+                    self._uow,
+                    pod_id=self._pod_id,
+                    table_name=step.name,
+                    column=column,
+                    ctx=self._ctx,
+                )
         if step.destructive:
             pk = existing.primary_key_column
             for name in existing_names - desired_names:
                 if name == pk or _is_system_column({"name": name}):
                     continue
-                await service.remove_column(self._pod_id, step.name, name, self._ctx)
+                await remove_table_column(
+                    self._uow,
+                    pod_id=self._pod_id,
+                    table_name=step.name,
+                    column_name=name,
+                    ctx=self._ctx,
+                )
 
     async def _apply_table_data(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import (
-            build_record_service,
-            build_table_service,
+        from app.modules.datastore.contracts.provisioning import (
+            get_table,
+            seed_table_rows,
         )
-        from app.modules.datastore.contracts import TableContext
 
         data_path = self._root / "tables" / step.name / TABLE_DATA_FILE
         if not data_path.is_file():
@@ -159,22 +170,20 @@ class BundleApplier:
         rows = _read_csv(data_path)
         if not rows:
             return
-        table_service = build_table_service(self._uow)
-        table = await _get_table(table_service, self._pod_id, step.name, self._ctx)
+        table = await get_table(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        )
         if table is None:
             raise PodBundleDomainError(
                 f"Table '{step.name}' must exist before seeding its data.",
                 code="POD_BUNDLE_STEP_ORDER",
             )
-        schema_name = table_service.schema_manager.get_schema_name(self._pod_id)
-        record_service = build_record_service(self._uow)
-        table_context = TableContext.from_table_entity(
-            table, schema_name, events_enabled=False
-        )
-        # Upsert so re-running the seed step (crash/retry) converges by primary
-        # key instead of raising on duplicates.
-        await record_service.bulk_create_records(
-            table_context, rows, self._user_id, upsert=True
+        await seed_table_rows(
+            self._uow,
+            pod_id=self._pod_id,
+            table=table,
+            rows=rows,
+            user_id=self._user_id,
         )
 
     # --- files -----------------------------------------------------------
@@ -183,16 +192,21 @@ class BundleApplier:
         """Create a bundled folder or file. Idempotent: an existing path is left
         as-is (create-once by path), so a replayed step converges. Folders are
         planned parent-first, so the parent exists by the time a child runs."""
-        from app.composition.pod_bundle_resources import build_file_service
+        from app.modules.datastore.contracts.provisioning import (
+            create_file,
+            create_folder,
+            file_exists,
+        )
 
         parts = [p for p in str(step.name or "").split("/") if p]
         if not parts:
             return
         pod_path = "/" + "/".join(parts)
         files_root = self._root / "files"
-        service = build_file_service(self._uow)
 
-        if await _file_exists(service, self._pod_id, pod_path, self._ctx):
+        if await file_exists(
+            self._uow, pod_id=self._pod_id, path=pod_path, ctx=self._ctx
+        ):
             return
 
         if step.detail.get("is_folder"):
@@ -201,10 +215,11 @@ class BundleApplier:
                 label=f".folder.json for '{pod_path}'",
                 warnings=self._warnings,
             )
-            await service.create_folder(
-                self._pod_id,
-                pod_path,
-                self._ctx,
+            await create_folder(
+                self._uow,
+                pod_id=self._pod_id,
+                path=pod_path,
+                ctx=self._ctx,
                 description=meta.get("description"),
                 visibility=meta.get("visibility") or "POD",
             )
@@ -216,11 +231,12 @@ class BundleApplier:
         meta = _file_manifest_entry(files_root, pod_path, self._warnings)
         directory_path = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
         file_content = await run_blocking(source.read_bytes, limiter="cpu_bound")
-        await service.create_file(
-            self._pod_id,
-            parts[-1],
-            file_content,
-            self._ctx,
+        await create_file(
+            self._uow,
+            pod_id=self._pod_id,
+            name=parts[-1],
+            content=file_content,
+            ctx=self._ctx,
             description=meta.get("description"),
             directory_path=directory_path,
             search_enabled=bool(meta.get("search_enabled", True)),
@@ -230,67 +246,51 @@ class BundleApplier:
     # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import get_agent_service
+        from app.modules.agent.contracts.provisioning import (
+            create_agent,
+            get_agent,
+            update_agent,
+        )
 
-        service = get_agent_service(self._uow)
         payload = self._load("agents", step.name)
         runtime = _agent_runtime(payload)
         # Toolsets are what let an imported agent actually *use* tools (POD,
         # WEB_SEARCH, …). Without them, a granted agent still can't act — so they
         # travel with the agent, not the deferred grants step.
         toolsets = _agent_toolsets(payload)
-        existing = await _get_agent(service, self._pod_id, step.name, self._ctx)
+        common = {
+            "description": payload.get("description"),
+            "icon_url": payload.get("icon_url"),
+            "agent_runtime": runtime,
+            "toolsets": toolsets,
+            "input_schema": payload.get("input_schema"),
+            "output_schema": payload.get("output_schema"),
+            "metadata": payload.get("metadata"),
+        }
+        existing = await get_agent(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        )
         if existing is None:
-            await service.create_agent(
+            await create_agent(
+                self._uow,
                 pod_id=self._pod_id,
                 user_id=self._user_id,
                 name=step.name,
                 instruction=str(payload.get("instruction") or ""),
-                description=payload.get("description"),
-                icon_url=payload.get("icon_url"),
-                agent_runtime=runtime,
-                toolsets=toolsets,
-                input_schema=payload.get("input_schema"),
-                output_schema=payload.get("output_schema"),
                 visibility=payload.get("visibility"),
-                metadata=payload.get("metadata"),
                 ctx=self._ctx,
+                **common,
             )
         else:
-            await service.update_agent(
+            await update_agent(
+                self._uow,
                 pod_id=self._pod_id,
                 name=step.name,
                 instruction=payload.get("instruction"),
-                description=payload.get("description"),
-                icon_url=payload.get("icon_url"),
-                agent_runtime=runtime,
-                toolsets=toolsets,
-                input_schema=payload.get("input_schema"),
-                output_schema=payload.get("output_schema"),
-                metadata=payload.get("metadata"),
-                requester_user_id=self._user_id,
+                user_id=self._user_id,
                 ctx=self._ctx,
+                **common,
             )
-
-    async def _sync_memory_grant(self, agent: Any, toolsets: Any) -> None:
-        """Derive the `/memory` folder and grant the MEMORY toolset implies.
-
-        Why an imported agent needs this, and why it runs after the grants step
-        rather than before it, is on
-        `app.composition.pod_bundle_resources.sync_agent_memory_grant`.
-        """
-        from app.composition.pod_bundle_resources import sync_agent_memory_grant
-
-        if agent is None or getattr(agent, "id", None) is None:
-            return
-        await sync_agent_memory_grant(
-            self._uow,
-            pod_id=self._pod_id,
-            agent_id=agent.id,
-            toolsets=toolsets,
-            ctx=self._ctx,
-            created_by_user_id=self._user_id,
-        )
 
     async def _surface_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `surface_apply.apply_surface`."""
@@ -315,15 +315,19 @@ class BundleApplier:
         Gated on ``has_grants``, not on the parsed list: a manifest that says
         ``{"grants": []}`` means "holds nothing" and clears the target's grants,
         while one with no ``permissions`` key leaves them alone."""
-        from app.composition.pod_bundle_resources import build_function_service
+        from app.modules.function.contracts.provisioning import get_function
 
         payload = self._load("functions", step.name)
         if not _has_grants(payload):
             return
         grants = _grants_from_payload(payload)
-        service = build_function_service(self._uow)
-        function = await _get_function(
-            service, self._pod_id, step.name, self._user_id, self._ctx
+        function = await get_function(
+            self._uow,
+            pod_id=self._pod_id,
+            name=step.name,
+            user_id=self._user_id,
+            ctx=self._ctx,
+            include_code=False,
         )
         if function is None or function.id is None:
             raise PodBundleDomainError(
@@ -348,14 +352,18 @@ class BundleApplier:
         """Deferred grant step: replace an agent's resource permission grants once
         every resource it references (tables, functions) has been applied. An
         explicitly empty grant list clears them — see `_apply_function_grants`."""
-        from app.composition.pod_bundle_resources import get_agent_service
+        from app.modules.agent.contracts.provisioning import (
+            get_agent,
+            sync_agent_memory_grant,
+        )
 
         payload = self._load("agents", step.name)
         if not _has_grants(payload):
             return
         grants = _grants_from_payload(payload)
-        service = get_agent_service(self._uow)
-        agent = await _get_agent(service, self._pod_id, step.name, self._ctx)
+        agent = await get_agent(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        )
         if agent is None or agent.id is None:
             raise PodBundleDomainError(
                 f"Agent '{step.name}' must exist before applying its grants.",
@@ -367,7 +375,14 @@ class BundleApplier:
         # Replace semantics: whatever the bundle listed is now the whole set, so
         # the toolset-derived grant has to be put back. From the agent as saved,
         # not from the bundle -- the same rule the permissions endpoint follows.
-        await self._sync_memory_grant(agent, getattr(agent, "toolsets", None))
+        await sync_agent_memory_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            toolsets=getattr(agent, "toolsets", None),
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
 
     # --- grants ----------------------------------------------------------
 
@@ -388,15 +403,16 @@ class BundleApplier:
     # --- schedules -------------------------------------------------------
 
     async def _apply_schedule(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import get_schedule_service
-        from app.modules.schedule.contracts import (
-            ScheduleCreateEntity,
-            ScheduleType,
+        from app.modules.schedule.contracts import ScheduleCreateEntity, ScheduleType
+        from app.modules.schedule.contracts.provisioning import (
+            create_schedule,
+            get_schedule_by_name,
         )
 
-        service = get_schedule_service(self._uow)
         payload = self._load("schedules", step.name)
-        existing = await _get_schedule(service, self._pod_id, step.name, self._ctx)
+        existing = await get_schedule_by_name(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        )
         if existing is not None:
             # Create-once by name. The plan says SKIP for this case, so reaching
             # here means the pod grew the schedule between plan and apply.
@@ -423,19 +439,24 @@ class BundleApplier:
             pod_id=self._pod_id,
             **fields,
         )
-        await service.create_schedule(entity, self._ctx)
+        await create_schedule(self._uow, entity, ctx=self._ctx)
 
     # --- workflows (best-effort) -----------------------------------------
 
     async def _apply_workflow(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import get_workflow_service
+        from app.modules.workflow.contracts.provisioning import (
+            create_workflow,
+            workflow_exists,
+        )
 
-        service = get_workflow_service(self._uow)
         payload = self._load("workflows", step.name)
-        if await _flow_exists(service, self._pod_id, step.name, self._ctx):
+        if await workflow_exists(
+            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
+        ):
             # Create-once by name, like schedules; the plan says SKIP for it.
             return
-        await service.create_workflow(
+        await create_workflow(
+            self._uow,
             pod_id=self._pod_id,
             name=step.name,
             description=payload.get("description"),
@@ -445,11 +466,9 @@ class BundleApplier:
             visibility=payload.get("visibility"),
             nodes=payload.get("nodes"),
             edges=payload.get("edges"),
-            requester_user_id=self._user_id,
+            user_id=self._user_id,
             ctx=self._ctx,
         )
-
-    # --- surfaces (connectors) -------------------------------------------
 
 
 # --- module helpers ----------------------------------------------------------
@@ -486,14 +505,6 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
             continue
         toolsets.append(toolset)
     return toolsets
-
-
-async def _file_exists(service, pod_id, path, ctx) -> bool:
-    # get_file_by_path raises when the path is absent; treat that as "create".
-    try:
-        return await service.get_file_by_path(pod_id, path, ctx) is not None
-    except Exception:
-        return False
 
 
 def _read_json_file(path: Path, *, label: str, warnings: list[str]) -> dict[str, Any]:

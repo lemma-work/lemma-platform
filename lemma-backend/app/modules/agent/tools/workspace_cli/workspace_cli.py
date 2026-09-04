@@ -47,7 +47,7 @@ from app.modules.workspace.session_support import retry_advice
 from app.modules.agent.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
-from app.composition.agent_workspace import (
+from app.modules.workspace.contracts.tooling import (
     get_workspace_tool_runtime,
 )
 from pydantic_ai import ToolReturn, BinaryContent

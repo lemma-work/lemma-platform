@@ -27,7 +27,7 @@ from app.core.auth_state_cache import (
     get_account_standing,
     set_account_standing,
 )
-from app.composition.app_session import maybe_record_app_session
+from app.core.analytics.app_session import maybe_record_app_session
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select

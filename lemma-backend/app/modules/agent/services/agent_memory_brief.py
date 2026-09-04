@@ -30,7 +30,7 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.composition.agent_datastore import build_file_service
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_memory_paths import (
     AgentMemoryPaths,
@@ -276,7 +276,7 @@ class AgentMemoryBriefBuilder:
         """
         results: dict[str, str] = {}
         async with self.uow_factory() as uow:
-            ctx = await create_authorization_service(uow).build_user_context(
+            ctx = await create_authorization_data_service(uow).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
             token = set_current_context(ctx)

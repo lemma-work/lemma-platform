@@ -16,10 +16,14 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
-from app.composition.workflow_schedule_runtime import (
-    ScheduleRepository,
-    ScheduleRunOutcomeService,
-    ScheduleRunRepository,
+from app.modules.schedule.contracts.dispatch import (
+    claim_schedule_run,
+    mark_run_dispatched,
+    mark_run_failed,
+    record_fire,
+    get_schedule,
+    record_dispatch_dead_letter,
+    record_pre_dispatch_failure,
 )
 from app.modules.schedule.contracts import (
     ScheduleFireStatus,
@@ -185,8 +189,7 @@ class ScheduleStartService:
             return
 
         # 2. A schedule targeting a workflow or agent.
-        schedule_repo = ScheduleRepository(self._uow)
-        schedule = await schedule_repo.get(UUID(schedule_id))
+        schedule = await get_schedule(self._uow, UUID(schedule_id))
         if schedule is None:
             logger.debug(
                 "workflow.schedule_start_service.no_target_schedule.observed",
@@ -204,13 +207,13 @@ class ScheduleStartService:
             # breaker counts, so a schedule left pointing at nothing is
             # eventually paused and its owner emailed.
             if not schedule.is_internal:
-                await ScheduleRunOutcomeService(self._uow).record_pre_dispatch_failure(
+                await record_pre_dispatch_failure(
+                    self._uow,
                     schedule,
                     source_event_id=schedule_event_id,
                     error_type="ScheduleTargetMissing",
                 )
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     status=ScheduleFireStatus.ERROR,
                     error=(
@@ -232,8 +235,8 @@ class ScheduleStartService:
             return
         run_user_id = _schedule_run_user_id(schedule, user_id)
 
-        run_repo = ScheduleRunRepository(self._uow)
-        schedule_run = await run_repo.claim(
+        schedule_run = await claim_schedule_run(
+            self._uow,
             schedule_id=schedule.id,
             user_id=run_user_id,
             source_event_id=schedule_event_id,
@@ -248,7 +251,6 @@ class ScheduleStartService:
         execution_user_id, target_run_id = _schedule_run_identity(schedule_run)
         if schedule_run.status == ScheduleRunStatus.DEAD_LETTERED:
             await self._record_fire(
-                schedule_repo,
                 schedule,
                 run_id=target_run_id,
                 status=ScheduleFireStatus.ERROR,
@@ -273,16 +275,14 @@ class ScheduleStartService:
                     schedule_event_id=schedule_event_id,
                     target_run_id=target_run_id,
                 )
-                await run_repo.mark_dispatched(schedule_run.id)
+                await mark_run_dispatched(self._uow, schedule_run.id)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=run_id,
                 )
             except Exception as exc:
-                run_status = await run_repo.mark_failed(schedule_run.id, exc)
+                run_status = await mark_run_failed(self._uow, schedule_run.id, exc)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
@@ -317,14 +317,13 @@ class ScheduleStartService:
                     )
                 finally:
                     reset_current_context(ctx_token)
-                await run_repo.mark_dispatched(schedule_run.id)
+                await mark_run_dispatched(self._uow, schedule_run.id)
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=str(conversation_id),
                 )
             except Exception as exc:
-                run_status = await run_repo.mark_failed(schedule_run.id, exc)
+                run_status = await mark_run_failed(self._uow, schedule_run.id, exc)
                 logger.debug(
                     "workflow.schedule_start_service.start_agent_schedule.propagated",
                     agent_id=str(schedule.agent_id),
@@ -332,7 +331,6 @@ class ScheduleStartService:
                     exc_info=True,
                 )
                 await self._record_fire(
-                    schedule_repo,
                     schedule,
                     run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
@@ -508,7 +506,6 @@ class ScheduleStartService:
 
     async def _record_fire(
         self,
-        schedule_repo,
         schedule,
         *,
         run_id: str | None = None,
@@ -517,14 +514,13 @@ class ScheduleStartService:
         dispatch_dead_lettered: bool = False,
     ) -> None:
         resolved = status or ScheduleFireStatus.TRIGGERED
-        await schedule_repo.record_fire(
+        await record_fire(
+            self._uow,
             schedule.id,
             status=resolved,
             run_id=run_id,
             error=error,
         )
         if dispatch_dead_lettered:
-            await ScheduleRunOutcomeService(self._uow).record_dispatch_dead_letter(
-                schedule
-            )
+            await record_dispatch_dead_letter(self._uow, schedule)
         await self._uow.commit()

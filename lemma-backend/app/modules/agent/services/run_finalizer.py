@@ -43,9 +43,7 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
 )
 from app.modules.agent.services.run_identity import RunIdentity
-from app.composition.agent_usage import (
-    usage_context_from_agent_context,
-)
+from app.modules.usage.contracts.execution import usage_context_from_agent_context
 from app.modules.agent.tools.context import ConversationContext
 
 logger = get_logger(__name__)

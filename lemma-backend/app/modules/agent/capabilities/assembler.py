@@ -69,7 +69,7 @@ from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
-from app.composition.agent_surface_runtime import platform_is_known
+from app.modules.agent_surfaces.contracts.platforms import platform_is_known
 
 logger = get_logger(__name__)
 

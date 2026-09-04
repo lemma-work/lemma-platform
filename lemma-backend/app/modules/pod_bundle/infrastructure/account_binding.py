@@ -60,10 +60,9 @@ async def validate_account_binding(
             code="POD_BUNDLE_ACCOUNT_INVALID",
         ) from exc
 
-    from app.composition.pod_bundle_resources import get_connector_service
+    from app.modules.connectors.contracts.provisioning import get_account
 
-    service = get_connector_service(uow)
-    account = await service.account_repository.get(account_uuid)
+    account = await get_account(uow, account_uuid)
     if account is None:
         raise PodBundleDomainError(
             f"{resource_label} references a connector account that does not "
@@ -79,7 +78,7 @@ async def validate_account_binding(
             code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
         )
     await _validate_account_kind(
-        service=service,
+        uow,
         account=account,
         expected_kind=expected_kind,
         expected_connector=expected_connector,
@@ -88,16 +87,18 @@ async def validate_account_binding(
 
 
 async def _validate_account_kind(
+    uow,
     *,
-    service,
     account,
     expected_kind: object,
     expected_connector: object,
     resource_label: str,
 ) -> None:
+    from app.modules.connectors.contracts.provisioning import get_account_kind
+
     if not expected_kind:
         return
-    actual = await service.get_account_kind(account)
+    actual = await get_account_kind(uow, account)
     if actual is None:
         return
     wanted = str(expected_kind).lower()

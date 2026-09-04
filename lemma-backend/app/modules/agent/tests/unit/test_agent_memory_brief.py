@@ -67,7 +67,7 @@ def agents_md(monkeypatch):
     """A live dict of path -> AGENTS.md text, plus caching turned off."""
     files: dict[str, str] = {}
     monkeypatch.setattr(
-        memory_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        memory_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         memory_mod, "build_file_service", lambda uow: _FakeFileService(files)
@@ -141,7 +141,7 @@ async def test_an_unreadable_scope_never_takes_the_others_down(monkeypatch):
             raise DatastoreFileNotFoundError()
 
     monkeypatch.setattr(
-        memory_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        memory_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         memory_mod, "build_file_service", lambda uow: _PartlyExplodingFileService()

@@ -48,7 +48,7 @@ from app.modules.agent.services.workspace_location import (
     apply_location_metadata,
 )
 from app.composition.agent_pod import create_agent_pod_repository
-from app.composition.agent_usage import UsageService
+from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )

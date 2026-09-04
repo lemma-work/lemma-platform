@@ -24,7 +24,7 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.tools.context import BaseAgentContext
 
 
@@ -39,7 +39,9 @@ async def build_delegated_context(
     GitHub-credential bridge -- so there is one implementation of the
     delegation shape, not several that can drift.
     """
-    return await create_authorization_service(uow).build_delegated_workload_context(
+    return await create_authorization_data_service(
+        uow
+    ).build_delegated_workload_context(
         user_id=deps.user_id,
         principal_type="AGENT",
         principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,

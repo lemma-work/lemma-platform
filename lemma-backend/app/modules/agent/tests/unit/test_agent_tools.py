@@ -1792,7 +1792,7 @@ def _run_with_age(*, run_index: int, hours_ago: float, message_count: int = 5):
 def test_surface_history_window_trims_by_message_count(monkeypatch):
     # Small budget so only the most recent run fits (5 msgs each, budget 6).
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (6, 0),
     )
     runs = [_agent_run_with_messages(i) for i in range(4)]
@@ -1815,7 +1815,7 @@ def test_surface_history_window_trims_by_message_count(monkeypatch):
 
 def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (40, 24),
     )
     old = _run_with_age(run_index=0, hours_ago=48)
@@ -1833,7 +1833,7 @@ def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
 
 def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch):
     monkeypatch.setattr(
-        "app.composition.agent_surface_runtime.surface_history_limits",
+        "app.modules.agent_surfaces.contracts.platforms.surface_history_limits",
         lambda: (6, 0),
     )
     runs = [_agent_run_with_messages(i) for i in range(4)]

@@ -258,27 +258,42 @@ def snapshot() -> dict[str, Any]:
                 # the loop below only looks at `app.modules.*`, so the 195 edges
                 # that make the composition root a shared middle layer were the
                 # one thing no metric could see.
-                if in_modules and parts[:2] == ["app", "composition"]:
+                if parts[:2] == ["app", "composition"] and source != "composition":
+                    # Counted for `app/core` too, not only for modules. The one
+                    # core edge -- `core/security.py` reaching an analytics
+                    # helper that imported no module at all -- was in neither
+                    # this metric nor `composition_deep_imports`, which only
+                    # looks the other way. Dependencies point inward; core
+                    # reaching the root is the sharpest version of not doing so.
                     module_composition_imports[f"{source}->composition"] += 1
                     continue
                 if len(parts) < 3 or parts[:2] != ["app", "modules"]:
                     continue
                 target = parts[2]
-                if source == "composition":
-                    composition_targets.add(target)
                 # The composition root is allowed to know every module -- that is
                 # its job -- but only through each module's published surface.
                 # Reaching into services, repositories or ORM models makes it a
                 # shared middle layer instead of a root.
                 if source == "composition" and not _allowed_cross_module_import(parts):
                     composition_deep_imports[f"composition->{target}"] += 1
+                    # Only the internal reaches. A module the root touches
+                    # through its contracts is not a hop that carries a cycle.
+                    composition_targets.add(target)
                 if source == "core" and relative not in CORE_MODULE_IMPORT_EXEMPT:
                     core_module_imports[f"core->{target}"] += 1
                 if not in_modules or target == source:
                     continue
-                dependency_graph[source].add(target)
                 if not _allowed_cross_module_import(parts):
                     forbidden[f"{source}->{target}"] += 1
+                    # Only internal reaches build the cycle graph. Two modules
+                    # publishing contracts to each other is the target design,
+                    # not a defect: `agent` reads surface capabilities and
+                    # `agent_surfaces` reads a conversation context, both
+                    # through published surfaces, and neither package imports
+                    # the other -- so there is no import cycle to have. Counting
+                    # those edges made the shape this refactor is heading for
+                    # indistinguishable from the tangle it is leaving.
+                    dependency_graph[source].add(target)
 
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
@@ -422,9 +437,14 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["module_cycles"], baseline.get("module_cycles", [])
     ):
         failures.append(f"new module cycle: {' -> '.join(cycle)}")
-    for cycle in _new_pairs(
-        current["induced_module_cycles"], baseline.get("induced_module_cycles", [])
-    ):
+    known_knots = [set(cycle) for cycle in baseline.get("induced_module_cycles", [])]
+    for cycle in current["induced_module_cycles"]:
+        # A subset of a known knot is that knot with modules cut out of it,
+        # which is the whole point of the work. Only a component containing a
+        # module no recorded knot had is news.
+        members = set(cycle)
+        if any(members <= knot for knot in known_knots):
+            continue
         failures.append(
             f"new cycle once app/composition is inlined: {' -> '.join(cycle)}"
         )

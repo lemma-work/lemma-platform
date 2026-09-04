@@ -218,7 +218,6 @@ async def resolve_surface_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
     ctx,
 ) -> SurfaceConfig:
     channel_routes = _resolve_channel_routes(config_input=config_input)
@@ -247,7 +246,6 @@ async def merge_surface_config(
     pod_id: UUID,
     platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
-    agent_service,
     ctx,
 ) -> SurfaceConfig:
     updates: dict = {}

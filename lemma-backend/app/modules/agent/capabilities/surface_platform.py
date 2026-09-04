@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic_ai.capabilities import AbstractCapability
 
-from app.composition.agent_surface_runtime import platform_agent_guidance
+from app.modules.agent_surfaces.contracts.platforms import platform_agent_guidance
 
 
 class SurfacePlatformCapability(AbstractCapability[object]):

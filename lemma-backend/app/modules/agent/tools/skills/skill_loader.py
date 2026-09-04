@@ -14,7 +14,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.composition.agent_datastore import create_agent_skill_file_service
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 from functools import lru_cache
 
 _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
@@ -205,7 +205,7 @@ async def _default_file_service(
     async with create_uow_from_session_maker(async_session_maker) as uow:
         service = create_agent_skill_file_service(
             uow,
-            authorization_service=create_authorization_service(uow),
+            authorization_service=create_authorization_data_service(uow),
         )
         ctx = await AuthorizationDataService(uow.session).build_user_context(
             user_id=user_id,

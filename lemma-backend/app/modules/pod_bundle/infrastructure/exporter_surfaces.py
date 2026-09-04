@@ -33,18 +33,17 @@ async def export_surfaces(
     none, and the person importing it only finds out when the surface never
     answers.
     """
-    from app.composition.pod_bundle_resources import (
-        _surface_response,
-        get_surface_service,
+    from app.modules.agent_surfaces.contracts.provisioning import (
+        list_surfaces,
+        surface_response,
     )
-    from app.modules.pod_bundle.infrastructure.exporter import (
-        _dump_response,
-        _resolve_account_connector_info,
+    from app.modules.connectors.contracts.provisioning import (
+        resolve_account_connector,
     )
+    from app.modules.pod_bundle.infrastructure.exporter import _dump_response
 
     try:
-        service = get_surface_service(uow)
-        surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
+        surfaces = await list_surfaces(uow, pod_id=pod_id)
     except Exception as exc:  # noqa: BLE001 - surfaces are best-effort
         logger.debug(
             "pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic",
@@ -60,10 +59,10 @@ async def export_surfaces(
     for surface in surfaces:
         surface_label = str(getattr(surface, "name", None) or "unnamed")
         try:
-            raw_surface = _dump_response(_surface_response(surface))
+            raw_surface = _dump_response(surface_response(surface))
             account_id = raw_surface.get("account_id")
             if account_id:
-                info = await _resolve_account_connector_info(uow, UUID(str(account_id)))
+                info = await resolve_account_connector(uow, UUID(str(account_id)))
                 if info is None:
                     raise ValueError(
                         f"Surface references account {account_id}, which no "
