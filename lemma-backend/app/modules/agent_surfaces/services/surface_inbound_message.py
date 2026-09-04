@@ -13,7 +13,9 @@ from typing import Any
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 
-from app.composition.surface_agent import ConversationService
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent.contracts.speech import (
     VoiceClip,
     VoiceTranscript,
@@ -120,21 +122,23 @@ class SurfaceInboundMessageMixin:
         message_text: str,
         metadata: dict[str, Any],
     ):
-        """Persist the inbound message / resume the paused run in a short UoW."""
+        """Persist the inbound message / resume the paused run in a short UoW.
+
+        The two modes are now one line apart rather than two branches building
+        two different collaborators: every conversation operation takes the unit
+        of work, so the worker's short-scoped session and the request's
+        long-lived one are the same argument.
+        """
         if self._uow_factory is not None:
-            if self._conversation_service_factory is None:
-                raise RuntimeError("Conversation service factory is unavailable")
             async with self._uow_factory() as uow:
-                conversation_service = self._conversation_service_factory(uow)
                 return await self._write_inbound_message(
-                    context, message_text, metadata, uow, conversation_service
+                    context, message_text, metadata, uow
                 )
-        else:
-            if self.uow is None or self.conversation_service is None:
-                raise RuntimeError("Conversation service is unavailable")
-            return await self._write_inbound_message(
-                context, message_text, metadata, self.uow, self.conversation_service
-            )
+        if self.uow is None:
+            raise RuntimeError("Surface ingress has no unit of work")
+        return await self._write_inbound_message(
+            context, message_text, metadata, self.uow
+        )
 
     async def _write_inbound_message(
         self,
@@ -142,7 +146,6 @@ class SurfaceInboundMessageMixin:
         message_text: str,
         metadata: dict[str, Any],
         uow,
-        conversation_service: ConversationService,
     ):
         if context.pod_id is None:
             raise ValueError("Surface chat context requires a pod")
@@ -168,7 +171,7 @@ class SurfaceInboundMessageMixin:
             # how the formatted-text fallback (and any "type your own" reply) gets
             # back into the run as a structured answer.
             outcome = await maybe_resume_pending_interaction(
-                context, message_text, conversation_service=conversation_service
+                context, message_text, uow=uow
             )
             if outcome is ResumeOutcome.FAILED:
                 # They decided and we could not write it down. Starting a turn
@@ -179,7 +182,8 @@ class SurfaceInboundMessageMixin:
                 await self._say_the_decision_was_not_recorded(context)
                 return None
             if outcome is ResumeOutcome.NOT_A_DECISION:
-                return await conversation_service.add_user_message_and_start_run(
+                return await agent_conversations.start_surface_turn(
+                    uow,
                     conversation_id=context.conversation_id,
                     user_id=context.user_id,
                     content=message_text,

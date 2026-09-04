@@ -35,9 +35,8 @@ async def expire_past_due_notifications(uow) -> int:
     dependency runs the other way.
     """
     from app.modules.agent_surfaces.api.dependencies import get_notification_service
-    from app.modules.agent.api.dependencies import get_conversation_service
 
-    service = get_notification_service(uow, get_conversation_service(uow))
+    service = get_notification_service(uow)
     return await service.expire_past_due()
 
 
@@ -97,12 +96,12 @@ class WorkflowNotificationAdapter:
         from app.modules.agent_surfaces.api.dependencies import (
             get_notification_service,
         )
-        from app.composition.surface_agent import get_conversation_service
 
-        # Both are plain factories despite their FastAPI ``Depends`` annotations;
-        # calling them directly is how the other composition adapters build the
-        # same services outside a request.
-        return get_notification_service(self._uow, get_conversation_service(self._uow))
+        # A plain factory despite its FastAPI ``Depends`` annotation; calling it
+        # directly is how the other composition adapters build the same service
+        # outside a request. It no longer takes a `ConversationService` -- see
+        # `agent/contracts/conversations_for_surfaces.py`.
+        return get_notification_service(self._uow)
 
     async def notify_form_assignee(
         self,

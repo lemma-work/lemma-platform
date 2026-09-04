@@ -70,7 +70,6 @@ def _service(*, outstanding: int, notification: NotificationEntity):
         surface_repository=AsyncMock(),
         conversation_link_repository=AsyncMock(),
         external_user_repository=AsyncMock(),
-        conversation_service=AsyncMock(),
         ingress_service=AsyncMock(),
         pod_membership_port=AsyncMock(),
     )

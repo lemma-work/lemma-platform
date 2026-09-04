@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from collections.abc import Callable
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -27,7 +26,6 @@ from app.modules.agent_surfaces.services.surface_ingress_credentials import (
 )
 from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMixin
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.surface_agent import ConversationService
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
     SurfacePlatformWebhookIngress,
@@ -96,13 +94,10 @@ class AgentSurfaceIngressService(
         uow_factory: UnitOfWorkFactory | None = None,
         surface_repository: SurfaceInstallationRepositoryPort | None = None,
         conversation_link_repository: SurfaceConversationLinkRepository | None = None,
-        conversation_service: ConversationService | None = None,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         pod_membership_port: SurfacePodMembershipPort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
-        conversation_service_factory: Callable[[Any], ConversationService]
-        | None = None,
     ):
         # Two modes:
         #  - uow mode (request/egress/ingress callers): collaborators are bound
@@ -110,17 +105,21 @@ class AgentSurfaceIngressService(
         #  - uow_factory mode (the worker's execute_chat): the long external I/O
         #    (platform APIs, file ingest, transcription) must NOT pin a pooled
         #    connection, so the credential read and the message-write tail each
-        #    open their own short UoW via the factories.
+        #    open their own short UoW from the factory.
+        #
+        # There used to be a third thing to carry for the second mode: a
+        # `conversation_service_factory`, because a conversation service is
+        # bound to a session and the worker's is not the one it was built with.
+        # `agent.contracts.conversations_for_surfaces` takes the unit of work
+        # per call, so the mode is now only which one to open.
         if uow is None and uow_factory is None:
             raise ValueError(
                 "AgentSurfaceIngressService requires either uow or uow_factory"
             )
         self.uow = uow
         self._uow_factory = uow_factory
-        self._conversation_service_factory = conversation_service_factory
         self.surface_repository = surface_repository
         self.conversation_link_repository = conversation_link_repository
-        self.conversation_service = conversation_service
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
@@ -217,9 +216,7 @@ class AgentSurfaceIngressService(
             adapter=adapter,
             credentials=credentials,
             uow_factory=self._uow_factory,
-            conversation_service_factory=self._conversation_service_factory,
             uow=self.uow,
-            conversation_service=self.conversation_service,
         ):
             return
         with suppress(Exception):

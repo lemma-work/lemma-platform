@@ -39,6 +39,9 @@ from app.modules.datastore.contracts.surfaces import (
     run_readonly_query,
 )
 from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline
@@ -144,7 +147,6 @@ class PodFileParts:
 async def resolve_pod_file_parts(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     path: str,
@@ -165,7 +167,6 @@ async def resolve_pod_file_parts(
     """
     resolved = await _load_pod_file(
         uow=uow,
-        conversation_service=conversation_service,
         target=target,
         conversation_id=conversation_id,
         path=path,
@@ -236,7 +237,6 @@ async def resolve_pod_file_parts(
 async def load_pod_file_bytes(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     path: str,
@@ -244,7 +244,6 @@ async def load_pod_file_bytes(
     """A pod file's entity and bytes, with no size cap — for the voice path."""
     resolved = await _load_pod_file(
         uow=uow,
-        conversation_service=conversation_service,
         target=target,
         conversation_id=conversation_id,
         path=path,
@@ -258,7 +257,6 @@ async def load_pod_file_bytes(
 async def resolve_table_preview(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     request: DisplayResourceRequest,
@@ -267,7 +265,6 @@ async def resolve_table_preview(
     return await _best_effort(
         lambda: _read_table_preview(
             uow=uow,
-            conversation_service=conversation_service,
             target=target,
             conversation_id=conversation_id,
             request=request,
@@ -280,7 +277,6 @@ async def resolve_table_preview(
 async def _read_table_preview(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     request: DisplayResourceRequest,
@@ -288,7 +284,6 @@ async def _read_table_preview(
     pod_id = target.surface.pod_id
     ctx = await _pod_context(
         uow=uow,
-        conversation_service=conversation_service,
         conversation_id=conversation_id,
         pod_id=pod_id,
     )
@@ -354,7 +349,6 @@ def _filter_op(op: Any) -> str:
 async def _load_pod_file(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     path: str,
@@ -369,7 +363,6 @@ async def _load_pod_file(
     return await _best_effort(
         lambda: _read_pod_file(
             uow=uow,
-            conversation_service=conversation_service,
             target=target,
             conversation_id=conversation_id,
             path=path,
@@ -383,7 +376,6 @@ async def _load_pod_file(
 async def _read_pod_file(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
     path: str,
@@ -392,7 +384,6 @@ async def _read_pod_file(
     pod_id = target.surface.pod_id
     ctx = await _pod_context(
         uow=uow,
-        conversation_service=conversation_service,
         conversation_id=conversation_id,
         pod_id=pod_id,
     )
@@ -421,7 +412,6 @@ async def _read_pod_file(
 async def _pod_context(
     *,
     uow: Any,
-    conversation_service: Any,
     conversation_id: UUID,
     pod_id: UUID,
 ) -> Context | None:
@@ -430,9 +420,7 @@ async def _pod_context(
     Everything read for a surface card is read as that person, so a resource
     they cannot see is a resource the card does not describe.
     """
-    conversation = await conversation_service.conversation_repository.get_conversation(
-        conversation_id
-    )
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
     if conversation is None:
         return None
     return await create_authorization_data_service(uow).build_user_context(

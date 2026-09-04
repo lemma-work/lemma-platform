@@ -18,6 +18,9 @@ from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
@@ -204,7 +207,8 @@ class SurfaceConversationLinkMixin:
         )
         token = set_current_context(auth_ctx)
         try:
-            return await self.conversation_service.create_conversation(
+            return await agent_conversations.open_surface_conversation(
+                self.uow,
                 pod_id=surface.pod_id,
                 agent_name=route.agent_name,
                 user_id=resolved_user.internal_user_id,

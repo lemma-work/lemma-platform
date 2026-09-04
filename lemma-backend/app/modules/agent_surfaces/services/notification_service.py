@@ -94,7 +94,6 @@ class NotificationService:
         surface_repository,
         conversation_link_repository,
         external_user_repository,
-        conversation_service,
         ingress_service: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
@@ -105,7 +104,6 @@ class NotificationService:
         self.surfaces = surface_repository
         self.links = conversation_link_repository
         self.external_users = external_user_repository
-        self.conversation_service = conversation_service
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
@@ -123,7 +121,7 @@ class NotificationService:
         # coupling. See ``notification_egress``.
         self.egress = NotificationEgress(
             egress=ingress_service,
-            conversation_service=conversation_service,
+            uow=uow,
             conversation_link_repository=conversation_link_repository,
         )
 

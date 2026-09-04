@@ -36,15 +36,24 @@ def _target(adapter, platform: str = "TELEGRAM"):
     )
 
 
-def _conversation_service():
-    repository = SimpleNamespace(
-        get_conversation=AsyncMock(return_value=SimpleNamespace(user_id=uuid4()))
-    )
-    return SimpleNamespace(conversation_repository=repository)
+#: Where `agent` publishes the conversation lookup a card's authorization needs.
+_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
 
 
 def _file_entity(*, name: str, size_bytes: int, mime_type: str):
     return SimpleNamespace(name=name, size_bytes=size_bytes, mime_type=mime_type)
+
+
+@pytest.fixture(autouse=True)
+def conversation_owner(monkeypatch):
+    """Whose authorization a card is rendered under.
+
+    Doubled on `agent`'s contract rather than on this module's import of it:
+    the lookup belongs to another module, and the real one reads a row.
+    """
+    owner = AsyncMock(return_value=SimpleNamespace(user_id=uuid4()))
+    monkeypatch.setattr(f"{_CONVERSATIONS}.surface_conversation", owner)
+    return owner
 
 
 @pytest.fixture
@@ -75,7 +84,6 @@ async def test_a_file_that_fits_is_attached_and_never_becomes_a_card(pod_files):
     pod_files.download_pod_file.return_value = (entity, b"pixels")
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/reports/q3.png",
@@ -99,7 +107,6 @@ async def test_a_pdf_arrives_with_its_first_page_shown_above_it(pod_files):
     pod_files.render_pod_file_page.return_value = b"jpeg-bytes"
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/reports/shiplog.pdf",
@@ -127,7 +134,6 @@ async def test_a_page_that_will_not_render_still_sends_the_document(pod_files):
     pod_files.render_pod_file_page.side_effect = RuntimeError("corrupt")
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         path="/me/broken.pdf",
@@ -153,7 +159,6 @@ async def test_an_oversize_file_comes_back_described_rather_than_sent(pod_files)
 
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(adapter),
         conversation_id=CONVERSATION_ID,
         path="/me/raw-export.zip",
@@ -176,7 +181,6 @@ async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
 
     resolved = await resolve_pod_file_parts(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(adapter),
         conversation_id=CONVERSATION_ID,
         path="/me/secret.pdf",
@@ -189,17 +193,14 @@ async def test_a_file_that_cannot_be_read_leaves_the_card_alone(pod_files):
     assert apply_file_facts(plan, resolved.facts) is plan
 
 
-async def test_a_table_that_cannot_be_read_still_lets_the_card_go_out():
+async def test_a_table_that_cannot_be_read_still_lets_the_card_go_out(
+    conversation_owner,
+):
     """Enrichment never fails the send — the whole contract of this module."""
-    conversation_service = SimpleNamespace(
-        conversation_repository=SimpleNamespace(
-            get_conversation=AsyncMock(side_effect=AttributeError("mock uow"))
-        )
-    )
+    conversation_owner.side_effect = AttributeError("mock uow")
 
     preview = await resolve_table_preview(
         uow=SimpleNamespace(session=None),
-        conversation_service=conversation_service,
         target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         request=DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
@@ -269,7 +270,6 @@ async def test_a_displayed_table_arrives_with_its_own_first_rows(monkeypatch):
 
     preview = await resolve_table_preview(
         uow=SimpleNamespace(session=None),
-        conversation_service=_conversation_service(),
         target=_target(AsyncMock()),
         conversation_id=CONVERSATION_ID,
         request=DisplayResourceRequest(

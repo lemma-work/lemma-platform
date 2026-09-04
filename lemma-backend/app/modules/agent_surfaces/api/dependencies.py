@@ -13,7 +13,6 @@ from app.modules.agent_surfaces.services.email_surface_provisioning import (
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.composition.surface_agent import ConversationServiceDep
 from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
     SqlAlchemySurfaceAccountAdapter,
     SqlAlchemySurfaceAuthConfigAdapter,
@@ -92,31 +91,23 @@ def get_surface_connection_resolver(uow: UoWDep) -> SurfaceConnectionResolver:
     )
 
 
-def get_surface_event_handler(
-    uow: UoWDep,
-    conversation_service: ConversationServiceDep,
-) -> AgentSurfaceIngressService:
+def get_surface_event_handler(uow: UoWDep) -> AgentSurfaceIngressService:
     return AgentSurfaceIngressService(
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=conversation_service,
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
 
-def get_notification_service(
-    uow: UoWDep,
-    conversation_service: ConversationServiceDep,
-) -> NotificationService:
+def get_notification_service(uow: UoWDep) -> NotificationService:
     return NotificationService(
         uow=uow,
         notification_repository=NotificationRepository(uow),
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
-        conversation_service=conversation_service,
-        ingress_service=get_surface_event_handler(uow, conversation_service),
+        ingress_service=get_surface_event_handler(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         rate_limiter=NotificationRateLimiter(),
         surface_provisioner=_build_system_email_provisioner(uow),

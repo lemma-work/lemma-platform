@@ -33,13 +33,14 @@ logger = get_logger(__name__)
 
 
 def _service(uow):
-    # Through the shim rather than straight at `agent.api.dependencies`: the
-    # `ConversationService` reach is the one crossing this module still makes,
-    # and routing every use of it through one file keeps it one thing to fix.
-    from app.composition.surface_agent import get_conversation_service
+    # Straight at this module's own factory. It used to go through
+    # `app/composition/surface_agent.py` to pick up a `ConversationService` for
+    # the notification service to hold; that shim is gone, and the operations
+    # it stood in front of are `agent.contracts.conversations_for_surfaces`,
+    # which the notification service reaches per call.
     from app.modules.agent_surfaces.api.dependencies import get_notification_service
 
-    return get_notification_service(uow, get_conversation_service(uow))
+    return get_notification_service(uow)
 
 
 async def resolve_recipient(*, pod_id: UUID, reference: str) -> UUID | None:
