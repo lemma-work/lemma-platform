@@ -43,6 +43,19 @@ logger = get_logger(__name__)
 # readable when an account holds hundreds.
 _UNATTRIBUTED_SAMPLE = 10
 
+# How far past the idle cutoff a sandbox has to be before an unreachable
+# provider stops being treated as "try again next sweep".
+#
+# "Next sweep will try it again" is the right answer to a blip and the wrong one
+# to a provider object that is never coming back: one sandbox failed to release
+# every hour for as long as the logs went back, warning identically each time
+# and never converging. Past this window the release is recorded locally
+# instead. That keeps the disk -- release never deletes storage -- so the cost
+# of being wrong is a cold start, and if the compute really is still running,
+# the orphan sweep below is what finds a provider object with no live row and
+# destroys it.
+_UNREACHABLE_GIVE_UP_MULTIPLE = 6
+
 
 class SandboxSweeper:
     def __init__(self, *, service, uow_factory) -> None:
@@ -104,6 +117,11 @@ class SandboxSweeper:
                     idle_after_seconds=idle_after_seconds,
                 )
             except Exception as exc:
+                if await self._give_up_on(
+                    sandbox, idle_after_seconds=idle_after_seconds, error=exc
+                ):
+                    released += 1
+                    continue
                 # One unreachable sandbox must not stop the others being
                 # reclaimed; the next sweep will try it again.
                 logger.warning(
@@ -114,6 +132,37 @@ class SandboxSweeper:
                 continue
             released += 1
         return released
+
+    async def _give_up_on(self, sandbox, *, idle_after_seconds: int, error) -> bool:
+        """Record the release ourselves when the provider will not answer.
+
+        Only for a sandbox that has been idle far past the cutoff -- see
+        `_UNREACHABLE_GIVE_UP_MULTIPLE`. Anything sooner is a blip and is worth
+        another sweep.
+        """
+        last_used_at = getattr(sandbox, "last_used_at", None)
+        if last_used_at is None:
+            return False
+        give_up_after = timedelta(
+            seconds=idle_after_seconds * _UNREACHABLE_GIVE_UP_MULTIPLE
+        )
+        if datetime.now(timezone.utc) - last_used_at < give_up_after:
+            return False
+
+        async with self._uow_factory() as uow:
+            repository = SandboxRepository(uow)
+            instance = await repository.current_instance(sandbox.id)
+            if instance is not None:
+                await repository.mark_instance_released(instance.id)
+            await repository.set_desired_state(sandbox.id, SandboxDesiredState.RELEASED)
+            await uow.commit()
+        logger.info(
+            "workspace.sandbox_sweeper.released_unreachable_sandbox.observed",
+            sandbox_id=str(sandbox.id),
+            error_type=type(error).__name__,
+            idle_after_seconds=idle_after_seconds,
+        )
+        return True
 
     async def _is_busy(self, sandbox) -> bool:
         """Is something still running inside this sandbox?

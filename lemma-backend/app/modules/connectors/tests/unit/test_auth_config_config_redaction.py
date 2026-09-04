@@ -160,6 +160,10 @@ class TestOnlyAManagerSeesTheConfig:
             list_auth_configs=AsyncMock(return_value=([install], None)),
             get_auth_config_by_name=AsyncMock(return_value=install),
             may_read_install_config=AsyncMock(return_value=may_read),
+            # Stated rather than left to the mock's defaults: the response now
+            # carries the install's resolved auth scheme, and an AsyncMock's
+            # auto-generated child would hand the schema a coroutine.
+            install_auth_schemes=AsyncMock(return_value={install.id: "API_KEY"}),
         )
 
     async def test_a_manager_still_sees_it(self):
@@ -185,6 +189,10 @@ class TestOnlyAManagerSeesTheConfig:
         assert response.name == "an-install"
         assert response.status, "which installs exist stays visible"
         assert response.config is None
+        assert response.auth_scheme == "API_KEY", (
+            "how to connect an install is not part of what is withheld -- it is "
+            "the one thing config held that a member still has to know"
+        )
 
     async def test_the_list_applies_the_same_rule(self):
         listing = await list_auth_configs(

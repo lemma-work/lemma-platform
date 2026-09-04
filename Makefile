@@ -26,7 +26,7 @@ SHELL := /bin/bash
         desktop-concepts desktop-concepts-check \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
         desktop-verify-guest desktop-clean \
-        version-check local-domain-check script-portability-check \
+        version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -229,6 +229,24 @@ BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
 BACKEND_TELEGRAM_POLLING        ?= true
 BACKEND_SLACK_SOCKET_MODE       ?= true
 
+# The auth gates a local install turns off, and why each one is here.
+#
+# `lemma-stack` already renders exactly this set for the Docker local stack and
+# the desktop install (`lemma_stack/config/render.py`), and its own tests pin
+# them. `make dev` set only the first, so the documented way to run Lemma on
+# your own machine behaved differently from every other local path -- and worse
+# than all of them: signing up refused an `@example.com` address, and the sixth
+# account in fifteen minutes locked the developer out of their own laptop for
+# four minutes. None of these gates protects anything on localhost; they exist
+# to stop strangers abusing a public deployment.
+DEV_LOCAL_AUTH_ENV := \
+	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
+	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
+	AUTH_ABUSE_PROTECTION_ENABLED=false \
+	AUTH_ALTCHA_ENABLED=false
+DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
+
 BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
@@ -257,7 +275,7 @@ BACKEND_DEV_ENV := \
 	LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files) \
 	EMAIL_TRANSPORT=filesystem \
 	EMAIL_OUTPUT_DIR=$(abspath .local/emails) \
-	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	$(DEV_LOCAL_AUTH_ENV) \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
@@ -382,6 +400,7 @@ help:
 	@echo "    make lint               ruff + eslint across all components"
 	@echo "    make version-check      every Lemma component declares the same version"
 	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
+	@echo "    make local-auth-gate-check  make dev and the local stack relax the same auth gates"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -469,7 +488,7 @@ _init-backend-env:
 			echo "LOCAL_FILE_STORAGE_ROOT=$(abspath .local/files)"; \
 			echo "EMAIL_TRANSPORT=filesystem"; \
 			echo "EMAIL_OUTPUT_DIR=$(abspath .local/emails)"; \
-			echo "AUTH_EMAIL_VERIFICATION_REQUIRED=false"; \
+			for pair in $(DEV_LOCAL_AUTH_ENV); do echo "$$pair"; done; \
 			echo "ENABLE_TELEGRAM_POLLING_MODE=true"; \
 			echo "ENABLE_SLACK_SOCKET_MODE=true"; \
 			echo 'CORS_ORIGINS=["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -494,7 +513,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
+	for k in ENVIRONMENT DEBUG API_DOCS_ENABLED LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR $(DEV_LOCAL_AUTH_KEYS) ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -527,7 +546,9 @@ _ensure-backend-env-keys:
 		append LOCAL_FILE_STORAGE_ROOT '$(abspath .local/files)'; \
 		append EMAIL_TRANSPORT filesystem; \
 		append EMAIL_OUTPUT_DIR '$(abspath .local/emails)'; \
-		append AUTH_EMAIL_VERIFICATION_REQUIRED false; \
+		for pair in $(DEV_LOCAL_AUTH_ENV); do \
+			append "$${pair%%=*}" "$${pair#*=}"; \
+		done; \
 		append ENABLE_TELEGRAM_POLLING_MODE true; \
 		append ENABLE_SLACK_SOCKET_MODE true; \
 		append CORS_ORIGINS '["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]'; \
@@ -1343,6 +1364,10 @@ local-domain-check:
 	@echo "→ Local domain lists…"
 	@python3 scripts/check_local_domain_consistency.py
 
+local-auth-gate-check:
+	@echo "→ Local auth gates…"
+	@python3 scripts/check_local_auth_gates.py
+
 # CI runs scripts/ with a bare `python`, which on the Windows and macOS runners
 # is not the 3.14 the backend pins. Syntax they cannot parse is not a failing
 # step, it is a SyntaxError before the first line -- which is how one
@@ -1833,6 +1858,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
 	@echo "→ Local domain lists…"
 	@$(MAKE) --no-print-directory local-domain-check
+	@echo "→ Local auth gates…"
+	@$(MAKE) --no-print-directory local-auth-gate-check
 	@echo "→ Script portability…"
 	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"

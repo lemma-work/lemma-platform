@@ -117,6 +117,7 @@ from app.modules.connectors.domain.connector_operation import (
 )
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
 from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
+    NATIVE_LEMMA_OAUTH2_DEFAULTS,
     _dotenv_values,
 )
 from app.modules.connectors.infrastructure.adapters.schema_compiler import (
@@ -591,6 +592,39 @@ def _capability_order(kind: ConnectorKind) -> tuple[int, str]:
     return (1 if kind is ConnectorKind.COMPOSIO else 0, kind.value)
 
 
+def _is_unusable_carried_package_kind(capability: object, connector_id: str) -> bool:
+    """A `package` OAuth spec left behind by an import that no longer makes one.
+
+    The merge below preserves every kind a connector has ever been written
+    with, which is right for a real one and wrong for this: a connector that
+    dropped out of the native-operations set keeps a `package` spec that names
+    no package, has no OAuth endpoints and no system client, and cannot be
+    installed by any route. It is not inert. `supports_org_custom_oauth` was
+    set on it unconditionally, so the UI offered "use my own OAuth app", took a
+    client id and secret, created the install, and only then failed at sign-in
+    with "OAuth2 defaults are not configured" -- with the install left behind.
+
+    Recognised by what it lacks rather than by a list of connector ids, because
+    the next connector to leave that set would otherwise arrive in the same
+    state and nobody would think to add it.
+    """
+    if getattr(capability, "kind", None) is not ConnectorKind.PACKAGE:
+        return False
+    if getattr(capability, "auth_scheme", None) != AuthMethod.OAUTH2:
+        return False
+    # The Google apps are the reason the registry is consulted here: they store
+    # no `oauth2_defaults` and no `system_oauth` either, and resolve both at
+    # runtime from `NATIVE_LEMMA_OAUTH2_DEFAULTS`. By the shape test alone they
+    # are indistinguishable from the dead specs, and pruning gmail would be a
+    # far worse bug than the one this fixes.
+    return not (
+        getattr(capability, "package_name", None)
+        or getattr(capability, "oauth2_defaults", None)
+        or getattr(capability, "system_oauth", None)
+        or connector_id in NATIVE_LEMMA_OAUTH2_DEFAULTS
+    )
+
+
 def _merge_provider_capabilities(
     existing: ConnectorEntity | None,
     *capabilities: object | None,
@@ -601,13 +635,26 @@ def _merge_provider_capabilities(
     ``kind_to_provider`` maps http/sql/mcp/package alike to ``LEMMA``. A
     connector that gained a second native spec silently lost the first --
     exactly what a package-to-http migration does.
+
+    Carrying is not unconditional, though: a `package` spec this import would
+    no longer produce, and which nothing can install, is dropped rather than
+    preserved forever. See `_is_unusable_carried_package_kind`.
     """
     merged = _existing_capabilities(existing)
     for capability in capabilities:
         if capability is None:
             continue
         merged[capability.kind] = capability
-    return [merged[kind] for kind in sorted(merged, key=_capability_order)]
+    replaced = {
+        capability.kind for capability in capabilities if capability is not None
+    }
+    connector_id = existing.id if existing else ""
+    return [
+        merged[kind]
+        for kind in sorted(merged, key=_capability_order)
+        if kind in replaced
+        or not _is_unusable_carried_package_kind(merged[kind], connector_id)
+    ]
 
 
 def _native_package_provider_capability(
@@ -661,6 +708,17 @@ def _native_kind_spec(
     system_default_available = (
         auth_method != AuthMethod.OAUTH2 or _system_oauth_available(system_oauth)
     )
+    # "Bring your own OAuth app" is only an offer we can honour when the
+    # deployment knows where to send people. `resolve_auth_install` pairs the
+    # org's client id and secret with the connector's *endpoints*, which come
+    # from `oauth2_defaults` or the native registry -- and for a connector that
+    # has neither there is nothing to pair with, so the install is accepted and
+    # then fails at sign-in with "OAuth2 defaults are not configured", leaving a
+    # stranded install behind. Sixty of the eighty-four connectors in one
+    # deployment advertised exactly that.
+    org_custom_oauth_is_possible = auth_method == AuthMethod.OAUTH2 and bool(
+        oauth2_defaults or NATIVE_LEMMA_OAUTH2_DEFAULTS.get(connector_id or "")
+    )
     spec_cls = {
         "sql": SqlKindSpec,
         "mcp": McpKindSpec,
@@ -690,7 +748,7 @@ def _native_kind_spec(
         system_oauth=SystemOAuthCredentialRef.model_validate(system_oauth)
         if system_oauth
         else None,
-        supports_org_custom_oauth=auth_method == AuthMethod.OAUTH2,
+        supports_org_custom_oauth=org_custom_oauth_is_possible,
         system_default_available=system_default_available,
         profile_operation_names=profile_operation_names,
     )
