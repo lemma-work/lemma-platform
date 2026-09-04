@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.composition.webhook_sources import default_webhook_sources
+from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (

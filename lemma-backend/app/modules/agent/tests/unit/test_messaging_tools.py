@@ -25,12 +25,18 @@ from app.modules.agent.tools.messaging.pydantic_adapter import (
     list_pod_members,
     message_user,
 )
+from app.modules.pod.contracts.directory import PodDirectoryMember, PodDirectoryPage
 
 pytestmark = pytest.mark.asyncio
 
 PRIYA = uuid4()
 BOB = uuid4()
 ME = uuid4()
+# The pod-member id and the user id are different ids for the same person, and
+# reachability is keyed by the second: holding one value for both would let a
+# test pass while the tool looked reach up under the wrong key.
+PRIYA_USER = uuid4()
+BOB_USER = uuid4()
 
 
 def _ctx(pod_id=None, user_id=None) -> RunContext[BaseAgentContext]:
@@ -64,37 +70,58 @@ def _podless_ctx() -> RunContext[BaseAgentContext]:
     )
 
 
-def _members() -> list[dict]:
+def _members() -> list[PodDirectoryMember]:
     return [
-        {
-            "to": str(PRIYA),
-            "name": "Priya Sharma",
-            "email": "priya@example.com",
-            "role": "USER",
-            "is_you": False,
-        },
-        {
-            "to": str(BOB),
-            "name": "Bob Jones",
-            "email": "bob@example.com",
-            "role": "ADMIN",
-            "is_you": True,
-        },
+        PodDirectoryMember(
+            to=str(PRIYA),
+            name="Priya Sharma",
+            email="priya@example.com",
+            role="USER",
+            is_you=False,
+            user_id=PRIYA_USER,
+        ),
+        PodDirectoryMember(
+            to=str(BOB),
+            name="Bob Jones",
+            email="bob@example.com",
+            role="ADMIN",
+            is_you=True,
+            user_id=BOB_USER,
+        ),
     ]
 
 
-def _patch(monkeypatch, result):
-    async def _fake(*, pod_id, requester_user_id, search, limit, actor_agent_id=None):
+def _page(members, total, truncated) -> PodDirectoryPage:
+    return PodDirectoryPage(
+        members=tuple(members), total_matched=total, truncated=truncated
+    )
+
+
+def _patch(monkeypatch, result, reach=None):
+    """Double the two published operations the tool composes, where they live.
+
+    Not on the tool module: a patch installed inside the unit under test
+    certifies the half the test did not write, and this tool's whole job is the
+    composition -- ask `pod` who is in the pod, ask `agent_surfaces` where they
+    can be reached, and hand the model one row per person.
+    """
+
+    async def _fake(*, pod_id, requester_user_id, search, limit):
         _fake.seen = {
             "search": search,
             "limit": limit,
             "pod_id": pod_id,
-            "actor_agent_id": actor_agent_id,
         }
         return result
 
+    async def _reach(*, pod_id, recipients, actor_agent_id):
+        _fake.seen["actor_agent_id"] = actor_agent_id
+        _fake.seen["recipients"] = recipients
+        return dict(reach or {})
+
+    monkeypatch.setattr("app.modules.pod.contracts.directory.list_pod_members", _fake)
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.pydantic_adapter.list_members", _fake
+        "app.modules.agent_surfaces.contracts.notifications.reachable_channels", _reach
     )
     return _fake
 
@@ -103,7 +130,7 @@ async def test_the_lookup_hands_back_something_message_user_accepts(monkeypatch)
     """The whole point: `to` is copied through, not re-derived by the model."""
     from uuid import UUID
 
-    _patch(monkeypatch, (_members(), 2, False))
+    _patch(monkeypatch, _page(_members(), 2, False))
 
     result = await list_pod_members(_ctx(uuid4()), ListPodMembersRequest())
 
@@ -117,7 +144,7 @@ async def test_the_lookup_hands_back_something_message_user_accepts(monkeypatch)
 
 async def test_a_bare_first_name_is_passed_through_as_the_search(monkeypatch):
     """The literal scenario that made message_user unusable."""
-    fake = _patch(monkeypatch, ([_members()[0]], 1, False))
+    fake = _patch(monkeypatch, _page([_members()[0]], 1, False))
 
     result = await list_pod_members(
         _ctx(uuid4()), ListPodMembersRequest(search="priya")
@@ -129,7 +156,7 @@ async def test_a_bare_first_name_is_passed_through_as_the_search(monkeypatch):
 
 async def test_the_caller_is_flagged_so_the_agent_knows_who_it_is(monkeypatch):
     """Reaching the run's own owner needs no permission; the others do."""
-    _patch(monkeypatch, (_members(), 2, False))
+    _patch(monkeypatch, _page(_members(), 2, False))
 
     result = await list_pod_members(_ctx(uuid4()), ListPodMembersRequest())
 
@@ -147,7 +174,7 @@ async def test_no_pod_access_is_an_error_result_not_an_exception(monkeypatch):
 
 
 async def test_an_empty_match_says_so_rather_than_looking_broken(monkeypatch):
-    _patch(monkeypatch, ([], 0, False))
+    _patch(monkeypatch, _page([], 0, False))
 
     result = await list_pod_members(
         _ctx(uuid4()), ListPodMembersRequest(search="nobody")
@@ -167,7 +194,7 @@ async def test_outside_a_pod_the_tool_refuses(monkeypatch):
 
 async def test_truncation_tells_the_model_to_narrow_the_search(monkeypatch):
     """Silently returning a partial list is how an agent messages the wrong person."""
-    _patch(monkeypatch, (_members(), 87, True))
+    _patch(monkeypatch, _page(_members(), 87, True))
 
     result = await list_pod_members(_ctx(uuid4()), ListPodMembersRequest())
 
@@ -342,13 +369,29 @@ async def test_a_refused_channel_does_not_read_as_a_routing_failure(monkeypatch)
 
 
 async def test_the_lookup_says_which_channels_can_reach_each_person(monkeypatch):
-    """So that naming a channel is reading an answer, not guessing at one."""
-    members = _members()
-    members[0]["reachable_on"] = ["email", "telegram"]
-    members[1]["reachable_on"] = []
-    _patch(monkeypatch, (members, 2, False))
+    """So that naming a channel is reading an answer, not guessing at one.
+
+    Reach is `agent_surfaces`' answer, joined onto `pod`'s member list by user
+    id. The two are separate lookups, so this also pins the join: a member the
+    reach lookup said nothing about must read as "inbox only", never as
+    somebody else's channels.
+    """
+    _patch(
+        monkeypatch,
+        _page(_members(), 2, False),
+        reach={PRIYA_USER: ["email", "telegram"]},
+    )
 
     result = await list_pod_members(_ctx(), ListPodMembersRequest())
 
     assert result.members[0].reachable_on == ["email", "telegram"]
     assert result.members[1].reachable_on == []
+
+
+async def test_reach_is_asked_only_about_the_people_being_returned(monkeypatch):
+    """Reachability costs queries per surface; rows nobody sees are not worth it."""
+    fake = _patch(monkeypatch, _page(_members(), 2, False))
+
+    await list_pod_members(_ctx(), ListPodMembersRequest())
+
+    assert set(fake.seen["recipients"]) == {PRIYA_USER, BOB_USER}

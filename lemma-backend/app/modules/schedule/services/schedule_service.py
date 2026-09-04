@@ -99,7 +99,7 @@ class ScheduleService:
             datastore_policy=datastore_policy,
         )
         if target_resolver is None:
-            from app.composition.schedule_targets import (
+            from app.modules.schedule.infrastructure.adapters.target_resolver import (
                 SqlAlchemyScheduleTargetResolver,
             )
 

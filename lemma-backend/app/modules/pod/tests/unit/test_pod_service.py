@@ -112,7 +112,8 @@ async def test_create_pod_gives_the_pod_assistant_its_mailbox(
     """
     provision = AsyncMock(return_value="test-pod@mail.example.com")
     monkeypatch.setattr(
-        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        "app.modules.agent_surfaces.contracts.email_surfaces."
+        "provision_pod_assistant_email_surface",
         provision,
     )
     # The assistant's row is minted on the same path and is *not* best-effort,
@@ -161,7 +162,8 @@ async def test_create_pod_survives_a_mailbox_that_cannot_be_minted(
 ):
     """A deployment with no mail domain still gets a perfectly good pod."""
     monkeypatch.setattr(
-        "app.composition.agent_email_surface.provision_pod_assistant_email_surface",
+        "app.modules.agent_surfaces.contracts.email_surfaces."
+        "provision_pod_assistant_email_surface",
         AsyncMock(return_value=None),
     )
     # The assistant's row is minted on the same path and is *not* best-effort,
@@ -725,7 +727,9 @@ async def test_delete_pod_frees_its_inbound_addresses_in_the_same_request(
     """
     release = AsyncMock(return_value=1)
     monkeypatch.setattr(
-        "app.composition.agent_email_surface.release_pod_inbound_addresses", release
+        "app.modules.agent_surfaces.contracts.email_surfaces."
+        "release_pod_inbound_addresses",
+        release,
     )
     uow = SimpleNamespace(after_commit=lambda _hook: None)
     service = PodService(

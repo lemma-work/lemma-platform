@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.webhook_sources.github import _repo_context
+from app.modules.connectors.infrastructure.webhook_sources.github import _repo_context
 from app.modules.agent.services.workspace_location import parse_project_repo
 from app.modules.workflow.services.schedule_start_service import (
     _conversation_metadata,

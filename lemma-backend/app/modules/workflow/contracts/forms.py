@@ -1,24 +1,28 @@
-"""Turning what a person said into the values a workflow form is waiting for.
+"""Answering a workflow form on behalf of the person a run is waiting on.
 
-This is what an agent needs when somebody answers a form assignment in prose —
-over email especially, where "yes, 40 units, PO-8812" is the whole reply and
-nothing about it is shaped like a JSON object.
+One operation, for the case where somebody replies in prose -- over email
+especially, where "yes, 40 units, PO-8812" is the whole message and nothing
+about it is shaped like a JSON object. No new model does the extraction: the
+agent handling their reply already is one. What it needs is the *schema*
+(rendered into its instructions by `open_notifications`) and a way to submit
+that refuses a bad guess.
 
-No new model does the extraction: the agent handling their reply already is
-one. What it needs is the *schema* (rendered into its instructions by
-``open_notifications``) and a way to submit that refuses a bad guess.
-``WorkflowEngine.submit_form`` is that way — it re-checks the assignee, merges
-schema defaults, and validates against the resolved schema stored on the wait.
-So a hallucinated field is rejected server-side rather than written into a run.
+`WorkflowEngine.submit_form` is that way -- it re-checks the assignee, merges
+schema defaults, and validates against the resolved schema stored on the wait --
+so a hallucinated field is rejected here rather than written into a run. That is
+the whole reason this is published from `workflow` rather than reimplemented by
+the caller: the validation and the assignee check are this module's, and a
+contract that handed back an engine would let a caller skip both.
 
-Lives in ``composition`` because the agent module must not import ``workflow``;
-the lazy imports keep that true. Same shape as
-``agent_surfaces/contracts/notifications.py``.
+Replaces `app/composition/agent_workflow_forms.py`, which lived outside both
+modules only so that `agent` need not import `workflow`.
+
+A submodule rather than `contracts/__init__`: this reaches the execution layer,
+and `contracts/__init__` is imported by anything that wants any contract at all.
 """
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -29,20 +33,25 @@ async def submit_workflow_form(
     *,
     run_id: UUID,
     node_id: str,
-    inputs: dict[str, Any],
+    inputs: dict[str, object],
     requester_user_id: UUID,
 ) -> tuple[bool, str]:
     """``(submitted, message)``.
 
-    Never raises for a *rejected* submission. The refusal is the useful part —
+    Its own unit of work, like the surfaces contracts an agent tool reaches
+    beside it: a form submission moves a workflow on, and it is not part of the
+    asking run's transaction -- if that run later fails and rolls back, the
+    workflow has already stepped.
+
+    Never raises for a *rejected* submission. The refusal is the useful part --
     it names the field that was wrong, which the agent can take back to the
     person and ask again. Raising would hand the model a traceback instead.
     """
+    from app.modules.workflow.api.dependencies import build_workflow_engine
     from app.modules.workflow.domain.errors import (
         WorkflowAccessDeniedError,
         WorkflowDomainError,
     )
-    from app.modules.workflow.api.dependencies import build_workflow_engine
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         engine = build_workflow_engine(uow)
@@ -50,7 +59,7 @@ async def submit_workflow_form(
             await engine.submit_form(
                 run_id,
                 node_id,
-                inputs,
+                dict(inputs),
                 requester_user_id=requester_user_id,
             )
         except WorkflowAccessDeniedError:

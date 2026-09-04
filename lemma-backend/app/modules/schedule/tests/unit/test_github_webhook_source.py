@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from app.composition.webhook_sources.github import (
+from app.modules.connectors.infrastructure.webhook_sources.github import (
     GitHubWebhookSource,
     source_event_id,
 )

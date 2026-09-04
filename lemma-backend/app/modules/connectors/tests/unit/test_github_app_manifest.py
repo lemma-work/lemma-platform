@@ -22,7 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from app.composition.webhook_sources.github import SUPPORTED_EVENTS
+from app.modules.connectors.infrastructure.webhook_sources.github import (
+    SUPPORTED_EVENTS,
+)
 
 pytestmark = pytest.mark.unit
 

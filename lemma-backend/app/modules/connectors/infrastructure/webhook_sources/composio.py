@@ -6,13 +6,16 @@ that the controller stops knowing which sources exist, and a behaviour change
 smuggled in alongside it would be indistinguishable from a regression in the
 tests that cover it.
 
-Verification is Composio's own, so it is asked of `connectors` rather than
-reimplemented behind a second port: `WebhookSourcePlugin.verify` below is the
-only port a source has to satisfy.
+Verification is Composio's own, and this now lives beside it: the SDK call is
+`connectors.infrastructure.composio_triggers.verify_webhook`, reached directly
+rather than through this module's own contracts, which would pull
+`ConnectorService` onto a path an external sender chooses the rate of.
+`WebhookSourcePlugin.verify` below is the only port a source has to satisfy.
 """
 
 from __future__ import annotations
 
+from app.modules.connectors.infrastructure.composio_triggers import verify_webhook
 from app.modules.schedule.contracts import (
     NormalizedWebhook,
     VerifiedDelivery,
@@ -27,8 +30,6 @@ class ComposioWebhookSource:
     source = "composio"
 
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
-        from app.modules.connectors.contracts.triggers import verify_webhook
-
         payload_text = delivery.raw_body.decode("utf-8", errors="replace")
         # No try/except: a verifier that raises anything at all is a delivery
         # that did not verify, and the controller says so once for every plugin
