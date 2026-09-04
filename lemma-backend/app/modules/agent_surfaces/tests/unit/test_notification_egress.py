@@ -902,9 +902,11 @@ async def test_the_connection_is_released_before_the_platform_send(monkeypatch):
 async def test_a_cold_open_carries_both_names_to_the_platform():
     """Email puts the attribution in the From line, so it has to travel.
 
-    ``attribute()`` writes "Priya, on behalf of Deepak" into the body, which is
-    invisible until the message is opened. The sender column is what a person
-    scans in a list, and it named the deployment rather than the agent.
+    ``attribute()`` writes "On behalf of Deepak" into the body, which is
+    invisible until the message is opened — and it never names the agent, so the
+    From line is the only place "Priya" appears at all. The sender column is
+    what a person scans in a list, and it named the deployment rather than the
+    agent.
     """
     surface = _email_surface()
     notification = _notification()
@@ -1153,3 +1155,64 @@ async def test_reachability_says_what_the_agent_can_choose_between():
     )
 
     assert reach == {priya: ["email", "telegram"], bob: []}
+
+
+# ------------------------------------------------- what the header ends up saying
+
+
+async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user_id):
+    """Deliver one cold email and hand back the body that went out."""
+    _email_configured(monkeypatch)
+
+    surface = _email_surface()
+    service = _notification_service(surfaces=(surface,))
+    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
+    service.membership.get_user_email.return_value = "bob@example.com"
+
+    notification = _notification(
+        pod_id=surface.pod_id,
+        recipient_user_id=recipient_user_id,
+        actor_user_id=actor_user_id,
+    )
+    service.ingress.open_cold_email_thread.return_value = _thread_for(
+        surface,
+        cold_thread_seed_id(notification_id=notification.id, surface=surface),
+        "bob@example.com",
+    )
+
+    await service.deliver(
+        notification, agent_name="Priya", actor_display_name="Deepak Jha"
+    )
+    return service.ingress.open_cold_email_thread.await_args.kwargs
+
+
+async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):
+    """ "On behalf of Deepak" told Deepak nothing, and read as a third party.
+
+    The header exists to resolve one ambiguity: under a bot you trust, whose
+    authority is this? When the reader *is* that authority there is nothing to
+    resolve. The From line still names them -- an inbox list has to say
+    something, and their own name is the true thing to say.
+    """
+    same_person = uuid4()
+    kwargs = await _deliver_and_read_header(
+        monkeypatch, actor_user_id=same_person, recipient_user_id=same_person
+    )
+
+    assert kwargs["message"] == "What did you ship yesterday?"
+    assert kwargs["metadata"]["actor_display_name"] == "Deepak Jha"
+
+
+async def test_a_colleagues_authority_is_still_named(monkeypatch):
+    """The phishing case, and the reason the line is not simply deleted.
+
+    One bot, one name, one avatar: an agent acting for Deepak and the same agent
+    acting for someone else are indistinguishable without this.
+    """
+    kwargs = await _deliver_and_read_header(
+        monkeypatch, actor_user_id=uuid4(), recipient_user_id=uuid4()
+    )
+
+    assert kwargs["message"].startswith("On behalf of Deepak Jha:")
+    # Never the agent: the bot it arrives from is already the answer to that.
+    assert "Priya" not in kwargs["message"]

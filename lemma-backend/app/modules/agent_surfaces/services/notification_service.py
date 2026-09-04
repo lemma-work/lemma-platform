@@ -61,25 +61,28 @@ def default_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-def attribute(
-    body: str, *, agent_name: str | None, actor_display_name: str | None
-) -> str:
-    """Prefix the message with who is asking and on whose authority.
+def attribute(body: str, *, actor_display_name: str | None) -> str:
+    """Prefix the message with whose authority it carries, when that is news.
 
-    Mandatory, not cosmetic. The recipient sees the pod's bot — the same bot
-    they trust — and has no other way to tell "the agent Priya's schedule is
-    running" from "the pod". Without this line, an agent that can message
-    colleagues is a phishing primitive.
+    Not the agent. A surface belongs to exactly one agent and nothing borrows
+    another's — see ``surfaces_for_agent`` — so the bot a message arrives from
+    *is* the answer to "which agent". Where one app does serve several, the
+    platform paints the agent's own name and avatar on the message before it is
+    sent (``slack_customized_message_kwargs``). Naming it again in the body adds
+    a line and no information, and it was the line that leaked ``pod_default``.
+
+    The actor is the half no channel can carry. Under one bot, with one name and
+    one avatar, an agent acting for Priya and the same agent acting for Anukul
+    are indistinguishable — and an agent that can message colleagues without
+    that distinction is a phishing primitive.
+
+    ``actor_display_name`` is None when the recipient *is* the actor, and that
+    is the whole of the omission: the ambiguity this line exists to resolve
+    cannot arise when the authority being carried is the reader's own.
     """
-    if agent_name and actor_display_name:
-        header = f"*{agent_name}*, on behalf of {actor_display_name}:"
-    elif agent_name:
-        header = f"*{agent_name}*:"
-    elif actor_display_name:
-        header = f"On behalf of {actor_display_name}:"
-    else:
+    if not actor_display_name:
         return body
-    return f"{header}\n\n{body}"
+    return f"On behalf of {actor_display_name}:\n\n{body}"
 
 
 class NotificationService:
@@ -248,10 +251,16 @@ class NotificationService:
             )
             return await self.notifications.update(notification)
 
+        # Suppressed for a message to its own asker; still handed to `send`
+        # below, which puts it in the email `From` where an inbox list needs
+        # *some* name and yours is the true one.
         message = attribute(
             notification.body,
-            agent_name=agent_name,
-            actor_display_name=actor_display_name,
+            actor_display_name=(
+                None
+                if notification.actor_user_id == notification.recipient_user_id
+                else actor_display_name
+            ),
         )
 
         # First success wins. Three copies of one message across three apps is
@@ -300,9 +309,10 @@ class NotificationService:
                     conversation_id=conversation_id,
                     notification=notification,
                     message=message,
-                    # The same two names ``attribute()`` puts in the body. On
-                    # email they also become the From display name, so the
-                    # attribution survives an inbox list nobody has opened yet.
+                    # Both names, unconditionally — wider than the body header
+                    # above. On email they become the From display name, which
+                    # is all an unopened inbox list shows; on chat the agent
+                    # name is the bot's username and avatar.
                     agent_name=agent_name,
                     actor_display_name=actor_display_name,
                 )

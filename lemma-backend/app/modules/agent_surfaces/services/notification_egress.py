@@ -79,9 +79,9 @@ class NotificationEgress:
 
         Both names travel in the metadata because email puts them in the ``From``
         display name, where an inbox list will actually show them — the body
-        header from ``attribute()`` is not visible until the message is opened.
-        A chat platform ignores them; its bot identity is the surface's, and the
-        body header is the whole attribution it gets.
+        header from ``attribute()`` is not visible until the message is opened,
+        and it carries only the actor. A chat platform takes the agent name as
+        its bot's username and avatar, and ignores the actor.
         """
         metadata: dict[str, Any] = {"notification_id": str(notification.id)}
         # Set only when known. ``_egress_metadata_with_agent_name`` fills
