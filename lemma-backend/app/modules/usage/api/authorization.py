@@ -21,11 +21,15 @@ from app.modules.identity.contracts import (
 )
 from app.modules.identity.contracts.organizations import organization_member_role
 from app.modules.usage.domain.errors import UsageAccessDeniedError
+<<<<<<< HEAD
 
 #: Which organization roles may read an organization's spend.
 _ROLES_THAT_MAY_READ_USAGE = frozenset(
     {OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR}
 )
+=======
+from app.modules.usage.services.identity_lookups import identity_lookups
+>>>>>>> 29cc0441b (Warn before the allowance runs out, instead of only refusing when it has)
 
 
 async def require_usage_org_access(
@@ -35,7 +39,12 @@ async def require_usage_org_access(
     uow: UoWDep,
 ) -> None:
     """Administration, for the whole organization's spend."""
+<<<<<<< HEAD
     role = await organization_member_role(
+=======
+    can_view = identity_lookups().can_view_organization_usage
+    if not await can_view(
+>>>>>>> 29cc0441b (Warn before the allowance runs out, instead of only refusing when it has)
         uow,
         user_id=user.id,
         organization_id=organization_id,
@@ -62,7 +71,12 @@ async def require_usage_org_membership(
     gate forces ``user_id`` to the caller, so a member still cannot read
     anybody else's figures, and a non-member is still refused outright.
     """
+<<<<<<< HEAD
     role = await organization_member_role(
+=======
+    is_member = identity_lookups().is_organization_member
+    if not await is_member(
+>>>>>>> 29cc0441b (Warn before the allowance runs out, instead of only refusing when it has)
         uow,
         user_id=user.id,
         organization_id=organization_id,

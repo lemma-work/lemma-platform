@@ -131,6 +131,11 @@ class UsageLimitScopeResponse(BaseModel):
     reserved_usd: float
     remaining_usd: float | None = None
     allowed: bool
+    # True once this window is past the deployment's warning threshold and not
+    # yet refusing. `allowed` says whether work runs *now*; this says whether a
+    # person should look before it stops. A window with no limit is never
+    # approaching one.
+    approaching: bool = False
     reset_at: datetime
     window_start: datetime
 
@@ -142,3 +147,7 @@ class UsageLimitsResponse(BaseModel):
     user_weekly: UsageLimitScopeResponse
     user_monthly: UsageLimitScopeResponse
     allowed: bool
+    # The fraction each scope's `approaching` is measured against, so a caller
+    # can say "over 80%" rather than only "approaching" -- and so a deployment
+    # that moved the threshold does not have a UI quietly claiming the default.
+    warn_fraction: float = 0.8

@@ -553,17 +553,6 @@ class Settings(BaseSettings):
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
     )
-    usage_limit_warn_fraction: float = Field(
-        default=0.8,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Fraction of a spend window at which the people it applies to are "
-            "warned, once per window, before work starts being refused. 1.0 "
-            "warns only at the point of refusal; 0 disables the warning. See "
-            "PS-OPS-010."
-        ),
-    )
     usage_org_limit_overrides_json: str = Field(
         default="",
         description=(

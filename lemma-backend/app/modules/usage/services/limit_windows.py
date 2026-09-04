@@ -58,17 +58,28 @@ def limit_scope(
     window_start_at: datetime,
     scope: str,
     counter_organization_id: UUID | None,
+    warn_fraction: float,
 ) -> dict[str, object]:
     """One window's state, as the limits API and the reservation path read it."""
     consumed = used_usd + reserved_usd
     remaining = None if limit_usd is None else max(0.0, limit_usd - consumed)
+    allowed = limit_usd is None or consumed < limit_usd
     return {
         "limit_usd": limit_usd,
         "scope": scope,
         "used_usd": used_usd,
         "reserved_usd": reserved_usd,
         "remaining_usd": remaining,
-        "allowed": limit_usd is None or consumed < limit_usd,
+        "allowed": allowed,
+        # Past the warning line and not yet over the limit. Both halves matter:
+        # a window that is already refusing work does not need to be described
+        # as approaching anything, and a window with no limit cannot be.
+        "approaching": (
+            allowed
+            and limit_usd is not None
+            and warn_fraction > 0
+            and consumed >= limit_usd * warn_fraction
+        ),
         "reset_at": reset_at,
         "window_start": window_start_at,
         "counter_organization_id": counter_organization_id,

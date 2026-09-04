@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from opentelemetry import metrics
 
+from app.modules.usage.config import usage_settings
 from app.modules.usage.contracts import AgentRunUsage, ModelPricing
 from app.modules.usage.domain.entities import (
-    CostSource,
     UsageLimitCounterScope,
     UsageRecord,
     UsageReservation,
 )
-from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
 from app.modules.usage.services.reservation_sizing import (
+    approaching_events,
     remaining_after,
     reservation_amount,
 )
@@ -172,6 +171,16 @@ class UsageService(UsagePricing):
                 reason="limit_exceeded",
             )
             raise UsageLimitExceededError()
+        # Warned on the crossing, so one email per window rather than one per
+        # run from then on. See `approaching_events`.
+        self.usage_repository.uow.collect_events(
+            approaching_events(
+                limits,
+                reserved=amount,
+                fraction=usage_settings.usage_limit_warn_fraction,
+                user_id=user_id,
+            )
+        )
         return UsageReservation(
             organization_id=organization_id,
             user_id=user_id,
@@ -534,6 +543,7 @@ class UsageService(UsagePricing):
             window_start_at=window_month,
             scope="organization",
             counter_organization_id=organization_id,
+            warn_fraction=usage_settings.usage_limit_warn_fraction,
         )
         user_weekly_scope = limit_scope(
             limit_usd=limit_values.user_weekly_limit_usd,
@@ -543,6 +553,7 @@ class UsageService(UsagePricing):
             window_start_at=window_week,
             scope=limit_values.user_limit_scope,
             counter_organization_id=user_limit_organization_id,
+            warn_fraction=usage_settings.usage_limit_warn_fraction,
         )
         user_monthly_scope = limit_scope(
             limit_usd=limit_values.user_monthly_limit_usd,
@@ -552,6 +563,7 @@ class UsageService(UsagePricing):
             window_start_at=window_month,
             scope=limit_values.user_limit_scope,
             counter_organization_id=user_limit_organization_id,
+            warn_fraction=usage_settings.usage_limit_warn_fraction,
         )
         return {
             "organization_id": organization_id,
@@ -564,6 +576,7 @@ class UsageService(UsagePricing):
                 and user_weekly_scope["allowed"]
                 and user_monthly_scope["allowed"]
             ),
+            "warn_fraction": usage_settings.usage_limit_warn_fraction,
         }
 
     async def _resolve_usage_limit_values(
@@ -653,36 +666,3 @@ class UsageService(UsagePricing):
                 )
             ]
         )
-
-
-def assert_system_pricing_covers_catalog(
-    model_names: Iterable[tuple[str, str | None]],
-    *,
-    pricing: Mapping[str, ModelPricing] | None = None,
-    base_url: str | None = None,
-) -> list[str]:
-    """Return the system models nothing can price (empty == all priceable).
-
-    "Covered" now means *either* layer answers: a registered entry under the
-    public name or the provider id, or the public dataset recognising the model.
-    A model reaches this list only when both miss, and that is the case worth an
-    operator's attention -- it meters with a null cost, so it counts toward no
-    spend limit and is effectively free to run.
-
-    Missing prices still never prevent metering or refuse a run (`PS-OPS-011`);
-    this only reports completeness.
-    """
-    table = pricing if pricing is not None else UsageService._SYSTEM_MODEL_PRICING
-    probe = UsageTokens(input_tokens=1)
-    uncovered: list[str] = []
-    for public_name, provider_name in model_names:
-        resolved = resolve_cost(
-            model_name=public_name,
-            provider_model_name=provider_name,
-            base_url=base_url,
-            tokens=probe,
-            pricing_table=dict(table),
-        )
-        if resolved.source is CostSource.UNKNOWN:
-            uncovered.append(public_name or provider_name or "<unknown>")
-    return uncovered

@@ -23,6 +23,7 @@ class UsageLimitScopeResponse:
         scope (str):
         used_usd (float):
         window_start (datetime.datetime):
+        approaching (bool | Unset):  Default: False.
         limit_usd (float | None | Unset):
         remaining_usd (float | None | Unset):
     """
@@ -33,6 +34,7 @@ class UsageLimitScopeResponse:
     scope: str
     used_usd: float
     window_start: datetime.datetime
+    approaching: bool | Unset = False
     limit_usd: float | None | Unset = UNSET
     remaining_usd: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -49,6 +51,8 @@ class UsageLimitScopeResponse:
         used_usd = self.used_usd
 
         window_start = self.window_start.isoformat()
+
+        approaching = self.approaching
 
         limit_usd: float | None | Unset
         if isinstance(self.limit_usd, Unset):
@@ -74,6 +78,8 @@ class UsageLimitScopeResponse:
                 "window_start": window_start,
             }
         )
+        if approaching is not UNSET:
+            field_dict["approaching"] = approaching
         if limit_usd is not UNSET:
             field_dict["limit_usd"] = limit_usd
         if remaining_usd is not UNSET:
@@ -95,6 +101,8 @@ class UsageLimitScopeResponse:
         used_usd = d.pop("used_usd")
 
         window_start = isoparse(d.pop("window_start"))
+
+        approaching = d.pop("approaching", UNSET)
 
         def _parse_limit_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -121,6 +129,7 @@ class UsageLimitScopeResponse:
             scope=scope,
             used_usd=used_usd,
             window_start=window_start,
+            approaching=approaching,
             limit_usd=limit_usd,
             remaining_usd=remaining_usd,
         )

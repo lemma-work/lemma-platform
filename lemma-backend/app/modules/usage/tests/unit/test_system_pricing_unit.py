@@ -25,11 +25,10 @@ from app.modules.usage.services.cost_resolver import (
     tokens_for_budget,
 )
 from app.modules.usage.services.reservation_sizing import RESERVED_REQUEST
-from app.modules.usage.services.usage_service import (
-    ModelPricing,
-    UsageService,
+from app.modules.usage.services.pricing_coverage import (
     assert_system_pricing_covers_catalog,
 )
+from app.modules.usage.services.usage_service import ModelPricing, UsageService
 
 pytestmark = pytest.mark.unit
 

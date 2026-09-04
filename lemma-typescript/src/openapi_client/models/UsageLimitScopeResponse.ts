@@ -4,6 +4,7 @@
 /* eslint-disable */
 export type UsageLimitScopeResponse = {
     allowed: boolean;
+    approaching?: boolean;
     limit_usd?: (number | null);
     remaining_usd?: (number | null);
     reserved_usd: number;

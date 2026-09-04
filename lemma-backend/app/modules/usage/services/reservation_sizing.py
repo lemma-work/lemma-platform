@@ -11,7 +11,11 @@ ratcheted.
 
 from __future__ import annotations
 
+from datetime import datetime
+from uuid import UUID
+
 from app.modules.usage.contracts import ModelPricing
+from app.modules.usage.domain.events import UsageLimitApproachingEvent
 from app.modules.usage.services.cost_resolver import UsageTokens, resolve_cost
 
 #: The request a reservation assumes. Declared as a contract rather than
@@ -79,3 +83,81 @@ def remaining_after(limits: dict[str, object], reserved: float) -> float | None:
     if not remaining:
         return None
     return max(0.0, min(remaining) - reserved)
+
+
+def approaching_events(
+    limits: dict[str, object],
+    *,
+    reserved: float,
+    fraction: float,
+    user_id: UUID,
+) -> list[UsageLimitApproachingEvent]:
+    """Every window this reservation just carried past its warning line.
+
+    Usually none, occasionally one, and more than one only when two windows sit
+    at almost the same fraction -- which is somebody genuinely running out of
+    two allowances at once, and worth saying twice.
+    """
+    if fraction <= 0:
+        return []
+    events = []
+    for key in _SCOPES:
+        scope = limits.get(key)
+        if not isinstance(scope, dict):
+            continue
+        event = _approaching_event(
+            scope, key=key, reserved=reserved, fraction=fraction, user_id=user_id
+        )
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _approaching_event(
+    scope: dict[str, object],
+    *,
+    key: str,
+    reserved: float,
+    fraction: float,
+    user_id: UUID,
+) -> UsageLimitApproachingEvent | None:
+    """The warning this reservation just triggered, if it triggered one.
+
+    ``None`` unless the hold being placed is what carries this window past the
+    threshold. The figures in ``scope`` were read before the hold, so the pair
+    (before, after) straddles the line exactly once per window -- which is how
+    one warning is emitted rather than one per run from then on.
+    """
+    limit = scope.get("limit_usd")
+    if not isinstance(limit, (int, float)) or limit <= 0:
+        return None
+    before = _as_float(scope.get("used_usd")) + _as_float(scope.get("reserved_usd"))
+    after = before + reserved
+    threshold = limit * fraction
+    if before >= threshold or after < threshold:
+        return None
+    reset_at = scope.get("reset_at")
+    window_start = scope.get("window_start")
+    if not isinstance(reset_at, datetime) or not isinstance(window_start, datetime):
+        return None
+    counter_organization_id = scope.get("counter_organization_id")
+    return UsageLimitApproachingEvent(
+        organization_id=(
+            counter_organization_id
+            if isinstance(counter_organization_id, UUID)
+            else None
+        ),
+        user_id=user_id,
+        scope=key,
+        window_start=window_start,
+        reset_at=reset_at,
+        limit_usd=float(limit),
+        consumed_usd=after,
+        threshold_fraction=fraction,
+    )
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)

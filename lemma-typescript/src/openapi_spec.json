@@ -15141,6 +15141,11 @@
             "title": "Allowed",
             "type": "boolean"
           },
+          "approaching": {
+            "default": false,
+            "title": "Approaching",
+            "type": "boolean"
+          },
           "limit_usd": {
             "anyOf": [
               {
@@ -15228,6 +15233,11 @@
           },
           "user_weekly": {
             "$ref": "#/components/schemas/UsageLimitScopeResponse"
+          },
+          "warn_fraction": {
+            "default": 0.8,
+            "title": "Warn Fraction",
+            "type": "number"
           }
         },
         "required": [

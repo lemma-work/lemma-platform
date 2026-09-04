@@ -10,4 +10,5 @@ export type UsageLimitsResponse = {
     user_id: string;
     user_monthly: UsageLimitScopeResponse;
     user_weekly: UsageLimitScopeResponse;
+    warn_fraction?: number;
 };

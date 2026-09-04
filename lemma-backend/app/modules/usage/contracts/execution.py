@@ -34,10 +34,10 @@ from app.modules.usage.services.usage_context import (
     usage_context_from_agent_context,
     usage_execution_context,
 )
-from app.modules.usage.services.usage_service import (
-    UsageService,
+from app.modules.usage.services.pricing_coverage import (
     assert_system_pricing_covers_catalog,
 )
+from app.modules.usage.services.usage_service import UsageService
 from app.modules.usage.services.usage_service_factory import build_usage_service
 
 __all__ = [

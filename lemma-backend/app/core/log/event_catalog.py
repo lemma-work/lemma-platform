@@ -709,6 +709,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'surface.whatsapp.history_failed': EventSpec('debug', frozenset()),
     'surface.whatsapp.media_upload_rejected': EventSpec('debug', frozenset({'mime_type', 'status_code'})),
     'usage.cost_resolver.model_could_not_be_priced.observed': EventSpec('debug', frozenset()),
+    'usage.limit_notification_consumer.no_address_for_warning.diagnostic': EventSpec('debug', frozenset({'scope'})),
     'usage.limit_overrides.not_a_list': EventSpec('warning', frozenset({'detail'})),
     'usage.limit_overrides.unparseable': EventSpec('warning', frozenset({'detail'})),
     'usage.pricing.invalid_system_model_usage_metadata.failed': EventSpec('error', frozenset({'error_type'})),

@@ -499,7 +499,16 @@ USAGE_USER_MONTHLY_LIMIT_USD=
 # Per-organization monthly caps, overriding USAGE_ORG_MONTHLY_LIMIT_USD.
 # A JSON list; each entry names either an exact `slug` or a `slug_prefix`.
 USAGE_ORG_LIMIT_OVERRIDES_JSON=
+
+# How full a window has to be before the people it applies to are warned.
+# Default 0.8. Set to 0 to disable the warning; 1.0 warns only at refusal.
+USAGE_LIMIT_WARN_FRACTION=
 ```
+
+A warning is sent once per window, at the moment the threshold is crossed --
+not on every run above it. Somebody over the line starts every subsequent
+conversation over the line, so warning whenever the figure is high produces a
+warning per run and the one that mattered is lost among them.
 
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of

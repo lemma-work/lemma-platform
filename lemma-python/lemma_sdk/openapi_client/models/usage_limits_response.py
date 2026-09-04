@@ -7,6 +7,8 @@ from uuid import UUID
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.usage_limit_scope_response import UsageLimitScopeResponse
 
@@ -24,6 +26,7 @@ class UsageLimitsResponse:
         user_id (UUID):
         user_monthly (UsageLimitScopeResponse):
         user_weekly (UsageLimitScopeResponse):
+        warn_fraction (float | Unset):  Default: 0.8.
     """
 
     allowed: bool
@@ -32,6 +35,7 @@ class UsageLimitsResponse:
     user_id: UUID
     user_monthly: UsageLimitScopeResponse
     user_weekly: UsageLimitScopeResponse
+    warn_fraction: float | Unset = 0.8
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,6 +55,8 @@ class UsageLimitsResponse:
 
         user_weekly = self.user_weekly.to_dict()
 
+        warn_fraction = self.warn_fraction
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -63,6 +69,8 @@ class UsageLimitsResponse:
                 "user_weekly": user_weekly,
             }
         )
+        if warn_fraction is not UNSET:
+            field_dict["warn_fraction"] = warn_fraction
 
         return field_dict
 
@@ -96,6 +104,8 @@ class UsageLimitsResponse:
 
         user_weekly = UsageLimitScopeResponse.from_dict(d.pop("user_weekly"))
 
+        warn_fraction = d.pop("warn_fraction", UNSET)
+
         usage_limits_response = cls(
             allowed=allowed,
             org_monthly=org_monthly,
@@ -103,6 +113,7 @@ class UsageLimitsResponse:
             user_id=user_id,
             user_monthly=user_monthly,
             user_weekly=user_weekly,
+            warn_fraction=warn_fraction,
         )
 
         usage_limits_response.additional_properties = d
