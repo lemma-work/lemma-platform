@@ -171,7 +171,11 @@ class AgentService:
         # domain still gets a perfectly good agent, just not an emailable one.
         provision = self._provision_email_surface
         if provision is None:
-            from app.composition.agent_email_surface import (
+            # Deferred, and measured: `agent_surfaces.contracts.email_surfaces`
+            # reaches the surface service, which every process importing this
+            # one would otherwise pay for whether or not it ever creates an
+            # agent. Injectable above it because that is the seam the tests use.
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
                 provision_agent_email_surface as provision,
             )
 
@@ -363,7 +367,10 @@ class AgentService:
         # ON DELETE SET NULL, so once the agent is deleted its surfaces are no
         # longer identifiable as its own — they read as the pod assistant's,
         # and the pod starts answering from a deleted agent's address.
-        from app.composition.agent_email_surface import teardown_agent_surfaces
+        # Deferred for the same reason as the provisioner above.
+        from app.modules.agent_surfaces.contracts.email_surfaces import (
+            teardown_agent_surfaces,
+        )
 
         await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
         await self.agent_repository.delete(agent.id)

@@ -13,8 +13,10 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.contracts.workflow_notifications import (
+    build_workflow_notification_adapter,
+)
 from app.modules.icon.contracts.provisioning import create_icon_service
-from app.composition.workflow_notifications import WorkflowNotificationAdapter
 from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
 from app.modules.function.contracts.workflow_control import (
     build_function_control_adapter,
@@ -43,7 +45,7 @@ def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
         agent_adapter=build_agent_control_adapter(uow),
         function_adapter=build_function_control_adapter(uow),
         schedule_adapter=WaitRowTimer(),
-        notification_adapter=WorkflowNotificationAdapter(uow),
+        notification_adapter=build_workflow_notification_adapter(uow),
     )
 
 

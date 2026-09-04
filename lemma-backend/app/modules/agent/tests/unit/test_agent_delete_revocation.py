@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.composition import agent_email_surface
+from app.modules.agent_surfaces.contracts import email_surfaces
 from app.modules.agent.services import agent_service as agent_service_module
 from app.modules.agent.services.agent_service import AgentService
 
@@ -28,7 +28,7 @@ async def test_delete_agent_revokes_delegation(monkeypatch):
     # Surface teardown reaches a real repository over this mock's session; it has
     # its own test below.
     monkeypatch.setattr(
-        agent_email_surface, "teardown_agent_surfaces", AsyncMock(return_value=0)
+        email_surfaces, "teardown_agent_surfaces", AsyncMock(return_value=0)
     )
 
     # requester_user_id/ctx omitted: authorization is exercised elsewhere; here we
@@ -60,7 +60,7 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_service_module, "revoke_delegation", AsyncMock())
     teardown = AsyncMock(return_value=1)
-    monkeypatch.setattr(agent_email_surface, "teardown_agent_surfaces", teardown)
+    monkeypatch.setattr(email_surfaces, "teardown_agent_surfaces", teardown)
 
     await service.delete_agent(pod_id=pod_id, name="reporter")
 
@@ -86,7 +86,7 @@ async def test_the_surfaces_go_before_the_agent_row_does(monkeypatch):
 
     order: list[str] = []
     monkeypatch.setattr(
-        agent_email_surface,
+        email_surfaces,
         "teardown_agent_surfaces",
         AsyncMock(side_effect=lambda *a, **k: order.append("surfaces") or 0),
     )

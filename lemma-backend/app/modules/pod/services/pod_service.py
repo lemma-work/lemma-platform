@@ -112,7 +112,7 @@ class PodService:
         # caller built the service without one -- the same guard `delete_pod`
         # uses for its role-cache hook.
         if self._uow is not None:
-            from app.composition.agent_email_surface import (
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
                 provision_pod_assistant_email_surface,
             )
 
@@ -331,7 +331,7 @@ class PodService:
         # and `_sync_email_schedule` returns early. Bounded by the number of
         # agents in the pod, and the rest still waits for the worker.
         if self._uow is not None:
-            from app.composition.agent_email_surface import (
+            from app.modules.agent_surfaces.contracts.email_surfaces import (
                 release_pod_inbound_addresses,
             )
 

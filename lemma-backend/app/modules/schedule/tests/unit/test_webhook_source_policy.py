@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.webhook_sources import default_webhook_sources
+from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
 from app.modules.schedule.contracts.webhook_source import (
     NormalizedWebhook,
     VerifiedDelivery,
