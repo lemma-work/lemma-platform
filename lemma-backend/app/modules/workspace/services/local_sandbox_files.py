@@ -67,6 +67,19 @@ class LocalSandboxFilesMixin:
             instance, path=path, deadline_at=deadline_at
         )
 
+    async def browser_cdp_endpoint(
+        self, logical_id: UUID, *, deadline_at: datetime
+    ) -> tuple[str, dict[str, str]]:
+        """Where a viewer reaches this sandbox's runtime, and with what.
+
+        Ensures the sandbox first, like every other call here: a viewer asking
+        to watch a paused workspace wants it started, not an address that 502s.
+        """
+        _, instance = await self._instance(logical_id)
+        return await self._provider.browser_cdp_endpoint(
+            instance, deadline_at=deadline_at
+        )
+
     async def create_directory(
         self, logical_id: UUID, path: str, *, deadline_at: datetime
     ) -> None:

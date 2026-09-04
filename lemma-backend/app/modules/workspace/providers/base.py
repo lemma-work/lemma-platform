@@ -322,10 +322,21 @@ class SandboxOpsProvider(Protocol):
     ) -> tuple[ProcessDescriptor, ...]:
         """Every process the sandbox is currently tracking."""
 
-    async def stat_file(
-        self, instance: ProviderInstance, *, path: str, deadline_at: datetime
-    ) -> FileStat:
-        """Metadata for one path, raising when it does not exist."""
+    async def browser_cdp_endpoint(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> tuple[str, dict[str, str]]:
+        """Where to reach the sandbox runtime, and with what credential.
+
+        One method rather than a pair, because a viewer needs both halves of the
+        same thing: an HTTP call to ask which pages exist, and a WebSocket to one
+        of them. Returning the endpoint lets the caller do each without the
+        provider growing a method per protocol.
+
+        Raises ``SandboxCapabilityUnsupported`` where the runtime is not reached
+        this way — which is a real answer, not a gap: a provider that cannot
+        offer a drivable browser should say so rather than hand back an address
+        that fails later.
+        """
 
     async def list_files(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime

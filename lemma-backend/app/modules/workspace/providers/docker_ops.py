@@ -279,6 +279,33 @@ class DockerOpsMixin:
             if client is not None:
                 await client.close()
 
+    async def browser_cdp_endpoint(
+        self, instance: ProviderInstance, *, deadline_at: datetime
+    ) -> tuple[str, dict[str, str]]:
+        """The runtime's own address and credential (see the protocol).
+
+        Built from the same inspect-and-derive path every runtime call uses, so
+        a viewer reaches the browser exactly where the file and process tools do
+        rather than through an address of its own that could drift from theirs.
+        """
+        inspected = await self._engine.inspect_container(
+            instance.provider_id, deadline_at=deadline_at
+        )
+        if inspected is None:
+            raise ProviderGone(
+                f"sandbox container {instance.provider_id} no longer exists"
+            )
+        if self._runtime_credentials is None:
+            raise WorkspaceRuntimeError("runtime credentials are not configured")
+        kind = SandboxKind(
+            inspected.config.labels.get(LABEL_SANDBOX_KIND, SandboxKind.WORKSPACE.value)
+        )
+        base_url = self._base_url(
+            inspected, runtime_port=profile_for(kind).runtime_port
+        )
+        token = self._runtime_credentials.token(instance.provider_id)
+        return base_url, {"X-Lemma-Runtime-Token": token}
+
     async def _runtime_client(
         self, provider_id: str, *, deadline_at: datetime
     ) -> WorkspaceRuntimeClient:
