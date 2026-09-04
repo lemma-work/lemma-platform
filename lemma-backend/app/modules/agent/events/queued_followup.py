@@ -24,8 +24,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.composition.agent_usage import build_usage_service
-from app.composition.authorization import create_authorization_service
+from app.modules.usage.contracts.execution import build_usage_service
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -84,7 +83,7 @@ async def start_followup_run_for_queued_messages(
                     uow=uow,
                     conversation_repository=conversation_repository,
                     agent_repository=AgentRepository(uow),
-                    authorization_service=create_authorization_service(uow),
+                    authorization_service=create_authorization_data_service(uow),
                     usage_service=build_usage_service(uow),
                 )
                 started = await service.turns.start_queued_followup(

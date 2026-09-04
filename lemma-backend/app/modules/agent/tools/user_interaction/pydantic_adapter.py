@@ -22,7 +22,7 @@ from app.modules.agent.tools.user_interaction.models import (
     validate_display_payload,
 )
 from app.core.widget_html_validation import validate_widget_html
-from app.composition.agent_workspace import WorkspaceSandboxService
+from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 
 
 async def display_resource(
@@ -153,8 +153,7 @@ async def _maybe_deliver_to_surface(
     if not platform:
         return
 
-    # Lazy import to avoid an agent -> agent_surfaces module-load cycle.
-    from app.composition.agent_surface_runtime import (
+    from app.modules.agent_surfaces.contracts.platforms import (
         platform_delivers_one_reply,
         platform_supports_chat_delivery,
     )

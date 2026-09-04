@@ -16,7 +16,7 @@ from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
-from app.composition.workflow_pod import PodMemberRepository
+from app.modules.pod.contracts.members import pod_member_id
 from app.modules.workflow.api.schemas import (
     WorkflowRunFormSubmitRequest,
     WorkflowRunListResponse,
@@ -159,14 +159,14 @@ async def list_waiting_runs_assigned_to_me(
     # the batched read below, 100k sequential run lookups on one request.
     effective_limit = min(limit, MAX_RUN_PAGE_SIZE)
 
-    pod_member = await PodMemberRepository(uow).get_by_pod_and_user_id(pod_id, user.id)
-    if pod_member is None:
+    member_id = await pod_member_id(uow, pod_id, user.id)
+    if member_id is None:
         raise HTTPException(status_code=404, detail="Pod member not found")
 
     wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
     waits, next_cursor = await wait_repo.list_active_for_assignee(
         pod_id=pod_id,
-        assigned_pod_member_id=pod_member.id,
+        assigned_pod_member_id=member_id,
         limit=effective_limit,
         cursor=cursor,
     )

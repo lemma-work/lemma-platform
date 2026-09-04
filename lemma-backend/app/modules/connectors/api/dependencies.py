@@ -6,7 +6,7 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
@@ -161,7 +161,7 @@ def build_connector_operation_service(
 def get_account_resolution_service(uow: UoWDep) -> AccountResolutionService:
     return AccountResolutionService(
         account_repository=_account_repository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
     )
 

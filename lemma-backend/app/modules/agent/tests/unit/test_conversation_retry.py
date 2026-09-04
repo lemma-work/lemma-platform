@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.composition.agent_usage import UsageLimitExceededError
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationStateError

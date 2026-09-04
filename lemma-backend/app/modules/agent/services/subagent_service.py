@@ -37,8 +37,8 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
-from app.composition.authorization import create_authorization_service
-from app.composition.agent_usage import build_usage_service
+from app.core.authorization.factory import create_authorization_data_service
+from app.modules.usage.contracts.execution import build_usage_service
 
 
 class SubAgentError(RuntimeError):
@@ -69,13 +69,15 @@ class SubAgentService:
             uow=uow,
             conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
-            authorization_service=create_authorization_service(uow),
+            authorization_service=create_authorization_data_service(uow),
             usage_service=build_usage_service(uow),
         )
 
     async def _agent_ctx(self, uow, deps):
         """Parent agent's delegated context (honors its agent.execute grant)."""
-        return await create_authorization_service(uow).build_delegated_workload_context(
+        return await create_authorization_data_service(
+            uow
+        ).build_delegated_workload_context(
             user_id=deps.user_id,
             principal_type="AGENT",
             principal_id=deps.workload_id or DEFAULT_POD_AGENT_ID,

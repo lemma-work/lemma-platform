@@ -4,6 +4,15 @@
 The baseline records pre-existing debt, not exemptions for new code. CI fails
 when a new cross-module internal import/cycle appears, a broad catch is added,
 or a large/complex function grows. Shrinking the baseline is always allowed.
+
+Two of the metrics exist because the first version of this file could not see
+the thing it was written to stop. `module_cycles` read zero while thirteen of
+fifteen modules were mutually dependent, because every one of those cycles ran
+through `app/composition`, and a file there is excluded from the graph.
+`induced_module_cycles` inlines that hop and reports what the graph will be once
+the hop is deleted; `module_composition_imports` counts the 195 edges that make
+the composition root a shared middle layer rather than a root. Neither number
+was wrong before -- neither existed.
 """
 
 from __future__ import annotations
@@ -218,6 +227,8 @@ def snapshot() -> dict[str, Any]:
     broad_catches: dict[str, int] = {}
     untyped_escapes: dict[str, int] = {}
     composition_deep_imports: dict[str, int] = defaultdict(int)
+    module_composition_imports: dict[str, int] = defaultdict(int)
+    composition_targets: set[str] = set()
     core_module_imports: dict[str, int] = defaultdict(int)
 
     for path in _python_files():
@@ -243,6 +254,19 @@ def snapshot() -> dict[str, Any]:
         for node in ast.walk(tree):
             for imported in _imported_modules(node):
                 parts = imported.split(".")
+                # A module reaching app/composition was counted nowhere at all:
+                # the loop below only looks at `app.modules.*`, so the 195 edges
+                # that make the composition root a shared middle layer were the
+                # one thing no metric could see.
+                if parts[:2] == ["app", "composition"] and source != "composition":
+                    # Counted for `app/core` too, not only for modules. The one
+                    # core edge -- `core/security.py` reaching an analytics
+                    # helper that imported no module at all -- was in neither
+                    # this metric nor `composition_deep_imports`, which only
+                    # looks the other way. Dependencies point inward; core
+                    # reaching the root is the sharpest version of not doing so.
+                    module_composition_imports[f"{source}->composition"] += 1
+                    continue
                 if len(parts) < 3 or parts[:2] != ["app", "modules"]:
                     continue
                 target = parts[2]
@@ -252,19 +276,39 @@ def snapshot() -> dict[str, Any]:
                 # shared middle layer instead of a root.
                 if source == "composition" and not _allowed_cross_module_import(parts):
                     composition_deep_imports[f"composition->{target}"] += 1
+                    # Only the internal reaches. A module the root touches
+                    # through its contracts is not a hop that carries a cycle.
+                    composition_targets.add(target)
                 if source == "core" and relative not in CORE_MODULE_IMPORT_EXEMPT:
                     core_module_imports[f"core->{target}"] += 1
                 if not in_modules or target == source:
                     continue
-                dependency_graph[source].add(target)
                 if not _allowed_cross_module_import(parts):
                     forbidden[f"{source}->{target}"] += 1
+                    # Only internal reaches build the cycle graph. Two modules
+                    # publishing contracts to each other is the target design,
+                    # not a defect: `agent` reads surface capabilities and
+                    # `agent_surfaces` reads a conversation context, both
+                    # through published surfaces, and neither package imports
+                    # the other -- so there is no import cycle to have. Counting
+                    # those edges made the shape this refactor is heading for
+                    # indistinguishable from the tangle it is leaving.
+                    dependency_graph[source].add(target)
 
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
         "composition_deep_imports": dict(sorted(composition_deep_imports.items())),
+        "module_composition_imports": dict(sorted(module_composition_imports.items())),
         "core_module_imports": dict(sorted(core_module_imports.items())),
         "module_cycles": [list(cycle) for cycle in _cycles(dependency_graph)],
+        "induced_module_cycles": [
+            list(cycle)
+            for cycle in _cycles(
+                _inline_composition(
+                    dependency_graph, module_composition_imports, composition_targets
+                )
+            )
+        ],
         "oversized_files": dict(sorted(oversized.items())),
         "complex_functions": _aggregate_by_module(complex_functions),
         "broad_catches": _aggregate_by_module(broad_catches),
@@ -284,6 +328,34 @@ def _aggregate_by_module(values: dict[str, int]) -> dict[str, int]:
         result[f"{module}:total"] = sum(module_values)
         result[f"{module}:max"] = max(module_values)
     return result
+
+
+def _inline_composition(
+    graph: dict[str, set[str]],
+    inbound: dict[str, int],
+    composition_targets: set[str],
+) -> dict[str, set[str]]:
+    """The module graph as it will be once `app/composition` is gone.
+
+    `module_cycles` reads zero, and that is not because there are none: a file
+    under `app/composition` is excluded from the graph, so every cycle routed
+    through it is invisible. `app/composition/agent_notifications.py` says as
+    much in its own docstring -- agent must not import agent_surfaces "because
+    the dependency runs the other way" -- which is a cycle with a hop in it.
+
+    Inlining that hop is what the number has to measure, because the plan is to
+    delete the hop. Deleting it today collapses thirteen of fifteen modules into
+    one component; this is the metric that has to reach zero first.
+    """
+    induced: dict[str, set[str]] = {
+        source: set(targets) for source, targets in graph.items()
+    }
+    for edge in inbound:
+        source = edge.split("->", 1)[0]
+        induced.setdefault(source, set()).update(
+            target for target in composition_targets if target != source
+        )
+    return induced
 
 
 def _cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
@@ -351,6 +423,10 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         failures.append(f"forbidden import count grew: {name} ({before} -> {after})")
     for label, key in (
         ("composition reaching past contracts", "composition_deep_imports"),
+        (
+            "a module reaching through the composition root",
+            "module_composition_imports",
+        ),
         ("app/core importing a module", "core_module_imports"),
     ):
         for name, (before, after) in _growth(
@@ -361,6 +437,17 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["module_cycles"], baseline.get("module_cycles", [])
     ):
         failures.append(f"new module cycle: {' -> '.join(cycle)}")
+    known_knots = [set(cycle) for cycle in baseline.get("induced_module_cycles", [])]
+    for cycle in current["induced_module_cycles"]:
+        # A subset of a known knot is that knot with modules cut out of it,
+        # which is the whole point of the work. Only a component containing a
+        # module no recorded knot had is news.
+        members = set(cycle)
+        if any(members <= knot for knot in known_knots):
+            continue
+        failures.append(
+            f"new cycle once app/composition is inlined: {' -> '.join(cycle)}"
+        )
     for label, key in (
         ("oversized file", "oversized_files"),
         ("complex function", "complex_functions"),
@@ -394,10 +481,15 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
+    induced = current["induced_module_cycles"]
+    knot = max((len(cycle) for cycle in induced), default=0)
     print(
         "Architecture ratchet passed "
         f"({len(current['forbidden_imports'])} inherited import violations, "
-        f"{len(current['module_cycles'])} inherited cycles)."
+        f"{sum(current['module_composition_imports'].values())} imports through "
+        f"the composition root, "
+        f"{len(current['module_cycles'])} cycles"
+        + (f", {knot} modules knotted once composition is inlined)." if knot else ").")
     )
     return 0
 

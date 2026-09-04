@@ -10,8 +10,8 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 
-from app.composition.agent_usage import build_usage_service
-from app.composition.authorization import create_authorization_service
+from app.modules.usage.contracts.execution import build_usage_service
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
@@ -52,7 +52,7 @@ def _build_conversation_service(uow) -> ConversationService:
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 
@@ -62,7 +62,7 @@ def _build_conversation_retry_service(uow) -> ConversationRetryService:
         uow=uow,
         conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
-        authorization_service=create_authorization_service(uow),
+        authorization_service=create_authorization_data_service(uow),
         usage_service=build_usage_service(uow),
     )
 

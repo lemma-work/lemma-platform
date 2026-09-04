@@ -455,81 +455,74 @@ class ServiceExistingResources:
         self._user_id = user_id
 
     async def table_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import build_table_service
+        from app.modules.datastore.contracts.provisioning import list_table_names
 
-        service = build_table_service(self._uow)
-        tables, _ = await service.list_tables(self._pod_id, self._ctx, limit=1000)
-        return {str(t.name or "") for t in tables}
+        return set(
+            await list_table_names(self._uow, pod_id=self._pod_id, ctx=self._ctx)
+        )
 
     async def table_manifest(self, name: str) -> dict[str, Any] | None:
-        from app.composition.pod_bundle_resources import build_table_service
         from app.modules.datastore.contracts import TableResponse
+        from app.modules.datastore.contracts.provisioning import get_table
 
-        service = build_table_service(self._uow)
-        table = await service.get_table(self._pod_id, name, self._ctx)
+        table = await get_table(
+            self._uow, pod_id=self._pod_id, name=name, ctx=self._ctx
+        )
         if table is None:
             return None
         return TableResponse.model_validate(table).model_dump(mode="json")
 
     async def function_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import build_function_service
+        from app.modules.function.contracts.provisioning import list_function_names
 
-        service = build_function_service(self._uow)
-        functions, _ = await service.list_functions(
-            self._pod_id, self._user_id, limit=1000, ctx=self._ctx
+        return set(
+            await list_function_names(
+                self._uow, pod_id=self._pod_id, user_id=self._user_id, ctx=self._ctx
+            )
         )
-        return {str(f.name or "") for f in functions}
 
     async def agent_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import get_agent_service
+        from app.modules.agent.contracts.provisioning import list_agents
 
-        service = get_agent_service(self._uow)
-        agents, _ = await service.list_agents(
-            pod_id=self._pod_id,
-            limit=1000,
-            requester_user_id=self._user_id,
-            ctx=self._ctx,
+        agents = await list_agents(
+            self._uow, pod_id=self._pod_id, user_id=self._user_id, ctx=self._ctx
         )
         # Excluded to match the exporter -- a bundle can never contain one, so
         # this must never plan an update against the target pod's.
         return {str(a.name or "") for a in agents if is_exportable_agent(a)}
 
     async def workflow_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import get_workflow_service
+        from app.modules.workflow.contracts.provisioning import list_workflow_names
 
-        service = get_workflow_service(self._uow)
-        flows, _ = await service.list_workflows(
-            self._pod_id, limit=1000, requester_user_id=self._user_id, ctx=self._ctx
+        return set(
+            await list_workflow_names(
+                self._uow, pod_id=self._pod_id, user_id=self._user_id, ctx=self._ctx
+            )
         )
-        return {str(f.name or "") for f in flows}
 
     async def schedule_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import get_schedule_service
+        from app.modules.schedule.contracts.provisioning import list_schedules
 
-        service = get_schedule_service(self._uow)
-        schedules, _ = await service.list_schedules(
-            pod_id=self._pod_id, limit=1000, ctx=self._ctx
-        )
+        schedules = await list_schedules(self._uow, pod_id=self._pod_id, ctx=self._ctx)
         return {str(s.name or "") for s in schedules}
 
     async def app_names(self) -> set[str]:
-        from app.composition.pod_bundle_resources import build_app_service
+        from app.modules.apps.contracts.provisioning import list_app_names
 
-        service = build_app_service(self._uow)
-        apps, _ = await service.list_apps(
-            self._pod_id, self._user_id, 1000, None, ctx=self._ctx
+        return set(
+            await list_app_names(
+                self._uow, pod_id=self._pod_id, user_id=self._user_id, ctx=self._ctx
+            )
         )
-        return {str(a.name or "") for a in apps}
 
     async def surface_names(self) -> set[str]:
         """The pod's surface *names* — the key the applier upserts by, and the
         one the exporter writes a directory per. Keyed by platform, the diff
         called a second Slack surface an UPDATE of the first."""
-        try:
-            from app.composition.pod_bundle_resources import get_surface_service
+        from app.modules.agent_surfaces.contracts.provisioning import list_surfaces
 
-            service = get_surface_service(self._uow)
-            surfaces, _ = await service.list_surfaces_by_pod(self._pod_id, limit=100)
+        try:
+            surfaces = await list_surfaces(self._uow, pod_id=self._pod_id)
             return {str(getattr(s, "name", "") or "") for s in surfaces}
         except Exception:  # noqa: BLE001 - surfaces are best-effort in the plan
             # Degraded, not fatal: every bundled surface is then planned CREATE

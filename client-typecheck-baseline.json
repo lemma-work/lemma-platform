@@ -1,0 +1,28 @@
+{
+  "_comment": "basedpyright errors in the published client packages, at the `standard` setting lemma-backend uses. This file may shrink freely. lemma_sdk's entries are the ones that reach users: the package ships py.typed, so its annotations are what a consumer's checker believes. See scripts/check_client_types.py.",
+  "errors_by_file": {
+    "lemma-cli/lemma_cli/__init__.py": 1,
+    "lemma-cli/lemma_cli/cli_app/pod_bundle.py": 2,
+    "lemma-cli/lemma_cli/cli_app/scaffold.py": 6,
+    "lemma-cli/lemma_cli/cli_core/commands/apps.py": 1,
+    "lemma-cli/lemma_cli/cli_core/commands/connectors.py": 4,
+    "lemma-cli/lemma_cli/cli_core/commands/pods.py": 6,
+    "lemma-cli/lemma_cli/cli_core/context.py": 3,
+    "lemma-cli/lemma_cli/cli_core/state.py": 4,
+    "lemma-cli/lemma_cli/cli_core/watch.py": 1,
+    "lemma-cli/lemma_cli/tui/widgets/messages.py": 1,
+    "lemma-python/lemma_sdk/resources/data.py": 1,
+    "lemma-python/lemma_sdk/resources/notifications.py": 1,
+    "lemma-python/lemma_sdk/settings.py": 2,
+    "lemma-python/lemma_sdk/transport.py": 1
+  },
+  "errors_by_rule": {
+    "reportArgumentType": 11,
+    "reportAssignmentType": 2,
+    "reportAttributeAccessIssue": 5,
+    "reportOptionalIterable": 1,
+    "reportOptionalMemberAccess": 13,
+    "reportOptionalSubscript": 1,
+    "reportReturnType": 1
+  }
+}

@@ -81,8 +81,8 @@ from app.modules.agent.services.run_observer_delivery import (
     notify_run_started,
 )
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
-from app.composition.agent_usage import (
-    UsageReservation,
+from app.modules.usage.contracts import UsageReservation
+from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
     usage_execution_context,
 )

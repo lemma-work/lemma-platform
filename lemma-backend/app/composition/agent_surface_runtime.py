@@ -1,8 +1,11 @@
 """Root adapters between the agent runtime and optional surface platforms.
 
-The agent module owns the execution flow. Surface-specific rendering, delivery,
-tools, and metadata parsing are bound here so neither module imports the other's
-implementation packages.
+The agent module owns the execution flow. Delivering something to a surface,
+building its toolsets and parsing its event metadata are bound here so neither
+module imports the other's implementation packages. What a platform *is* -- the
+capability lookups and the prompt text derived from them -- is not here: it is
+published by `agent_surfaces.contracts.platforms`, which `agent` imports where
+it asks.
 """
 
 from __future__ import annotations
@@ -15,48 +18,6 @@ if TYPE_CHECKING:
     from app.modules.agent.domain.entities import Conversation
 
 
-def platform_agent_guidance(platform: str | None) -> str:
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        platform_agent_guidance as build_guidance,
-    )
-
-    return build_guidance(platform)
-
-
-def platform_is_known(platform: str | None) -> bool:
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        get_platform_capabilities,
-    )
-
-    return get_platform_capabilities(platform) is not None
-
-
-def surface_history_limits() -> tuple[int, int]:
-    """Runtime history bounds for surface conversations: ``(max_messages,
-    window_hours)`` from ``SurfaceSettings``. ``window_hours <= 0`` disables the
-    age filter. Read through this bridge so the agent module never imports
-    surface config directly."""
-    from app.modules.agent_surfaces.config import surface_settings
-
-    return (
-        surface_settings.surface_runtime_history_max_messages,
-        surface_settings.surface_runtime_history_window_hours,
-    )
-
-
-def platform_delivers_one_reply(platform: str | None) -> bool:
-    """Does a run on this platform get one composed reply rather than messages?"""
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        DeliveryCardinality,
-        get_platform_capabilities,
-    )
-
-    capabilities = get_platform_capabilities(platform)
-    return bool(
-        capabilities and capabilities.delivery_cardinality is DeliveryCardinality.ONE
-    )
-
-
 def hold_display_for_one_reply(conversation_id, path: str) -> bool:
     """Keep a displayed pod file until this surface's single reply goes out."""
     from app.modules.agent_surfaces.services.pending_envelope import (
@@ -64,49 +25,6 @@ def hold_display_for_one_reply(conversation_id, path: str) -> bool:
     )
 
     return remember_display_path(conversation_id, path)
-
-
-def platform_supports_chat_delivery(platform: str | None) -> bool:
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        get_platform_capabilities,
-    )
-
-    capabilities = get_platform_capabilities(platform)
-    return bool(capabilities and not capabilities.is_email)
-
-
-def voice_note_format(platform: str | None) -> str:
-    from app.modules.agent_surfaces.platforms.platform_capabilities import (
-        voice_note_format as resolve_format,
-    )
-
-    return resolve_format(platform)
-
-
-def render_attachment_context(
-    attachments: list[object], *, platform: str
-) -> tuple[str, str]:
-    from app.modules.agent_surfaces.platforms.common import (
-        attachment_tool_hint,
-        render_attachment_prompt_block,
-    )
-
-    return (
-        render_attachment_prompt_block(
-            attachments,
-            platform=platform,
-            include_hint=False,
-        ),
-        attachment_tool_hint(platform),
-    )
-
-
-def email_reply_instruction(platform: str) -> str:
-    from app.modules.agent_surfaces.platforms.common import (
-        email_reply_instruction as build_instruction,
-    )
-
-    return build_instruction(platform)
 
 
 def parse_surface_event_metadata(payload: dict[str, object]) -> object:

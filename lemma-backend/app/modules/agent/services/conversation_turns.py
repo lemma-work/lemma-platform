@@ -22,7 +22,8 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.composition.agent_snooze_scheduler import cancel_snooze_wake
-from app.composition.agent_usage import UsageLimitExceededError, UsageService
+from app.modules.usage.contracts import UsageLimitExceededError
+from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,

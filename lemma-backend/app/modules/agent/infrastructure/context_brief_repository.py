@@ -15,7 +15,8 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.composition.agent_context_models import Pod, User
+from app.modules.identity.contracts.profiles import user_profile
+from app.modules.pod.contracts.members import pod_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +38,7 @@ class AgentContextBriefRepository:
         self._session = uow.session
 
     async def get_pod_name(self, pod_id: UUID) -> str | None:
-        return (
-            await self._session.execute(select(Pod.name).where(Pod.id == pod_id))
-        ).scalar_one_or_none()
+        return await pod_name(self._session, pod_id)
 
     async def get_user_profile(self, user_id: UUID) -> UserProfile:
         """Name, address and timezone in one read.
@@ -48,9 +47,7 @@ class AgentContextBriefRepository:
         other two are free -- and an empty profile for a missing user rather
         than a raise, because a brief is still worth rendering without one.
         """
-        user = (
-            await self._session.execute(select(User).where(User.id == user_id))
-        ).scalar_one_or_none()
+        user = await user_profile(self._session, user_id)
         if user is None:
             return UserProfile()
         name = " ".join(

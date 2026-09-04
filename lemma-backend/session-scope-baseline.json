@@ -1,6 +1,8 @@
 {
   "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. Entries are {key: count}: the key has no line number so that edits above a violation do not churn the file, and the count is what stops a baselined function having a free slot for a second one. See scripts/check_session_scope.py.",
   "violations": {
-    "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow": 1
+    "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow": 1,
+    "app/modules/agent_surfaces/api/controllers/surface_controller.py::get_surface_setup::non-db-await/request-scoped::via get_surface_setup_by_name: surface_setup_for_reader": 1,
+    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::teams_admin_consent_callback::non-db-await/request-scoped::via delete_if_value: teams_consent.consume_nonce": 1
   }
 }

@@ -132,7 +132,7 @@ def stubbed(monkeypatch):
         lambda uow: _FakeListRepo(uow),
     )
     monkeypatch.setattr(
-        brief_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        brief_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         brief_mod, "build_table_service", lambda uow: _FakeTableService()
@@ -158,7 +158,7 @@ def stubbed(monkeypatch):
     # its own stubs -- patching the brief module alone would leave the real
     # authorization service and datastore wired in behind the memory section.
     monkeypatch.setattr(
-        memory_mod, "create_authorization_service", lambda uow: _FakeAuthzService()
+        memory_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
     monkeypatch.setattr(
         memory_mod, "build_file_service", lambda uow: _FakeFileService(agents_md)
