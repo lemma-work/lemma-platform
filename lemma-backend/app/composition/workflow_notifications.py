@@ -8,7 +8,7 @@ sit for three days on somebody who had no idea.
 This is the bridge that fixes it, and it lives in ``composition`` because the
 workflow module must not import ``agent_surfaces`` (the dependency runs the
 other way, and surfaces already reach into agents). Same shape as
-``workflow_agent.py`` and ``workflow_scheduler.py``.
+``workflow_agent.py``.
 
 Every failure here is swallowed. A workflow must not fail because a Slack token
 expired: the wait is still recorded, the queue still lists it, and the person can
