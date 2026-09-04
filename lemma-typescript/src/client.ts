@@ -31,6 +31,7 @@ import { TablesNamespace } from "./namespaces/tables.js";
 import { UsersNamespace } from "./namespaces/users.js";
 import { WorkflowsNamespace } from "./namespaces/workflows.js";
 import { WidgetsNamespace } from "./namespaces/widgets.js";
+import { WebLoginsNamespace, WorkspaceNamespace } from "./namespaces/workspace.js";
 import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
@@ -65,6 +66,8 @@ export class LemmaClient {
   readonly workflows: WorkflowsNamespace;
   readonly apps: AppsNamespace;
   readonly widgets: WidgetsNamespace;
+  readonly workspace: WorkspaceNamespace;
+  readonly webLogins: WebLoginsNamespace;
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
   readonly schedules: SchedulesNamespace;
@@ -129,6 +132,8 @@ export class LemmaClient {
     this.notifications = new NotificationsNamespace(this._generated, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
+    this.workspace = new WorkspaceNamespace(this._http);
+    this.webLogins = new WebLoginsNamespace(this._http);
     this.connectors = new ConnectorsNamespace(this._generated, this._http);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
     this.schedules = new SchedulesNamespace(this._generated, podIdFn);
