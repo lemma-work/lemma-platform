@@ -36,6 +36,7 @@ from app.modules.agent_surfaces.services import surface_egress
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
+from app.modules.agent.tools.speech.provider import SpeechProviderError
 from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
     EnvelopeFile,
@@ -2556,12 +2557,22 @@ async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch)
     assert text4 == "voice memo for you\n\nschedule a meeting tomorrow"
 
 
-async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        SpeechProviderError("deepgram down"),
+        # A provider that breaks its own interface must not cost the person
+        # their message either -- it is reported, not propagated.
+        TimeoutError("the client raised something the interface never promised"),
+    ],
+    ids=["declared_failure", "undeclared_failure"],
+)
+async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch, failure):
     import app.modules.agent.tools.speech.provider as speech_provider
 
     class _Provider:
         async def transcribe(self, audio_bytes, *, mime, language=None):
-            raise RuntimeError("deepgram down")
+            raise failure
 
     monkeypatch.setattr(speech_provider, "get_speech_provider", lambda: _Provider())
     service = _build_service(adapter=AsyncMock(), surfaces=[_slack_surface()])

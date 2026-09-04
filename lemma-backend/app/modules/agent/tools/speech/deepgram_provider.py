@@ -14,6 +14,7 @@ import httpx
 from app.modules.agent.config import agent_settings
 from app.modules.agent.tools.speech.provider import (
     SpeechProvider,
+    SpeechProviderError,
     SpeechProviderName,
     TranscriptionResult,
 )
@@ -81,19 +82,24 @@ class DeepgramSpeechProvider(SpeechProvider):
         self, audio_bytes: bytes, *, mime: str, language: str | None = None
     ) -> TranscriptionResult:
         if not self._api_key:
-            raise RuntimeError("Deepgram API key is not configured.")
+            raise SpeechProviderError("Deepgram API key is not configured.")
         params: dict[str, str] = {"model": _DEFAULT_STT_MODEL, "smart_format": "true"}
         params.update(_language_params(language))
-        async with httpx.AsyncClient(timeout=_STT_TIMEOUT) as client:
-            response = await client.post(
-                _LISTEN_URL,
-                params=params,
-                headers=self._headers(content_type=mime or "application/octet-stream"),
-                content=audio_bytes,
-            )
-            response.raise_for_status()
-            payload: dict[str, Any] = response.json()
-        return _parse_transcription(payload)
+        try:
+            async with httpx.AsyncClient(timeout=_STT_TIMEOUT) as client:
+                response = await client.post(
+                    _LISTEN_URL,
+                    params=params,
+                    headers=self._headers(
+                        content_type=mime or "application/octet-stream"
+                    ),
+                    content=audio_bytes,
+                )
+                response.raise_for_status()
+                payload: dict[str, Any] = response.json()
+            return _parse_transcription(payload)
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+            raise SpeechProviderError(f"Deepgram transcription failed: {exc}") from exc
 
     async def synthesize(
         self,
@@ -104,7 +110,7 @@ class DeepgramSpeechProvider(SpeechProvider):
         language: str | None = None,
     ) -> bytes:
         if not self._api_key:
-            raise RuntimeError("Deepgram API key is not configured.")
+            raise SpeechProviderError("Deepgram API key is not configured.")
         model = (
             voice
             or voice_for_language(language)

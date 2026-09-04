@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.identity.contracts import UserPreferences
-from app.composition.surface_identity import PodMember
+from app.modules.pod.contracts.orm import PodMember
 from app.modules.identity.contracts.orm import OrganizationMember, User
 
 

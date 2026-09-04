@@ -7,7 +7,6 @@ transcribed first, recent channel history a group mention needs for context.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 
@@ -15,6 +14,11 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 
 from app.composition.surface_agent import ConversationService
+from app.modules.agent.contracts.speech import (
+    VoiceClip,
+    VoiceTranscript,
+    transcribe_voice_notes,
+)
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
@@ -46,32 +50,15 @@ _DECISION_NOT_RECORDED = (
 )
 
 
-def _speech_provider() -> Any:
-    """The speech provider, or None when it cannot be reached."""
-    try:
-        from app.composition.surface_agent import get_speech_provider
-
-        return get_speech_provider()
-    except Exception as exc:
-        # Voice notes arrive untranscribed from here on, which is a user-visible
-        # degradation — so it stays a warning, but it has to name the failure.
-        # The line this replaced carried no fields at all, so it could only
-        # report that something was wrong.
-        logger.warning(
-            "agent_surfaces.ingress_service.speech_provider_unavailable",
-            error_type=type(exc).__name__,
-        )
-        return None
-
-
 def _record_transcripts(
-    results: list[tuple[IngestedAttachment, Any]], metadata: dict[str, Any]
+    results: list[tuple[IngestedAttachment, VoiceTranscript | None]],
+    metadata: dict[str, Any],
 ) -> list[str]:
     """The transcripts that came back, with provenance stamped into metadata."""
     transcripts: list[str] = []
     provenance: list[dict[str, Any]] = []
     for item, result in results:
-        text = (getattr(result, "text", "") or "").strip()
+        text = (result.text if result else "").strip()
         if not text:
             provenance.append({"path": item.path, "text": "", "failed": True})
             continue
@@ -80,8 +67,8 @@ def _record_transcripts(
             {
                 "path": item.path,
                 "text": text,
-                "detected_language": getattr(result, "detected_language", None),
-                "duration_seconds": getattr(result, "duration_seconds", None),
+                "detected_language": result.detected_language,
+                "duration_seconds": result.duration_seconds,
             }
         )
     if provenance:
@@ -284,20 +271,12 @@ class SurfaceInboundMessageMixin:
 
     async def _transcribe_all(
         self, items: list[IngestedAttachment]
-    ) -> list[tuple[IngestedAttachment, Any]]:
+    ) -> list[tuple[IngestedAttachment, VoiceTranscript | None]]:
         """Transcribe every voice note at once; a failure yields None for that one."""
-        if not items:
-            return []
-        provider = _speech_provider()
-        if provider is None:
-            return []
-
-        async def _one(item: IngestedAttachment) -> tuple[IngestedAttachment, Any]:
-            try:
-                return item, await provider.transcribe(
-                    item.audio_bytes, mime=item.mime or "audio/ogg"
-                )
-            except Exception:
-                return item, None
-
-        return list(await asyncio.gather(*[_one(item) for item in items]))
+        transcripts = await transcribe_voice_notes(
+            [
+                VoiceClip(audio_bytes=item.audio_bytes, mime=item.mime or "audio/ogg")
+                for item in items
+            ]
+        )
+        return list(zip(items, transcripts))

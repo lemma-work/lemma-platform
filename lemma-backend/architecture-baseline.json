@@ -1,11 +1,11 @@
 {
   "broad_catches": {
-    "agent:count": 64,
+    "agent:count": 65,
     "agent:max": 3,
-    "agent:total": 75,
-    "agent_surfaces:count": 91,
+    "agent:total": 76,
+    "agent_surfaces:count": 87,
     "agent_surfaces:max": 5,
-    "agent_surfaces:total": 103,
+    "agent_surfaces:total": 99,
     "app:count": 6,
     "app:max": 2,
     "app:total": 8,
