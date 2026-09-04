@@ -298,22 +298,38 @@ class ConversationTitleService:
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        conversation_repository: Callable[
-            [SqlAlchemyUnitOfWork], ConversationOpeningReader
-        ] = ConversationRepository,
+        conversation_repository: (
+            Callable[[SqlAlchemyUnitOfWork], ConversationOpeningReader] | None
+        ) = None,
         generator: TitleGenerator | None = None,
-        publish_event: Callable[
-            [UUID, dict[str, object]], Awaitable[None]
-        ] = publish_conversation_event,
+        publish_event: (
+            Callable[[UUID, dict[str, object]], Awaitable[None]] | None
+        ) = None,
         counter: OutcomeCounter = title_counter,
     ):
+        # `None` rather than the real collaborator, for the two names tests
+        # replace by patching a module attribute. A default is evaluated once,
+        # at import, so `= publish_conversation_event` would capture the
+        # function and leave a later `monkeypatch.setattr(module, ...)` with
+        # nothing to reach. `title_counter` keeps its default: nothing patches
+        # it, and `scripts/check_import_bound_defaults.py` is what says so.
         self.uow_factory = uow_factory
-        self.conversation_repository = conversation_repository
+        self._conversation_repository = conversation_repository
         self.generator = (
             generator if generator is not None else (ConversationTitleGenerator())
         )
-        self.publish_event = publish_event
+        self._publish_event = publish_event
         self.counter = counter
+
+    @property
+    def conversation_repository(
+        self,
+    ) -> Callable[[SqlAlchemyUnitOfWork], ConversationOpeningReader]:
+        return self._conversation_repository or ConversationRepository
+
+    @property
+    def publish_event(self) -> Callable[[UUID, dict[str, object]], Awaitable[None]]:
+        return self._publish_event or publish_conversation_event
 
     async def generate_title_if_absent(self, conversation_id: UUID) -> str | None:
         """Generate a title when one is missing; return it, or ``None`` to skip.
