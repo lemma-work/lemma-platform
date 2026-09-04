@@ -237,6 +237,7 @@ export {
 export {
     AppWindow,
     ChatTeardrop,
+    Desktop as Monitor,
     Cube,
     FlowArrow,
     FolderSimple,

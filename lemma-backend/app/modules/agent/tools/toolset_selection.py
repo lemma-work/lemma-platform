@@ -52,6 +52,7 @@ from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 DECLARABLE_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.WORKSPACE_CLI,
     AgentToolset.WEB_SEARCH,
+    AgentToolset.BROWSER,
     AgentToolset.SUBAGENTS,
     AgentToolset.SPEECH,
     AgentToolset.MEMORY,

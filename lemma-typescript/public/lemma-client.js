@@ -16918,6 +16918,116 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/namespaces/workspace.ts
+  var WebLoginsNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    list() {
+      return this.http.request("GET", "/web-logins");
+    }
+    /**
+     * Forget a site.
+     *
+     * Revokes Lemma's copy and nothing else: the session stays valid at the site
+     * until it expires or the person logs out there.
+     */
+    remove(origin) {
+      return this.http.request("DELETE", "/web-logins", {
+        params: { origin }
+      });
+    }
+    history(limit = 100) {
+      return this.http.request(
+        "GET",
+        "/web-logins/history",
+        { params: { limit } }
+      );
+    }
+  };
+  var WorkspaceNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    listFiles(options = {}) {
+      return this.http.request("GET", "/workspace/files", {
+        params: {
+          ...options.path ? { path: options.path } : {},
+          ...options.wake ? { wake: true } : {}
+        }
+      });
+    }
+    statFile(path) {
+      return this.http.request("GET", "/workspace/files:stat", {
+        params: { path }
+      });
+    }
+    /**
+     * A signed, short-lived URL for the live browser view.
+     *
+     * Minting one starts the workspace if it is paused, so ask whether it is
+     * awake before calling this rather than after.
+     */
+    browserAccess(ttlSeconds = 1800) {
+      return this.http.request("POST", "/workspace/apps/browser/access", {
+        body: { ttl_seconds: ttlSeconds }
+      });
+    }
+    /**
+     * Keep the browser awake while somebody is watching.
+     *
+     * Watching is not a command, and `agent-browser` closes Chrome after two
+     * minutes without one — so a live view with nobody typing goes dark on its
+     * own unless something touches it.
+     */
+    heartbeatBrowser() {
+      return this.http.request("POST", "/workspace/apps/browser/heartbeat");
+    }
+    /** Ask the person to drive the browser, and get the id that addresses it. */
+    createTakeover(body) {
+      return this.http.request("POST", "/workspace/takeover", { body });
+    }
+    /**
+     * Open a takeover.
+     *
+     * The id is a lookup, never a credential: the server checks it against the
+     * caller's own session, which is what makes the link safe to send through a
+     * chat platform whose unfurl bot fetches every URL it is shown.
+     */
+    openTakeover(requestId) {
+      return this.http.request(
+        "GET",
+        `/workspace/takeover/${encodeURIComponent(requestId)}`
+      );
+    }
+    /** Keep the browser alive while somebody is still typing into it. */
+    heartbeatTakeover(requestId) {
+      return this.http.request(
+        "POST",
+        `/workspace/takeover/${encodeURIComponent(requestId)}:heartbeat`
+      );
+    }
+    resolveTakeover(requestId, done) {
+      return this.http.request(
+        "POST",
+        `/workspace/takeover/${encodeURIComponent(requestId)}:resolve`,
+        { params: { done } }
+      );
+    }
+    /**
+     * Raw bytes of one file, from `offset`, at most `length` bytes.
+     *
+     * The query is built into the path because `requestBytes` takes no options —
+     * it is the byte-returning sibling of `request`, not a full request builder.
+     */
+    readFile(path, options = {}) {
+      const query = new URLSearchParams({ path });
+      if (options.offset) query.set("offset", String(options.offset));
+      if (options.length) query.set("length", String(options.length));
+      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`);
+    }
+  };
+
   // src/openapi_client/services/QueryService.ts
   var QueryService = class {
     /**
@@ -17125,6 +17235,8 @@ var LemmaClient = (() => {
       __publicField(this, "workflows");
       __publicField(this, "apps");
       __publicField(this, "widgets");
+      __publicField(this, "workspace");
+      __publicField(this, "webLogins");
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
@@ -17179,6 +17291,8 @@ var LemmaClient = (() => {
       this.notifications = new NotificationsNamespace(this._generated, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
+      this.workspace = new WorkspaceNamespace(this._http);
+      this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);

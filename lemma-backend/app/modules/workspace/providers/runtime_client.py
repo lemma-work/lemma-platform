@@ -63,6 +63,15 @@ class WorkspaceRuntimeFileConflict(WorkspaceRuntimeError):
     pass
 
 
+class WorkspaceBrowserNotRunning(WorkspaceRuntimeError):
+    """No browser to attach to.
+
+    Its own type because it is not a failure: a workspace whose browser has been
+    shed — for idleness or memory — is the ordinary resting state, and the
+    caller wants to say "nothing to watch yet" rather than "something broke".
+    """
+
+
 class WorkspaceRuntimeFileRejected(WorkspaceRuntimeError):
     def __init__(self, message: str, *, status_code: int) -> None:
         super().__init__(message)
@@ -83,6 +92,8 @@ class WorkspaceRuntimeClient:
         self, base_url: str, token: str, *, request_timeout_seconds: float = 35
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
+        self._base_url = base_url
+        self._token = token
         self._client = httpx.AsyncClient(
             base_url=base_url,
             headers={"X-Lemma-Runtime-Token": token},
@@ -92,9 +103,48 @@ class WorkspaceRuntimeClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    def cdp_socket(self, target_id: str) -> tuple[str, dict[str, str]]:
+        """Where to attach to one page's debugging protocol, and with what.
+
+        Returned rather than opened here because the caller is a relay: it holds
+        the connection for as long as somebody is watching, which is not a
+        lifetime this client should own.
+
+        The credential goes with it. Only the runtime's own port is published,
+        so the debugging protocol is reachable exclusively through the runtime —
+        which is also where it should be, since a place to stand between a
+        browser tab and full control of the session is worth having.
+        """
+        scheme = "wss" if self._base_url.startswith("https") else "ws"
+        base = self._base_url.split("://", 1)[-1].rstrip("/")
+        return (
+            f"{scheme}://{base}/browser/cdp/{target_id}",
+            {"X-Lemma-Runtime-Token": self._token},
+        )
+
     async def health(self, *, deadline_at: datetime) -> RuntimeHealthResponse:
         response = await self._request("GET", "/health", deadline_at=deadline_at)
         return RuntimeHealthResponse.model_validate(response.json())
+
+    async def browser_targets(
+        self, *, deadline_at: datetime
+    ) -> tuple[dict[str, str], ...]:
+        """The pages a person could be shown, newest first.
+
+        Empty when the browser is not running, rather than an error: a workspace
+        whose browser has been shed is the ordinary resting state, and a caller
+        asking what there is to watch wants "nothing yet" rather than a failure.
+        """
+        try:
+            response = await self._request(
+                "GET",
+                "/browser/cdp/targets",
+                deadline_at=deadline_at,
+                status_errors={409: WorkspaceBrowserNotRunning},
+            )
+        except WorkspaceBrowserNotRunning:
+            return ()
+        return tuple(response.json().get("targets", ()))
 
     async def start_process(
         self, request: StartProcessRequest

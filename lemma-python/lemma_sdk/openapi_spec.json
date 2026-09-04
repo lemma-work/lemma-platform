@@ -2452,6 +2452,7 @@
         "description": "Known tool bundles an agent may request.",
         "enum": [
           "WORKSPACE_CLI",
+          "BROWSER",
           "SKILLS",
           "WEB_SEARCH",
           "USER_INTERACTION",
@@ -12075,6 +12076,7 @@
           "conversation",
           "connector",
           "connector_account",
+          "web_login",
           "connector_auth_config"
         ],
         "title": "ResourceType",
@@ -14204,6 +14206,176 @@
         "title": "TableSummaryResponse",
         "type": "object"
       },
+      "TakeoverCreateRequest": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation that raised this.",
+            "title": "Conversation Id"
+          },
+          "origin": {
+            "description": "The site being logged into, e.g. `https://app.example.com`.",
+            "maxLength": 255,
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "description": "What the agent was trying to do when it hit the wall.",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "title": "TakeoverCreateRequest",
+        "type": "object"
+      },
+      "TakeoverResponse": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "saved": {
+            "default": false,
+            "description": "Whether the session was kept, so this site is not asked about again.",
+            "title": "Saved",
+            "type": "boolean"
+          },
+          "saved_detail": {
+            "default": "",
+            "description": "Why it was or was not kept, in words for the person who just signed in.",
+            "title": "Saved Detail",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TakeoverStatus"
+          }
+        },
+        "required": [
+          "request_id",
+          "origin",
+          "reason",
+          "status",
+          "conversation_id",
+          "created_at"
+        ],
+        "title": "TakeoverResponse",
+        "type": "object"
+      },
+      "TakeoverSessionResponse": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When that URL stops working.",
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "saved": {
+            "default": false,
+            "description": "Whether the session was kept, so this site is not asked about again.",
+            "title": "Saved",
+            "type": "boolean"
+          },
+          "saved_detail": {
+            "default": "",
+            "description": "Why it was or was not kept, in words for the person who just signed in.",
+            "title": "Saved Detail",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TakeoverStatus"
+          },
+          "url": {
+            "description": "Signed URL of the live browser view.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "origin",
+          "reason",
+          "status",
+          "conversation_id",
+          "created_at",
+          "url",
+          "expires_at"
+        ],
+        "title": "TakeoverSessionResponse",
+        "type": "object"
+      },
+      "TakeoverStatus": {
+        "enum": [
+          "pending",
+          "done",
+          "cancelled"
+        ],
+        "title": "TakeoverStatus",
+        "type": "string"
+      },
       "TelegramManagedBotSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -16319,6 +16491,171 @@
         "title": "WaitUntilNodeResponse",
         "type": "object"
       },
+      "WebLoginAuditEntry": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "action",
+          "outcome",
+          "actor",
+          "detail",
+          "created_at"
+        ],
+        "title": "WebLoginAuditEntry",
+        "type": "object"
+      },
+      "WebLoginAuditResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebLoginAuditEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "WebLoginAuditResponse",
+        "type": "object"
+      },
+      "WebLoginKind": {
+        "enum": [
+          "SESSION",
+          "CREDENTIAL"
+        ],
+        "title": "WebLoginKind",
+        "type": "string"
+      },
+      "WebLoginListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebLoginResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "WebLoginListResponse",
+        "type": "object"
+      },
+      "WebLoginResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_hint_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires Hint At"
+          },
+          "has_password": {
+            "description": "Whether a password is stored as well as a session.",
+            "title": "Has Password",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WebLoginKind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "origin",
+          "label",
+          "kind",
+          "created_at",
+          "updated_at",
+          "last_used_at",
+          "expires_hint_at",
+          "has_password"
+        ],
+        "title": "WebLoginResponse",
+        "type": "object"
+      },
       "WebSearchRequest": {
         "description": "Request model for standard web search",
         "properties": {
@@ -17719,6 +18056,83 @@
           "expires_at"
         ],
         "title": "WorkspaceAppAccessResponse",
+        "type": "object"
+      },
+      "WorkspaceFileEntry": {
+        "properties": {
+          "kind": {
+            "description": "What this entry is.",
+            "enum": [
+              "file",
+              "directory",
+              "symlink"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "modified_at": {
+            "description": "Last modification time.",
+            "format": "date-time",
+            "title": "Modified At",
+            "type": "string"
+          },
+          "name": {
+            "description": "Final path segment.",
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path inside the workspace.",
+            "title": "Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "description": "Size in bytes; 0 for a directory.",
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "kind",
+          "size_bytes",
+          "modified_at"
+        ],
+        "title": "WorkspaceFileEntry",
+        "type": "object"
+      },
+      "WorkspaceFileListResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceFileEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "path": {
+            "description": "The directory that was listed.",
+            "title": "Path",
+            "type": "string"
+          },
+          "sleeping": {
+            "default": false,
+            "description": "True when the workspace is paused and was not woken to answer. Entries are empty; ask again with `wake=true` to start it.",
+            "title": "Sleeping",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "description": "True when the directory holds more entries than were returned.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WorkspaceFileListResponse",
         "type": "object"
       },
       "attach": {
@@ -34304,6 +34718,139 @@
         }
       }
     },
+    "/web-logins": {
+      "delete": {
+        "description": "Forget a site.\n\nRemoving the row is the whole revocation from Lemma's side. It does **not**\nsign the person out at the site, and the response says so \u2014 a saved session\nthat has been deleted here is still a valid session there until they log out\nor it expires, and implying otherwise would be the more dangerous lie.",
+        "operationId": "web_login.delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a saved site login",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "web_login"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "web_login",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "web_login.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List saved site logins",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "web_login",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/web-logins/history": {
+      "get": {
+        "operationId": "web_login.history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginAuditResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What has been done with your saved logins",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "web_login",
+          "result": "entity",
+          "verb": "history"
+        }
+      }
+    },
     "/workspace/apps/browser/access": {
       "post": {
         "operationId": "workspace.browser.access",
@@ -34352,6 +34899,470 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/workspace/apps/browser/heartbeat": {
+      "post": {
+        "operationId": "workspace.browser.heartbeat",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Keep the workspace browser awake while somebody is watching",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "heartbeat"
+        }
+      }
+    },
+    "/workspace/apps/browser/targets": {
+      "get": {
+        "description": "What there is to watch.\n\nAn empty list when the browser is not running, rather than an error: a\nworkspace whose browser has been shed for idleness or memory is the ordinary\nresting state, and the caller wants \"nothing yet\".",
+        "operationId": "workspace.browser.targets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "items": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "title": "Response Workspace.Browser.Targets",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List pages the workspace browser has open",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "targets"
+        }
+      }
+    },
+    "/workspace/files": {
+      "get": {
+        "operationId": "workspace.files.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          },
+          {
+            "description": "Start the workspace if it is paused. Off by default.",
+            "in": "query",
+            "name": "wake",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Start the workspace if it is paused. Off by default.",
+              "title": "Wake",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List workspace files",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.files",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/workspace/files:content": {
+      "get": {
+        "operationId": "workspace.files.content",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "length",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 8388608,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Length"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read workspace file content",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "workspace.files",
+          "result": "entity",
+          "verb": "content"
+        }
+      }
+    },
+    "/workspace/files:stat": {
+      "get": {
+        "operationId": "workspace.files.stat",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stat one workspace file",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.files",
+          "result": "entity",
+          "verb": "stat"
+        }
+      }
+    },
+    "/workspace/takeover": {
+      "post": {
+        "operationId": "workspace.takeover.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeoverCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask a person to drive the workspace browser",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.takeover"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.takeover",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/workspace/takeover/{request_id}": {
+      "get": {
+        "operationId": "workspace.takeover.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoverSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open a takeover and get the live browser URL",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.takeover",
+          "result": "entity",
+          "verb": "open"
+        }
+      }
+    },
+    "/workspace/takeover/{request_id}:heartbeat": {
+      "post": {
+        "description": "Touch the browser so neither timer closes it under the person.\n\nA trivial `agent-browser` command is what resets the daemon's two-minute\nidle timer, and running it through the workspace session is what refreshes\nthe sandbox's own activity clock. One call answers both.",
+        "operationId": "workspace.takeover.heartbeat",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Keep the browser alive while somebody is typing",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.takeover"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.takeover",
+          "result": "entity",
+          "verb": "heartbeat"
+        }
+      }
+    },
+    "/workspace/takeover/{request_id}:resolve": {
+      "post": {
+        "operationId": "workspace.takeover.resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "done",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Done",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Say the takeover is finished",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.takeover"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.takeover",
+          "result": "entity",
+          "verb": "resolve"
         }
       }
     }

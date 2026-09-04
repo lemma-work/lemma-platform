@@ -59,6 +59,11 @@ class LemmaModule:
     # --- API process ---
     routers: RouterProvider | None = None
     api_lifespans: Sequence[ApiLifespan] = ()
+    # ASGI middleware this module owns. Declared here rather than wired in
+    # `app.py` because host-based serving belongs to the module that is being
+    # served: an app knows it lives at a subdomain, and so does a sandbox
+    # browser. Applied in module-list order, innermost first.
+    middlewares: Sequence[type] = ()
 
     # --- Worker process ---
     event_routers: EventRouterProvider | None = None

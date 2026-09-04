@@ -12,6 +12,9 @@ import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { PodWelcome, type PodWelcomeChoice } from '@/components/pod/pod-welcome';
 import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
+import { ComputerPanel } from '@/components/workspace/computer-panel';
+import { Monitor } from '@/components/ui/icons';
+import { Button } from '@/components/ui/button';
 import {
     buildScopedConversationHref,
     resolveConversationAgentName,
@@ -106,6 +109,11 @@ function PodConversationSurface({
         searchParams.get('presented'),
         podId,
     );
+    // The agent's computer, shown beside the conversation rather than at a route
+    // of its own: a workspace is keyed to the person and only means anything in
+    // the conversation that has been using it, so a URL you could navigate to
+    // cold would be a page that cannot say whose files it is showing.
+    const isComputerOpen = searchParams.get('computer') === '1';
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadataParam(searchParams.get('conversationMetadata')),
@@ -236,6 +244,20 @@ function PodConversationSurface({
         );
     }, [conversationId, podId, router, searchParamsString]);
 
+    const setComputerOpen = useCallback((open: boolean) => {
+        const params = new URLSearchParams(searchParamsString);
+        if (open) {
+            params.set('computer', '1');
+        } else {
+            params.delete('computer');
+        }
+        const query = params.toString();
+        router.replace(
+            `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}${query ? `?${query}` : ''}`,
+            { scroll: false },
+        );
+    }, [conversationId, podId, router, searchParamsString]);
+
     useEffect(() => {
         openedConversationIdRef.current = openedConversationId;
     }, [openedConversationId]);
@@ -355,7 +377,26 @@ function PodConversationSurface({
                     onSkip={() => leaveWelcome(null)}
                 />
             ) : null}
-            <section className="min-h-0 flex-1">
+            <section className="relative min-h-0 flex-1">
+                {/* Shown for any open conversation rather than only a running
+                    one: compute is released after fifteen minutes idle but the
+                    files outlive it, so hiding this when the machine sleeps
+                    would take the affordance away exactly when somebody comes
+                    back to look at what the agent made. */}
+                {isRouteConversationSelected && !isNewConversation ? (
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="icon"
+                        onClick={() => setComputerOpen(!isComputerOpen)}
+                        aria-pressed={isComputerOpen}
+                        aria-label={isComputerOpen ? "Hide this agent's computer" : "Show this agent's computer"}
+                        title={isComputerOpen ? "Hide this agent's computer" : "Show this agent's computer"}
+                        className="absolute right-3 top-2 z-10 size-8"
+                    >
+                        <Monitor className="size-4" />
+                    </Button>
+                ) : null}
                 {isRouteConversationSelected ? (
                     <PodAssistantEmbedded
                         title={isNewConversation ? 'New' : conversationTitle}
@@ -392,6 +433,24 @@ function PodConversationSurface({
             </section>
         </div>
     );
+
+    if (isComputerOpen && !presentedResourceHref) {
+        return (
+            <ConversationPresentationStage
+                podId={podId}
+                resourceHref=""
+                stageTitle="This agent's computer"
+                stageBodyOverride={
+                    <ComputerPanel
+                        conversationId={isNewConversation ? undefined : conversationId}
+                    />
+                }
+                onClose={() => setComputerOpen(false)}
+            >
+                {conversationSurface}
+            </ConversationPresentationStage>
+        );
+    }
 
     if (presentedResourceHref) {
         return (

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pydantic_ai.capabilities import AbstractCapability
 
 from app.modules.agent.tools.registry import (
+    browser_toolset,
     connectors_toolset,
     messaging_toolset,
     pod_toolset,
@@ -31,6 +32,7 @@ _GROUP_LABELS: dict[int, str] = {
     id(connectors_toolset): "Connected third-party apps",
     id(messaging_toolset): "Reaching pod members",
     id(snooze_toolset): "Pausing and resuming later",
+    id(browser_toolset): "Driving a real browser",
 }
 
 

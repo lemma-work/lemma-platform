@@ -43,6 +43,17 @@ def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> No
             app.include_router(router)
 
 
+def add_module_middleware(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
+    """Add each module's ASGI middleware, in module-list order.
+
+    Called before the correlation-id middleware so that stays outermost and
+    stamps every response, including the ones a host rewrite redirected.
+    """
+    for module in modules:
+        for middleware in module.middlewares:
+            app.add_middleware(middleware)
+
+
 def register_streaq_tasks(modules: Sequence[LemmaModule]) -> None:
     """Import each module's ``@streaq_task``/``@streaq_cron`` modules.
 

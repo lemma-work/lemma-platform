@@ -8,6 +8,7 @@ the right workspace, cwd and credentials.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
@@ -282,13 +283,37 @@ class WorkspaceSandboxService:
     ) -> PortAccessGrant:
         if ensure_sandbox:
             await self.get_or_create_sandbox(user_id)
-        return await self._get_manager_client().create_port_access(
+        grant = await self._get_manager_client().create_port_access(
             WorkloadKind.WORKSPACE,
             user_id,
             4848,
             protocol=PortProtocol.HTTP,
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
         )
+        return await self._as_browser_host(grant)
+
+    @staticmethod
+    async def _as_browser_host(grant: PortAccessGrant) -> PortAccessGrant:
+        """Move the grant onto its own origin, where the dashboard can work.
+
+        The path-prefixed URL is left alone when no browser domain is
+        configured, so an install that has not set one still gets today's
+        behaviour rather than a broken link — it just gets the dashboard's
+        un-hydrated shell, which is what a path prefix can serve.
+        """
+        from app.modules.workspace.config import workspace_settings
+        from app.modules.workspace.services.browser_host import BrowserHostCodeStore
+
+        base = (workspace_settings.browser_base_domain or "").strip()
+        if not base:
+            return grant
+
+        token = grant.url.rstrip("/").rsplit("/", 1)[-1]
+        code = await BrowserHostCodeStore().mint(token, expires_at=grant.expires_at)
+        scheme = (
+            "http" if base.startswith("localhost") or ".localhost" in base else "https"
+        )
+        return replace(grant, url=f"{scheme}://{code}.{base}/")
 
     async def get_env_vars(
         self,

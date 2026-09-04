@@ -55,8 +55,7 @@ from app.core.security import supertokens_core_reachable
 from app.sandbox_health import record_sandbox_probe, sandbox_capability
 from app.core.infrastructure.channels.channel_service import channel_service
 
-from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
-from app.core.registry.assembly import enter_api_lifespans, include_module_routers
+from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
@@ -219,7 +218,7 @@ async def lifespan(app: FastAPI):
                 # The composed module list (OSS by default; lemma-cloud passes
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
-                await enter_api_lifespans(module_stack, modules, app)
+                await assembly.enter_api_lifespans(module_stack, modules, app)
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
                 logger.info("service.started")
@@ -723,10 +722,9 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # unless apps call the API on their own origin; see the module docstring.
     app.add_middleware(RefreshCookieScopeMiddleware)
 
-    # Host-based app serving: rewrite `<slug>.<app_base_domain>` requests onto
-    # the public app asset endpoint. Outermost so the slug is resolved before
-    # routing/auth (the rewritten /public/* path is unauthenticated).
-    app.add_middleware(AppHostRoutingMiddleware)
+    # Host-based serving — apps and sandbox browsers, each claimed by its own
+    # module. Before the correlation id so that stays outermost.
+    assembly.add_module_middleware(app, modules)
 
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).
@@ -735,7 +733,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # Routers — registered from the module registry (app/core/registry).
     # Order follows OSS_MODULES; intra-module order follows each module's
     # routers() thunk. See app/modules/<name>/module.py.
-    include_module_routers(app, modules)
+    assembly.include_module_routers(app, modules)
 
     # Liveness: process/event-loop check only. No DB or network dependency, so
     # it normally completes within ~100 ms. 503 when the event loop is wedged
