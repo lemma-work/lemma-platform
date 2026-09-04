@@ -6,6 +6,13 @@ scope check is implication-expanded, so the implied ``function.read`` is
 admitted too). Long-lived agent contexts (sub-agent runs, pod data-access
 tools) are deliberately unscoped — the workload's explicit resource grants
 and the destructive-action gate are the limiters there.
+
+The pod-default agent's two names also live here, together and on purpose.
+``DEFAULT_POD_AGENT_NAME`` is what the row carries and what a token claims;
+``DEFAULT_RESPONDER_NAME`` is what a person reads. They were apart, and the
+display name lost: the change that gave the pod's agent a real row normalised
+every place that had faked one to the *product* name, because nothing beside the
+wire value said the actor already had a name of its own.
 """
 
 from __future__ import annotations
@@ -35,6 +42,30 @@ POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
 POD_DEFAULT_AGENT_SELECTOR_ALIASES = frozenset(
     {POD_DEFAULT_AGENT_SELECTOR, DEFAULT_POD_AGENT_NAME}
 )
+
+# What the pod's own agent is called wherever a person can read it. See
+# `lemma-frontend/lib/utils/agents.ts` — these two must agree, because someone
+# reading a name in Slack and someone reading it in the app are reading about
+# the same actor.
+DEFAULT_RESPONDER_NAME = "Lem"
+
+
+def agent_display_name(name: str | None) -> str:
+    """An agent's row name → what a person reads.
+
+    The pod's own agent is stored as ``pod_default`` and claimed as
+    ``POD_DEFAULT``; both are identifiers, and neither is a name to show
+    anybody. ``None`` resolves the same way, because a surface with no agent
+    is the pod answering — the same reading :func:`is_pod_default_agent`
+    gives a null agent id.
+
+    Display only. Anything that resolves a name back to a row — conversation
+    creation, address allocation — needs the stored value and must not call
+    this.
+    """
+    if not name or name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+        return DEFAULT_RESPONDER_NAME
+    return name
 
 
 def is_pod_default_agent(agent_id: UUID | None, *, pod_id: UUID | None) -> bool:

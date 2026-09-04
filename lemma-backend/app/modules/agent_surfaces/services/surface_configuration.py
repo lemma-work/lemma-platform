@@ -16,9 +16,7 @@ from __future__ import annotations
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent.contracts import AgentKind
-from app.modules.agent_surfaces.platforms.slack.blocks import (
-    DEFAULT_RESPONDER_NAME,
-)
+from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.permissions import Permissions
