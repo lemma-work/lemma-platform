@@ -76,11 +76,11 @@ class ScheduleService:
             uow=uow
         )
         if external_schedule_writer is None:
-            from app.composition.schedule_connectors import (
+            from app.modules.schedule.infrastructure.adapters.external_schedule_writer import (
                 ExternalScheduleWriterAdapter,
             )
 
-            external_schedule_writer = ExternalScheduleWriterAdapter(uow=uow)
+            external_schedule_writer = ExternalScheduleWriterAdapter(uow)
         self.external_schedule_writer = external_schedule_writer
         self.authorization_service = authorization_service
         # Injected rather than resolved here: the registry is a deployment

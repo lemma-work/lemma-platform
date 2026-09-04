@@ -7,7 +7,9 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
+from app.modules.schedule.services.run_recovery_service import (
+    ScheduleRunRecoveryService,
+)
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.infrastructure.models.run import ScheduleRun

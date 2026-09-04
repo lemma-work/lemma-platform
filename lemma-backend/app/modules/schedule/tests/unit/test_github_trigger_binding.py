@@ -12,11 +12,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from types import SimpleNamespace
 
 import pytest
 
-from app.composition.schedule_connectors import _github_binding
+from app.modules.connectors.contracts.triggers import TriggerBinding
+from app.modules.schedule.infrastructure.adapters.external_schedule_writer import (
+    _github_binding,
+    defaults_the_author_left_out,
+)
 from app.composition.webhook_sources.github import GitHubWebhookSource
 from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.errors import ScheduleValidationError
@@ -71,10 +74,13 @@ async def _delivered_key(event: str, payload: dict) -> dict:
 async def test_the_stored_key_matches_the_delivered_key(event):
     """Every catalog trigger, against a delivery of the event it names."""
     stored = _github_binding(
-        # `external_ref` is a string column; the payload's `installation.id` is
-        # a JSON number. This assertion is what keeps them comparable.
-        trigger=SimpleNamespace(event_type=event, connector_id="github"),
-        account=SimpleNamespace(external_ref=str(INSTALLATION_ID)),
+        TriggerBinding(
+            connector_id="github",
+            event_type=event,
+            # `external_ref` is a string column; the payload's `installation.id`
+            # is a JSON number. This assertion is what keeps them comparable.
+            installation_id=str(INSTALLATION_ID),
+        )
     )
     payloads = {
         "push": {"after": "abc"},
@@ -103,8 +109,9 @@ async def test_an_unbound_account_is_refused_rather_than_silently_unroutable():
     """
     with pytest.raises(ScheduleValidationError):
         _github_binding(
-            trigger=SimpleNamespace(event_type="push", connector_id="github"),
-            account=SimpleNamespace(external_ref=None),
+            TriggerBinding(
+                connector_id="github", event_type="push", installation_id=None
+            )
         )
 
 
@@ -116,39 +123,30 @@ class TestDeclaredDefaults:
     repository emits one delivery per run per state change, so the API path
     would wake an agent three times for one CI run while the UI path woke it
     once.
+
+    Reading the defaults out of the schema belongs to `connectors`, which owns
+    `config_schema`, and is covered there. What is decided here is the half that
+    is a schedule policy: whose value wins.
     """
 
     @staticmethod
-    def _trigger(properties: dict) -> SimpleNamespace:
-        return SimpleNamespace(
-            event_type="workflow_run",
-            connector_id="github",
-            config_schema={"type": "object", "properties": properties},
+    def _binding(**defaults) -> TriggerBinding:
+        return TriggerBinding(
+            connector_id="github", event_type="workflow_run", config_defaults=defaults
         )
 
     def test_a_default_fills_a_key_the_author_left_out(self):
-        from app.composition.schedule_connectors import _schema_defaults
+        binding = self._binding(actions=["completed"])
 
-        trigger = self._trigger({"actions": {"default": ["completed"]}})
-        assert _schema_defaults(trigger, {}) == {"actions": ["completed"]}
-        assert _schema_defaults(trigger, None) == {"actions": ["completed"]}
+        assert defaults_the_author_left_out(binding, {}) == {"actions": ["completed"]}
+        assert defaults_the_author_left_out(binding, None) == {"actions": ["completed"]}
 
     def test_what_the_author_wrote_is_never_overwritten(self):
-        from app.composition.schedule_connectors import _schema_defaults
+        binding = self._binding(actions=["completed"])
 
-        trigger = self._trigger({"actions": {"default": ["completed"]}})
-        assert _schema_defaults(trigger, {"actions": ["requested"]}) == {}
+        assert defaults_the_author_left_out(binding, {"actions": ["requested"]}) == {}
         # An empty list is a decision, not an absence.
-        assert _schema_defaults(trigger, {"actions": []}) == {}
+        assert defaults_the_author_left_out(binding, {"actions": []}) == {}
 
-    def test_a_property_with_no_default_stays_absent(self):
-        from app.composition.schedule_connectors import _schema_defaults
-
-        trigger = self._trigger({"repository_id": {"type": "integer"}})
-        assert _schema_defaults(trigger, {}) == {}
-
-    def test_a_trigger_with_no_schema_contributes_nothing(self):
-        from app.composition.schedule_connectors import _schema_defaults
-
-        assert _schema_defaults(SimpleNamespace(config_schema=None), {}) == {}
-        assert _schema_defaults(SimpleNamespace(config_schema={}), {}) == {}
+    def test_a_trigger_that_declares_nothing_contributes_nothing(self):
+        assert defaults_the_author_left_out(self._binding(), {}) == {}

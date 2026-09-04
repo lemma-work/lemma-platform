@@ -17,18 +17,14 @@ pod, owned and read by the person who built it, never activates -- and that is
 the design doc's own canonical example of a pod delivering value. A definition
 that scores it as churn is measuring chat, not the product.
 
-Fires once per pod, ever, and that fact lives in the pod's own ``config`` JSONB
-under an ``analytics`` key. A dedicated table would have been a schema migration,
-an ORM model and a whole module's infrastructure package to store one timestamp
-per pod -- and the pod row is already the thing the fact is about.
+Fires once per pod, ever. That fact is a marker on the pod's own row, claimed
+through ``pod.contracts.delivery``: pod owns the write because pod owns the
+column and the conditional ``UPDATE`` that makes the claim atomic. What the
+marker *means* is here.
 
 Not Redis alone: a flush or a failover would re-fire activation for every
 established pod at once and corrupt the funnel irreversibly. Redis sits in front
 as a negative cache, which is safe because a miss only ever costs a read.
-
-The claim is a conditional ``UPDATE ... WHERE NOT (config->'analytics' ? 'delivered_at')``
-that returns a row only to the caller that won it, so two workers processing two
-outcomes for the same pod at the same instant still produce exactly one event.
 """
 
 from __future__ import annotations
@@ -37,12 +33,19 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID
 
+from redis.exceptions import RedisError
 from sqlalchemy import text
 
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.context import ActorType
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind
+from app.modules.analytics.services.buckets import COUNT_EDGES, bucket, days_bucket
+from app.modules.pod.contracts.delivery import (
+    claim_first_delivery,
+    mark_delivery_seeded,
+    pod_provenance,
+)
 
 logger = get_logger(__name__)
 
@@ -63,40 +66,14 @@ AUTONOMOUS_ORIGINS = frozenset(
     {OriginKind.SCHEDULE, OriginKind.DATA_TRIGGER, OriginKind.CONNECTOR}
 )
 
-#: Claim activation for a pod, exactly once.
-#:
-#: The ``NOT (... ? 'delivered_at')`` guard is what makes it once-only: two
-#: workers processing two outcomes for the same pod at the same instant both run
-#: this, and only one gets a row back.
-#:
-#: The casts are load-bearing, not decoration. ``jsonb_build_object`` declares
-#: its arguments as ``"any"``, so PostgreSQL cannot infer a type for a bound
-#: parameter and asyncpg raises ``IndeterminateDatatypeError`` before the
-#: statement runs at all. Without them this never wrote the marker, so the guard
-#: never became false and every later outcome retried it forever.
-#:
-#: ``CAST(x AS text)`` rather than ``x::text``: SQLAlchemy's ``text()`` scans for
-#: ``:name`` and reads the second colon of ``::text`` as a bind parameter called
-#: ``text``, which turns the statement into a syntax error. The ``'{}'::jsonb``
-#: literals below are unaffected because no bind parameter precedes them.
-#:
-#: Kept as a module constant so the e2e test binds the same statement production
-#: does. A copy in the test would have passed while this failed.
-DELIVERY_CLAIM_SQL = """
-UPDATE pods
-SET config = jsonb_set(
-    coalesce(config, '{}'::jsonb),
-    '{analytics}',
-    coalesce(config->'analytics', '{}'::jsonb)
-        || jsonb_build_object('delivered_at', CAST(:now AS text), 'via', CAST(:via AS text)),
-    true
-)
-WHERE id = :pod_id
-  AND NOT (coalesce(config->'analytics', '{}'::jsonb) ? 'delivered_at')
-RETURNING id
-"""
-
 _CACHE_KEY = "analytics:pod-delivered:{pod_id}"
+
+
+async def pod_creator(uow_factory, pod_id: UUID) -> UUID | None:
+    """Who built the pod — the person an outcome has to reach *past* to count."""
+    async with uow_factory() as uow:
+        provenance = await pod_provenance(uow, pod_id)
+    return provenance.creator_user_id if provenance else None
 
 
 def qualifies(
@@ -127,10 +104,10 @@ async def maybe_emit_pod_delivered(
     """Emit ``pod.delivered`` if this is the first qualifying outcome for the pod.
 
     Safe to call on every outcome, and safe to call twice for the same one: the
-    insert is the claim, so only the caller whose insert returns a row emits.
-    Runs inside the consumer's inbox closure, so a crash between the insert and
-    the emit is covered by at-least-once redelivery — and the retry is a no-op
-    because the second insert returns nothing.
+    claim is the lock, so only the caller it returns ``True`` to emits. Runs
+    inside the consumer's inbox closure, so a crash between the claim and the
+    emit is covered by at-least-once redelivery -- and the retry is a no-op
+    because the second claim returns ``False``.
     """
     if not qualifies(
         origin=origin,
@@ -146,22 +123,18 @@ async def maybe_emit_pod_delivered(
     try:
         if await redis.get(key):
             return
-    except Exception:  # noqa: BLE001 - a cache that is down costs a read, not correctness
+    except RedisError, OSError:
+        # A cache that is down costs a read, not correctness: the claim below is
+        # the only thing that decides whether this pod has already delivered.
         logger.debug("analytics.pod_delivered.cache_unavailable")
 
-    already = False
+    seeded = False
     resource_count: int | None = None
-    created_at = None
+    created_at: datetime | None = None
     async with uow_factory() as uow:
-        claimed = await uow.session.scalar(
-            text(DELIVERY_CLAIM_SQL),
-            {
-                "pod_id": pod_id,
-                "now": datetime.now(timezone.utc).isoformat(),
-                "via": via.value,
-            },
+        first = await claim_first_delivery(
+            uow, pod_id, at=datetime.now(timezone.utc), via=via.value
         )
-        first = claimed is not None
         if first:
             # Seed rather than announce, when the pod had already delivered
             # before any of this existed. Dating those activations to the deploy
@@ -169,33 +142,23 @@ async def maybe_emit_pod_delivered(
             # the alternative -- a backfill migration -- would still miss any pod
             # dormant on the day it ran. Deciding it here, on first touch, is both
             # simpler and more accurate.
-            already = await _delivered_before(uow, pod_id)
-            if already:
-                await uow.session.execute(
-                    text(
-                        """
-                        UPDATE pods
-                        SET config = jsonb_set(
-                            config, '{analytics,seeded}', 'true'::jsonb, true
-                        )
-                        WHERE id = :pod_id
-                        """
-                    ),
-                    {"pod_id": pod_id},
-                )
+            seeded = await _delivered_before(uow, pod_id)
+            if seeded:
+                await mark_delivery_seeded(uow, pod_id)
             else:
-                resource_count, created_at = await _pod_shape(uow, pod_id)
+                resource_count = await _resource_count(uow, pod_id)
+                provenance = await pod_provenance(uow, pod_id)
+                created_at = provenance.created_at if provenance else None
         await uow.commit()
 
     try:
         await redis.set(key, "1")
-    except Exception:  # noqa: BLE001 - the pod row is the truth; this is a shortcut
+    except RedisError, OSError:
+        # The pod row is the truth; this is a shortcut.
         logger.debug("analytics.pod_delivered.cache_unavailable")
 
-    if not first or already:
+    if not first or seeded:
         return
-
-    from app.composition.analytics_consumer import _bucket, _days_bucket, COUNT_EDGES
 
     age_days = None
     if created_at is not None:
@@ -213,11 +176,31 @@ async def maybe_emit_pod_delivered(
         properties={
             "pod_id": pod_id,
             "via": via.value,
-            "days_since_created_bucket": _days_bucket(age_days),
-            "resource_count_bucket": _bucket(resource_count, COUNT_EDGES),
+            "days_since_created_bucket": days_bucket(age_days),
+            "resource_count_bucket": bucket(resource_count, COUNT_EDGES),
         },
     )
 
+
+# -- the one place analytics reads other modules' tables directly -------------
+#
+# Both statements below are raw SQL against tables analytics does not own, and
+# that is deliberate rather than unfinished. Each is one question that is
+# genuinely about every module at once, each runs at most once per pod for the
+# life of the platform, and the alternative -- a contract call per module -- is
+# five or seven round-trips to answer a question the database answers in one.
+#
+# The dependency is therefore on these table and column names, and nothing else:
+#
+#   agent_runs.status, agent_runs.conversation_id, agent_conversations.pod_id
+#   workflow_flow_runs.status, workflow_flow_runs.pod_id
+#   schedule_runs.status, schedule_runs.schedule_id, schedules.pod_id
+#   datastore_tables.pod_id, datastore_files.pod_id, functions.pod_id,
+#   agents.pod_id, workflow_flows.pod_id, schedules.pod_id, apps.pod_id
+#
+# A rename in any of those modules breaks this file and nothing else, which is
+# the cost of the exception. It is stated here so the next reader does not have
+# to infer it from the SQL.
 
 #: Whether the pod had produced a completed outcome before the one being
 #: processed. Each source reaches the pod differently -- an agent run through its
@@ -241,42 +224,6 @@ SELECT EXISTS (
 )
 """
 
-
-async def _delivered_before(uow, pod_id: UUID) -> bool:
-    """Had this pod already delivered before the outcome being processed?
-
-    ``OFFSET 1`` is the whole trick: the current outcome is already committed and
-    visible by the time the consumer runs, so "more than one completed run
-    exists" means one existed before this one. Runs once per pod, ever.
-    """
-    return bool(await uow.session.scalar(text(_PRIOR_DELIVERY_SQL), {"pod_id": pod_id}))
-
-
-async def _pod_shape(uow, pod_id: UUID) -> tuple[int | None, datetime | None]:
-    """How much had been built by the time the pod first delivered.
-
-    Cross-module on purpose, which is why this lives in ``app/composition``. It
-    runs once per pod for the life of the platform, so counting seven tables
-    costs nothing worth optimising -- and the alternative, a denormalised counter
-    maintained on every resource write for the sake of one event, would.
-
-    Raw SQL rather than the ORM because the seven models live in seven modules
-    that must not import each other; a UNION ALL of counts is the honest way to
-    ask a question that is genuinely about all of them at once.
-    """
-    created_at = await uow.session.scalar(
-        text("SELECT created_at FROM pods WHERE id = :pod_id"), {"pod_id": pod_id}
-    )
-    union = " UNION ALL ".join(
-        f"SELECT count(*) AS n FROM {table} WHERE pod_id = :pod_id"
-        for table in _RESOURCE_TABLES
-    )
-    total = await uow.session.scalar(
-        text(f"SELECT sum(n) FROM ({union}) AS counts"), {"pod_id": pod_id}
-    )
-    return (int(total) if total is not None else None), created_at
-
-
 #: The resources a pod is made of. Counted together as one shape number, never
 #: reported per-type: the question is "how much had they built", not which
 #: feature they used.
@@ -289,3 +236,39 @@ _RESOURCE_TABLES = (
     "schedules",
     "apps",
 )
+
+
+async def _delivered_before(uow, pod_id: UUID) -> bool:
+    """Had this pod already delivered before the outcome being processed?
+
+    ``OFFSET 1`` is the whole trick: the current outcome is already committed and
+    visible by the time the consumer runs, so "more than one completed run
+    exists" means one existed before this one. Runs once per pod, ever.
+    """
+    return bool(await uow.session.scalar(text(_PRIOR_DELIVERY_SQL), {"pod_id": pod_id}))
+
+
+async def _resource_count(uow, pod_id: UUID) -> int | None:
+    """How much had been built by the time the pod first delivered.
+
+    Runs once per pod for the life of the platform, so counting seven tables
+    costs nothing worth optimising -- and the alternative, a denormalised counter
+    maintained on every resource write for the sake of one event, would.
+    """
+    union = " UNION ALL ".join(
+        f"SELECT count(*) AS n FROM {table} WHERE pod_id = :pod_id"
+        for table in _RESOURCE_TABLES
+    )
+    total = await uow.session.scalar(
+        text(f"SELECT sum(n) FROM ({union}) AS counts"), {"pod_id": pod_id}
+    )
+    return int(total) if total is not None else None
+
+
+__all__ = [
+    "AUTONOMOUS_ORIGINS",
+    "DeliveryVia",
+    "maybe_emit_pod_delivered",
+    "pod_creator",
+    "qualifies",
+]

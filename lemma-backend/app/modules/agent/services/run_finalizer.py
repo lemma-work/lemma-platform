@@ -173,6 +173,14 @@ class RunFinalizer:
                         agent_run_id=run.agent_run_id,
                         status=status,
                         data=event_data or None,
+                        # Copied off the identity this finalizer already holds.
+                        # A consumer that wants to say which pod a run belonged
+                        # to would otherwise have to load the conversation back.
+                        pod_id=run.pod_id,
+                        organization_id=run.organization_id,
+                        agent_id=run.agent_id,
+                        user_id=run.user_id,
+                        started_at=run.started_at,
                     )
                     uow.collect_events([event])
             if finish_result is None or not finish_result.updated:

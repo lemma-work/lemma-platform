@@ -112,11 +112,18 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     publish_usage = AsyncMock()
     monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
-    conversation_id = UUID("00000000-0000-0000-0000-000000000101")
-    run_id = UUID("00000000-0000-0000-0000-000000000102")
+    identity = RunIdentity(
+        conversation_id=UUID("00000000-0000-0000-0000-000000000101"),
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000102"),
+        organization_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        agent_id=uuid4(),
+        started_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
 
     await service.finalizer.finish(
-        run=RunIdentity(conversation_id=conversation_id, agent_run_id=run_id),
+        run=identity,
         status=AgentRunStatus.FAILED,
         conversation_status=ConversationStatus.FAILED,
         error="stale pre-transition error",
@@ -131,6 +138,15 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
         "output_data": {"partial": True},
         "conversation_status": "STOPPED",
     }
+    # A run is scoped to a conversation, so nothing downstream can say which pod
+    # it belonged to from the event alone unless the finalizer puts it there --
+    # and it already holds all of it, on the identity it is finishing. Leaving it
+    # off meant every consumer that wanted a pod loaded the conversation back.
+    assert event.pod_id == identity.pod_id
+    assert event.organization_id == identity.organization_id
+    assert event.agent_id == identity.agent_id
+    assert event.user_id == identity.user_id
+    assert event.started_at == identity.started_at
     assert publish.await_count == 1
     assert publish.await_args.args[1]["type"] == "completed"
     publish_usage.assert_awaited_once()

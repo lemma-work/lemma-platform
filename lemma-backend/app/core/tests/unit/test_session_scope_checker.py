@@ -410,7 +410,7 @@ if __name__ == "__main__":  # pragma: no cover
 # awaited one. An await at least lets other tasks run while the connection is
 # pinned; a sync call pins the connection *and* stops the loop for everyone.
 #
-# `ComposioWebhookVerifier.verify` ran the synchronous Composio SDK on the event
+# Composio webhook verification ran the synchronous Composio SDK on the event
 # loop from an unauthenticated route, and no gate in this repo could see it.
 
 

@@ -16,7 +16,7 @@ from app.modules.pod.infrastructure.pod_repositories import (
     PodRepository,
     PodMemberRepository,
 )
-from app.composition.pod_identity_wiring import create_organization_repository
+from app.modules.identity.contracts.organizations import build_organization_membership
 from app.core.authorization.permissions import Permissions
 
 from app.modules.pod.domain.pod_entities import PodRole
@@ -32,7 +32,7 @@ def get_pod_service(
     return PodService(
         pod_repository=PodRepository(uow, message_bus=message_bus),
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
-        organization_repository=create_organization_repository(uow),
+        organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
         authorization_service=create_authorization_data_service(uow),
         icon_service=create_icon_service(),
@@ -49,7 +49,7 @@ def get_pod_member_service(
     return PodMemberService(
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
         pod_repository=PodRepository(uow, message_bus=message_bus),
-        organization_repository=create_organization_repository(uow),
+        organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
     )
 
@@ -75,7 +75,7 @@ def get_pod_join_request_service(
         ),
         pod_member_repository=PodMemberRepository(uow, message_bus=message_bus),
         pod_repository=PodRepository(uow, message_bus=message_bus),
-        organization_repository=create_organization_repository(uow),
+        organization_repository=build_organization_membership(uow),
         pod_role_service=PodRoleService(uow),
     )
 

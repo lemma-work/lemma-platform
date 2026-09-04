@@ -12,7 +12,7 @@ from app.core.authorization.models import (
     RolePermissionModel,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.composition.pod_identity_wiring import OrganizationMember
+from app.modules.identity.contracts.orm import OrganizationMember
 from app.modules.pod.domain.role_entities import PodRoleEntity
 from app.modules.pod.infrastructure.models.pod_models import PodMember
 

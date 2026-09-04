@@ -2,7 +2,6 @@
   "_comment": "Pre-existing broad excepts that leave no trace of what they caught: no log at all, or a debug record with no exc_info that production never emits. This file may shrink freely; growing it means a new failure has been made invisible. See scripts/check_swallowed_errors.py.",
   "violations": {
     "app/composition/agent_notifications.py::open_notifications_for_conversation::silent-broad-catch::Exception -> return": 1,
-    "app/composition/pod_delivery.py::maybe_emit_pod_delivered::debug-only-broad-catch::analytics.pod_delivered.cache_unavailable": 2,
     "app/core/analytics/app_session.py::_record_app_session::debug-only-broad-catch::analytics.app_session.cache_unavailable": 1,
     "app/core/analytics/app_session.py::maybe_record_app_session::debug-only-broad-catch::analytics.app_session.record_failed": 1,
     "app/core/authorization/service.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
@@ -72,7 +71,6 @@
     "app/modules/pod_bundle/events/handlers.py::_resolve_importer_pod_member_id::debug-only-broad-catch::pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic": 1,
     "app/modules/pod_bundle/events/handlers.py::apply_pod_import::debug-only-broad-catch::pod_bundle.handlers.delete_staged_import_s_s.diagnostic": 1,
     "app/modules/pod_bundle/infrastructure/ai_readme.py::polish_readme::debug-only-broad-catch::pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic": 1,
-    "app/modules/pod_bundle/infrastructure/applier.py::_file_exists::silent-broad-catch::Exception -> return": 1,
     "app/modules/pod_bundle/infrastructure/realtime.py::publish_bundle_event::debug-only-broad-catch::pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic": 1,
     "app/modules/workflow/api/workflow_run_controller.py::_close_subscription::debug-only-broad-catch::workflow.run.stream_teardown_failed": 1,
     "app/modules/workspace/services/workspace_sandbox_service.py::WorkspaceSandboxService.get_session::silent-broad-catch::Exception -> assign": 1,

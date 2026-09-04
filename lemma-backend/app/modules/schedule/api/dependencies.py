@@ -13,7 +13,6 @@ from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
 )
 from app.modules.schedule.services.webhook_handler import WebhookHandler
-from app.modules.schedule.domain.interfaces import WebhookVerifier
 from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 
 
@@ -45,13 +44,6 @@ def get_webhook_handler(
     return WebhookHandler(matcher_factory=_matcher, uow_factory=uow_factory)
 
 
-def get_composio_webhook_verifier() -> WebhookVerifier:
-    """Provide Composio webhook verifier."""
-    from app.composition.schedule_connectors import ComposioWebhookVerifier
-
-    return ComposioWebhookVerifier()
-
-
 @lru_cache(maxsize=1)
 def get_webhook_source_registry() -> WebhookSourceRegistry:
     """The sources this deployment accepts on `POST /webhooks/{source}`.
@@ -73,9 +65,6 @@ def get_current_user_id(request: Request) -> UUID:
 
 ScheduleServiceDep = Annotated[ScheduleService, Depends(get_schedule_service)]
 WebhookHandlerDep = Annotated[WebhookHandler, Depends(get_webhook_handler)]
-ComposioWebhookVerifierDep = Annotated[
-    WebhookVerifier, Depends(get_composio_webhook_verifier)
-]
 WebhookSourceRegistryDep = Annotated[
     WebhookSourceRegistry, Depends(get_webhook_source_registry)
 ]

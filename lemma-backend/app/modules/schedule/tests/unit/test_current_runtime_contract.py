@@ -15,20 +15,27 @@ from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[3]
 
-# Deleted modules. Each had a live replacement at the time of removal:
-# the schedule adapters/managers moved to app/composition/schedule_connectors.py,
-# the workflow adapters were re-export shims over app/composition, and the
-# filter job service was already unreachable.
+# Deleted modules. Each had a live replacement at the time of removal: the
+# workflow adapters were re-export shims over app/composition, the filter job
+# service was already unreachable, and the schedule composition files below
+# were emptied into the modules that own what they were building.
+#
+# `modules/schedule/infrastructure/adapters/external_schedule_writer.py` used to
+# be on this list, and is not any more: it was removed because a *second*
+# runtime path existed alongside the one in the composition root, and it is back
+# because that root file is now the one that is gone. What this ratchet forbids
+# is two paths, not this path.
 REMOVED_PATHS = (
     "modules/schedule/infrastructure/adapters/datastore_adapter.py",
-    "modules/schedule/infrastructure/adapters/external_schedule_writer.py",
-    "modules/schedule/infrastructure/adapters/composio_webhook_verifier.py",
     "modules/schedule/infrastructure/schedule_managers/composio.py",
     "modules/schedule/infrastructure/schedule_managers/manager_factory.py",
     "modules/schedule/services/schedule_filter_job_service.py",
     "modules/workflow/infrastructure/adapters/agent_adapter.py",
     "modules/workflow/infrastructure/adapters/function_adapter.py",
     "modules/workflow/infrastructure/adapters/schedule_adapter.py",
+    "composition/schedule_connectors.py",
+    "composition/schedule_run_recovery.py",
+    "composition/workflow_agent.py",
 )
 
 # Import paths for the same modules, plus the sentinel that used to stand in for
@@ -37,11 +44,12 @@ REMOVED_PATHS = (
 FORBIDDEN_REFERENCES = (
     "_LEGACY_MISSING_USER_ID",
     "modules.schedule.infrastructure.adapters.datastore_adapter",
-    "modules.schedule.infrastructure.adapters.external_schedule_writer",
-    "modules.schedule.infrastructure.adapters.composio_webhook_verifier",
     "modules.schedule.infrastructure.schedule_managers.composio",
     "modules.schedule.infrastructure.schedule_managers.manager_factory",
     "modules.workflow.infrastructure.adapters",
+    "composition.schedule_connectors",
+    "composition.schedule_run_recovery",
+    "composition.workflow_agent",
 )
 
 
