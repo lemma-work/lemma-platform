@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, Request, status
 
 from app.core.api.dependencies import UoWDep
 from app.modules.usage.domain.errors import UsageAccessDeniedError
-from app.modules.identity.contracts import AuthenticatedUser as UserEntity
+from app.modules.identity.contracts import (
+    AuthenticatedUser as UserEntity,
+    OrganizationRole,
+)
+from app.modules.identity.contracts.organizations import organization_member_role
 from app.modules.usage.api.dependencies import UsageServiceDep
 from app.modules.usage.api.schemas import (
     UsageLimitsResponse,
@@ -86,21 +90,28 @@ def _summary_response(summary) -> UsageSummaryResponse:
     )
 
 
+#: Which organization roles may read an organization's spend. Usage's policy,
+#: written where usage can see it: identity answers what a person's role *is*
+#: (`organization_member_role`) and this names what that role may do here. The
+#: two used to be one function in `app/composition/identity_notifications.py`,
+#: where changing who may read usage meant editing a file in a third module.
+_ROLES_THAT_MAY_READ_USAGE = frozenset(
+    {OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR}
+)
+
+
 async def _require_usage_org_access(
     *,
     user: UserEntity,
     organization_id: UUID,
     uow: UoWDep,
 ) -> None:
-    from app.composition.identity_notifications import (
-        user_can_view_organization_usage,
-    )
-
-    if not await user_can_view_organization_usage(
+    role = await organization_member_role(
         uow,
         user_id=user.id,
         organization_id=organization_id,
-    ):
+    )
+    if role not in _ROLES_THAT_MAY_READ_USAGE:
         raise UsageAccessDeniedError(
             "Only organization owners and editors can view usage"
         )

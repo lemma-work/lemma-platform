@@ -1,8 +1,13 @@
 {
-  "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. Entries are {key: count}: the key has no line number so that edits above a violation do not churn the file, and the count is what stops a baselined function having a free slot for a second one. See scripts/check_session_scope.py.",
+  "_comment": "Pre-existing places where a DB connection is held across non-database work. This file may shrink freely; growing it means a new connection is being held across an LLM call, an HTTP request or a thread offload. Entries are {key: count}: the key has no line number so that edits above a violation do not churn the file, and the count is what stops a baselined function having a free slot for a second one. See scripts/check_session_scope.py. The five function_controller entries were not written by the change that added them here: they are real holds -- a request-scoped connection kept across applying a function's code and across a cache invalidation -- that the checker could not see until the composition root stopped supplying the definitions that made the controller's session unresolvable. Fixing them is its own change.",
   "violations": {
     "app/core/api/dependencies.py::get_uow::session-across-yield::get_uow": 1,
     "app/modules/agent_surfaces/api/controllers/surface_controller.py::get_surface_setup::non-db-await/request-scoped::via get_surface_setup_by_name: surface_setup_for_reader": 1,
-    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::teams_admin_consent_callback::non-db-await/request-scoped::via delete_if_value: teams_consent.consume_nonce": 1
+    "app/modules/agent_surfaces/api/controllers/webhook_controller.py::teams_admin_consent_callback::non-db-await/request-scoped::via delete_if_value: teams_consent.consume_nonce": 1,
+    "app/modules/function/api/controllers/function_controller.py::create_function::non-db-await/request-scoped::via _apply_code: use_cases.create_function": 1,
+    "app/modules/function/api/controllers/function_controller.py::create_function::non-db-await/request-scoped::via invalidate_function_workspace_env_cache: _apply_function_grants": 1,
+    "app/modules/function/api/controllers/function_controller.py::replace_function_permissions::non-db-await/request-scoped::via delete_matching: invalidate_function_workspace_env_cache": 1,
+    "app/modules/function/api/controllers/function_controller.py::update_function::non-db-await/request-scoped::via _apply_code: use_cases.update_function": 1,
+    "app/modules/function/api/controllers/function_controller.py::update_function::non-db-await/request-scoped::via invalidate_function_workspace_env_cache: _apply_function_grants": 1
   }
 }
