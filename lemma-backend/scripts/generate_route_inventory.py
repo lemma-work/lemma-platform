@@ -34,6 +34,7 @@ TAG_MODULES = {
     "Usage": "usage",
     "Users": "identity",
     "Widgets": "agent",
+    "Web Logins": "web_login",
     "Workspace": "workspace",
     "Workspace Apps": "workspace",
     "agent-tools": "agent",
