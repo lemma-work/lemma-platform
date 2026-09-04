@@ -9,7 +9,7 @@ recorded "however the run ended".
 
 ``usage_accumulated`` is where that spend goes as it happens, keyed by attempt:
 
-    {"attempts": {"<attempt id>": {"input_tokens": 4000, ...}}}
+    {"<attempt id>": {"input_tokens": 4000, "output_tokens": 120, ...}}
 
 Keyed rather than summed because a reclaimed run is the *same* run under a new
 attempt, so a flat total would have to be read before it could be added to, and

@@ -75,6 +75,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.mock_model.mock_llm_structured_output_required.diagnostic': EventSpec('debug', frozenset()),
     'agent.model_stream_budget.stream_abandoned.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'first_chunk', 'reason', 'url'})),
     'agent.module.system_lemma_models_will_be.observed': EventSpec('debug', frozenset()),
+    'agent.orphan_reservations.unattributable_spend.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.pending_user_messages.claim_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.pending_user_messages.steered_into_run.observed': EventSpec('info', frozenset({'agent_run_id', 'message_count'})),
     'agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded': EventSpec('warning', frozenset()),

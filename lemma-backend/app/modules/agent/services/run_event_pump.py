@@ -14,7 +14,8 @@ terminal, which is how the driver knows to stop consuming.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Protocol
+from uuid import UUID
 
 
 from app.core.log.log import get_logger
@@ -71,12 +72,35 @@ class RunOutcome:
     terminal_seen: bool = False
 
 
+class SpendRecorder(Protocol):
+    """The one thing the pump needs from usage: write down what has been spent.
+
+    A protocol rather than the recorder itself, so the pump's build does not
+    depend on where that class lives -- and so the parameter says what it is
+    for, which `Any` never does.
+    """
+
+    async def accumulate(
+        self, *, agent_run_id: UUID, attempt_id: str, usage_data: AgentRunUsage
+    ) -> None: ...
+
+
 class RunEventPump:
     """Applies harness events to persistence and the realtime channel."""
 
-    def __init__(self, message_writer: Any, finalizer: Any) -> None:
+    def __init__(
+        self,
+        message_writer: Any,
+        finalizer: Any,
+        usage_recorder: SpendRecorder | None = None,
+    ) -> None:
         self.message_writer = message_writer
         self.finalizer = finalizer
+        # Optional, because two call sites construct a pump only to drain
+        # events and never to bill: the sub-agent and function paths settle
+        # through their own caller. Without a recorder the pump keeps the spend
+        # in the outcome exactly as it always did.
+        self.usage_recorder = usage_recorder
         # One run's worth of state. A `<think>` tag can straddle two deltas, so
         # classifying the live stream means remembering where it is; the pump is
         # constructed per run (`handlers.process_agent_run`), so this needs no
@@ -191,6 +215,17 @@ class RunEventPump:
 
         return False
 
+    async def _persist_spend(self, run: RunIdentity, outcome: RunOutcome) -> None:
+        if self.usage_recorder is None or outcome.usage_data is None:
+            return
+        if run.attempt_id is None:
+            return
+        await self.usage_recorder.accumulate(
+            agent_run_id=run.agent_run_id,
+            attempt_id=run.attempt_id,
+            usage_data=outcome.usage_data,
+        )
+
     async def drive(
         self,
         events: AsyncIterator[AgentEvent],
@@ -223,6 +258,12 @@ class RunEventPump:
                 await notify_event(observer, event, conversation, ctx, run.agent_run_id)
                 if event.type == AgentEventType.USAGE:
                     outcome.usage_data = _usage_from_event(event) or outcome.usage_data
+                    # Durable before the next request starts. Everything the run
+                    # has bought is on its own row from here on, so a worker
+                    # that dies -- parked by a SIGTERM or gone outright -- costs
+                    # the person who ran it nothing that nobody recorded. See
+                    # PS-OPS-003.
+                    await self._persist_spend(run, outcome)
                     continue
                 should_stop = await self.handle(event=event, run=run, outcome=outcome)
                 if event.type == AgentEventType.MESSAGE:

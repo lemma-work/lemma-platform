@@ -294,6 +294,14 @@ class ConversationRepository(Protocol):
         self, *, agent_run_id: UUID
     ) -> JsonObject | None: ...
 
+    async def store_attempt_usage(
+        self, *, agent_run_id: UUID, attempt_id: str, usage: JsonObject
+    ) -> None: ...
+
+    async def claim_accumulated_usage(
+        self, *, agent_run_id: UUID
+    ) -> JsonObject | None: ...
+
     async def record_approval_decision(
         self,
         *,

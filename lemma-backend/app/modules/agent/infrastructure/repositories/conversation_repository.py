@@ -478,6 +478,21 @@ class ConversationRepository(
             self.session, agent_run_id=agent_run_id
         )
 
+    async def store_attempt_usage(
+        self, *, agent_run_id: UUID, attempt_id: str, usage: JsonObject
+    ) -> None:
+        await agent_run_reservations.store_attempt_usage(
+            self.session,
+            agent_run_id=agent_run_id,
+            attempt_id=attempt_id,
+            usage=usage,
+        )
+
+    async def claim_accumulated_usage(self, *, agent_run_id: UUID) -> JsonObject | None:
+        return await agent_run_reservations.claim_accumulated_usage(
+            self.session, agent_run_id=agent_run_id
+        )
+
     async def finish_agent_run(
         self,
         *,

@@ -251,6 +251,14 @@ class AgentRunModel(UUIDAuditBase):
     usage_reservation: Mapped[dict[str, object] | None] = mapped_column(
         JSONB, nullable=True
     )
+    # What this run has spent so far, keyed by attempt so a reclaimed run adds
+    # to its own total rather than overwriting it. Written as each model request
+    # lands, summed and cleared when the run is billed. A non-null value on a
+    # terminal run is spend nobody has recorded yet, which is what
+    # `reconcile_orphaned_agent_runs` settles.
+    usage_accumulated: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

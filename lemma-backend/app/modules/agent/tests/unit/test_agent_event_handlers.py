@@ -285,6 +285,11 @@ async def test_reconcile_orphaned_agent_runs_finalizes_and_publishes(
 
         async def claim_usage_reservation(self, *, agent_run_id):
             claimed.append(agent_run_id)
+
+        async def claim_accumulated_usage(self, *, agent_run_id):
+            # Nothing accumulated: this run is being reaped for its status, and
+            # what a reaped run that *did* spend gets billed is proven against a
+            # real database in the usage e2e suite.
             return
 
         def collect_events(self, events: list[object]) -> None:

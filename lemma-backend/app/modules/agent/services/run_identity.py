@@ -11,7 +11,7 @@ Resolved once when the run starts and passed whole after that.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
@@ -31,37 +31,28 @@ class RunIdentity:
     started_at: datetime | None = None
     runtime_profile: dict[str, object | None] | None = None
     usage_reservation: UsageReservation | None = None
+    #: This worker's turn at the run, which is not the same as the run. A
+    #: reclaimed run keeps its id and gets a new attempt, so spend recorded
+    #: under one attempt cannot be overwritten by the next.
+    attempt_id: str | None = None
 
+    # `replace` rather than reconstructing field by field: the hand-written
+    # copies meant adding a field to this class silently dropped it from every
+    # run that had been through one of them.
     def with_reservation(self, reservation: UsageReservation | None) -> "RunIdentity":
         """The same run, once usage has been reserved for it.
 
         The reservation is made after the context is built but before the model
         is called, so it is the one field that arrives late.
         """
-        return RunIdentity(
-            conversation_id=self.conversation_id,
-            agent_run_id=self.agent_run_id,
-            organization_id=self.organization_id,
-            pod_id=self.pod_id,
-            user_id=self.user_id,
-            agent_id=self.agent_id,
-            started_at=self.started_at,
-            runtime_profile=self.runtime_profile,
-            usage_reservation=reservation,
-        )
+        return replace(self, usage_reservation=reservation)
 
     def with_runtime_profile(
         self, snapshot: dict[str, object | None] | None
     ) -> "RunIdentity":
         """The same run, once its runtime profile has been resolved."""
-        return RunIdentity(
-            conversation_id=self.conversation_id,
-            agent_run_id=self.agent_run_id,
-            organization_id=self.organization_id,
-            pod_id=self.pod_id,
-            user_id=self.user_id,
-            agent_id=self.agent_id,
-            started_at=self.started_at,
-            runtime_profile=snapshot,
-            usage_reservation=self.usage_reservation,
-        )
+        return replace(self, runtime_profile=snapshot)
+
+    def with_attempt(self, attempt_id: str) -> "RunIdentity":
+        """The same run, under this worker's turn at it."""
+        return replace(self, attempt_id=attempt_id)

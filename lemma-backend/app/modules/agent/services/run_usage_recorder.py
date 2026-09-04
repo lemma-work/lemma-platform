@@ -1,7 +1,13 @@
-"""Usage reservation/recording/release for agent runs.
+"""Usage reservation, accumulation, recording and release for agent runs.
 
 Extracted so the background runner and the inline sub-agent/function paths share
-one implementation instead of duplicating reserve/record/release plumbing.
+one implementation instead of duplicating the plumbing.
+
+Accumulation is the part that is easy to miss. A run's spend used to exist only
+in the worker's memory until the run finished, so a worker that was killed took
+the tokens it had already bought with it. `accumulate` writes them to the run's
+own row as each model request lands, which is what lets both the finalizer and
+the orphan reconciler bill a run neither of them watched.
 """
 
 from __future__ import annotations
@@ -9,6 +15,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
@@ -65,6 +72,37 @@ class RunUsageRecorder:
                 await uow.commit()
                 return reservation
 
+    async def accumulate(
+        self,
+        *,
+        agent_run_id: UUID,
+        attempt_id: str,
+        usage_data,
+    ) -> None:
+        """Write what this attempt has spent so far, replacing its own last word.
+
+        Absolute rather than incremental, so a repeated write says the same
+        thing. Its own transaction, and deliberately not joined to whatever the
+        run is doing: this is bookkeeping about the run, and a rollback of the
+        run's work must not roll back the record of what that work cost.
+        """
+        async with self.uow_factory() as uow:
+            await ConversationRepository(uow).store_attempt_usage(
+                agent_run_id=agent_run_id,
+                attempt_id=attempt_id,
+                usage=_attempt_row(usage_data),
+            )
+            await uow.commit()
+
+    async def claim_accumulated(self, *, agent_run_id: UUID) -> JsonObject | None:
+        """Take the run's spend, leaving nothing for a second biller."""
+        async with self.uow_factory() as uow:
+            claimed = await ConversationRepository(uow).claim_accumulated_usage(
+                agent_run_id=agent_run_id
+            )
+            await uow.commit()
+            return claimed
+
     async def release(
         self,
         reservation: UsageReservation | None,
@@ -95,9 +133,14 @@ class RunUsageRecorder:
             # so the reconciler never finds a handle for a run that already
             # settled up.
             if ctx.agent_run_id is not None:
-                await ConversationRepository(uow).store_usage_reservation(
+                repository = ConversationRepository(uow)
+                await repository.store_usage_reservation(
                     agent_run_id=ctx.agent_run_id, reservation=None
                 )
+                # And the accumulation, for the same reason: this row is the
+                # settlement of everything the run spent, so anything left
+                # behind would be billed a second time by the reconciler.
+                await repository.claim_accumulated_usage(agent_run_id=ctx.agent_run_id)
             await self._service(uow).record_agent_run_usage(
                 ctx=ctx,
                 runtime_profile=runtime_profile,
@@ -106,3 +149,23 @@ class RunUsageRecorder:
                 reservation=reservation,
             )
             await uow.commit()
+
+
+def _attempt_row(usage_data) -> JsonObject:
+    """One attempt's spend, as the few numbers a usage row is rebuilt from.
+
+    Deliberately not the whole `AgentRunUsage`: what has to survive a dead
+    worker is the counts and the model they were bought on. Everything else on
+    the record -- who, which pod, which conversation -- is on the run's own row
+    already and is read from there when the spend is finally billed.
+    """
+    metadata = usage_data.metadata or {}
+    return {
+        "model_name": usage_data.model_name,
+        "input_tokens": int(usage_data.input_tokens or 0),
+        "output_tokens": int(usage_data.output_tokens or 0),
+        "request_count": int(usage_data.request_count or 0),
+        "tool_call_count": int(usage_data.tool_call_count or 0),
+        "cache_read_tokens": int(metadata.get("cache_read_tokens") or 0),
+        "cache_write_tokens": int(metadata.get("cache_write_tokens") or 0),
+    }

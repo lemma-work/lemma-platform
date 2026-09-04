@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from typing import Awaitable, Callable, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 from pydantic_ai import UsageLimits
@@ -158,7 +158,7 @@ class AgentRunnerService:
         self.message_writer = RunMessageWriter(uow_factory)
         self.finalizer = finalizer or RunFinalizer(uow_factory, self.usage_recorder)
         self.event_pump = event_pump or RunEventPump(
-            self.message_writer, self.finalizer
+            self.message_writer, self.finalizer, self.usage_recorder
         )
 
     async def execute(
@@ -184,6 +184,10 @@ class AgentRunnerService:
             user_id=user_id,
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
+            # This worker's turn at the run, not the run. A run reclaimed after
+            # a restart keeps its id, and its spend has to add to what the
+            # previous attempt already bought rather than replace it.
+            attempt_id=uuid4().hex,
         )
         if agent_run.status != AgentRunStatus.RUNNING:
             await self.finalizer.finish(
