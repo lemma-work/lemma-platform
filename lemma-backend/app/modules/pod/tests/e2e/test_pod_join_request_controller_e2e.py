@@ -101,7 +101,7 @@ async def test_pod_join_request_lifecycle(
     assert self_member_after.json()["user_id"] == outsider_id
 
     visible_pods_response = await async_client.get(
-        f"/pods/organization/{org_id}",
+        f"/organizations/{org_id}/pods",
         headers={"Authorization": f"Bearer {outsider_token}"},
     )
     assert visible_pods_response.status_code == 200, visible_pods_response.text
@@ -235,7 +235,7 @@ async def test_request_join_auto_approves_when_policy_allows(
 
     # The user is now a real pod member (auto-added to the org too).
     visible_pods = await async_client.get(
-        f"/pods/organization/{org_id}", headers=outsider_headers
+        f"/organizations/{org_id}/pods", headers=outsider_headers
     )
     assert visible_pods.status_code == 200, visible_pods.text
     assert any(

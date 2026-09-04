@@ -4,7 +4,10 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
-    from app.modules.pod.api.controllers.pod_controller import router as pod
+    from app.modules.pod.api.controllers.pod_controller import (
+        router as pod,
+        organization_router as pod_by_organization,
+    )
     from app.modules.pod.api.controllers.pod_member_controller import router as member
     from app.modules.pod.api.controllers.pod_permission_controller import (
         router as permission,
@@ -22,6 +25,7 @@ def _routers():
 
     return [
         pod,
+        pod_by_organization,
         member,
         permission,
         resource_access,
