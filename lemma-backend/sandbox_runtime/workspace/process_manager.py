@@ -202,15 +202,19 @@ class ManagedProcess:
             self._termination_requested = True
         try:
             os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError, PermissionError:
-            # Both mean the same thing to us: there is no process group of ours
-            # left to signal. `ESRCH` is the group having exited. `EPERM` is the
-            # one that took a flaky test to find -- once the direct child is
-            # reaped its pid is free, and a pid recycled into a process we do not
-            # own answers `killpg` with "operation not permitted" rather than
-            # "no such process". Letting that escape turned
-            # `DELETE /processes/{id}` into a 500 for a process that had already
-            # stopped.
+        except ProcessLookupError:
+            self._residual_process_group = False
+            return
+        except PermissionError:
+            # `EPERM`, and what it means depends on whether the direct child is
+            # still ours. Once it is reaped its pid is free, and a pid recycled
+            # into a process we do not own answers `killpg` with "operation not
+            # permitted" rather than "no such process" -- our group is gone and
+            # this is done. While the direct child is still running the pid is
+            # ours, so `EPERM` is not an answer we can act on, and reporting
+            # success would leave a live process behind believed dead.
+            if direct_process_running:
+                raise
             self._residual_process_group = False
             return
         try:
@@ -223,9 +227,15 @@ class ManagedProcess:
         except TimeoutError:
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError, PermissionError:
-                # Same pair, same reason: nothing of ours left to kill.
+            except ProcessLookupError:
                 pass
+            except PermissionError:
+                # Same split as the `SIGTERM` above: a recycled pid is nothing
+                # of ours to kill, but a live direct child that refuses our
+                # signal is a fact worth surfacing rather than swallowing on the
+                # way out of a `SIGKILL` that did not land.
+                if direct_process_running:
+                    raise
             if direct_process_running:
                 await self._wait_for_direct_exit()
         finally:
@@ -281,11 +291,12 @@ class ManagedProcess:
             try:
                 os.killpg(self.process.pid, 0)
             except ProcessLookupError, PermissionError:
-                # The probe asks "is the group still there", so `EPERM` answers
-                # it as well as `ESRCH` does: a group we may not signal is not
-                # one we are waiting to exit, and polling it until the grace
-                # runs out would raise `TimeoutError` into a `SIGKILL` we cannot
-                # deliver either.
+                # This probe only ever runs for a *residual* group -- the direct
+                # child is already reaped by the time `terminate` reaches it. So
+                # the pid is free, and `EPERM` says as clearly as `ESRCH` does
+                # that the group we were waiting on is not there any more.
+                # Polling it until the grace ran out only produced a
+                # `TimeoutError` into a `SIGKILL` that could not land either.
                 return
             await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
         raise TimeoutError
