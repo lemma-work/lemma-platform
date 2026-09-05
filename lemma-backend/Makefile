@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -101,7 +101,8 @@ help:
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
 	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
-	@echo "  make lint-controller-types  # new basedpyright errors in API controllers"
+	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
+	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
@@ -176,7 +177,18 @@ test-e2e-fast:
 # contention that makes -n2 flaky. The union of all shards' E2E_ARGS must equal
 # the whole fast suite (the last shard is a catch-all via --ignore).
 test-e2e-shard:
-	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" -o timeout=120
+	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "$(E2E_SHARD_MARKERS)" -o timeout=120
+
+# Reproduce one CI shard by name, taking its paths, worker count and marker
+# filter from `.github/e2e-shards.json` -- the same file the workflow reads.
+#
+# Prefer this to `test-e2e-shard` for anything you are checking against CI. That
+# target used to hard-code the fast-lane filter and ignore E2E_SHARD_MARKERS
+# entirely, so reproducing the `sandbox` shard locally deselected every
+# Docker-sandbox test and passed while the shard failed on the pull request.
+test-e2e-shard-ci:
+	@test -n "$(SHARD)" || (echo "SHARD is required -- one of:" && uv run python ../scripts/run_e2e_shard.py --list && exit 1)
+	uv run python ../scripts/run_e2e_shard.py $(SHARD)
 
 # Kreuzberg-backed indexing/search e2e (real document extraction). Split out of
 # test-e2e-fast so that job stays fast and never boots the RAM-heavy Kreuzberg
@@ -198,8 +210,18 @@ test-e2e-real-llm:
 	E2E_LLM_MODE=real uv run pytest -m "e2e and not slow and not workspace and not local_cli and not indexing" \
 		app/modules/agent -o timeout=300
 
+# Byte-identical to the marker filter and environment in
+# `.github/workflows/backend-protected-e2e.yml`, and asserted so by
+# `test_the_protected_lane_can_be_reproduced_from_the_makefile`. It had drifted:
+# this target used to select `provider` where the workflow says `not provider`,
+# omit `not mock_sandbox_only`, and leave `E2E_LLM_MODE` unset -- so running it
+# locally to reproduce the protected lane failed on tests CI never runs, and
+# passed on none it does. That lane once did nothing at all for eleven days and
+# blocked every Desktop release; it should be reproducible in one command.
 test-e2e-runtime:
-	E2E_REAL=1 uv run pytest -m "e2e and (slow or workspace or provider or local_cli or indexing or surface_live or protected)"
+	E2E_REAL=1 E2E_LLM_MODE=mock LEMMA_RUN_SURFACE_LIVE_E2E=1 uv run pytest \
+		-m "e2e and (slow or workspace or surface_live or indexing or local_cli or protected) and not provider and not mock_sandbox_only" \
+		-o timeout=300
 
 test-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make test-module MODULE=pod" && exit 1)
@@ -410,9 +432,10 @@ lint-unbounded:
 lint-import-bound-defaults:
 	uv run python scripts/check_import_bound_defaults.py
 
-# A controller is where a signature meets a caller, so it is where a keyword
-# argument that stopped matching its callee lands -- #620 shipped exactly that
-# to CI. `typecheck-critical` names paths by hand and did not name these.
+# Where a signature meets a caller: every module's HTTP controllers, plus
+# `agent_surfaces/services`, the most entangled service layer in the backend.
+# #620 shipped a keyword argument that stopped matching its callee straight to
+# CI; `typecheck-critical` names paths by hand and did not name these.
 lint-controller-types:
 	uv run python scripts/check_controller_types.py
 
