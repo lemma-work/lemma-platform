@@ -179,11 +179,11 @@ pwsh desktop\scripts\desktop.ps1 test
 pwsh desktop\scripts\desktop.ps1 exe
 ```
 
-There is deliberately no `dev` verb: running the app from source is macOS only
-for now. `desktop/local-runtime/manager` names its WSL distribution with a
-global constant, so a dev run in a throwaway state root would adopt and mutate
-the distribution a real install owns. On Windows, build and install the
-installer instead.
+The source-development launcher currently supports macOS. Windows startup and
+confirmed cleanup derive the same installation-specific WSL distribution name;
+only the default installation retains the legacy name. Windows packaged-app
+qualification must still use a disposable user/installation and verify that its
+distribution and data are separate before exercising recovery.
 
 ### Reproducing a flake under CPU load
 

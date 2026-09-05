@@ -200,6 +200,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[derive(Default)]
     struct ResetFixture {
         vm_failure: bool,
         credential_failure: bool,
@@ -294,7 +295,7 @@ mod tests {
         std::fs::create_dir_all(paths.root.join("runtime/macos")).unwrap();
         std::fs::write(paths.root.join("runtime/macos/data.raw"), b"database").unwrap();
 
-        let summary = perform_reset(paths.clone()).unwrap();
+        let summary = perform_reset_with(paths.clone(), &ResetFixture::default()).unwrap();
 
         assert!(!paths.root.exists(), "nothing of the installation survives");
         assert_eq!(
@@ -314,7 +315,7 @@ mod tests {
         let paths = LocalPaths::new(root.path().join("locald"));
         paths.ensure().unwrap();
 
-        let summary = perform_reset(paths).unwrap();
+        let summary = perform_reset_with(paths, &ResetFixture::default()).unwrap();
 
         assert_eq!(
             summary["install_id_recovered"], false,
@@ -333,7 +334,7 @@ mod tests {
     fn resetting_an_installation_that_is_already_gone_succeeds() {
         let root = tempdir().unwrap();
         let paths = LocalPaths::new(root.path().join("never-ran"));
-        reset_install(paths).unwrap();
+        perform_reset_with(paths, &ResetFixture::default()).unwrap();
     }
 
     /// The identity is read before the file naming it is destroyed.
@@ -361,7 +362,27 @@ mod tests {
             Some(install_id)
         );
 
-        reset_install(paths.clone()).unwrap();
+        struct IdentitySweep(std::path::PathBuf, std::sync::Mutex<Vec<String>>);
+        impl ResetEnvironment for IdentitySweep {
+            fn reclaim_vm(&self, _: &LocalPaths) -> io::Result<()> {
+                Ok(())
+            }
+            fn purge_credentials(&self, install_id: &str) -> Vec<String> {
+                assert!(
+                    self.0.is_file(),
+                    "identity must survive until the vault sweep succeeds"
+                );
+                self.1.lock().unwrap().push(install_id.to_owned());
+                Vec::new()
+            }
+        }
+        let environment = IdentitySweep(
+            paths.root.join("operator-config.json"),
+            std::sync::Mutex::new(Vec::new()),
+        );
+        let summary = perform_reset_with(paths.clone(), &environment).unwrap();
+        assert_eq!(*environment.1.lock().unwrap(), vec![install_id]);
+        assert_eq!(summary["secrets_swept"], true);
         assert!(!paths.root.exists());
     }
 }

@@ -817,15 +817,20 @@ impl ManagedRuntime {
     /// This destroys guest state. Callers must have asked first.
     #[cfg(windows)]
     pub fn unregister_windows_guest(&self) -> io::Result<()> {
-        let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
-        // Asked for the end state, not for the command. A distribution that is
-        // already gone is the outcome this repair exists to reach, and
-        // `--unregister` exits non-zero on a name it cannot find -- so running
-        // it unconditionally would report failure for the one case that needs
-        // no work. Anything else that goes wrong is now a real error, which it
-        // was not before: this used to discard the exit code entirely and tell
-        // the user the runtime had been reset when nothing had happened.
-        if self.distribution_is_registered() {
+        let output = match self.wsl_allowing_failure(&["--list", "--quiet"], None) {
+            Ok(output) => output,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && !self.config.local_root.join("runtime/wsl").exists() =>
+            {
+                return Ok(())
+            }
+            Err(error) => return Err(error),
+        };
+        // An unavailable WSL service is not evidence that the distribution is
+        // absent. Preserve its registration and cleanup records on ambiguity.
+        if registered_guest(output.status.success(), &output.stdout, self.distribution())? {
+            let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
             self.wsl(&["--unregister", self.distribution()], None)?;
         }
         let _ = fs::remove_file(self.guest_release_marker());
@@ -1312,6 +1317,16 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
 }
 
 #[cfg(any(windows, test))]
+fn registered_guest(success: bool, output: &[u8], distribution: &str) -> io::Result<bool> {
+    if !success {
+        return Err(io::Error::other("Windows could not list its local runtimes. The installation has been kept. Restart Windows and retry Recovery."));
+    }
+    Ok(decode_wsl_output(output)
+        .lines()
+        .any(|line| line.trim() == distribution))
+}
+
+#[cfg(any(windows, test))]
 fn decode_wsl_output(value: &[u8]) -> String {
     let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         // `as_chunks`, not `chunks_exact(2)`: clippy 1.98 rejects a constant
@@ -1619,6 +1634,69 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    struct RecoveryTestChild(std::process::Child);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for RecoveryTestChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn confirmed_recovery_reclaims_a_verified_helper_from_a_replaced_bundle() {
+        let root = tempdir().unwrap();
+        let mut runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: PathBuf::from("/bin/sleep"),
+        })
+        .unwrap();
+        let mut child = RecoveryTestChild(Command::new("/bin/sleep").arg("10").spawn().unwrap());
+        runtime.record_macos_vm(&child.0).unwrap();
+        runtime.config.vz_executable = root.path().join("new-app/lemma-vz");
+        assert!(runtime.reclaim_owned_macos_vm().is_err());
+        assert!(runtime.vm_process_marker.exists());
+        thread::scope(|scope| {
+            let reclaim = scope.spawn(|| runtime.reclaim_owned_macos_vm_for_reset());
+            let status = child.0.wait().unwrap();
+            reclaim.join().unwrap().unwrap();
+            assert!(!status.success());
+        });
+        assert!(!runtime.vm_process_marker.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recovery_never_signals_a_reused_process_identity() {
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: PathBuf::from("/bin/sleep"),
+        })
+        .unwrap();
+        let mut child = RecoveryTestChild(Command::new("/bin/sleep").arg("10").spawn().unwrap());
+        runtime.record_macos_vm(&child.0).unwrap();
+        let mut marker: serde_json::Value =
+            serde_json::from_slice(&fs::read(&runtime.vm_process_marker).unwrap()).unwrap();
+        marker["start_identity"] = serde_json::json!("different process start");
+        fs::write(
+            &runtime.vm_process_marker,
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+        runtime.reclaim_owned_macos_vm_for_reset().unwrap();
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn reclaims_only_the_exact_recorded_vm_helper_across_daemon_replacement() {
         let root = tempdir().unwrap();
@@ -1638,6 +1716,21 @@ mod tests {
 
         assert!(!waiter.join().unwrap().success());
         assert!(!runtime.vm_process_marker.exists());
+    }
+
+    #[test]
+    fn recovery_requires_positive_evidence_of_guest_presence_or_absence() {
+        assert!(registered_guest(false, b"", "LemmaRuntime").is_err());
+        assert!(registered_guest(false, b"LemmaRuntime", "LemmaRuntime").is_err());
+        assert!(
+            !registered_guest(true, b"Ubuntu\r\nLemmaRuntime-dev\r\n", "LemmaRuntime").unwrap()
+        );
+        assert!(registered_guest(true, b"Ubuntu\r\nLemmaRuntime\r\n", "LemmaRuntime").unwrap());
+        let utf16: Vec<u8> = "LemmaRuntime\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(registered_guest(true, &utf16, "LemmaRuntime").unwrap());
     }
 
     #[cfg(windows)]

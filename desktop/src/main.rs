@@ -3126,7 +3126,12 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    ensure_locald(&app)?;
+    // Stop never installs a runtime or starts a replacement daemon. In
+    // particular, quitting a damaged installation must not start a download.
+    if app.state::<Shell>().locald_writer.lock().unwrap().is_none() {
+        let connection = connect_locald()?;
+        install_locald_connection(&app, connection);
+    }
     // Only put the splash up once the daemon has actually taken the stop.
     // Showing it first meant a refused operation left a "stopping Lemma"
     // screen in front of a stack that was never asked to stop.

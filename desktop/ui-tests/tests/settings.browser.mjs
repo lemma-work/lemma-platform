@@ -64,6 +64,11 @@ async function settings(t, mode = 'local', daemonOffline = false) {
         if (emitEvent) emit({ event: 'config.applied', id: args.id, operator: structuredClone(this.snapshot.operator) });
       },
     };
+    if (mode !== 'local') {
+      fixture.snapshot.services = null;
+      fixture.snapshot.managed_runtime = null;
+      fixture.snapshot.state = { ready: false, running: false, status: 'stopped' };
+    }
     window.__fixture = fixture;
     window.__LEMMA_DESKTOP__ = { mode };
     window.__TAURI__ = {
@@ -136,6 +141,7 @@ test('a save submits one section and does not erase typing during activation', a
 test('cloud mode opens this computer without provisioning a local stack', async (t) => {
   const page = await settings(t, 'hosted');
   assert.equal(await page.locator('#page-title').textContent(), 'This computer');
+  assert.equal(await page.locator('#attention-banner').isVisible(), false, 'cloud mode has no local application stack to repair');
   assert.equal(await page.getByRole('button', { name: 'AI provider', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: 'Open agent setup in Lemma' }).click();
   const commands = await page.evaluate(() => window.__fixture.calls.map((call) => call.command));
