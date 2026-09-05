@@ -995,9 +995,8 @@ async def test_function_execute_requires_only_execute_not_read(
         },
     )
 
-    # Grant the custom role ONLY function.execute on the RESTRICTED function —
-    # no function.read. (RESTRICTED means no default visibility, so the role's
-    # POD_VIEWER membership grants no read on it either.)
+    # Execution implies read, but must not grant authoring rights. RESTRICTED
+    # visibility prevents the ordinary viewer from inheriting either grant.
     grant = await authenticated_client.put(
         f"/pods/{pod_id}/roles/{ctx['custom_role']}/permissions",
         json={
@@ -1028,6 +1027,23 @@ async def test_function_execute_requires_only_execute_not_read(
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["doubled"] == 42
+
+    base = f"/pods/{pod_id}/functions/{name}"
+    for path in ("/revisions", "/revisions/r1"):
+        history = await async_client.get(base + path, headers=ctx["custom_headers"])
+        assert history.status_code == 200, history.text
+        refused = await async_client.get(base + path, headers=ctx["viewer_headers"])
+        assert refused.status_code == 403, refused.text
+    refused_promotion = await async_client.post(
+        base + "/revisions/r1/promote", headers=ctx["custom_headers"]
+    )
+    assert refused_promotion.status_code == 403, refused_promotion.text
+    refused_pin = await async_client.post(
+        base + "/runs",
+        json={"input_data": {"n": 21}, "revision": "r1"},
+        headers=ctx["custom_headers"],
+    )
+    assert refused_pin.status_code == 403, refused_pin.text
 
 
 @pytest.mark.asyncio

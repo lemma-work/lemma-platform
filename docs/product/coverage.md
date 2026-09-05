@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 385.
+Scenario tests declaring a promise: 386.
 
 ## Contract coverage
 
@@ -58,7 +58,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
+| `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused`, `test_an_instruction_has_a_bounded_text_budget` |
 | `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_a_data_grant_brings_its_own_tools`, `test_the_universal_abilities_need_no_declaring`, `test_an_agents_grants_are_readable`, `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
 | `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |

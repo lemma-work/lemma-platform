@@ -12,6 +12,7 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.errors import AgentValidationError
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -24,6 +25,20 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+
+
+MAX_AGENT_INSTRUCTION_CHARACTERS = 60_000
+
+
+def validate_agent_instruction(instruction: str | None) -> str:
+    """Validate authored text without rejecting historical entities on read."""
+    if instruction is None or not instruction.strip():
+        raise AgentValidationError("Agent instruction is required")
+    if len(instruction) > MAX_AGENT_INSTRUCTION_CHARACTERS:
+        raise AgentValidationError(
+            f"Agent instruction must be at most {MAX_AGENT_INSTRUCTION_CHARACTERS:,} characters"
+        )
+    return instruction
 
 
 class Agent(Entity):

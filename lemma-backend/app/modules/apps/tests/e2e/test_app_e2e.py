@@ -377,6 +377,26 @@ async def test_app_list_and_access_respects_pod_roles(
         "app.update",
     }
 
+    history_path = f"/pods/{pod_id}/apps/{default_name}/releases"
+    upload = await authenticated_client.post(
+        f"/pods/{pod_id}/apps/{default_name}/bundle",
+        files={
+            "dist_archive": ("dist.zip", build_dist_archive("live"), "application/zip")
+        },
+    )
+    assert upload.status_code == 200, upload.text
+    history = await async_client.get(history_path, headers=ctx["viewer_headers"])
+    assert history.status_code == 200, history.text
+    assert history.json()["items"][0]["is_live"]
+    refused = await async_client.post(
+        history_path + "/v1/promote", headers=ctx["viewer_headers"]
+    )
+    assert refused.status_code == 403, refused.text
+    promoted = await async_client.post(
+        history_path + "/v1/promote", headers=ctx["editor_headers"]
+    )
+    assert promoted.status_code == 200, promoted.text
+
 
 @pytest.mark.asyncio
 async def test_create_app_rejects_duplicate_public_slug(
