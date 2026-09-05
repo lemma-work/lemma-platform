@@ -64,6 +64,37 @@ def _ensure_repo_root_on_path() -> None:
         sys.path.insert(0, repo_root_str)
 
 
+def _remove_workspace_volumes() -> None:
+    """Remove sandbox workspace volumes left by e2e runs.
+
+    Scoped to ``managed-by=lemma-workspace`` rather than pruning dangling
+    volumes: a broad prune is machine-wide and would take an unrelated project's
+    disks with it on a shared developer machine.
+    """
+    listed = subprocess.run(
+        [
+            "docker",
+            "volume",
+            "ls",
+            "-q",
+            "--filter",
+            "label=managed-by=lemma-workspace",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if names:
+        # A volume still mounted by a container Docker has not finished removing
+        # refuses deletion; the next sweep gets it.
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", *sorted(set(names))],
+            check=False,
+            capture_output=True,
+        )
+
+
 def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     """Remove leftover Docker containers created by e2e runs.
 
@@ -124,6 +155,8 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
         subprocess.run(
             ["docker", "rm", "-f", "-v", *sorted(set(container_ids))], check=False
         )
+
+    _remove_workspace_volumes()
 
     if sandboxes_only:
         return

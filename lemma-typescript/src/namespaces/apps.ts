@@ -42,6 +42,20 @@ export class AppsNamespace {
     });
   }
 
+  /** This app's release history, newest first. */
+  releases(name: string) {
+    return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+  }
+
+  /**
+   * Make an existing release the one this app serves. `releaseRef` is the
+   * release number ("7" or "v7") or a prefix of its dist digest. No bytes move
+   * -- the app's current-release pointer does.
+   */
+  promoteRelease(name: string, releaseRef: string) {
+    return this.client.request(() => AppsService.appReleasePromote(this.podId(), name, releaseRef));
+  }
+
   readonly assets = {
     get: (name: string, path?: string): Promise<string> =>
       this.http.request("GET", `/pods/${this.podId()}/apps/${name}/assets${path ? `/${path.replace(/^\/+/, "")}` : ""}`),

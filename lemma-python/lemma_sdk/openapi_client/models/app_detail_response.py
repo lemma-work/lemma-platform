@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
 from ..models.app_status import AppStatus
 from ..types import UNSET, Unset
@@ -17,7 +19,7 @@ T = TypeVar("T", bound="AppDetailResponse")
 class AppDetailResponse:
     """
     Attributes:
-        created_at (Any):
+        created_at (datetime.datetime | None):
         id (UUID):
         name (str):
         pod_id (UUID):
@@ -33,7 +35,7 @@ class AppDetailResponse:
         visibility (str | Unset):  Default: 'PUBLIC'.
     """
 
-    created_at: Any
+    created_at: datetime.datetime | None
     id: UUID
     name: str
     pod_id: UUID
@@ -50,7 +52,11 @@ class AppDetailResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        created_at = self.created_at
+        created_at: None | str
+        if isinstance(self.created_at, datetime.datetime):
+            created_at = self.created_at.isoformat()
+        else:
+            created_at = self.created_at
 
         id = str(self.id)
 
@@ -126,7 +132,21 @@ class AppDetailResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        created_at = d.pop("created_at")
+
+        def _parse_created_at(data: object) -> datetime.datetime | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                created_at_type_0 = isoparse(data)
+
+                return created_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None, data)
+
+        created_at = _parse_created_at(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
 

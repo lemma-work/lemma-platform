@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from functools import partial
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -22,6 +21,7 @@ from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
+from app.modules.agent_surfaces.api import dependencies as surface_dependencies
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
 
@@ -294,27 +294,23 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     job_queue.enqueue.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_process_surface_message_uses_worker_factory(monkeypatch):
-    service = AsyncMock()
-    worker_ctx = SimpleNamespace(
-        build_surface_event_handler_with_factory=Mock(return_value=service)
-    )
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=worker_ctx))
-    registered_task = handlers.process_surface_message
-    monkeypatch.setattr(
-        handlers,
-        "process_surface_message",
-        SimpleNamespace(context=SimpleNamespace(task_id="surface-task-1")),
-    )
-    payload = handlers.SurfaceProcessMessageTaskPayload(
-        context=_reply_context()
-    ).model_dump(mode="json")
+def test_the_worker_builder_scopes_its_own_units_of_work():
+    """The long-I/O task must build a service that opens its own short UoWs.
 
-    await registered_task.fn(payload)
+    `execute_chat` runs platform API calls, file ingest and voice transcription;
+    holding a pooled connection across that is what the factory form exists to
+    avoid. Asserting the service got *that* factory, because a service built
+    around a request-scoped one would satisfy any weaker check and still hold a
+    connection for the length of the I/O.
 
-    worker_ctx.build_surface_event_handler_with_factory.assert_called_once()
-    service.execute_chat.assert_awaited_once()
+    No double: the builder is a constructor call, so the real one is cheaper
+    than a stand-in and cannot drift from it.
+    """
+    factory = object()
+
+    service = surface_dependencies.build_surface_event_handler_with_factory(factory)
+
+    assert service._uow_factory is factory
 
 
 def _reply_context() -> SurfaceReplyContext:

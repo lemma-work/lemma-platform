@@ -99,7 +99,6 @@ async def test_cleanup_written_bundle_removes_source_and_release_prefix():
         has_source=True,
         version="v1",
         release_root="releases/v1/dist/",
-        existing_release_id=None,
         needs_dist_write=True,
     )
 
@@ -138,7 +137,6 @@ async def test_bundle_write_failure_rolls_back_every_partial_object():
         has_source=True,
         version="v1",
         release_root="releases/v1/dist/",
-        existing_release_id=None,
         needs_dist_write=True,
     )
 

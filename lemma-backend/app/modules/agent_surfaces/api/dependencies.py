@@ -100,6 +100,19 @@ def get_surface_event_handler(uow: UoWDep) -> AgentSurfaceIngressService:
     )
 
 
+def build_surface_event_handler_with_factory(
+    uow_factory: UnitOfWorkFactory,
+) -> AgentSurfaceIngressService:
+    """An ingress service that scopes its own short UoWs.
+
+    Used by the `process_surface_message` worker task: `execute_chat` runs long
+    external I/O -- platform APIs, file ingest, voice transcription -- that must
+    not hold a pooled DB connection. The service resolves credentials and writes
+    the inbound message in separate short UoWs from the factory.
+    """
+    return AgentSurfaceIngressService(uow_factory=uow_factory)
+
+
 def get_notification_service(uow: UoWDep) -> NotificationService:
     return NotificationService(
         uow=uow,

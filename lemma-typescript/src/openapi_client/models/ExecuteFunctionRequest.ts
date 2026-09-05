@@ -8,4 +8,8 @@ import type { JsonObject } from './JsonObject.js';
  */
 export type ExecuteFunctionRequest = {
     input_data?: JsonObject;
+    /**
+     * Run a specific revision instead of the live one -- a revision number ('r12') or a hash prefix. Requires function.update: running a superseded build is an authoring action, not an execution one.
+     */
+    revision?: (string | null);
 };

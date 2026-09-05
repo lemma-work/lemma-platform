@@ -1,7 +1,6 @@
 """Streaq tasks for pod bundle jobs.
 
 Imported for side effects by ``module.register_streaq`` at worker startup.
-Tasks land slice by slice: export, plan, apply, GitHub import, publish, sweep.
 
 Export job phases:
   (a) mark ``EXPORTING`` + publish status
@@ -50,7 +49,6 @@ from app.modules.pod_bundle.domain.state import (
 from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
 )
-from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure import github_fetcher
 from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
@@ -191,6 +189,8 @@ async def _settle_import_state_conflict(store, staging, import_id: UUID) -> bool
 
 @streaq_task(name="export_pod_bundle", lane=Lane.BULK)
 async def export_pod_bundle(context: dict[str, str | None]) -> None:
+    from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+
     worker_ctx: AppWorkerContext = streaq_worker.context
     export_id = UUID(str(context["export_id"]))
     pod_id = UUID(str(context["pod_id"]))

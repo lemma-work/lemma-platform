@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
+    ResolvedExecution,
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
@@ -119,20 +120,9 @@ def parse_python_packages(code: str) -> list[str]:
     return packages
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedExecution:
-    """A resolved + authorized function and its freshly-created PENDING run,
-    handed from the DB resolve phase to the sandbox execution phase."""
-
-    function: FunctionEntity
-    run: FunctionRunEntity
-
-
 @dataclass(slots=True)
 class FunctionUpdatePlan:
-    """In-memory-mutated function plus what the sandbox/persist phases need: the
-    new ``code`` to write+extract (or None), its ``code_path``, and the prior
-    icon url for post-persist cleanup."""
+    """A pending edit and its post-commit icon cleanup."""
 
     function: FunctionEntity
     old_icon_url: str | None
@@ -362,13 +352,6 @@ class FunctionService:
         function.code = code
         return code
 
-    # -- Per-phase methods for the use-case layer (bound mode, no sandbox) -----
-    #
-    # Each runs a single DB step against the bound repositories (within the
-    # caller's short pod_context_scope) and returns plain entities/plans. The
-    # use case sequences these around the sandbox phases the executor owns, so a
-    # pooled connection is never held across the sandbox round-trip.
-
     async def resolve_create(
         self, entity: FunctionEntity, user_id: UUID, *, ctx: Context
     ) -> FunctionEntity:
@@ -380,8 +363,16 @@ class FunctionService:
         await self._validate_resources(entity)
         return await self._create_function_checked(entity)
 
+    async def _record_revision(self, function: FunctionEntity) -> None:
+        from app.modules.function.services.function_revision_service import (
+            FunctionRevisionService,
+        )
+
+        await FunctionRevisionService(self.repository).record(function)
+
     async def persist_create(self, function: FunctionEntity) -> FunctionEntity:
         """Persist the schema/code fields onto the created row. DB only."""
+        await self._record_revision(function)
         return await self._update_function_row(function)
 
     async def resolve_update(
@@ -445,8 +436,9 @@ class FunctionService:
         name: str,
         ctx: Context,
     ) -> FunctionEntity:
-        """Persist the mutated row and re-read it (with ctx, for allowed_actions).
-        DB only."""
+        """Persist and reread with allowed actions inside the current transaction."""
+        if plan.code is not None:
+            await self._record_revision(plan.function)
         updated = await self._update_function_row(plan.function)
         async with self._repos() as (function_repository, _run_repository):
             refreshed = await function_repository.get_by_name(pod_id, name, ctx=ctx)
@@ -484,12 +476,9 @@ class FunctionService:
         *,
         ctx: Context,
         dispatch_mode: FunctionDispatchMode | None = None,
+        revision_ref: str | None = None,
     ) -> ResolvedExecution:
-        """Authorize FUNCTION_EXECUTE and persist its one PENDING run. DB only.
-
-        Queue publication is deliberately owned by ``FunctionUseCases`` after
-        this transaction commits and releases its connection.
-        """
+        """Authorize, select a revision, and persist its PENDING run atomically."""
         function = await self._load_function_by_name(pod_id, name, ctx=ctx)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
@@ -503,9 +492,20 @@ class FunctionService:
             ),
         )
 
+        function = await self.repository.get_for_update(function.id)
+        if function is None:
+            raise FunctionNotFoundError(f"Function {name} not found")
+
+        if revision_ref is not None:
+            from app.modules.function.services.function_revision_service import (
+                FunctionRevisionService,
+            )
+
+            function = await FunctionRevisionService(
+                self.repository
+            ).resolve_for_execution(function, revision_ref, ctx=ctx)
         require_ready_revision(function)
-        # Before the run row, the lease and (often) a cold sandbox start, so a
-        # mistyped field is a refusal naming the field rather than a failed run.
+        # Reject bad input before spending a run or sandbox lease.
         validate_input(function, input_data)
 
         run_entity = FunctionRunEntity(

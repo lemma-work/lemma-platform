@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 158 |
-| `gap` | 2 |
+| `covered` | 160 |
+| `gap` | 0 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 383.
+Scenario tests declaring a promise: 386.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 236 | 237 |
+| OpenAPI operations | 241 | 242 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -58,7 +58,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused` |
+| `PS-AGENT-001` A person creates an agent and gives it a job | `covered` | `test_an_agent_can_be_changed`, `test_an_agent_is_created`, `test_a_duplicate_agent_name_is_refused`, `test_an_instruction_has_a_bounded_text_budget` |
 | `PS-AGENT-002` An agent gets only the access it was granted | `covered` | `test_an_agents_reach_can_be_set`, `test_a_data_grant_brings_its_own_tools`, `test_the_universal_abilities_need_no_declaring`, `test_an_agents_grants_are_readable`, `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
 | `PS-AGENT-003` A pod has an agent without anyone creating one | `covered` | `test_a_pod_can_be_asked_without_building_an_agent`, `test_deleting_an_agent_keeps_the_default` |
 | `PS-AGENT-005` A person gives an agent a memory | `covered` | `test_memory_comes_with_the_access_it_needs`, `test_memory_access_is_not_handed_out_unasked`, `test_memory_access_leaves_with_the_capability` |
@@ -84,7 +84,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FUNC-001` A person creates a function and runs it | `covered` | `test_a_function_runs_and_returns_its_output`, `test_a_mismatched_input_is_refused`, `test_a_function_is_created`, `test_a_duplicate_function_name_is_refused` |
 | `PS-FUNC-002` A function runs isolated from everything else | `covered` | `test_a_function_runs_in_a_sandbox`, `test_a_step_beyond_the_runs_authority_is_refused_readably`, `test_browser_access_is_granted_or_refused_but_never_crashes` |
 | `PS-FUNC-003` A function gets only the access it was granted | `covered` | `test_a_functions_reach_can_be_set`, `test_an_outsider_cannot_run_a_function`, `test_a_functions_grants_are_readable`, `test_an_outsider_cannot_create_a_function` |
-| `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_deleting_a_function_removes_it` |
+| `PS-FUNC-004` A person can change a function without breaking what is running | `covered` | `test_updated_code_is_what_runs_next`, `test_a_pinned_run_uses_its_own_input_contract`, `test_deleting_a_function_removes_it` |
 | `PS-FUNC-010` A quick function answers immediately | `covered` | `test_a_function_runs_and_returns_its_output` |
 | `PS-FUNC-011` A long function is queued and reports progress | `covered` | `test_runs_are_recorded`, `test_a_job_function_completes` |
 | `PS-FUNC-012` A run that cannot finish does not hang forever | `covered` | `test_a_sleeping_function_is_stopped`, `test_a_spinning_function_is_stopped` |
@@ -188,7 +188,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
-| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
+| `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
 | `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
 
@@ -231,7 +231,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a platform | `gap` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-001` A person connects a pod's agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
@@ -242,7 +242,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
-| `PS-SURF-023` A person reached on several platforms gets one predictable answer | `gap` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
+| `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
