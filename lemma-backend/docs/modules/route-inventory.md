@@ -88,11 +88,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/apps/{app_name}/assets` | `app.asset.root.get` | Get App Root Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/assets/{asset_path}` | `app.asset.get` | Get App Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/dist/archive` | `app.dist.archive.get` | Download App Dist Archive |
+| GET | `/pods/{pod_id}/apps/{app_name}/releases` | `app.release.list` | List App Releases |
 | GET | `/pods/{pod_id}/apps/{app_name}/source/archive` | `app.source.archive.get` | Download App Source Archive |
 | PATCH | `/pods/{pod_id}/apps/{app_name}` | `app.update` | Update App |
 | POST | `/pods/{pod_id}/apps` | `app.create` | Create App |
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
+| POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
 
 ## connectors
 
@@ -168,10 +170,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/functions` | `function.list` | List Functions |
 | GET | `/pods/{pod_id}/functions/{function_name}` | `function.get` | Get Function |
 | GET | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.get` | Get Function Resource Permissions |
+| GET | `/pods/{pod_id}/functions/{function_name}/revisions` | `function.revision.list` | List Function Revisions |
+| GET | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}` | `function.revision.get` | Get Function Revision |
 | GET | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run.list` | List Runs |
 | GET | `/pods/{pod_id}/functions/{function_name}/runs/{run_id}` | `function.run.get` | Get Run |
 | PATCH | `/pods/{pod_id}/functions/{function_name}` | `function.update` | Update Function |
 | POST | `/pods/{pod_id}/functions` | `function.create` | Create Function |
+| POST | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote` | `function.revision.promote` | Promote Function Revision |
 | POST | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run` | Execute Function |
 | PUT | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.replace` | Replace Function Resource Permissions |
 

@@ -231,9 +231,14 @@ class SandboxSweeper:
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
         objects = await self._provider.list_objects(deadline_at=deadline_at)
 
+        # Containers first. A volume in use cannot be deleted, so reclaiming the
+        # container that mounts it in the same pass is what makes its disk
+        # collectable now rather than one sweep later.
+        ordered = sorted(objects, key=lambda item: item.kind == "volume")
+
         reclaimed: list[str] = []
         unattributed: list[str] = []
-        for obj in objects:
+        for obj in ordered:
             if obj.sandbox_id is None:
                 # Not identifiable as ours at all. Leaving a stray object
                 # running is recoverable; deleting a stranger's container is
@@ -289,8 +294,15 @@ class SandboxSweeper:
                 reclaimed.append(obj.name)
                 continue
             try:
-                await self._provider.destroy(obj.name, deadline_at=deadline_at)
+                if obj.kind == "volume":
+                    await self._provider.destroy_volume(
+                        obj.name, deadline_at=deadline_at
+                    )
+                else:
+                    await self._provider.destroy(obj.name, deadline_at=deadline_at)
             except Exception as exc:
+                # A volume still mounted by a container Docker has not finished
+                # removing refuses deletion; the next sweep collects it.
                 logger.warning(
                     "workspace.sandbox_sweeper.orphan_destroy_failed",
                     sandbox_id=str(obj.sandbox_id),
@@ -363,6 +375,22 @@ class SandboxSweeper:
                 # row still says DELETED.
                 return None
             return "sandbox deleted"
+        if obj.kind == "volume":
+            # A volume is the workspace's disk: it deliberately outlives every
+            # container that mounts it, so it is NOT superseded by an epoch
+            # bump. Only a newer storage generation makes one obsolete, and a
+            # volume whose generation cannot be read is never judged by it --
+            # unparseable means unknown, not old.
+            if (
+                obj.storage_generation is not None
+                and obj.storage_generation < sandbox.storage_generation
+            ):
+                return (
+                    f"storage generation {obj.storage_generation} is behind "
+                    f"{sandbox.storage_generation}"
+                )
+            return None
+
         if obj.legacy:
             # A pre-cutover object carries no epoch, so it cannot be judged by
             # one. While both provisioning paths exist it may still be the

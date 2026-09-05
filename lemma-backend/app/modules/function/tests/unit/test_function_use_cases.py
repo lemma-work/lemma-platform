@@ -94,6 +94,7 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
     compiler = SimpleNamespace(
         write_code=AsyncMock(),
         extract_schemas=AsyncMock(),
+        discard_unused_artifact=AsyncMock(),
         build_artifact=AsyncMock(),
     )
     dispatcher = SimpleNamespace(execute=AsyncMock(), cancel=AsyncMock())
@@ -235,6 +236,7 @@ async def test_execute_backfills_legacy_revision_before_creating_run():
             ]
         ),
         activate_revision_if_missing=AsyncMock(return_value=activated),
+        persist_create=AsyncMock(),
     )
     code = (
         "# input_type_name: Input\n# output_type_name: Output\n# function_name: run\n"
@@ -321,6 +323,7 @@ async def test_execute_raises_when_a_second_backfill_attempt_is_still_legacy():
             ]
         ),
         activate_revision_if_missing=AsyncMock(return_value=activated),
+        persist_create=AsyncMock(),
     )
     code = (
         "# input_type_name: Input\n# output_type_name: Output\n# function_name: run\n"

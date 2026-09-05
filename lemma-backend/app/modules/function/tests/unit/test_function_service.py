@@ -11,6 +11,7 @@ from app.core.authorization.context import Context
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionEntity,
+    FunctionRevisionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
@@ -180,6 +181,7 @@ async def test_get_run_rejects_cross_function_id(
         user_id=function.user_id,
     )
     function_repository.get_by_name.return_value = function
+    function_repository.get_for_update.return_value = function
 
     with pytest.raises(FunctionValidationError, match="does not belong"):
         await service.get_run(
@@ -223,6 +225,7 @@ async def test_resolve_execute_creates_only_the_durable_pending_run(
         revision_hash=f"sha256:{'2' * 64}",
     )
     function_repository.get_by_name.return_value = function
+    function_repository.get_for_update.return_value = function
     run_repository.create_run.side_effect = lambda item: item
 
     resolved = await service.resolve_execute(
@@ -242,6 +245,55 @@ async def test_resolve_execute_creates_only_the_durable_pending_run(
     assert created_run.revision_hash == function.revision_hash
 
 
+@pytest.mark.parametrize("valid", [True, False])
+async def test_pinned_run_uses_the_selected_revision_contract(
+    service: FunctionService,
+    function_repository: AsyncMock,
+    run_repository: AsyncMock,
+    context: Context,
+    valid: bool,
+) -> None:
+    function = _function(
+        status=FunctionStatus.READY,
+        revision_hash=f"sha256:{'2' * 64}",
+        input_schema={"type": "object", "required": ["current"]},
+    )
+    revision = FunctionRevisionEntity(
+        function_id=function.id,
+        revision_number=1,
+        revision_hash=f"sha256:{'1' * 64}",
+        code_path="revisions/old/function.py",
+        input_schema={"type": "object", "required": ["historical"]},
+        output_schema={"type": "string"},
+        config_schema={"type": "object", "required": ["old_setting"]},
+    )
+    function_repository.get_by_name.return_value = function
+    function_repository.get_for_update.return_value = function
+    function_repository.get_revision_by_number.return_value = revision
+    run_repository.create_run.side_effect = lambda run: run
+    call = service.resolve_execute(
+        function.pod_id,
+        function.name,
+        {"historical": 1} if valid else {"current": 1},
+        function.user_id,
+        None,
+        ctx=context,
+        revision_ref="r1",
+    )
+    if not valid:
+        with pytest.raises(FunctionValidationError, match="historical"):
+            await call
+        run_repository.create_run.assert_not_awaited()
+        return
+    resolved = await call
+    assert resolved.run.revision_hash == revision.revision_hash
+    assert resolved.function.input_schema == revision.input_schema
+    assert resolved.function.output_schema == revision.output_schema
+    assert resolved.function.config_schema == revision.config_schema
+    assert resolved.function.code_path == revision.code_path
+    assert function.revision_hash != revision.revision_hash
+
+
 async def test_resolve_execute_requires_ready_revision(
     service: FunctionService,
     function_repository: AsyncMock,
@@ -249,6 +301,7 @@ async def test_resolve_execute_requires_ready_revision(
 ) -> None:
     function = _function(status=FunctionStatus.DRAFT)
     function_repository.get_by_name.return_value = function
+    function_repository.get_for_update.return_value = function
 
     with pytest.raises(FunctionValidationError, match="ready"):
         await service.resolve_execute(
@@ -273,6 +326,7 @@ async def test_resolve_execute_requests_backfill_for_ready_legacy_source(
         revision_hash=None,
     )
     function_repository.get_by_name.return_value = function
+    function_repository.get_for_update.return_value = function
 
     with pytest.raises(LegacyFunctionRevisionRequired) as raised:
         await service.resolve_execute(

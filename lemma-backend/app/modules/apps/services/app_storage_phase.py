@@ -16,13 +16,14 @@ from __future__ import annotations
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
 from app.core.runtime_config import app_api_url, inject_runtime_config
-from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
+from app.modules.apps.domain.entities import AppReleaseEntity
+from app.modules.apps.domain.entities import AppAssetDocument
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
@@ -59,7 +60,7 @@ class _AppDeletionCleanup:
 
     app_id: UUID
     source_archive_path: str | None
-    releases: tuple
+    releases: tuple[AppReleaseEntity, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,6 @@ class _UploadPlan:
     has_source: bool
     version: str | None
     release_root: str | None
-    existing_release_id: UUID | None
     needs_dist_write: bool
 
 
@@ -80,6 +80,10 @@ class _UploadPlan:
 class _WrittenBundle:
     source_path: str | None
     dist_archive_path: str | None
+    # The source archive's own digest, carried out of the storage phase so the
+    # release row can record which source produced it without re-hashing bytes
+    # the finalize phase no longer holds.
+    source_digest: str | None = None
 
 
 class AppStoragePhase:
@@ -168,13 +172,14 @@ class AppStoragePhase:
         resolve_upload_bundle and finalize_upload_bundle."""
         storage = self.file_manager_factory(plan.app_id)
         source_path: str | None = None
+        source_version: str | None = None
         dist_archive_path: str | None = None
         try:
             if plan.has_source and source_archive_bytes is not None:
                 source_version = await run_blocking(
                     upload_source_sha256, source_archive_bytes
                 )
-                source_path = f"source/{source_version}/archive.zip"
+                source_path = f"source/{source_version}/{uuid7()}/archive.zip"
                 await storage.write_file(source_path, source_archive_bytes)
             if plan.needs_dist_write and dist_archive_bytes is not None:
                 bundle = await run_blocking(load_app_dist_bundle, dist_archive_bytes)
@@ -191,11 +196,14 @@ class AppStoragePhase:
                 _WrittenBundle(
                     source_path=source_path,
                     dist_archive_path=dist_archive_path,
+                    source_digest=source_version,
                 ),
             )
             raise
         return _WrittenBundle(
-            source_path=source_path, dist_archive_path=dist_archive_path
+            source_path=source_path,
+            dist_archive_path=dist_archive_path,
+            source_digest=source_version,
         )
 
     async def cleanup_written_bundle(

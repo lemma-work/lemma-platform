@@ -535,10 +535,12 @@ class BundleExporter:
         ctx: Context,
         byte_budget: _ByteBudget,
     ) -> None:
-        """Bundle an app's code: its source (extracted to ``source/``), or — for a
-        widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
-        an app with neither archive, or one over budget, exports metadata-only. A
-        one-file app lands as ``source/index.html``; the CLI writes ``html.html``."""
+        """Export source and dist, prioritizing source within the byte budget.
+
+        Source enables rebuilding for another pod; dist preserves the deployed
+        build and is the fallback when source is unavailable. Match the CLI's
+        ``_download_app_assets`` layout without claiming Vite build portability.
+        """
         from app.modules.apps.contracts import AppNotFoundError
         from app.modules.apps.contracts.provisioning import (
             read_app_archive,
@@ -546,8 +548,6 @@ class BundleExporter:
             resolve_app_source_archive,
         )
 
-        # Prefer source (rebuildable in the target pod); the exported vite dist is
-        # baked with the source pod id and is not portable.
         source_bytes: bytes | None = None
         try:
             app_id, source_path = await resolve_app_source_archive(
@@ -559,17 +559,15 @@ class BundleExporter:
         except AppNotFoundError:
             source_bytes = None
 
-        if source_bytes:
-            if byte_budget.allow(
-                name=f"apps/{app_name}/source", size=len(source_bytes)
-            ):
-                await run_blocking(
-                    _extract_zip_bytes,
-                    source_bytes,
-                    dest / "source",
-                    limiter="cpu_bound",
-                )
-            return
+        if source_bytes and byte_budget.allow(
+            name=f"apps/{app_name}/source", size=len(source_bytes)
+        ):
+            await run_blocking(
+                _extract_zip_bytes,
+                source_bytes,
+                dest / "source",
+                limiter="cpu_bound",
+            )
 
         dist_bytes: bytes | None = None
         try:

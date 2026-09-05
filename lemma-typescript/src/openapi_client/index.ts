@@ -70,6 +70,8 @@ export type { AppDetailResponse } from './models/AppDetailResponse.js';
 export type { AppListResponse } from './models/AppListResponse.js';
 export type { ApplyImportRequest } from './models/ApplyImportRequest.js';
 export type { AppMessageResponse } from './models/AppMessageResponse.js';
+export type { AppReleaseListResponse } from './models/AppReleaseListResponse.js';
+export type { AppReleaseResponse } from './models/AppReleaseResponse.js';
 export type { ApprovalDecisionResponse } from './models/ApprovalDecisionResponse.js';
 export { AppStatus } from './models/AppStatus.js';
 export type { AppTriggerListResponseSchema } from './models/AppTriggerListResponseSchema.js';
@@ -177,6 +179,9 @@ export type { FunctionPermissionsReplaceRequest } from './models/FunctionPermiss
 export type { FunctionPermissionsResponse } from './models/FunctionPermissionsResponse.js';
 export type { FunctionResourcePermissionRequest } from './models/FunctionResourcePermissionRequest.js';
 export type { FunctionResourcePermissionResponse } from './models/FunctionResourcePermissionResponse.js';
+export type { FunctionRevisionListResponse } from './models/FunctionRevisionListResponse.js';
+export type { FunctionRevisionPromoteResponse } from './models/FunctionRevisionPromoteResponse.js';
+export type { FunctionRevisionResponse } from './models/FunctionRevisionResponse.js';
 export type { FunctionRunListResponse } from './models/FunctionRunListResponse.js';
 export type { FunctionRunResponse } from './models/FunctionRunResponse.js';
 export { FunctionRunStatus } from './models/FunctionRunStatus.js';

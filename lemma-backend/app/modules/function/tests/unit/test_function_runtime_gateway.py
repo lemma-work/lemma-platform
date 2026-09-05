@@ -78,6 +78,9 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
     )
 
     class _Repository:
+        async def artifact_generation(self, *_args):
+            return None
+
         def __init__(self, _uow):
             pass
 
@@ -182,6 +185,9 @@ async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_ha
     )
 
     class _Repository:
+        async def artifact_generation(self, *_args):
+            return None
+
         def __init__(self, _uow):
             pass
 
@@ -233,6 +239,9 @@ async def test_gateway_terminal_rejects_when_completion_is_not_accepted(
     )
 
     class _Repository:
+        async def artifact_generation(self, *_args):
+            return None
+
         def __init__(self, _uow):
             pass
 

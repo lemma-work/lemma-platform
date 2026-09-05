@@ -17,7 +17,7 @@ from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.entities import Agent, validate_agent_instruction
 from app.modules.agent.domain.errors import (
     AgentAlreadyExistsError,
     AgentNotFoundError,
@@ -138,8 +138,7 @@ class AgentService:
             raise AgentValidationError(
                 f"Agent name {normalized_name!r} is reserved for the pod-default assistant"
             )
-        if not instruction.strip():
-            raise AgentValidationError("Agent instruction is required")
+        instruction = validate_agent_instruction(instruction)
         normalized_visibility = _normalize_agent_visibility(visibility)
 
         existing = await self.agent_repository.get_by_pod_and_name(
@@ -302,12 +301,7 @@ class AgentService:
         if not isinstance(icon_url, UnsetType):
             agent.icon_url = icon_url
         if not isinstance(instruction, UnsetType):
-            # `None` is rejected alongside blank, not accepted: the entity's
-            # instruction is a `str`, so clearing it wrote a null into a field
-            # that has no null.
-            if instruction is None or not instruction.strip():
-                raise AgentValidationError("Agent instruction is required")
-            agent.instruction = instruction
+            agent.instruction = validate_agent_instruction(instruction)
         if not isinstance(agent_runtime, UnsetType):
             agent.agent_runtime = agent_runtime
         if not isinstance(toolsets, UnsetType):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -18,10 +19,12 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.core.infrastructure.jobs.streaq_runtime import (
     AppWorkerContext,
+    Lane,
     streaq_cron,
     streaq_task,
     streaq_worker,
 )
+from app.core.config import settings
 from app.modules.function.api.dependencies import (
     build_function_service,
     build_function_use_cases,
@@ -31,15 +34,16 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
     FunctionRunQueueUnavailable,
 )
+from app.modules.function.config import revision_settings
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
-)
-from app.modules.function.application.runtime_policy import (
-    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
+)
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
 )
 from app.core.log.log import get_logger
 
@@ -176,8 +180,6 @@ async def prune_function_runs() -> None:
 
 
 async def _prune_function_runs() -> None:
-    from app.core.config import settings
-
     budget = settings.function_run_retention_budget_seconds
     if budget <= 0:
         return
@@ -224,3 +226,170 @@ async def _reconcile_function_runs() -> None:
             now=now,
             job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
         )
+
+
+@streaq_cron(
+    revision_settings.function_revision_retention_cron,
+    name="sweep_function_revisions",
+    lane=Lane.BULK,
+)
+async def sweep_function_revisions() -> None:
+    """Daily backstop for revisions whose retention window has passed.
+
+    Pruning already runs inline on a code save, which is when a function's
+    storage grows by an artifact. This catches what that structurally cannot: a
+    function that stops being edited, whose surplus revisions would otherwise
+    age forever with nothing re-evaluating them.
+
+    Bulk lane: it is slow, bursty and touches object storage.
+    """
+    # Through the module's shared cron boundary, which is why this module keeps
+    # exactly one broad catch rather than one per schedule.
+    await _guard_cron("sweep_function_revisions", _sweep_revisions())
+
+
+async def _sweep_revisions() -> None:
+    if not revision_settings.function_revision_retention_enabled:
+        return
+    outcome = await _sweep_function_revisions(
+        provide_uow_factory(),
+        page_size=revision_settings.function_revision_retention_batch,
+        budget_seconds=revision_settings.function_revision_retention_budget_seconds,
+    )
+    # Logged even on a no-op tick: "found nothing" and "frozen" looked the same
+    # from outside, which is how a sweep stuck on the head of the table went
+    # unnoticed.
+    logger.info(
+        "function.handlers.sweep_function_revisions.observed",
+        examined=outcome.examined,
+        pruned_functions=outcome.pruned_functions,
+        pruned_revisions=outcome.pruned_revisions,
+        failed=outcome.failed,
+        truncated=outcome.truncated,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionSweepOutcome:
+    examined: int = 0
+    pruned_functions: int = 0
+    pruned_revisions: int = 0
+    failed: int = 0
+    truncated: bool = False
+
+
+async def _prune_one_function(uow_factory: UnitOfWorkFactory, function_id: UUID) -> int:
+    """Plan and stamp in one short unit of work, then delete the bytes outside
+    it. Returns how many revisions lost their artifacts."""
+    from app.modules.function.api.dependencies import build_function_service
+    from app.modules.function.services.function_revision_retention import (
+        FunctionRevisionRetention,
+    )
+
+    async with uow_factory() as uow:
+        service = build_function_service(uow)
+        function = await service.repository.get(function_id)
+        if function is None:
+            return 0
+        retention = FunctionRevisionRetention(
+            service.repository, service.storage_factory
+        )
+        plan = await retention.plan(function)
+        await uow.commit()
+    if plan.is_empty:
+        return 0
+    await retention.execute(plan)
+    async with uow_factory() as completed_uow:
+        await build_function_service(completed_uow).repository.mark_revisions_purged(
+            plan.version_ids
+        )
+        await completed_uow.commit()
+    return len(plan.revision_numbers)
+
+
+async def _sweep_function_revisions(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    page_size: int,
+    budget_seconds: float = 0.0,
+    now: datetime | None = None,
+    prune_one=_prune_one_function,
+) -> RevisionSweepOutcome:
+    """Drain the functions that could have a prunable revision.
+
+    Was ``ORDER BY id LIMIT batch_size`` with no cursor and no filter, so every
+    tick examined the same functions and the tail -- a function that stopped
+    being edited, which is the only case this cron exists for -- was never
+    reached. See :mod:`app.core.infrastructure.db.retention_candidates`.
+
+    ``budget_seconds`` of 0 means unlimited.
+    """
+    from app.core.infrastructure.db.retention_candidates import (
+        owners_with_prunable_versions,
+    )
+    from app.modules.function.infrastructure.models import FunctionRevisionModel
+    from app.modules.function.services.function_revision_retention import (
+        PRUNE_FAILURES,
+        revision_retention_policy,
+    )
+
+    moment = now or datetime.now(timezone.utc)
+    policy = revision_retention_policy()
+    started = time.monotonic()
+    after: UUID | None = None
+    examined = pruned_functions = pruned_revisions = failed = 0
+    truncated = False
+
+    while True:
+        async with uow_factory() as uow:
+            page = list(
+                (
+                    await uow.session.execute(
+                        owners_with_prunable_versions(
+                            owner_column=FunctionRevisionModel.function_id,
+                            created_at_column=FunctionRevisionModel.created_at,
+                            pruned_at_column=FunctionRevisionModel.pruned_at,
+                            purged_at_column=FunctionRevisionModel.purged_at,
+                            policy=policy,
+                            now=moment,
+                            after=after,
+                            limit=page_size,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if not page:
+            break
+        after = page[-1]
+
+        for function_id in page:
+            examined += 1
+            try:
+                removed = await prune_one(uow_factory, function_id)
+            except PRUNE_FAILURES:
+                failed += 1
+                logger.warning(
+                    "function.handlers.sweep_function_revisions.skipped",
+                    function_id=str(function_id),
+                    exc_info=True,
+                )
+                continue
+            if removed:
+                pruned_functions += 1
+                pruned_revisions += removed
+
+        if len(page) < page_size:
+            break
+        if budget_seconds > 0 and (time.monotonic() - started) >= budget_seconds:
+            truncated = True
+            break
+
+    return RevisionSweepOutcome(
+        examined=examined,
+        pruned_functions=pruned_functions,
+        pruned_revisions=pruned_revisions,
+        failed=failed,
+        truncated=truncated,
+    )
