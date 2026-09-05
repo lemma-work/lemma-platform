@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import shlex
+import signal
 import struct
 import sys
 from uuid import uuid4
@@ -210,6 +212,82 @@ async def test_terminate_kills_process_group_and_requires_auth(tmp_path: Path):
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("descendant process survived group termination")
+
+
+async def test_terminate_survives_a_process_group_we_may_no_longer_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`EPERM` from `killpg` must end the termination, not 500 the request.
+
+    Once the direct child is reaped its pid is free. A pid recycled into a
+    process owned by somebody else answers `killpg` with `EPERM` -- "operation
+    not permitted" -- rather than the `ESRCH` the code was written for. All
+    three `killpg` calls in `terminate` used to let that escape, so
+    `DELETE /processes/{id}` returned `500 Internal Server Error` for a process
+    that had already stopped.
+
+    Found as a flake: roughly one run in thirty of
+    `test_direct_exit_is_terminal_when_descendant_holds_output_pipe`, which is
+    the test that leaves a reaped direct child and a live descendant lying
+    around for a pid to be recycled under. Reproducing that by luck is not a
+    test, so this raises the error the kernel would.
+
+    The fork matters. A process that simply exits leaves no residual group, so
+    `terminate` returns before it signals anything and the broken code passes --
+    the first version of this test made exactly that mistake. Only a descendant
+    still holding the output pipe reaches the `killpg` calls.
+    """
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+    real_killpg = os.killpg
+    child_pid = None
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        started = await client.post(
+            "/processes",
+            headers=HEADERS,
+            json=start_body(
+                tmp_path,
+                (
+                    f"{shlex.quote(sys.executable)} -c "
+                    + shlex.quote(
+                        "import os,time; pid=os.fork(); "
+                        "print(f'child:{pid}', flush=True) "
+                        "if pid else time.sleep(60)"
+                    )
+                ),
+            ),
+        )
+        operation_id = started.json()["operation_id"]
+        await wait_for_terminal(client, operation_id)
+        output = await client.get(
+            f"/processes/{operation_id}/output?after_seq=0", headers=HEADERS
+        )
+        combined = b"".join(frame[2] for frame in decode_output(output.content))
+        assert b"child:" in combined, combined
+        child_pid = int(combined.split(b"child:", 1)[1].splitlines()[0])
+
+        def refuse(*args: object, **kwargs: object) -> None:
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr(os, "killpg", refuse)
+        try:
+            terminated = await client.request(
+                "DELETE",
+                f"/processes/{operation_id}",
+                headers=HEADERS,
+                json={"grace_seconds": 0.1},
+            )
+        finally:
+            # The descendant is still asleep, because every signal this request
+            # tried to send was refused. Reap it with the real call rather than
+            # leaving a minute-long sleeper behind on every run.
+            monkeypatch.setattr(os, "killpg", real_killpg)
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(child_pid, signal.SIGKILL)
+
+    assert terminated.status_code == 200, terminated.text
 
 
 async def test_direct_exit_is_terminal_when_descendant_holds_output_pipe(

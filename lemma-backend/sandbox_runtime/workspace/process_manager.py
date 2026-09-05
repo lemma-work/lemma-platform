@@ -202,7 +202,15 @@ class ManagedProcess:
             self._termination_requested = True
         try:
             os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except ProcessLookupError, PermissionError:
+            # Both mean the same thing to us: there is no process group of ours
+            # left to signal. `ESRCH` is the group having exited. `EPERM` is the
+            # one that took a flaky test to find -- once the direct child is
+            # reaped its pid is free, and a pid recycled into a process we do not
+            # own answers `killpg` with "operation not permitted" rather than
+            # "no such process". Letting that escape turned
+            # `DELETE /processes/{id}` into a 500 for a process that had already
+            # stopped.
             self._residual_process_group = False
             return
         try:
@@ -215,7 +223,8 @@ class ManagedProcess:
         except TimeoutError:
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except ProcessLookupError, PermissionError:
+                # Same pair, same reason: nothing of ours left to kill.
                 pass
             if direct_process_running:
                 await self._wait_for_direct_exit()
@@ -271,7 +280,12 @@ class ManagedProcess:
         while asyncio.get_running_loop().time() < deadline:
             try:
                 os.killpg(self.process.pid, 0)
-            except ProcessLookupError:
+            except ProcessLookupError, PermissionError:
+                # The probe asks "is the group still there", so `EPERM` answers
+                # it as well as `ESRCH` does: a group we may not signal is not
+                # one we are waiting to exit, and polling it until the grace
+                # runs out would raise `TimeoutError` into a `SIGKILL` we cannot
+                # deliver either.
                 return
             await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
         raise TimeoutError
