@@ -13,7 +13,7 @@ the test harness, not purely agent-internal.
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -215,6 +215,75 @@ class AgentSettings(BaseSettings):
             "the sandbox. Turn it off to fall back to the plain HTTP client "
             "without redeploying — the SSRF guard applies either way. Env: "
             "``WEB_FETCH_IMPERSONATE_BROWSER``."
+        ),
+    )
+
+    # Moved out of `app/core/config.py`. Every production reader is in
+    # `mod:agent`; two are also read by the e2e worker-subprocess environment,
+    # repointed with them.
+    #
+    # `lemma_openai_api_key` and `lemma_openai_base_url` are deliberately NOT
+    # here: core's embeddings, datastore's reranker and
+    # `scripts/import_connector_catalog.py` read them too, so they are shared
+    # credentials rather than agent's. Nor are the six `llm_otel_*`, which only
+    # `core/observability/telemetry.py` reads despite the name.
+    lemma_anthropic_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description="API key for the server-provided Anthropic-compatible Lemma model profile.",
+    )
+    lemma_anthropic_base_url: str = Field(
+        default="https://api.anthropic.com",
+        description="Base URL for the server-provided Anthropic-compatible Lemma model profile.",
+    )
+    lemma_anthropic_default_model: str = Field(
+        default="claude-sonnet-4-5",
+        description="Default public model name for the server-provided Anthropic-compatible Lemma profile.",
+    )
+    lemma_anthropic_model_names: str = Field(
+        default="claude-sonnet-4-5,claude-haiku-4-5",
+        description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
+    )
+    lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
+        default="openai_compat",
+        description="Server-provided Lemma system model profile provider type.",
+    )
+    lemma_llm_caching_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
+            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
+            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
+            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
+        ),
+    )
+    lemma_openai_default_model: str = Field(
+        default="",
+        description=(
+            "Default model name for the OpenAI-compatible system model profile. "
+            "No built-in default: when LEMMA_OPENAI_API_KEY is set the model(s) "
+            "must be provided via LEMMA_OPENAI_MODEL_NAMES / "
+            "LEMMA_OPENAI_DEFAULT_MODEL, otherwise the profile build fails loudly."
+        ),
+    )
+    lemma_openai_model_names: str = Field(
+        default="",
+        description=(
+            "Comma-separated model names for the OpenAI-compatible system model "
+            "profile. Required (via env) when LEMMA_OPENAI_API_KEY is set; there "
+            "is no built-in model default."
+        ),
+    )
+    lemma_openai_vision_model_names: str = Field(
+        default="",
+        description=(
+            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES whose models accept "
+            "image input. Gates the image-returning tools (view_image): a text-only "
+            "model breaks when image content enters its history, so those tools are "
+            "withheld unless a model is listed here. The standard OpenAI /models "
+            "endpoint does not report modalities, so vision must be declared "
+            "explicitly here; leave empty if no configured model supports vision. "
+            "(Provider-discovered profiles can additionally auto-detect image input "
+            "when the provider advertises it.)"
         ),
     )
 

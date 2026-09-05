@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent.config import agent_settings
+from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.modules.workspace.config import workspace_settings
 
@@ -527,16 +529,15 @@ def _seed_system_model_pricing() -> None:
     """
     if os.environ.get("LEMMA_SYSTEM_MODEL_METADATA_JSON"):
         return
-    from app.core.config import settings
 
     # Every configured model, not just the default: one test deliberately runs
     # a NON-default one, to prove a model without a price entry cannot slip past
     # the usage limits by having its record dropped.
     names = os.environ.get("LEMMA_OPENAI_MODEL_NAMES") or (
-        settings.lemma_openai_model_names or ""
+        agent_settings.lemma_openai_model_names or ""
     )
     default = os.environ.get("LEMMA_OPENAI_DEFAULT_MODEL") or (
-        settings.lemma_openai_default_model
+        agent_settings.lemma_openai_default_model
     )
     models = {name.strip() for name in names.split(",") if name.strip()}
     if default:
@@ -563,7 +564,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     os.environ["SUPERTOKENS_ENV"] = "testing"
     settings.database_url = test_database_url
     base_url = test_database_url.rsplit("/", 1)[0]
-    settings.datastore_database_url = (
+    datastore_settings.datastore_database_url = (
         f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
     )
     settings.redis_url = test_redis_url
@@ -933,7 +934,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                     part for part in (".", os.environ.get("PYTHONPATH")) if part
                 ),
                 "DATABASE_URL": e2e_settings.database_url,
-                "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
+                "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
                 "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),

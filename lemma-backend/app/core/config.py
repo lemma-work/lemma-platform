@@ -468,10 +468,6 @@ class Settings(BaseSettings):
             "never contains provider credentials."
         ),
     )
-    lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
-        default="openai_compat",
-        description="Server-provided Lemma system model profile provider type.",
-    )
     lemma_openai_api_key: Optional[SecretStr] = Field(
         default=None,
         description="API key for the server-provided OpenAI-compatible Lemma model profile.",
@@ -483,52 +479,6 @@ class Settings(BaseSettings):
             "OpenAI; point it at any OpenAI-compatible endpoint (Fireworks, a local "
             "server, a gateway) via LEMMA_OPENAI_BASE_URL."
         ),
-    )
-    lemma_openai_default_model: str = Field(
-        default="",
-        description=(
-            "Default model name for the OpenAI-compatible system model profile. "
-            "No built-in default: when LEMMA_OPENAI_API_KEY is set the model(s) "
-            "must be provided via LEMMA_OPENAI_MODEL_NAMES / "
-            "LEMMA_OPENAI_DEFAULT_MODEL, otherwise the profile build fails loudly."
-        ),
-    )
-    lemma_openai_model_names: str = Field(
-        default="",
-        description=(
-            "Comma-separated model names for the OpenAI-compatible system model "
-            "profile. Required (via env) when LEMMA_OPENAI_API_KEY is set; there "
-            "is no built-in model default."
-        ),
-    )
-    lemma_openai_vision_model_names: str = Field(
-        default="",
-        description=(
-            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES whose models accept "
-            "image input. Gates the image-returning tools (view_image): a text-only "
-            "model breaks when image content enters its history, so those tools are "
-            "withheld unless a model is listed here. The standard OpenAI /models "
-            "endpoint does not report modalities, so vision must be declared "
-            "explicitly here; leave empty if no configured model supports vision. "
-            "(Provider-discovered profiles can additionally auto-detect image input "
-            "when the provider advertises it.)"
-        ),
-    )
-    lemma_anthropic_api_key: Optional[SecretStr] = Field(
-        default=None,
-        description="API key for the server-provided Anthropic-compatible Lemma model profile.",
-    )
-    lemma_anthropic_base_url: str = Field(
-        default="https://api.anthropic.com",
-        description="Base URL for the server-provided Anthropic-compatible Lemma model profile.",
-    )
-    lemma_anthropic_default_model: str = Field(
-        default="claude-sonnet-4-5",
-        description="Default public model name for the server-provided Anthropic-compatible Lemma profile.",
-    )
-    lemma_anthropic_model_names: str = Field(
-        default="claude-sonnet-4-5,claude-haiku-4-5",
-        description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
     )
     web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave"] = Field(
         default="auto",
@@ -569,10 +519,6 @@ class Settings(BaseSettings):
     brave_search_api_key: Optional[SecretStr] = Field(
         default=None,
         description="Brave Search API key used when WEB_SEARCH_PROVIDER=brave.",
-    )
-    datastore_database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
-        description="Database URL for datastore data storage (each datastore uses schema=datastore_id)",
     )
     # datastore query/document-processing/kreuzberg/pdf/signed-url config moved to
     # app/modules/datastore/config.py (datastore_database_url stays here — infra).
@@ -1377,15 +1323,6 @@ class Settings(BaseSettings):
             "contract's posture."
         ),
     )
-    lemma_llm_caching_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
-            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
-            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
-            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
-        ),
-    )
     embedding_provider: Literal["auto", "local", "openai_compat"] = Field(
         default="auto",
         description=(
@@ -1455,29 +1392,6 @@ class Settings(BaseSettings):
             "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
         ),
     )
-    local_embedding_preload: bool = Field(
-        default=True,
-        description=(
-            "Compatibility switch for local embedding startup. False forces lazy "
-            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
-        ),
-    )
-    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
-        default="blocking",
-        description=(
-            "How local embeddings initialize. 'blocking' preserves server "
-            "readiness semantics for hosted/developer deployments, 'background' "
-            "warms the model without blocking core API readiness, and 'lazy' "
-            "waits for the first embedding operation."
-        ),
-    )
-    local_embedding_preload_timeout_seconds: float = Field(
-        default=900.0,
-        description=(
-            "Maximum worker-startup time allowed for local model preload, including "
-            "a first-run model download."
-        ),
-    )
     workflow_wait_max_age_seconds: float = Field(
         default=6 * 60 * 60.0,
         description=(
@@ -1503,30 +1417,6 @@ class Settings(BaseSettings):
         description=(
             "Embedding model used when EMBEDDING_PROVIDER=openai_compat. "
             "Served via LEMMA_OPENAI_BASE_URL + LEMMA_OPENAI_API_KEY."
-        ),
-    )
-    reranker_mode: Literal["off", "local", "openai_compat"] = Field(
-        default="off",
-        description=(
-            "Optional second-stage reranker over hybrid retrieval. 'off' is a "
-            "no-op (first-stage order kept); 'local' uses a CPU cross-encoder; "
-            "'openai_compat' uses the LEMMA_OPENAI_BASE_URL /rerank endpoint "
-            "(LEMMA_OPENAI_API_KEY required)."
-        ),
-    )
-    local_reranker_model: str = Field(
-        default="BAAI/bge-reranker-v2-m3",
-        description="CrossEncoder model used when reranker_mode='local' (Apache-2.0, CPU).",
-    )
-    openai_compat_reranker_model: str = Field(
-        default="qwen3-reranker-8b",
-        description="Rerank model used when reranker_mode='openai_compat'.",
-    )
-    reranker_retrieve_n: int = Field(
-        default=50,
-        description=(
-            "First-stage candidate pool size to rerank down from when reranking "
-            "is active (retrieve N, rerank to the requested limit)."
         ),
     )
 

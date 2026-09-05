@@ -20,6 +20,7 @@ import pytest_asyncio
 import httpx
 import uvicorn
 
+from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.modules.workspace.providers.e2b_common import (
@@ -718,7 +719,7 @@ async def full_stack(
         **coverage_env,
         "PYTHONPATH": ".",
         "DATABASE_URL": settings.database_url,
-        "DATASTORE_DATABASE_URL": settings.datastore_database_url,
+        "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
         "REDIS_URL": redis_url,
         "SUPERTOKENS_CORE_URL": settings.supertokens_core_url,
         "ENVIRONMENT": "testing",
