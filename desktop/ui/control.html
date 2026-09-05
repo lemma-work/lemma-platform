@@ -4,28 +4,28 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <title>Lemma · Local settings</title>
+  <title>Lemma · Desktop settings</title>
   <link rel="stylesheet" href="control.css" />
   <script type="module" src="control.js"></script>
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Local settings navigation">
+    <aside class="sidebar" aria-label="Desktop settings navigation">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span><strong>Local settings</strong><small>This Lemma installation</small></span>
+        <span><strong>Desktop settings</strong><small>This computer and Local Lemma</small></span>
       </div>
 
       <nav id="nav">
+        <button class="nav-item" data-page="computer"><span>This computer</span></button>
+        <div class="nav-group">Local installation</div>
         <button class="nav-item active" data-page="overview"><span>Overview</span><i class="health-dot" id="dot-overview"></i></button>
-        <div class="nav-group">Intelligence</div>
         <button class="nav-item" data-page="ai"><span>AI provider</span><i class="health-dot" id="dot-ai"></i></button>
-        <div class="nav-group">Connectivity</div>
         <button class="nav-item" data-page="sharing"><span>Sharing</span><i class="health-dot" id="dot-sharing"></i></button>
         <button class="nav-item" data-page="integrations"><span>Integrations</span><i class="health-dot" id="dot-integrations"></i></button>
         <button class="nav-item" data-page="channels"><span>Channels</span><i class="health-dot" id="dot-channels"></i></button>
-        <div class="nav-group">System</div>
         <button class="nav-item" data-page="runtime"><span>Runtime</span><i class="health-dot" id="dot-runtime"></i></button>
+        <div class="nav-group">Desktop</div>
         <button class="nav-item" data-page="updates"><span>Updates</span><i class="health-dot" id="dot-updates"></i></button>
         <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot"></i></button>
       </nav>
@@ -39,7 +39,7 @@
     <main class="content">
       <header class="page-header">
         <div>
-          <div class="context-label">Local desktop</div>
+          <div class="context-label">Lemma Desktop</div>
           <h1 id="page-title">Overview</h1>
           <p id="page-subtitle">Health, attention, and exposure at a glance.</p>
         </div>
@@ -52,13 +52,26 @@
            something is already broken. -->
       <div class="warning-box" id="snapshot-unavailable" hidden>
         <strong>Can't reach Lemma's background service.</strong>
-        <p>Settings can't be shown until it answers. Retrying every few seconds.</p>
+        <p>Live status is unavailable. Your existing drafts are preserved. Retrying every few seconds.</p>
         <p class="limitation-note" id="snapshot-unavailable-detail"></p>
         <div class="button-row">
           <button class="btn" data-action="retry-snapshot">Try again</button>
           <button class="btn" data-action="logs">Open logs folder</button>
         </div>
       </div>
+
+      <section class="page" data-page="computer">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Installed coding agents</h2><p>Agent Host runs Claude Code, Codex, and OpenCode on this computer for your workspace. Connect it, choose which agents to use, and watch its runs from Lemma.</p></div></div>
+          <div id="agent-host-status"></div>
+          <div class="button-row"><button class="btn primary" data-action="agent-host-open">Open agent setup in Lemma</button><button class="btn" data-action="agent-host-restart">Restart</button><button class="btn" data-action="agent-host-log">Open log</button></div>
+        </article>
+        <article class="panel">
+          <h2>Where your data lives</h2>
+          <p id="deployment-description"></p>
+          <p>Installed coding agents use their own sign-in. API providers and local model servers are separate choices. Workspace model profiles live in the workspace’s Models screen.</p>
+        </article>
+      </section>
 
       <section class="page active" data-page="overview">
         <div class="attention-banner" id="attention-banner" hidden>
@@ -73,7 +86,7 @@
             <p id="metric-app-detail">Backend, frontend, and private dependencies.</p>
           </article>
           <article class="metric-card">
-            <span class="metric-label">Intelligence</span>
+            <span class="metric-label">API provider</span>
             <strong id="metric-ai">Checking</strong>
             <p id="metric-ai-detail">The default model available to agents.</p>
           </article>
@@ -234,11 +247,6 @@
           <div id="service-list"></div>
           <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
         </article>
-        <article class="panel">
-          <div class="panel-heading"><div><h2>External coding agents</h2><p>Agent Host runs Claude Code, Codex, and OpenCode on this computer for your workspace. Connect it, choose which agents to use, and watch its runs from Lemma.</p></div></div>
-          <div id="agent-host-status"></div>
-          <div class="button-row"><button class="btn primary" data-action="agent-host-open">Open in Lemma</button><button class="btn" data-action="agent-host-restart">Restart</button><button class="btn" data-action="agent-host-log">Open log</button></div>
-        </article>
         <article class="panel danger-zone">
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
@@ -269,8 +277,8 @@
             <strong id="app-update-headline">A new version of Lemma is available.</strong>
             <p id="app-update-cost"></p>
             <p class="danger-warning" id="app-update-reset-warning" hidden>
-              This version upgrades the local database. Your existing pods and files
-              cannot be carried across and must be reset first.
+              A data-preserving upgrade has not been established for this installation.
+              Your current version, pods, files, and accounts are kept. Wait for a compatible update.
             </p>
             <div class="button-row">
               <button class="btn primary" data-action="install-app-update">Download and install</button>
@@ -313,6 +321,16 @@
     </div>
   </dialog>
 
+  <dialog class="confirm-dialog" id="unsaved-dialog" aria-labelledby="unsaved-title">
+    <h2 id="unsaved-title">Save your settings changes?</h2>
+    <p>Save each changed section, discard your drafts, or keep editing.</p>
+    <p id="unsaved-status" role="status" aria-live="polite"></p>
+    <div class="button-row confirm-actions">
+      <button class="btn" id="unsaved-cancel" autofocus>Cancel</button>
+      <button class="btn danger" id="unsaved-discard">Discard</button>
+      <button class="btn primary" id="unsaved-save">Save changes</button>
+    </div>
+  </dialog>
   <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
 </body>
 </html>

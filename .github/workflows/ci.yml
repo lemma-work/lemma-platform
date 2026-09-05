@@ -821,6 +821,15 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --locked
 
+      - name: Settings behavior tests
+        working-directory: desktop/ui
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
       # ci-build-check` so the app refuses with a useful message instead of a
@@ -1151,6 +1160,15 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       - name: Read the pinned Tauri CLI
         run: |

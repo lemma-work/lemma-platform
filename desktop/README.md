@@ -68,7 +68,14 @@ offline release artifacts are intentionally removed.
 
 ## Build and test locally
 
-Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
+The settings tests run the shipped HTML and JavaScript with mocked desktop
+IPC in a disposable Chromium profile. `make desktop-test-browser` installs its
+pinned test dependencies and browser. To use an installed Chrome for the same
+tests, run `LEMMA_TEST_BROWSER_CHANNEL=chrome make desktop-test-browser`.
+These tests do not access the installed Lemma application or its data, and do
+not replace packaged macOS/Windows installation and upgrade qualification.
+
+Prerequisites for maintainers are Rust, the Node.js version in `.nvmrc`, Swift/Xcode on macOS,
 Python/uv, and the repository’s normal build toolchain.
 
 ### Before you push
@@ -80,7 +87,8 @@ make desktop-check
 ```
 
 It is `desktop-fmt`, `desktop-concepts-check`, `desktop-lint`, `desktop-test`,
-and `desktop-check-windows`. Run it rather than the individual targets. It is
+`desktop-check-windows`, and `desktop-test-browser`. Run it rather than the
+individual targets. It is
 not a promise that CI will be green — bundling, codesigning, and the app crate's
 Windows paths have no local equivalent (see below) — but everything it does
 cover fails here in seconds instead of there in minutes. The

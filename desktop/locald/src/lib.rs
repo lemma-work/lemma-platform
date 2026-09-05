@@ -1,4 +1,5 @@
 pub mod agent_host;
+pub mod config_operations;
 pub mod daemon;
 pub mod host_process;
 pub mod local_domain;

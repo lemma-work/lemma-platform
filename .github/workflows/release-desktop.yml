@@ -241,6 +241,14 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --locked
 
+      - name: Settings behavior tests
+        working-directory: desktop/ui
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       - name: Sign virtualization helper with its entitlement
         shell: bash
         env:

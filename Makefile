@@ -974,6 +974,7 @@ desktop-test: _desktop-ensure-sidecars
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace tests…"
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
+	@node --test desktop/ui/tests/*.test.mjs
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
@@ -1061,9 +1062,15 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+
+.PHONY: desktop-test-browser
+desktop-test-browser:
+	@npm ci --prefix desktop/ui --ignore-scripts --no-audit --no-fund
+	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui && npx --no-install playwright install chromium; fi
+	@npm --prefix desktop/ui run test:browser
 
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \

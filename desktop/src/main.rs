@@ -44,7 +44,7 @@ const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
 // public release number.
-const REQUIRED_LOCALD_API_REVISION: u64 = 3;
+const REQUIRED_LOCALD_API_REVISION: u64 = 4;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -2214,13 +2214,14 @@ fn locald_gone(app: &AppHandle) {
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+    let _ = app.emit_to("control", "lemma:locald-disconnected", ());
     // The tray is driven from `handle_locald_event`, which by definition stops
     // arriving when the daemon does -- so the menu bar kept reading
     // "Lemma: running" and "Agent Host: connected" indefinitely after the stack
     // had gone, which is exactly when someone looks at it.
     refresh_tray_status(app);
     refresh_agent_host_tray(app, &json!({"available": false}));
-    if current_mode(app) == "local" {
+    if current_mode(app) == "local" && app.get_webview("control").is_none() {
         show_splash(app);
     }
 }
@@ -2949,6 +2950,7 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
     if !matches!(
         page,
         "overview"
+            | "computer"
             | "ai"
             | "sharing"
             | "integrations"
@@ -3619,7 +3621,7 @@ struct AppUpdateStatus {
     /// user commits is the difference between a considered choice and a
     /// surprise.
     runtime_download_bytes: Option<u64>,
-    /// Whether taking this update requires discarding local data first.
+    /// Known database compatibility; this alone is not upgrade qualification.
     data_compatibility: &'static str,
 }
 
@@ -3662,7 +3664,13 @@ async fn check_for_app_update(window: Webview, app: AppHandle) -> Result<AppUpda
     // and hands back the parsed document, so this costs no extra request.
     let metadata = lemma_update_metadata(&update.raw_json);
     status.runtime_download_bytes = metadata.runtime_download_bytes;
-    status.data_compatibility = metadata.compatibility_with(installed_postgres_major());
+    status.data_compatibility = if !has_local_runtime_data() {
+        "compatible"
+    } else if cfg!(windows) {
+        "migration-unavailable"
+    } else {
+        metadata.compatibility_with(installed_postgres_major())
+    };
     Ok(status)
 }
 
@@ -3674,16 +3682,11 @@ struct LemmaUpdateMetadata {
 }
 
 impl LemmaUpdateMetadata {
-    /// Whether taking this update strands the data already on this Mac.
-    ///
-    /// Absent information warns rather than blocks. Blocking on absence would
-    /// strand every user the first time the feed lags a release, and the
-    /// runtime installer refuses an incompatible pairing anyway -- this exists
-    /// to say so *before* 506 MB is downloaded, not instead of that check.
+    /// Unknown compatibility blocks replacement when local runtime data exists.
     fn compatibility_with(&self, installed: Option<u64>) -> &'static str {
         match (installed, self.postgres_major) {
             (Some(installed), Some(candidate)) if installed == candidate => "compatible",
-            (Some(_), Some(_)) => "requires-reset",
+            (Some(_), Some(_)) => "migration-unavailable",
             _ => "unknown",
         }
     }
@@ -3704,6 +3707,27 @@ fn installed_postgres_major() -> Option<u64> {
     read_config()
         .pointer("/installedRuntime/dataCompatibility/postgres_major")
         .and_then(Value::as_u64)
+}
+
+fn has_local_runtime_data() -> bool {
+    configured_runtime(&read_config(), "installedRuntime").is_some()
+        || locald_root().join("runtime/macos/data.raw").exists()
+        || locald_root().join("runtime/windows").exists()
+}
+
+fn ensure_update_preserves_data(
+    reset_requested: bool,
+    has_runtime: bool,
+    compatibility: &str,
+    windows: bool,
+) -> Result<(), String> {
+    if reset_requested {
+        return Err("Updates never reset local data. Factory reset is a separate destructive action in recovery.".into());
+    }
+    if has_runtime && (windows || compatibility != "compatible") {
+        return Err("This update has no supported data-preserving migration for this installation. Your current version and data have been kept. Wait for a compatible update.".into());
+    }
+    Ok(())
 }
 
 /// Download and install a newer Lemma, then offer to restart.
@@ -3730,6 +3754,13 @@ async fn install_app_update(
         .map_err(|error| format!("could not check for updates: {error}"))?
         .ok_or("Lemma is already up to date")?;
 
+    ensure_update_preserves_data(
+        reset_data,
+        has_local_runtime_data(),
+        lemma_update_metadata(&update.raw_json).compatibility_with(installed_postgres_major()),
+        cfg!(windows),
+    )?;
+
     // Downloaded first, and deliberately not with `download_and_install`.
     //
     // `download` is where the signature is verified, and it is the step most
@@ -3741,25 +3772,6 @@ async fn install_app_update(
         .download(|_, _| {}, || {})
         .await
         .map_err(|error| format!("could not download the update: {error}"))?;
-
-    // The data goes now: after the download has been fetched and its signature
-    // checked, and while the daemon that has to do the wiping is still up.
-    //
-    // Not before the download, which is where the UI used to do it -- a network
-    // drop or an unverifiable key then destroyed every pod, file and account for
-    // an update that never began. And not after the install, because by then
-    // this app's bundle has been replaced and `ensure_locald` would start the
-    // *new* daemon against the old runtime.
-    //
-    // What remains is download-succeeded-then-install-failed, which leaves a
-    // working older app on empty data. Rare, recoverable, and the honest cost of
-    // an incompatible upgrade.
-    if reset_data {
-        let handle = app.clone();
-        tauri::async_runtime::spawn_blocking(move || reset_local_data_and_wait(&handle))
-            .await
-            .map_err(|error| error.to_string())??;
-    }
 
     // Now, and only now. A DMG install moves the old app to the Trash, so the
     // running daemon's executable path changes and `locald_is_this_build`
@@ -3774,6 +3786,12 @@ async fn install_app_update(
     update
         .install(bytes)
         .map_err(|error| format!("could not install the update: {error}"))?;
+
+    // The Windows updater exits this process to run the installer. Completion
+    // belongs to the next launch, not a dialog after installation.
+    if cfg!(windows) {
+        return Ok(());
+    }
 
     let restart = confirm_destructive_action_impl(
         app.clone(),
@@ -3875,36 +3893,6 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
         json!({"cmd": "local.reset-data", "confirm": "reset-local-data"}),
         operation_id("reset-data"),
     )
-}
-
-/// The same reset, but not returning until the daemon says it is done.
-///
-/// `reset_local_data_impl` hands the request to `send_local_operation`, which
-/// returns as soon as it is written -- right for a button, where the splash
-/// renders the progress. Wrong for the update flow, which has to know the data
-/// is actually gone before it replaces the app on top of it.
-///
-/// No confirmation of its own: the caller has already asked, in the words of
-/// what it is about to do.
-fn reset_local_data_and_wait(app: &AppHandle) -> Result<(), String> {
-    clear_local_session_data(app);
-    if let Err(error) = write_config(|config| {
-        if let Some(object) = config.as_object_mut() {
-            object.remove("resumeTarget");
-        }
-    }) {
-        append_install_log(&format!(
-            "update: could not clear the resume target: {error}"
-        ));
-    }
-    ensure_locald(app)?;
-    locald_request_blocking(json!({
-        "v": 1,
-        "cmd": "local.reset-data",
-        "confirm": "reset-local-data",
-        "id": operation_id("update-reset-data"),
-    }))
-    .map(|_| ())
 }
 
 /// Return this Mac to the state of one that has never run Lemma.
@@ -6296,7 +6284,13 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             ..Default::default()
         }),
     )?;
-    let settings = MenuItem::with_id(app, "control", "Settings…", local, Some("CmdOrCtrl+,"))?;
+    let settings = MenuItem::with_id(
+        app,
+        "control",
+        "Desktop settings…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
     let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
 
     // Services / Hide / Hide Others / Show All are AppKit application-menu
@@ -6464,7 +6458,7 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
-    let control_item = MenuItem::with_id(app, "control", "Local settings…", local, None::<&str>)?;
+    let control_item = MenuItem::with_id(app, "control", "Desktop settings…", true, None::<&str>)?;
 
     // Disabled: a label, not an action. The tray is where you glance at whether
     // this computer is currently able to run coding agents.
@@ -7885,19 +7879,33 @@ mod tests {
         assert_eq!(same.compatibility_with(Some(18)), "compatible");
         assert_eq!(
             same.compatibility_with(Some(16)),
-            "requires-reset",
+            "migration-unavailable",
             "a Postgres major bump cannot open the existing cluster"
         );
 
-        // Absent information warns rather than blocks. Blocking would strand
-        // every user the first time the feed lags a release, and the runtime
-        // installer still refuses an incompatible pairing -- this exists to say
-        // so before 506 MB is downloaded, not instead of that check.
+        // The caller blocks an unknown pairing if an installed runtime has data.
         assert_eq!(same.compatibility_with(None), "unknown");
         assert_eq!(
             LemmaUpdateMetadata::default().compatibility_with(Some(18)),
             "unknown"
         );
+    }
+
+    #[test]
+    fn update_preflight_rejects_data_reset_and_unsupported_migrations() {
+        for windows in [false, true] {
+            for has_runtime in [false, true] {
+                assert!(
+                    ensure_update_preserves_data(true, has_runtime, "compatible", windows).is_err()
+                );
+            }
+        }
+        for compatibility in ["unknown", "requires-reset", "migration-unavailable"] {
+            assert!(ensure_update_preserves_data(false, true, compatibility, false).is_err());
+        }
+        assert!(ensure_update_preserves_data(false, true, "compatible", true).is_err());
+        assert!(ensure_update_preserves_data(false, true, "compatible", false).is_ok());
+        assert!(ensure_update_preserves_data(false, false, "unknown", true).is_ok());
     }
 
     /// A feed without the block, or with junk in it, is read safely.
@@ -9565,7 +9573,10 @@ mod tests {
             &source[start..end]
         };
 
-        assert!(menus.contains("\"Settings…\", local, Some(\"CmdOrCtrl+,\")"));
+        assert!(menus
+            .split_whitespace()
+            .collect::<String>()
+            .contains("\"Desktopsettings…\",true,Some(\"CmdOrCtrl+,\")"));
         assert!(menus.contains("\"Connection…\""));
 
         // Quit is one command, and it is the one that stops the local server.

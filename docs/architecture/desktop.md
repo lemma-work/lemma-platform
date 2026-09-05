@@ -245,12 +245,12 @@ The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
 dependencies. Navigation is Overview; AI provider; Sharing,
 Integrations/Channels; Runtime, Updates/Diagnostics.
 
-Local settings exists only in local mode, so it is deliberately not the
-canonical home for anything a cloud workspace also needs. The Agent Host is the
-case in point: its Runtime panel shows status, restart, and the log - what is
-useful when the workspace itself will not load - while connecting, choosing
-agents, and turning it off live in the workspace page, which a hosted user can
-also reach. See [Agent Host in the desktop app](agent-host.md).
+Desktop settings is available in both cloud and local modes through the app
+menu and tray. This computer shows Agent Host status, restart, and logs, plus
+a link back to agent setup in the workspace. Local installation sections are
+enabled in local mode. Connecting and choosing agents still live in the
+workspace page, which both modes can reach. See
+[Agent Host in the desktop app](agent-host.md).
 
 ## 7.2 Sharing and canonical origin
 
@@ -349,8 +349,46 @@ Desktop injects a local context before application scripts. Local mode:
 Hosted mode retains browser handoff and production auth policy.
 
 Operator configuration is schema validated. Secrets are stored in the OS vault.
-Apply writes a candidate, probes the provider, restarts only the backend,
-health-checks it, and commits; failure restores prior config and secrets.
+The native settings page keeps saved configuration, drafts, and live health
+separate. Snapshot refreshes preserve dirty sections. Each save sends one
+section with its expected revision; the daemon serializes writes and rejects a
+stale revision with `config-conflict`. The legacy whole-config command also
+checks its revision. Credentials use explicit `keep`, `replace`, and `remove`
+actions. Reusing a saved AI key requires the same protocol and provider URL;
+changing the destination requires a replacement or explicit removal.
+
+Apply validates the provider, persists configuration, and restarts only the
+backend when it is running. Failed activation restores the prior configuration
+and secrets. `locald/config-operations.json` records operation IDs and outcomes
+without credential values. A snapshot exposes these outcomes so settings can
+recover after missing an event. A daemon restart marks unfinished writes
+interrupted; it does not replay them or claim that activation succeeded.
+Review the saved configuration before retrying an interrupted save. Unreadable
+operation history disables settings writes while keeping other services usable.
+
+The section payload for `config.apply` is:
+
+```json
+{
+  "expected_revision": 3,
+  "section": {
+    "name": "integrations",
+    "value": {
+      "composio_enabled": false,
+      "google_client_id": "",
+      "microsoft_client_id": "",
+      "github_client_id": "",
+      "slack_client_id": ""
+    }
+  },
+  "secrets": {"integrations.deepgram_api_key": {"action": "remove"}}
+}
+```
+
+`value` is the selected section's full schema; it never includes other sections.
+Valid names are `ai`, `integrations`, and `surfaces`. Credential names must
+belong to that section. Replacement requires a nonempty `value` alongside
+`action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM
 Studio prefill a loopback OpenAI-compatible endpoint that the user already

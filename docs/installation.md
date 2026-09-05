@@ -319,6 +319,17 @@ for the health timeout.
 
 ## Updates, data, and uninstall
 
+Local Lemma stores application data and runs Lemma services on your computer.
+Configured LLM providers, connectors, and online features can send requested
+prompts, tool results, and connector payloads to external services. Local mode
+does not mean offline operation.
+
+Settings refreshes preserve unsaved drafts. Save applies the selected section;
+Discard reloads that section from the saved configuration. If another save
+changed the revision, review the conflict and discard/re-enter the affected
+draft. Changing an API provider's destination requires entering a credential
+for that destination or explicitly removing the saved key.
+
 Managed state lives under:
 
 - macOS: `~/Library/Application Support/Lemma`
@@ -334,8 +345,15 @@ Important subpaths include:
 
 The active macOS guest root is attached directly from its release directory as
 read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
-containerd, and workspace sandboxes use the separate data disk. Updates replace
-the immutable release and preserve data.
+containerd, and workspace sandboxes use the separate data disk.
+
+App updates never reset local data. An unsupported database migration or unknown
+compatibility with an installed runtime blocks installation and keeps the
+current version. Windows runtime upgrades are blocked until a data-preserving
+migration is available. Matching PostgreSQL versions alone does not certify
+an upgrade: consistent backup, migration recovery, and packaged-app upgrade
+qualification remain required before a release can promise that guarantee.
+Factory reset remains a separate, explicitly destructive recovery action.
 
 Removing the app does not silently remove user data. Quit Lemma, back up
 anything important, remove the application, and only then remove the platform
