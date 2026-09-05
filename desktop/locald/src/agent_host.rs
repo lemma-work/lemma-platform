@@ -786,16 +786,66 @@ fn terminate_process_tree(child: &mut Child) -> io::Result<Option<i32>> {
         libc::kill(-process_group, libc::SIGTERM);
     }
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut code = None;
+    let mut reaped = false;
     while Instant::now() < deadline {
         if let Some(status) = child.try_wait()? {
-            return Ok(status.code());
+            code = status.code();
+            reaped = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    unsafe {
-        libc::kill(-process_group, libc::SIGKILL);
+    if !reaped {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+        code = child.wait()?.code();
     }
-    Ok(child.wait()?.code())
+    // Reaping the leader is not the group being empty, and this function
+    // promises the group. An adapter the host spawned sits in the same group
+    // and can outlive its leader by as long as it takes to die -- or for ever,
+    // if it ignores `SIGTERM`. Returning at the leader is what let
+    // `dropping_a_supervisor_kills_the_process_it_started` see a live group
+    // after the drop had returned: `/bin/sh` exits the moment it has forked,
+    // and whether the sibling had finished dying by then was a race the test
+    // lost about one run in fifty.
+    // One budget for the whole teardown, not one per phase: a slow leader must
+    // not buy the group a second five seconds. Whatever is left after the
+    // leader is what the group gets before the SIGKILL.
+    if !wait_for_group_exit(process_group, deadline) {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+        // Best effort past this point: a group that survives its own SIGKILL is
+        // not something a caller can act on, and the leader is already reaped,
+        // so there is nothing left to report but the exit code.
+        wait_for_group_exit(process_group, Instant::now() + Duration::from_secs(1));
+    }
+    Ok(code)
+}
+
+/// Poll until no process is left in `process_group`, or `deadline` passes.
+///
+/// `ESRCH` is the group having drained. `EPERM` counts as drained too: the
+/// leader has been reaped by the time this runs, so its pid is free, and a pid
+/// recycled into a process owned by somebody else answers with "operation not
+/// permitted" rather than "no such process". Reading that as "still ours and
+/// still alive" would spin for the whole budget and then signal a stranger.
+#[cfg(unix)]
+fn wait_for_group_exit(process_group: i32, deadline: Instant) -> bool {
+    loop {
+        if unsafe { libc::kill(-process_group, 0) } != 0 {
+            let errno = io::Error::last_os_error().raw_os_error();
+            if errno == Some(libc::ESRCH) || errno == Some(libc::EPERM) {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[cfg(windows)]
@@ -1272,6 +1322,51 @@ mod tests {
         assert!(
             !group_alive,
             "the sidecar's process group outlived the supervisor (pgid {pid})"
+        );
+    }
+
+    /// A sibling in the group must not outlive the drop either.
+    ///
+    /// `dropping_a_supervisor_kills_the_process_it_started` asserts the same
+    /// property, but it could only catch this by luck: `/bin/sh -c "sleep 30"`
+    /// usually execs, leaving one process, and when it forked instead the race
+    /// was whether the sibling had finished dying before the assertion ran. It
+    /// failed on CI about one run in fifty and passed everywhere else.
+    ///
+    /// This makes the sibling refuse `SIGTERM` and the leader exit at once, so
+    /// "the leader has been reaped" is decisively not "the group is empty".
+    /// Against the old `terminate_process_tree` -- which returned as soon as
+    /// `try_wait` succeeded -- the drop returns while a live process is still in
+    /// the group, every time.
+    ///
+    /// Unix-only because it signals a real process and reads its liveness.
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_supervisor_kills_a_sibling_that_refuses_to_go() {
+        use std::os::unix::process::CommandExt;
+
+        let home = tempdir().unwrap();
+        let mut command = Command::new("/bin/sh");
+        // The leader forks a child that ignores SIGTERM, then exits. Both sit
+        // in the group the supervisor signals.
+        command.args(["-c", "sh -c 'trap \"\" TERM; sleep 30' & exit 0"]);
+        command.process_group(0);
+        let child = command.spawn().expect("sh is available");
+        let pid = i32::try_from(child.id()).expect("a pid fits in i32");
+
+        {
+            let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+            supervisor
+                .state
+                .lock()
+                .expect("Agent Host state lock poisoned")
+                .child = Some(child);
+        }
+
+        let group_alive = unsafe { libc::kill(-pid, 0) } == 0;
+        assert!(
+            !group_alive,
+            "a sibling that ignored SIGTERM outlived the supervisor (pgid {pid})"
         );
     }
 
