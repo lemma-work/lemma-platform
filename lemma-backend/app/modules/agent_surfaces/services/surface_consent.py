@@ -199,6 +199,12 @@ class SurfaceConsentMixin:
         try:
             cached = await cache.get_json(cache_key)
         except Exception:
+            # An unreadable cache costs a Graph round-trip, not an answer.
+            logger.warning(
+                "agent_surfaces.consent.cache_read_failed.degraded",
+                tenant_id=tenant_id,
+                exc_info=True,
+            )
             cached = None
         if cached is not None:
             return bool(cached)
@@ -226,6 +232,17 @@ class SurfaceConsentMixin:
                     return False
                 token = token_response.json().get("access_token")
         except Exception:
+            # Fail closed: a surface whose consent we could not verify must not
+            # be activated. But "not granted" and "we could not tell" are
+            # different facts, and only one of them is the tenant's doing --
+            # without this line a timeout or a rotated secret looks exactly like
+            # an administrator who has not clicked yet, and the only symptom is
+            # a tenant stuck on the consent screen with nothing to read.
+            logger.warning(
+                "agent_surfaces.consent.token_request_failed.degraded",
+                tenant_id=tenant_id,
+                exc_info=True,
+            )
             return False
 
         if not token:
@@ -239,6 +256,13 @@ class SurfaceConsentMixin:
                 )
                 granted = probe.status_code == 200
         except Exception:
+            # Same as the token request above: indeterminate, reported as not
+            # granted, and worth saying so out loud.
+            logger.warning(
+                "agent_surfaces.consent.graph_probe_failed.degraded",
+                tenant_id=tenant_id,
+                exc_info=True,
+            )
             granted = False
 
         try:

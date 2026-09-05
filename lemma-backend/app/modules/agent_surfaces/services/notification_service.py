@@ -104,9 +104,11 @@ class NotificationService:
     ):
         self.uow = uow
         self.notifications = notification_repository
-        self.surfaces = surface_repository
-        self.links = conversation_link_repository
-        self.external_users = external_user_repository
+        # The three repositories this used to also hang on `self` are not kept:
+        # they were assigned and never read, because the objects that use them
+        # are built with them below. A field nothing reads reads as a seam --
+        # someone will reach for `service.surfaces` and get a repository this
+        # class has no opinion about.
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
