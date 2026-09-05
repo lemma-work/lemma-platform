@@ -8,7 +8,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_cold_e2e_schema_includes_usage_allocations() -> None:
+def test_cold_e2e_schema_includes_request_accounting() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -16,8 +16,9 @@ def test_cold_e2e_schema_includes_usage_allocations() -> None:
             "from app.modules.test_support.e2e_base import _import_e2e_models; "
             "from app.core.infrastructure.db.base import Base; "
             "_import_e2e_models(); "
-            "assert {'usage_allocations', 'usage_records', 'usage_limit_counters'} "
-            "<= Base.metadata.tables.keys(), 'Usage schema is incomplete'",
+            "assert {'usage_records', 'usage_limit_counters'} "
+            "<= Base.metadata.tables.keys(), 'Usage schema is incomplete'; "
+            "assert 'request_id' in Base.metadata.tables['usage_records'].columns",
         ],
         capture_output=True,
         text=True,

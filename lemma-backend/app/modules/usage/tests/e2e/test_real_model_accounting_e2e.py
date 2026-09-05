@@ -43,18 +43,18 @@ def deployment_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _receipt_price(card: RateCard, usage: RunUsage) -> Decimal:
     # Keep this arithmetic independent of RateCard.price and genai_prices.calc_price.
-    assert set(card.rates) <= {
+    assert {
         "input_mtok",
         "cache_read_mtok",
         "cache_write_mtok",
         "output_mtok",
-    }
+    } <= set(card.rates)
     assert usage.input_audio_tokens == usage.output_audio_tokens == 0
     assert usage.cache_audio_read_tokens == 0
     rates: dict[str, Decimal] = {}
     for name, rate in card.rates.items():
         applicable = [
-            value for start, value in rate.tiers if usage.input_tokens >= start
+            value for start, value in rate.tiers if usage.input_tokens > start
         ]
         rates[name] = applicable[-1] if applicable else rate.base
     uncached = usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens
@@ -89,13 +89,8 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
     async with metering_execution(
         UsageExecutionContext(user_id=user_id, organization_id=None, pod_id=None),
         factory=SessionUnitOfWorkFactory(db_manager.session_factory),
-        settings=UsageSettings(usage_batch_seconds=300),
-    ) as scope:
-        if not streaming:
-            _, frozen_card = scope.meter(runtime.runtime_profile, None)
-            monkeypatch.setattr(
-                settings, "usage_user_weekly_limit_usd", float(frozen_card.bound(512))
-            )
+        settings=UsageSettings(),
+    ):
         if streaming:
             async with agent.run_stream(
                 "Reply with the single word OK.", usage_limits=runtime.usage_limits
@@ -112,6 +107,7 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
         assert usage.requests == 1
         assert usage.input_tokens > 0
         if not streaming:
+            monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.000000001)
             with pytest.raises(UsageLimitExceededError):
                 await agent.run(
                     "Reply with the single word OK.", usage_limits=runtime.usage_limits
@@ -128,11 +124,12 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
         assert receipt.cached_input_tokens == usage.cache_read_tokens
         assert receipt.cache_write_tokens == usage.cache_write_tokens
         assert receipt.record_metadata is not None
+        assert receipt.request_id is not None
         card = RateCard.model_validate(receipt.record_metadata["pricing"])
         expected_cost = _receipt_price(card, usage)
         assert expected_cost > 0
         assert receipt.cost_amount == expected_cost
-        assert receipt.record_metadata["uncertain_usd"] == "0"
+        assert receipt.record_metadata["metering_state"] == "RECORDED"
         counter = (
             await session.scalars(
                 select(UsageLimitCounter).where(

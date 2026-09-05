@@ -9,8 +9,13 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.usage.domain.accounting import BudgetWindow, MeteringIdentity
-from app.modules.usage.infrastructure.allocation_repository import open_allocation
+from app.modules.usage.domain.accounting import (
+    BudgetWindow,
+    MeteringIdentity,
+    RequestReceipt,
+    TokenCounts,
+)
+from app.modules.usage.infrastructure import request_accounting
 from app.modules.usage.infrastructure.models import UsageLimitCounter, UsageRecord
 from app.modules.usage.infrastructure.price_catalog import RateCard
 from app.modules.usage.infrastructure.repositories import UsageRepository
@@ -105,20 +110,9 @@ async def test_counter_bootstrap_preserves_exact_ledger_and_legacy_amounts(
             ]
         )
         await uow.session.flush()
-        await open_allocation(
+        await request_accounting.check(
             uow.session,
-            allocation_id=uuid4(),
-            identity=MeteringIdentity(
-                execution_id=uuid4(),
-                organization_id=organization_id,
-                user_id=user_id,
-                profile_id="precision",
-                profile_scope="SYSTEM",
-                model_name="test",
-                provider_model_name="test",
-            ),
-            pricing=RateCard(model="test"),
-            windows=[
+            [
                 BudgetWindow(
                     organization_id=organization_id,
                     user_id=user_id,
@@ -128,10 +122,6 @@ async def test_counter_bootstrap_preserves_exact_ledger_and_legacy_amounts(
                     limit=Decimal("2"),
                 )
             ],
-            required=Decimal("1"),
-            target=Decimal("1"),
-            now=now,
-            timeout_seconds=120,
         )
         counter = (
             await uow.session.scalars(
@@ -139,7 +129,7 @@ async def test_counter_bootstrap_preserves_exact_ledger_and_legacy_amounts(
             )
         ).one()
         assert counter.used_usd == Decimal("0.300000001")
-        assert counter.reserved_usd == Decimal("1.000000000")
+        assert counter.reserved_usd == 0
 
 
 async def test_repository_round_trip_preserves_domain_exact_amount(
@@ -202,31 +192,31 @@ async def test_exact_last_nanodollar_is_admitted_once_after_historical_spend(
                 ),
             ]
         )
+    request_id = uuid4()
     async with factory() as uow:
-        allocation = await open_allocation(
-            uow.session,
-            allocation_id=uuid4(),
-            identity=identity,
-            pricing=RateCard(model="test"),
-            windows=[window],
-            required=Decimal("0.000000001"),
-            target=Decimal("0.000000001"),
-            now=now,
-            timeout_seconds=120,
+        await request_accounting.begin(
+            uow.session, request_id, identity, RateCard(model="test"), [window], now
         )
-        assert allocation.amount == Decimal("0.000000001")
+    async with factory() as uow:
+        exhausted = await request_accounting.record(
+            uow.session,
+            RequestReceipt(
+                request_id=request_id,
+                counts=TokenCounts(input_tokens=1, request_count=1),
+                cost=Decimal("0.000000001"),
+                occurred_at=now,
+            ),
+            identity,
+            [window],
+            [window],
+            [],
+            Decimal("0.8"),
+        )
+        assert exhausted
     with pytest.raises(UsageLimitExceededError):
         async with factory() as uow:
-            await open_allocation(
-                uow.session,
-                allocation_id=uuid4(),
-                identity=identity,
-                pricing=RateCard(model="test"),
-                windows=[window],
-                required=Decimal("0.000000001"),
-                target=Decimal("0.000000001"),
-                now=now,
-                timeout_seconds=120,
+            await request_accounting.begin(
+                uow.session, uuid4(), identity, RateCard(model="test"), [window], now
             )
     async with factory() as uow:
         counter = (
@@ -234,5 +224,5 @@ async def test_exact_last_nanodollar_is_admitted_once_after_historical_spend(
                 select(UsageLimitCounter).where(UsageLimitCounter.user_id == user_id)
             )
         ).one()
-        assert counter.used_usd == Decimal("0.300000001")
-        assert counter.reserved_usd == Decimal("0.000000001")
+        assert counter.used_usd == Decimal("0.300000002")
+        assert counter.reserved_usd == 0

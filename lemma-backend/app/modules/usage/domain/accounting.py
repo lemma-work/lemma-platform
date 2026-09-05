@@ -1,4 +1,4 @@
-"""Durable batch receipts and exclusive spending authority."""
+"""Exact monetary values and immutable provider request receipts."""
 
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
@@ -6,6 +6,8 @@ from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.modules.usage.domain.errors import UsageDomainError
 
 
 MONEY_QUANTUM = Decimal("0.000000001")
@@ -16,12 +18,6 @@ def money(value: Decimal | int | str | float) -> Decimal:
     if not amount.is_finite() or amount < 0:
         raise ValueError("Usage money must be finite and nonnegative")
     return amount.quantize(MONEY_QUANTUM, rounding=ROUND_CEILING)
-
-
-class AllocationState(StrEnum):
-    ACTIVE = "ACTIVE"
-    UNCERTAIN = "UNCERTAIN"
-    CLOSED = "CLOSED"
 
 
 class CostSource(StrEnum):
@@ -92,32 +88,24 @@ class BudgetWindow(BaseModel):
     excluded_organization_ids: tuple[UUID, ...] = ()
 
 
-class Allocation(BaseModel):
+class RequestReceipt(BaseModel):
+    """One immutable provider outcome, replayable after a lost commit response."""
+
     model_config = ConfigDict(frozen=True)
 
-    id: UUID
-    amount: Decimal
-    limited: bool
-    expires_at: datetime
-    window_end: datetime
-
-
-class UsageBatch(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    allocation_id: UUID
-    sequence: int = Field(ge=1)
+    request_id: UUID
     counts: TokenCounts
     cost: Decimal | None = Field(default=None, ge=0)
-    uncertain: Decimal = Field(default=Decimal(0), ge=0)
-    over_bound_cost: Decimal = Field(default=Decimal(0), ge=0)
     occurred_at: datetime
-    close: bool = False
 
 
-class PricingUnavailableError(ValueError):
-    """A limited execution has no enforceable rate or request bound."""
+class AccountingConflictError(UsageDomainError):
+    """A request receipt was replayed with conflicting content."""
 
-
-class AccountingConflictError(ValueError):
-    """A receipt was changed or exceeds its exclusively allocated budget."""
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            "Usage accounting could not safely authorize or settle this request. Please contact your workspace administrator.",
+            code="USAGE_ACCOUNTING_CONFLICT",
+            status_code=409,
+        )
+        self.details = {"reason": reason}

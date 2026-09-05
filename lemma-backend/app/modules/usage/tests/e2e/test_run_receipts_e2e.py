@@ -1,4 +1,4 @@
-"""Run outcomes label every batch without changing monetary settlement."""
+"""Run outcomes label every request without changing monetary settlement."""
 
 from decimal import Decimal
 from uuid import uuid4
@@ -20,8 +20,7 @@ from app.modules.agent.infrastructure.models.conversation import (
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.models.organization_models import Organization
 from app.modules.pod.infrastructure.models.pod_models import Pod
-from app.modules.usage.config import UsageSettings
-from app.modules.usage.domain.accounting import TokenCounts
+from app.modules.usage.domain.accounting import RequestReceipt, TokenCounts
 from app.modules.usage.infrastructure.models import UsageRecord
 from app.modules.usage.services.metering_scope import metering_execution
 from app.modules.usage.services.usage_context import UsageExecutionContext
@@ -59,15 +58,17 @@ async def test_finalization_labels_flushed_and_pending_receipts_without_rebillin
             user_id=user_id, organization_id=None, pod_id=None, agent_run_id=run_id
         ),
         factory=factory,
-        settings=UsageSettings(usage_batch_requests=2),
     ) as scope:
         meter, _ = scope.meter(profile, None)
         for _ in range(3):
-            ticket = await meter.before(None)
+            request_id, occurred_at, _ = await meter.before(priceable=True)
             await meter.after(
-                ticket,
-                TokenCounts(input_tokens=1, request_count=1),
-                Decimal("0.000000001"),
+                RequestReceipt(
+                    request_id=request_id,
+                    occurred_at=occurred_at,
+                    counts=TokenCounts(input_tokens=1, request_count=1),
+                    cost=Decimal("0.000000001"),
+                )
             )
         recorder = RunUsageRecorder(factory)
         for _ in range(2):
@@ -80,7 +81,7 @@ async def test_finalization_labels_flushed_and_pending_receipts_without_rebillin
                     select(UsageRecord).where(UsageRecord.agent_run_id == run_id)
                 )
             )
-            assert len(records) == 2
+            assert len(records) == 3
             assert {record.status for record in records} == {status}
             assert sum(
                 (record.cost_amount or Decimal(0) for record in records), Decimal(0)
@@ -138,7 +139,7 @@ async def test_finalizer_retry_labels_receipts_with_committed_status_after_failu
                 UsageRecord(
                     user_id=user_id,
                     agent_run_id=run_id,
-                    allocation_id=uuid4(),
+                    request_id=uuid4(),
                     source_type="agent_run",
                     profile_id="test:receipt-retry",
                     profile_scope="ORGANIZATION",

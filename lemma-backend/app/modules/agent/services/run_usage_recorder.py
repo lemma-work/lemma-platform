@@ -17,7 +17,7 @@ from app.modules.usage.contracts.execution import (
     build_usage_service,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.usage.contracts.metering import finalize_metered_run
+from app.modules.usage.contracts.metering import check_run_budget, finalize_metered_run
 
 
 class RunUsageRecorder:
@@ -40,8 +40,12 @@ class RunUsageRecorder:
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
         }:
-            # Provider dispatch owns admission; a second run-wide hold would
-            # reserve the same work twice and cannot follow retries or helpers.
+            await check_run_budget(
+                factory=self.uow_factory,
+                organization_id=organization_id,
+                user_id=user_id,
+                profile_scope=str(runtime_profile.get("scope") or "ORGANIZATION"),
+            )
             return None
         profile_id = runtime_profile.get("profile_id")
         profile_scope = runtime_profile.get("scope")

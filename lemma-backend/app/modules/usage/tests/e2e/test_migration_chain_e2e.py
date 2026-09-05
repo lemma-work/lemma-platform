@@ -15,7 +15,7 @@ pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
 MAIN_REVISION = "0022_function_revisions"
-USAGE_REVISION = "0030_usage_allocations"
+USAGE_REVISION = "0030_usage_requests"
 
 
 def test_usage_upgrade_follows_app_and_function_history_and_can_roll_back() -> None:
@@ -74,6 +74,19 @@ def test_usage_upgrade_follows_app_and_function_history_and_can_roll_back() -> N
                     "SELECT to_regclass('usage_allocations')"
                 ).fetchone()
                 assert allocation_row is not None
-                assert allocation_row[0] == (
-                    "usage_allocations" if revision == "head" else None
-                )
+                assert allocation_row[0] is None
+                if revision == "head":
+                    index = connection.execute(
+                        "SELECT i.indisunique, i.indisvalid, pg_get_expr(i.indpred, i.indrelid) "
+                        "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE c.relname = 'uq_usage_request_id'"
+                    ).fetchone()
+                    assert index == (True, True, "(request_id IS NOT NULL)")
+                    assert connection.execute(
+                        "SELECT cost_amount, cost_source, cached_input_tokens, request_id "
+                        "FROM usage_records WHERE profile_id = 'legacy'"
+                    ).fetchone() == (None, "LEGACY", None, None)
+                    assert connection.execute(
+                        "SELECT numeric_precision, numeric_scale FROM information_schema.columns "
+                        "WHERE table_name = 'usage_records' AND column_name = 'cost_amount'"
+                    ).fetchone() == (24, 9)

@@ -5,11 +5,9 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from typing import Literal, Protocol, Sequence
 from uuid import UUID
 
-from app.modules.usage.domain.accounting import Allocation, UsageBatch
 from app.modules.usage.domain.entities import UsageRecord, UsageSummary
 from app.modules.usage.domain.query_types import UsageStatsBucket
 
@@ -139,15 +137,3 @@ def normalize_limit_values(resolved: object) -> UsageLimitValues:
         user_monthly_limit_usd=None,
         user_limit_scope="organization",
     )
-
-
-class AccountingGateway(Protocol):
-    @abstractmethod
-    async def open(
-        self, allocation_id: UUID, required: Decimal | None, now: datetime
-    ) -> Allocation:
-        """Acquire exclusive authority before a provider request can spend."""
-
-    @abstractmethod
-    async def checkpoint(self, batch: UsageBatch, now: datetime) -> Allocation:
-        """Persist an idempotent receipt and return remaining authority."""

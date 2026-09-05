@@ -1,6 +1,4 @@
-"""Settings for batched usage persistence."""
-
-from decimal import Decimal
+"""Settings for per-request usage accounting."""
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,28 +13,6 @@ class UsageSettings(BaseSettings):
         default=8192,
         ge=1,
         description="Default output-token ceiling for each limited model request",
-    )
-    usage_batch_requests: int = Field(
-        default=10,
-        ge=1,
-        le=1000,
-        description="Completed provider requests per usage checkpoint",
-    )
-    usage_batch_seconds: float = Field(
-        default=30,
-        gt=0,
-        le=300,
-        description="Maximum seconds between active usage checkpoints",
-    )
-    usage_budget_chunk_usd: Decimal = Field(
-        default=Decimal("1"),
-        gt=0,
-        description="USD allocation target and headroom for large request bounds",
-    )
-    usage_allocation_timeout_seconds: int = Field(
-        default=120,
-        ge=30,
-        description="Seconds without a checkpoint before an allocation is classified uncertain",
     )
     usage_limit_warn_fraction: float = Field(
         default=0.8,

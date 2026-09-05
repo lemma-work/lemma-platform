@@ -57,6 +57,8 @@ def is_usage_limit_error(exc: BaseException) -> bool:
     the module that already classifies run failures is the one that should have
     it. Callers ask the question; they do not need the type.
     """
+    if isinstance(exc, BaseExceptionGroup):
+        return any(is_usage_limit_error(child) for child in exc.exceptions)
     return isinstance(exc, UsageLimitExceededError)
 
 
@@ -67,9 +69,16 @@ def run_failure_message(exc: BaseException) -> str:
     are both "the run failed", but only one of them is worth investigating, and
     neither is fixed by checking the runtime configuration.
     """
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return run_failure_message(UsageLimitExceededError())
+        domain_error = next(
+            (child for child in exc.exceptions if isinstance(child, DomainError)), None
+        )
+        return run_failure_message(domain_error or exc.exceptions[0])
     if isinstance(exc, UsageLimitExceededError):
         return (
-            "This run was not started because the workspace has used its "
+            "This run cannot continue because the workspace has used its "
             "available usage allowance. Usage resets with the billing period, "
             "or the plan limit can be raised."
         )

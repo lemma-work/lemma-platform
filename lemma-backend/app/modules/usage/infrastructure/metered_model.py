@@ -1,10 +1,13 @@
-"""Every provider dispatch spends from its execution's local allocation."""
+"""Check shared usage before dispatch and record each actual provider outcome."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from decimal import Decimal
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
     from app.modules.usage.infrastructure.price_catalog import RateCard
@@ -18,8 +21,20 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 from pydantic_ai.tools import RunContext
 
-from app.modules.usage.domain.accounting import TokenCounts
-from app.modules.usage.domain.errors import UsageContextMissingError
+from app.modules.usage.domain.accounting import RequestReceipt, TokenCounts
+from app.modules.usage.domain.errors import (
+    UsageContextMissingError,
+    ProviderAttemptsExhaustedError,
+)
+from app.modules.usage.infrastructure.provider_retries import (
+    MAX_PROVIDER_ATTEMPTS,
+    PROVIDER_ERRORS,
+    retry_delay,
+    confirmed_rejection,
+)
+from app.modules.usage.infrastructure.request_features import (
+    priceable_text_request,
+)
 from app.modules.usage.services.metering_scope import current_metering_scope
 
 
@@ -68,13 +83,24 @@ class MeteredModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        async with self._dispatch(model_settings, model_request_parameters) as dispatch:
-            response = await self.wrapped.request(
-                messages, dispatch.settings, model_request_parameters
-            )
-            if response.state == "complete":
-                dispatch.usage = response.usage
-            return response
+        for attempt in range(MAX_PROVIDER_ATTEMPTS):
+            dispatch: Dispatch | None = None
+            try:
+                async with self._dispatch(
+                    messages, model_settings, model_request_parameters
+                ) as dispatch:
+                    response = await self.wrapped.request(
+                        messages, dispatch.settings, model_request_parameters
+                    )
+                    dispatch.responded = True
+                    if response.state == "complete":
+                        dispatch.usage = response.usage
+                    return response
+            except PROVIDER_ERRORS as exc:
+                if dispatch is None or dispatch.provider_error is not exc:
+                    raise
+                await _retry_or_raise(exc, attempt)
+        raise AssertionError("Provider retry loop ended without a result")
 
     @asynccontextmanager
     async def request_stream(
@@ -84,19 +110,42 @@ class MeteredModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[object] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
-        async with self._dispatch(model_settings, model_request_parameters) as dispatch:
-            async with self.wrapped.request_stream(
-                messages, dispatch.settings, model_request_parameters, run_context
-            ) as stream:
-                yield stream
-            # A normal context exit can follow an early break. Only exhaustion
-            # with a complete provider response makes the usage receipt final.
-            if stream.get().state == "complete":
-                dispatch.usage = stream.usage
+        for attempt in range(MAX_PROVIDER_ATTEMPTS):
+            handed_to_consumer = False
+            dispatch: Dispatch | None = None
+            try:
+                async with self._dispatch(
+                    messages, model_settings, model_request_parameters
+                ) as dispatch:
+                    async with self.wrapped.request_stream(
+                        messages,
+                        dispatch.settings,
+                        model_request_parameters,
+                        run_context,
+                    ) as stream:
+                        handed_to_consumer = True
+                        yield stream
+                    dispatch.responded = True
+                    if stream.get().state == "complete":
+                        dispatch.usage = stream.usage
+                return
+            except PROVIDER_ERRORS as exc:
+                # Once the caller has the stream, only the harness can replace its
+                # partial output and resume history without repeating tool effects.
+                if (
+                    handed_to_consumer
+                    or dispatch is None
+                    or dispatch.provider_error is not exc
+                ):
+                    raise
+                await _retry_or_raise(exc, attempt)
 
     @asynccontextmanager
     async def _dispatch(
-        self, settings: ModelSettings | None, parameters: ModelRequestParameters
+        self,
+        messages: list[ModelMessage],
+        settings: ModelSettings | None,
+        parameters: ModelRequestParameters,
     ) -> AsyncIterator["Dispatch"]:
         scope = current_metering_scope()
         if scope is None:
@@ -106,35 +155,63 @@ class MeteredModel(WrapperModel):
         output_ceiling = (
             effective.get("max_tokens") or scope.settings.usage_request_output_ceiling
         )
-        bound = (
-            pricing.bound(output_ceiling)
-            if pricing.enforceable and pricing.input_ceiling
-            else None
+        _, prepared_parameters = self.wrapped.prepare_request(effective, parameters)
+        priceable = priceable_text_request(
+            messages, prepared_parameters, effective
+        ) and not _compound_billing(effective)
+        request_id, occurred_at, limited = await meter.before(
+            priceable=priceable and pricing.priceable
         )
-        extras: Mapping[str, object] = effective
-        priceable = not parameters.native_tools and not _compound_billing(extras)
-        if not priceable:
-            bound = None
-        ticket = await meter.before(bound)
-        if meter.allocation is not None and meter.allocation.limited:
+        if limited:
             effective["max_tokens"] = output_ceiling
-        dispatch = Dispatch(effective)
+        dispatch = Dispatch(effective, request_id, occurred_at)
         try:
             yield dispatch
+        except PROVIDER_ERRORS as exc:
+            dispatch.provider_error = exc
+            dispatch.rejected = confirmed_rejection(exc)
+            raise
         finally:
             with anyio.fail_after(10, shield=True):
-                counts = _counts(dispatch.usage) if dispatch.usage is not None else None
-                await meter.after(
-                    ticket,
-                    counts,
-                    _price_receipt(pricing, counts, priceable),
-                )
+                receipt = dispatch.receipt(pricing, priceable)
+                await meter.after(receipt)
+                if limited and dispatch.responded and receipt.cost is None:
+                    meter.require_reconciliation = True
 
 
 class Dispatch:
-    def __init__(self, settings: ModelSettings) -> None:
+    def __init__(
+        self, settings: ModelSettings, request_id: UUID, occurred_at: datetime
+    ) -> None:
         self.settings = settings
+        self.request_id = request_id
+        self.occurred_at = occurred_at
         self.usage: RequestUsage | None = None
+        self.rejected = False
+        self.responded = False
+        self.provider_error: Exception | None = None
+
+    def receipt(self, pricing: RateCard, priceable: bool) -> RequestReceipt:
+        counts = (
+            TokenCounts(request_count=1)
+            if self.rejected
+            else _counts(self.usage)
+            if self.usage is not None
+            else None
+        )
+        cost = (
+            Decimal(0) if self.rejected else _price_receipt(pricing, counts, priceable)
+        )
+        if counts is None:
+            counts = TokenCounts(request_count=1, unconfirmed_requests=1)
+        elif cost is None:
+            counts = counts.model_copy(update={"unpriced_requests": 1})
+        return RequestReceipt(
+            request_id=self.request_id,
+            occurred_at=self.occurred_at,
+            counts=counts,
+            cost=cost,
+        )
 
 
 def _compound_billing(settings: Mapping[str, object]) -> bool:
@@ -160,3 +237,12 @@ def _price_receipt(
     pricing: RateCard, counts: TokenCounts | None, priceable: bool
 ) -> Decimal | None:
     return pricing.price(counts) if counts is not None and priceable else None
+
+
+async def _retry_or_raise(exc: Exception, attempt: int) -> None:
+    delay = retry_delay(exc, attempt)
+    if delay is None:
+        raise exc
+    if attempt + 1 >= MAX_PROVIDER_ATTEMPTS:
+        raise ProviderAttemptsExhaustedError() from exc
+    await asyncio.sleep(delay)

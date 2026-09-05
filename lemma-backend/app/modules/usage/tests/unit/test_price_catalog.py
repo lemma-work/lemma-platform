@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from app.modules.usage.contracts import ModelPricing
+
 from app.modules.usage.domain.accounting import CostSource, TokenCounts
 from app.modules.usage.infrastructure.price_catalog import (
     Rate,
@@ -42,39 +44,23 @@ def test_known_provider_prices_automatically_but_private_gateway_is_only_an_esti
         datetime.now(timezone.utc),
     )
     assert known.source == CostSource.ESTIMATED
-    assert known.enforceable and known.input_ceiling
+    assert known.priceable
     assert unknown.source == CostSource.ESTIMATED
-    assert not unknown.enforceable
+    assert not unknown.priceable
 
 
-def test_zero_price_is_known_and_has_a_zero_request_bound() -> None:
+def test_explicit_zero_price_is_known_and_priceable() -> None:
     card = RateCard(
         model="free",
         source=CostSource.REGISTERED,
         enforceable=True,
-        input_ceiling=1000,
         rates={
             "input_mtok": Rate(base=Decimal(0)),
             "output_mtok": Rate(base=Decimal(0)),
         },
     )
     assert card.price(TokenCounts(input_tokens=10)) == 0
-    assert card.bound(100) == 0
-
-
-def test_request_bound_includes_cache_write_premium_and_output_tier() -> None:
-    card = RateCard(
-        model="premium",
-        source=CostSource.REGISTERED,
-        enforceable=True,
-        input_ceiling=1000,
-        rates={
-            "input_mtok": Rate(base=Decimal(1)),
-            "cache_write_mtok": Rate(base=Decimal(2)),
-            "output_mtok": Rate(base=Decimal(3), tiers=((100, Decimal(6)),)),
-        },
-    )
-    assert card.bound(500) == Decimal("0.005")
+    assert card.priceable
 
 
 def test_cache_buckets_are_inclusive_not_additional_input() -> None:
@@ -92,12 +78,11 @@ def test_cache_buckets_are_inclusive_not_additional_input() -> None:
     ) == Decimal(".00038")
 
 
-def test_audio_subsets_use_their_own_rates_and_bounds() -> None:
+def test_audio_receipts_use_audio_rates() -> None:
     card = RateCard(
         model="audio",
         source=CostSource.REGISTERED,
         enforceable=True,
-        input_ceiling=1000,
         rates={
             "input_mtok": Rate(base=Decimal("1")),
             "input_audio_mtok": Rate(base=Decimal("10")),
@@ -113,4 +98,93 @@ def test_audio_subsets_use_their_own_rates_and_bounds() -> None:
             output_audio_tokens=5,
         )
     ) == Decimal(".00066")
-    assert card.bound(100) == Decimal(".012")
+
+
+def test_sonnet_text_receipt_does_not_charge_for_unused_native_search() -> None:
+    card = resolve_rate_card(
+        {
+            "provider_model_name": "claude-sonnet-4-5",
+            "protocol": "ANTHROPIC_COMPATIBLE",
+        },
+        {},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    # Listing a native-search rate does not charge for a search that never ran.
+    assert card.price(
+        TokenCounts(input_tokens=1000, output_tokens=100, request_count=1)
+    ) == Decimal(".0045")
+
+
+def test_gemini_pricing_does_not_require_context_metadata() -> None:
+    card = resolve_rate_card(
+        {
+            "provider_model_name": "gemini-2.5-pro",
+            "config": {
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+            },
+        },
+        {},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert card.enforceable
+    assert card.priceable
+    assert card.price(TokenCounts(input_tokens=1000, output_tokens=100)) == Decimal(
+        ".00225"
+    )
+
+
+def test_missing_output_price_is_not_a_free_output_price() -> None:
+    card = RateCard(
+        model="incomplete",
+        source=CostSource.REGISTERED,
+        enforceable=True,
+        rates={"input_mtok": Rate(base=Decimal("1"))},
+    )
+    assert card.price(TokenCounts(input_tokens=10, output_tokens=1)) is None
+    assert card.price(TokenCounts(input_tokens=10)) == Decimal(".00001")
+    assert not card.priceable
+
+
+def test_unpriced_audio_and_cache_receipts_do_not_look_like_zero_cost() -> None:
+    card = RateCard(
+        model="text-only-rates",
+        source=CostSource.REGISTERED,
+        rates={
+            "input_mtok": Rate(base=Decimal("1")),
+            "output_mtok": Rate(base=Decimal("1")),
+        },
+    )
+    assert card.price(TokenCounts(input_tokens=10, input_audio_tokens=5)) is None
+    assert card.price(TokenCounts(input_tokens=10, cache_read_tokens=5)) is None
+
+
+def test_registered_custom_gateway_prices_without_context_metadata() -> None:
+    card = resolve_rate_card(
+        {
+            "provider_model_name": "gpt-4o",
+            "config": {"base_url": "https://gateway.example"},
+        },
+        {"gpt-4o": ModelPricing(1, 2)},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert card.priceable
+    assert card.price(TokenCounts(input_tokens=1000, output_tokens=100)) == Decimal(
+        ".0012"
+    )
+
+
+def test_receipt_tiers_use_actual_input_and_start_only_above_threshold() -> None:
+    card = RateCard(
+        model="tiered",
+        source=CostSource.REGISTERED,
+        rates={
+            "input_mtok": Rate(base=Decimal("1"), tiers=((100, Decimal("2")),)),
+            "output_mtok": Rate(base=Decimal("3"), tiers=((100, Decimal("6")),)),
+        },
+    )
+    assert card.price(TokenCounts(input_tokens=100, output_tokens=10)) == Decimal(
+        ".00013"
+    )
+    assert card.price(TokenCounts(input_tokens=101, output_tokens=10)) == Decimal(
+        ".000262"
+    )

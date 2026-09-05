@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, Index, String, Numeric
+from sqlalchemy import DateTime, Float, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,7 +14,6 @@ from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.usage.domain.accounting import money
 from app.modules.usage.domain.entities import UsageKind, UsageProfileScope
 from app.modules.usage.domain.entities import UsageRecord as UsageRecordEntity
-
 
 __all__ = ["UsageLimitCounter", "UsageRecord"]
 
@@ -51,9 +50,7 @@ class UsageRecord(UUIDAuditBase):
     output_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
     units: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
-    allocation_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    batch_sequence: Mapped[int | None] = mapped_column(nullable=True)
-    receipt_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[UUID | None] = mapped_column(nullable=True)
     cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 9), nullable=True)
     cached_input_tokens: Mapped[int | None] = mapped_column(nullable=True)
     cache_write_tokens: Mapped[int | None] = mapped_column(nullable=True)
@@ -78,7 +75,10 @@ class UsageRecord(UUIDAuditBase):
 
     __table_args__ = (
         Index(
-            "uq_usage_allocation_batch", "allocation_id", "batch_sequence", unique=True
+            "uq_usage_request_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
         ),
         Index("ix_usage_org_time", "organization_id", "occurred_at"),
         Index("ix_usage_pod_time", "pod_id", "occurred_at"),

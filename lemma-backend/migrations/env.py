@@ -44,9 +44,6 @@ from app.modules.agent_surfaces.infrastructure import models as surface_models  
 
 # Usage / metering (usage_records, usage_limit_counters)
 from app.modules.usage.infrastructure import models as usage_models  # noqa: F401
-from app.modules.usage.infrastructure import (
-    allocation_models as usage_allocation_models,
-)
 from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  # noqa: F401
 
 # Workspace sandboxes (sandboxes, sandbox_instances)
@@ -72,7 +69,6 @@ REGISTERED_MODEL_MODULES = (
     workflow_models,
     surface_models,
     usage_models,
-    usage_allocation_models,
     pod_bundle_models,
     workspace_models,
 )

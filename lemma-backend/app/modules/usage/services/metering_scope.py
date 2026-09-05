@@ -1,6 +1,7 @@
-"""An execution owns its batch meters, including their timer tasks."""
+"""Bind immediate request accounting and unfinished receipt writes to an execution."""
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -16,9 +17,12 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.usage.config import UsageSettings, usage_settings
 from app.modules.usage.domain.accounting import MeteringIdentity
+from app.modules.usage.domain.errors import UsageCheckpointError
 from app.modules.usage.infrastructure.price_catalog import RateCard, resolve_rate_card
-from app.modules.usage.services.accounting_gateway import PostgresAccountingGateway
-from app.modules.usage.services.batch_meter import BatchMeter
+from app.modules.usage.services.request_accounting_gateway import (
+    PostgresRequestAccountingGateway,
+)
+from app.modules.usage.services.request_meter import RequestMeter
 from app.modules.usage.services.usage_context import (
     UsageExecutionContext,
     usage_execution_context,
@@ -37,11 +41,11 @@ class MeteringScope:
         self.factory = factory
         self.settings = settings
         self.execution_id = uuid4()
-        self.meters: dict[str, tuple[BatchMeter, RateCard]] = {}
+        self.meters: dict[str, tuple[RequestMeter, RateCard]] = {}
 
     def meter(
         self, profile: Mapping[str, object], source: str | None
-    ) -> tuple[BatchMeter, RateCard]:
+    ) -> tuple[RequestMeter, RateCard]:
         identity = MeteringIdentity(
             execution_id=self.execution_id,
             user_id=self.context.user_id,
@@ -72,22 +76,18 @@ class MeteringScope:
             card = resolve_rate_card(
                 profile, UsageService._SYSTEM_MODEL_PRICING, datetime.now(timezone.utc)
             )
-            gateway = PostgresAccountingGateway(
+            gateway = PostgresRequestAccountingGateway(
                 self.factory, identity, card, self.settings
             )
             self.meters[key] = (
-                BatchMeter(
-                    gateway,
-                    request_interval=self.settings.usage_batch_requests,
-                    seconds=self.settings.usage_batch_seconds,
-                ),
+                RequestMeter(gateway),
                 card,
             )
         return self.meters[key]
 
     async def close(self) -> None:
-        # Every timer must be joined even if one meter cannot flush. Each failed
-        # flush leaves a durable allocation for recovery rather than a refund.
+        # A lost commit response can be replayed using the same request identity.
+        # No timer or database session outlives the execution.
         results = await asyncio.gather(
             *(meter.close() for meter, _ in self.meters.values()),
             return_exceptions=True,
@@ -97,7 +97,9 @@ class MeteringScope:
                 raise result
         errors = [result for result in results if isinstance(result, Exception)]
         if errors:
-            raise ExceptionGroup("Usage checkpoint failed", errors)
+            raise UsageCheckpointError() from ExceptionGroup(
+                "Usage checkpoint failed", errors
+            )
 
 
 _scope: ContextVar[MeteringScope | None] = ContextVar(
@@ -126,8 +128,15 @@ async def metering_execution(
         with usage_execution_context(context):
             yield scope
     finally:
+        failure = sys.exception()
         try:
             with anyio.fail_after(10, shield=True):
                 await scope.close()
+        except (UsageCheckpointError, TimeoutError) as close_error:
+            if failure is not None:
+                raise BaseExceptionGroup(
+                    "Execution and usage finalization failed", [failure, close_error]
+                ) from None
+            raise
         finally:
             _scope.reset(token)

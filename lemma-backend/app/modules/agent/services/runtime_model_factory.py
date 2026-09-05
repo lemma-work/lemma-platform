@@ -26,14 +26,9 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
-from tenacity import stop_after_attempt, wait_exponential
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
-from app.modules.agent.infrastructure.transport_errors import (
-    RETRYABLE_STATUS_CODES,
-)
 from app.modules.agent.services.model_stream_budget import (
     ModelStreamBudgetTransport,
 )
@@ -143,18 +138,6 @@ def _client_cache_key(
     return f"{protocol}|{base_url}|{_credential_label(api_key)}|{header_sig}"
 
 
-def _should_retry_status(response: httpx.Response) -> None:
-    """Raise (so tenacity retries) only for statuses that mean "try again".
-
-    Deliberately silent for 400/401/402/404: in production those are a malformed
-    request, a bad key, an account out of credit, and a model that doesn't exist.
-    Retrying any of them burns the same failure three times and delays the error
-    the user actually needs to read.
-    """
-    if response.status_code in RETRYABLE_STATUS_CODES or response.status_code >= 500:
-        response.raise_for_status()
-
-
 def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
     # Limits belong to the transport, not to the client. `AsyncClient._init_transport`
     # returns a transport passed to it *before* it ever looks at `limits`, so a
@@ -162,32 +145,14 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
     # this pool ran on httpx's defaults (20 keepalive, 5s expiry) while the
     # settings said 100 and 30, and `agent_model_http_max_connections` did
     # nothing at all. Building the base transport here is what makes the setting
-    # real, and it has to be built explicitly anyway — AsyncTenacityTransport
-    # wraps `AsyncHTTPTransport()` with no arguments when handed nothing.
+    # real. Retries belong to the metered model boundary so each dispatch
+    # receives spending authority before reaching this transport.
     pooled = httpx.AsyncHTTPTransport(
         limits=httpx.Limits(
             max_connections=agent_settings.agent_model_http_max_connections,
             max_keepalive_connections=agent_settings.agent_model_http_max_connections,
             keepalive_expiry=30.0,
         ),
-    )
-    retrying = AsyncTenacityTransport(
-        config=RetryConfig(
-            retry=lambda state: isinstance(
-                state.outcome.exception() if state.outcome else None,
-                (httpx.TransportError, httpx.HTTPStatusError),
-            ),
-            wait=wait_retry_after(
-                fallback_strategy=wait_exponential(multiplier=1, max=30),
-                max_wait=60,
-            ),
-            # A lost response may already be billable. Retry at the metered
-            # model boundary so each dispatch owns a separate request bound.
-            stop=stop_after_attempt(1),
-            reraise=True,
-        ),
-        wrapped=pooled,
-        validate_response=_should_retry_status,
     )
     return httpx.AsyncClient(
         # Split timeouts: the read timeout is per-chunk, so it is the "provider
@@ -202,12 +167,8 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
             pool=10.0,
         ),
         headers={str(key): str(value) for key, value in headers.items()},
-        # Outermost, so the budget covers the response body of whichever attempt
-        # tenacity finally returns. It has to be out here regardless: tenacity
-        # retries `handle_async_request`, which is done once the headers land, so
-        # nothing inside it is still watching while the body streams.
         transport=ModelStreamBudgetTransport(
-            retrying,
+            pooled,
             first_chunk_seconds=(
                 agent_settings.agent_model_stream_first_chunk_timeout_seconds
             ),
@@ -328,17 +289,9 @@ def _unmetered_model_from_runtime_profile(
         client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key or "EMPTY",
-            # Connection reuse, split timeouts and transport-level retries all
-            # come from the shared client; the SDK's own retry layer would only
-            # duplicate it.
-            #
-            # Ignored, not cast: openai 3.x annotates this against `httpx2`,
-            # while the shared client is `httpx` -- which is not a preference,
-            # it is what pydantic-ai's `AsyncTenacityTransport` (the retry layer
-            # above) is built on, and the Anthropic SDK still wants. The two are
-            # duck-compatible for everything the SDK calls, so this works; it is
-            # marked rather than hidden because the day it stops working, this
-            # line is where to look.
+            # Disable SDK retries: each attempt must pass through metering.
+            # OpenAI 3.x types its client as httpx2; our shared httpx client is
+            # also used by Anthropic and implements the same client interface.
             http_client=get_provider_http_client(  # type: ignore[arg-type]
                 protocol="openai",
                 base_url=base_url,

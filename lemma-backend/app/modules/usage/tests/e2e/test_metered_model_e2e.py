@@ -1,8 +1,7 @@
-"""Provider streaming and settings cannot refund or bypass dispatch authority."""
+"""Every provider outcome is recorded and current limits gate subsequent requests."""
 
 from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -26,19 +25,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.usage.domain.errors import UsageLimitExceededError
-from app.modules.usage.domain.accounting import (
-    AccountingConflictError,
-    BudgetWindow,
-    MeteringIdentity,
-    TokenCounts,
-    UsageBatch,
-)
-from app.modules.usage.infrastructure.allocation_repository import (
-    checkpoint,
-    open_allocation,
-)
-from app.modules.usage.infrastructure.price_catalog import RateCard
+from app.modules.usage.domain.errors import UsageLimitExceededError, UsageReportingError
 from app.modules.usage.infrastructure.metered_model import MeteredModel
 from app.modules.usage.infrastructure.models import UsageLimitCounter, UsageRecord
 from app.modules.usage.services.metering_scope import metering_execution
@@ -59,7 +46,7 @@ def bounded_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         UsageService._SYSTEM_MODEL_PRICING.pop(name, None)
 
 
-async def test_early_stream_exit_retains_unconfirmed_authority(
+async def test_early_stream_exit_records_unconfirmed_usage(
     db_manager: DatabaseManager, bounded_model_name: str
 ) -> None:
     async def provider(
@@ -95,7 +82,6 @@ async def test_early_stream_exit_retains_unconfirmed_authority(
                 )
             )
         ).one()
-        assert counter.reserved_usd == Decimal("1")
         assert counter.used_usd == 0
         receipt = (
             await session.scalars(
@@ -103,7 +89,8 @@ async def test_early_stream_exit_retains_unconfirmed_authority(
             )
         ).one()
         assert receipt.record_metadata is not None
-        assert receipt.record_metadata["uncertain_usd"] == "1.000000000"
+        assert receipt.record_metadata["metering_state"] == "UNCONFIRMED"
+        assert receipt.cost_amount is None
 
 
 @pytest.mark.parametrize(
@@ -196,11 +183,10 @@ async def test_standard_provider_settings_record_confirmed_usage(
             )
         ).one()
         assert counter.used_usd == Decimal("0.01")
-        assert counter.reserved_usd == 0
 
 
 @pytest.mark.parametrize("response_state", ["incomplete", "interrupted", "suspended"])
-async def test_noncomplete_response_retains_authority_until_usage_is_final(
+async def test_noncomplete_response_is_not_misreported_as_final_usage(
     db_manager: DatabaseManager,
     bounded_model_name: str,
     response_state: ModelResponseState,
@@ -237,7 +223,6 @@ async def test_noncomplete_response_retains_authority_until_usage_is_final(
                 )
             )
         ).one()
-        assert counter.reserved_usd == Decimal("1")
         assert counter.used_usd == 0
 
 
@@ -246,7 +231,7 @@ async def test_confirmed_overage_counts_toward_subsequent_admission(
     bounded_model_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 2.0)
+    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
     dispatched = 0
 
     async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -269,9 +254,9 @@ async def test_confirmed_overage_counts_toward_subsequent_admission(
             "model_metadata": {"context_window": 1000},
         },
     )
-    with pytest.raises(AccountingConflictError):
-        async with metering_execution(context, factory=factory):
-            await model.request([], None, ModelRequestParameters())
+    async with metering_execution(context, factory=factory):
+        response = await model.request([], None, ModelRequestParameters())
+        assert response.parts == [TextPart("done")]
 
     with pytest.raises(UsageLimitExceededError):
         async with metering_execution(context, factory=factory):
@@ -288,7 +273,6 @@ async def test_confirmed_overage_counts_toward_subsequent_admission(
             )
         ).one()
         assert counter.used_usd == Decimal("1.5")
-        assert counter.reserved_usd == 0
         receipt = (
             await session.scalars(
                 select(UsageRecord).where(UsageRecord.user_id == user_id)
@@ -298,78 +282,7 @@ async def test_confirmed_overage_counts_toward_subsequent_admission(
         assert receipt.input_tokens == 1500
 
 
-async def test_late_inflight_uncertainty_survives_exhausted_overage_allocation(
-    db_manager: DatabaseManager,
-) -> None:
-    now = datetime.now(timezone.utc)
-    user_id = uuid4()
-    identity = MeteringIdentity(
-        execution_id=uuid4(),
-        user_id=user_id,
-        profile_id="system:test",
-        profile_scope="SYSTEM",
-        model_name="overage",
-        provider_model_name="overage",
-    )
-    window = BudgetWindow(
-        organization_id=None,
-        user_id=user_id,
-        kind="user_week",
-        start=now - timedelta(days=1),
-        end=now + timedelta(days=1),
-        limit=Decimal("3"),
-    )
-    async with db_manager.session_factory() as session, session.begin():
-        allocation = await open_allocation(
-            session,
-            allocation_id=uuid4(),
-            identity=identity,
-            pricing=RateCard(model="overage"),
-            windows=[window],
-            required=Decimal("1"),
-            target=Decimal("2"),
-            now=now,
-            timeout_seconds=120,
-        )
-    async with db_manager.session_factory() as session, session.begin():
-        await checkpoint(
-            session,
-            UsageBatch(
-                allocation_id=allocation.id,
-                sequence=1,
-                counts=TokenCounts(request_count=1),
-                cost=Decimal("2.5"),
-                occurred_at=now,
-            ),
-            now=now,
-            timeout_seconds=120,
-        )
-    async with db_manager.session_factory() as session, session.begin():
-        closed = await checkpoint(
-            session,
-            UsageBatch(
-                allocation_id=allocation.id,
-                sequence=2,
-                counts=TokenCounts(request_count=1, unconfirmed_requests=1),
-                uncertain=Decimal("1"),
-                occurred_at=now,
-                close=True,
-            ),
-            now=now,
-            timeout_seconds=120,
-        )
-        assert closed.amount == 0
-    async with db_manager.session_factory() as session:
-        counter = (
-            await session.scalars(
-                select(UsageLimitCounter).where(UsageLimitCounter.user_id == user_id)
-            )
-        ).one()
-        assert counter.used_usd == Decimal("2.5")
-        assert counter.reserved_usd == Decimal("1")
-
-
-async def test_complete_response_without_provider_usage_retains_authority(
+async def test_complete_response_without_provider_usage_is_not_reported_as_free(
     db_manager: DatabaseManager, bounded_model_name: str
 ) -> None:
     def provider(request: httpx2.Request) -> httpx2.Response:
@@ -415,6 +328,8 @@ async def test_complete_response_without_provider_usage_retains_authority(
             response = await model.request([], None, ModelRequestParameters())
             assert response.state == "complete"
             assert response.usage.total_tokens == 0
+            with pytest.raises(UsageReportingError):
+                await model.request([], None, ModelRequestParameters())
 
     async with db_manager.session_factory() as session:
         counter = (
@@ -425,5 +340,4 @@ async def test_complete_response_without_provider_usage_retains_authority(
                 )
             )
         ).one()
-        assert counter.reserved_usd == Decimal("1")
         assert counter.used_usd == 0

@@ -406,16 +406,18 @@ USAGE_ANNOTATED_PATHS := \
 	app/modules/usage/domain/budget_windows.py \
 	app/modules/usage/domain/ports.py \
 	app/modules/usage/domain/query_types.py \
-	app/modules/usage/infrastructure/allocation_models.py \
+	app/modules/usage/infrastructure/provider_retries.py \
+	app/modules/usage/infrastructure/request_features.py \
 	app/modules/usage/infrastructure/cost_expressions.py \
 	app/modules/usage/infrastructure/usage_limit_reads.py \
-	app/modules/usage/infrastructure/allocation_repository.py \
+	app/modules/usage/infrastructure/request_accounting.py \
+	app/modules/usage/services/request_accounting_gateway.py \
+	app/modules/usage/services/request_meter.py \
+	app/modules/usage/tests/unit/test_request_meter.py \
 	app/modules/usage/infrastructure/metered_model.py \
 	app/modules/usage/infrastructure/models.py \
 	app/modules/usage/infrastructure/price_catalog.py \
 	app/modules/usage/infrastructure/repositories.py \
-	app/modules/usage/services/accounting_gateway.py \
-	app/modules/usage/services/batch_meter.py \
 	app/modules/usage/services/metering_scope.py \
 	app/modules/usage/services/pricing.py \
 	app/modules/usage/services/run_receipts.py \
@@ -424,8 +426,9 @@ USAGE_ANNOTATED_PATHS := \
 	app/modules/usage/tests/e2e \
 	app/modules/usage/tests/fakes.py \
 	app/modules/usage/tests/unit/test_accounting_money.py \
-	app/modules/usage/tests/unit/test_batch_meter.py \
-	app/modules/usage/tests/unit/test_price_catalog.py
+	app/modules/usage/tests/unit/test_price_catalog.py \
+	app/modules/usage/tests/unit/test_request_features.py \
+	app/modules/usage/tests/unit/test_accounting_failures.py
 
 typecheck-critical:
 	uv run ruff check --select ANN $(USAGE_ANNOTATED_PATHS) $(AGENT_HARNESS_TYPED_PATHS)
