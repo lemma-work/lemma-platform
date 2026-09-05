@@ -211,5 +211,30 @@ class WorkspaceSettings(BaseSettings):
         description="URL the guest calls back on",
     )
 
+    # Moved from `app/core/config.py`: the callback URLs the sandbox uses to
+    # reach back into the platform, read only by this module.
+    workspace_callback_api_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "URL workspace sandboxes use to reach this API (e.g. http://backend:8000 "
+            "when sandboxes share a container network). No hostname inference "
+            "or rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_auth_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit auth frontend URL reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_frontend_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit frontend origin reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
+        ),
+    )
+
 
 workspace_settings = WorkspaceSettings()

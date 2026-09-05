@@ -69,9 +69,106 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "app_archive_max_uncompressed_bytes",
         "app_archive_max_compression_ratio",
         "schedule_max_consecutive_failures",
+        # ── Moved in the 0.8.0 config audit ───────────────────────────────
+        # Twenty-five read only by `mod:identity`, which made it the largest
+        # single-owner cluster left in core. The two `is_*_configured`
+        # predicates went with them: they read `self.<field>`, which
+        # `check_settings_attrs.py` cannot see, so leaving either behind would
+        # have been an AttributeError at runtime under a green gate.
+        "auth_altcha_hmac_key",
+        "auth_altcha_max_number",
+        "auth_bounce_webhook_secret",
+        "auth_disposable_email_allowlist",
+        "auth_jwks_unknown_kid_cache_size",
+        "auth_jwks_unknown_kid_ttl_seconds",
+        "auth_trusted_proxy_ips",
+        "auth_website_base_path",
+        "auth_whatsapp_mobile_verification_enabled",
+        "desktop_auth_create_limit",
+        "desktop_auth_create_window_seconds",
+        "microsoft_client_id",
+        "microsoft_client_secret",
+        "microsoft_tenant_id",
+        "organization_home_cache_ttl_seconds",
+        "session_cookie_domain",
+        "session_cookie_older_domain",
+        "session_cookie_same_site",
+        "session_cookie_secure",
+        "supertokens_api_base_path",
+        "supertokens_api_gateway_path",
+        "telegram_oidc_client_id",
+        "telegram_oidc_client_secret",
+        "telegram_oidc_redirect_uri",
+        "user_cache_ttl_seconds",
+        # Telegram's own OIDC endpoints stopped being settings entirely -- see
+        # `test_telegram_oidc_endpoints_are_constants_not_settings`. Listed here
+        # too: they must not come back as fields on `Settings` either.
+        "telegram_oidc_issuer",
+        "telegram_oidc_authorization_endpoint",
+        "telegram_oidc_token_endpoint",
+        "telegram_oidc_jwks_uri",
+        # Single-owner clusters that went to the module that reads them.
+        "workflow_wait_retention_days",
+        "workflow_wait_retention_batch_size",
+        "workflow_wait_retention_budget_seconds",
+        "usage_org_monthly_limit_usd",
+        "usage_user_weekly_limit_usd",
+        "usage_user_monthly_limit_usd",
+        "workspace_callback_api_url",
+        "workspace_callback_auth_url",
+        "workspace_callback_frontend_url",
+        "app_branding_enabled",
+        "schedule_poll_interval_seconds",
+        "e2e_disable_worker_file_autoindex",
+        # Deleted rather than moved: nothing in the repo read either, in any
+        # language, and no environment set them.
+        "gcp_project_id",
+        "gcp_location",
     }
 
     assert module_owned.isdisjoint(Settings.model_fields)
     assert {"database_url", "redis_url", "max_request_body_bytes"} <= set(
         Settings.model_fields
     )
+    # Kept in core deliberately: `mod:agent_surfaces` reads it and
+    # `agent_surfaces -> workflow` is a forbidden import, so module ownership
+    # here would have cost a dependency the architecture gate refuses.
+    assert "workflow_wait_max_age_seconds" in Settings.model_fields
+
+
+def test_moved_settings_actually_arrived_on_their_new_class() -> None:
+    """Absence from core is only half the claim.
+
+    The check above says a field is not on `Settings`. It has never said the
+    field is anywhere at all -- so deleting one by accident, or moving it to a
+    class nothing instantiates, reads exactly like a successful move. Each
+    cluster is asserted against the class that now owns it.
+    """
+    from app.modules.apps.config import AppsSettings
+    from app.modules.datastore.config import DatastoreSettings
+    from app.modules.identity.config import IdentitySettings
+    from app.modules.schedule.config import ScheduleSettings
+    from app.modules.usage.config import UsageSettings
+    from app.modules.workflow.config import WorkflowSettings
+    from app.modules.workspace.config import WorkspaceSettings
+
+    arrived = {
+        IdentitySettings: {
+            "auth_altcha_hmac_key",
+            "session_cookie_older_domain",
+            "supertokens_api_gateway_path",
+            "telegram_oidc_client_id",
+            "user_cache_ttl_seconds",
+        },
+        WorkflowSettings: {
+            "workflow_wait_retention_days",
+        },
+        UsageSettings: {"usage_org_monthly_limit_usd"},
+        WorkspaceSettings: {"workspace_callback_api_url"},
+        AppsSettings: {"app_branding_enabled"},
+        ScheduleSettings: {"schedule_poll_interval_seconds"},
+        DatastoreSettings: {"e2e_disable_worker_file_autoindex"},
+    }
+    for cls, fields in arrived.items():
+        missing = fields - set(cls.model_fields)
+        assert not missing, f"{cls.__name__} is missing {sorted(missing)}"

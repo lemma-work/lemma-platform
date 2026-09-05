@@ -36,6 +36,7 @@ from app.modules.identity.infrastructure.supertokens_auth.jwks_guard import (
     install_jwks_guard,
 )
 from app.core.log.log import get_logger
+from app.modules.identity.config import identity_settings
 
 logger = get_logger(__name__)
 
@@ -47,7 +48,7 @@ def email_verification_mode():
 def _supertokens_api_domain() -> str:
     parsed_api_url = urlparse(settings.api_url)
     api_path = parsed_api_url.path.rstrip("/")
-    gateway_path = settings.supertokens_api_gateway_path
+    gateway_path = identity_settings.supertokens_api_gateway_path
 
     if (
         parsed_api_url.scheme
@@ -65,9 +66,9 @@ def build_supertokens_app_info() -> InputAppInfo:
         app_name=settings.app_name,
         api_domain=_supertokens_api_domain(),
         website_domain=settings.auth_frontend_url,
-        api_gateway_path=settings.supertokens_api_gateway_path,
-        api_base_path=settings.supertokens_api_base_path,
-        website_base_path=settings.auth_website_base_path,
+        api_gateway_path=identity_settings.supertokens_api_gateway_path,
+        api_base_path=identity_settings.supertokens_api_base_path,
+        website_base_path=identity_settings.auth_website_base_path,
     )
 
 
@@ -90,9 +91,9 @@ def build_thirdparty_providers() -> list[ProviderInput]:
             )
         )
 
-    if settings.is_microsoft_oauth_configured():
-        assert settings.microsoft_client_id is not None
-        tenant_id = settings.microsoft_tenant_id or "common"
+    if identity_settings.is_microsoft_oauth_configured():
+        assert identity_settings.microsoft_client_id is not None
+        tenant_id = identity_settings.microsoft_tenant_id or "common"
         microsoft_base_url = (
             f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0"
         )
@@ -103,9 +104,9 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                     name="Microsoft",
                     clients=[
                         ProviderClientConfig(
-                            client_id=settings.microsoft_client_id,
+                            client_id=identity_settings.microsoft_client_id,
                             client_secret=reveal_secret(
-                                settings.microsoft_client_secret
+                                identity_settings.microsoft_client_secret
                             ),
                             scope=["openid", "email", "profile"],
                         ),
@@ -131,7 +132,7 @@ def initialize_supertokens():
         framework="fastapi",
         recipe_list=[
             session.init(
-                cookie_domain=settings.session_cookie_domain,
+                cookie_domain=identity_settings.session_cookie_domain,
                 # The domain we are migrating *away* from, for one release.
                 #
                 # Changing `cookie_domain` does not replace the cookies already
@@ -143,9 +144,9 @@ def initialize_supertokens():
                 # `.lemma.localhost` change logged 30 of those and 17 500s.
                 #
                 # Set, this clears the old pair instead of colliding with it.
-                older_cookie_domain=settings.session_cookie_older_domain,
-                cookie_secure=settings.session_cookie_secure,
-                cookie_same_site=settings.session_cookie_same_site,
+                older_cookie_domain=identity_settings.session_cookie_older_domain,
+                cookie_secure=identity_settings.session_cookie_secure,
+                cookie_same_site=identity_settings.session_cookie_same_site,
             ),
             emailpassword.init(
                 override=emailpassword.InputOverrideConfig(

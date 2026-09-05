@@ -34,6 +34,7 @@ from app.modules.workspace.services.workspace_process_store import WorkspaceProc
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
+from app.modules.workspace.config import workspace_settings
 
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
@@ -161,8 +162,8 @@ class WorkspaceSandboxService:
 
     @staticmethod
     def _resolve_workspace_api_url() -> str:
-        if settings.workspace_callback_api_url:
-            return settings.workspace_callback_api_url
+        if workspace_settings.workspace_callback_api_url:
+            return workspace_settings.workspace_callback_api_url
         return settings.cli_api_url or settings.api_url
 
     async def _delete_sandbox(
@@ -319,11 +320,13 @@ class WorkspaceSandboxService:
         )
         api_url = self._resolve_workspace_api_url()
         auth_url = (
-            settings.workspace_callback_auth_url
+            workspace_settings.workspace_callback_auth_url
             or settings.cli_auth_frontend_url
             or settings.auth_frontend_url
         )
-        host_origin = settings.workspace_callback_frontend_url or settings.frontend_url
+        host_origin = (
+            workspace_settings.workspace_callback_frontend_url or settings.frontend_url
+        )
 
         resolved_org_id = (
             str(organization_id)

@@ -532,5 +532,18 @@ class DatastoreSettings(BaseSettings):
         description="CrossEncoder model used when reranker_mode='local' (Apache-2.0, CPU).",
     )
 
+    # Moved from `app/core/config.py`: a test hook for this module's indexing
+    # path, and nothing else reads it.
+    e2e_disable_worker_file_autoindex: bool = Field(
+        default=False,
+        description=(
+            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
+            "datastore files (the upload->event->process_datastore_file_task path "
+            "is skipped). e2e indexes explicitly in-process via the index_file "
+            "helper; auto-indexing every upload would otherwise overwhelm the "
+            "single shared Kreuzberg under parallel load. Production leaves False."
+        ),
+    )
+
 
 datastore_settings = DatastoreSettings()

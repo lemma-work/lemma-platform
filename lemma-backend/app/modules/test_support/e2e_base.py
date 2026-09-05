@@ -37,6 +37,7 @@ from app.core.test_utils import (
     shared_postgres,
     shared_redis,
 )
+from app.modules.schedule.config import schedule_settings
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -615,7 +616,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
         "WORKSPACE_E2E_DOCKER_API_URL",
         f"http://host.docker.internal:{callback_port}",
     )
-    settings.workspace_callback_api_url = callback_url
+    workspace_settings.workspace_callback_api_url = callback_url
     function_settings.function_runtime_gateway_url = callback_url
     os.environ["WORKSPACE_E2E_BACKEND_PORT"] = str(callback_port)
     os.environ["WORKSPACE_CALLBACK_API_URL"] = callback_url
@@ -678,7 +679,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # Disable the worker's auto-index-on-upload so it doesn't ALSO index every
     # uploaded file through the single shared Kreuzberg — that double load OOMs
     # the container under -n2. Inherited by the worker subprocess.
-    settings.e2e_disable_worker_file_autoindex = True
+    datastore_settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
     # The schedule poller is a real background loop in the worker subprocess,
@@ -690,7 +691,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # this process's settings singleton -- so set os.environ too, same as
     # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
     # env={**os.environ, ...} already inherits it, no extra Popen key needed.
-    settings.schedule_poll_interval_seconds = 0.5
+    schedule_settings.schedule_poll_interval_seconds = 0.5
     os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
 
     # The same argument as the schedule poller, for the other production
@@ -836,7 +837,6 @@ async def sandbox_reachable_backend(e2e_settings):
     for the whole run, pointed at the port each test's backend rebinds.
     """
 
-    from app.core.config import settings
     from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
 
     off_box = workspace_settings.provider.lower() == "e2b"
@@ -849,20 +849,20 @@ async def sandbox_reachable_backend(e2e_settings):
         key: os.environ.get(key)
         for key in ("WORKSPACE_CALLBACK_API_URL", "FUNCTION_RUNTIME_GATEWAY_URL")
     }
-    original_callback = settings.workspace_callback_api_url
+    original_callback = workspace_settings.workspace_callback_api_url
     original_gateway = function_settings.function_runtime_gateway_url
 
     async with _temporary_workspace_tunnel(
         f"http://127.0.0.1:{port}", wait_for_backend=False
     ) as public_url:
-        settings.workspace_callback_api_url = public_url
+        workspace_settings.workspace_callback_api_url = public_url
         function_settings.function_runtime_gateway_url = public_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = public_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = public_url
         try:
             yield public_url
         finally:
-            settings.workspace_callback_api_url = original_callback
+            workspace_settings.workspace_callback_api_url = original_callback
             function_settings.function_runtime_gateway_url = original_gateway
             for key, value in previous.items():
                 if value is None:

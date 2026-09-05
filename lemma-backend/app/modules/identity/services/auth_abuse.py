@@ -16,6 +16,7 @@ from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
+from app.modules.identity.config import identity_settings
 
 
 logger = get_logger(__name__)
@@ -41,7 +42,7 @@ class AuthAbuseStore:
 
     @staticmethod
     def digest(value: str) -> str:
-        key = reveal_secret(settings.auth_altcha_hmac_key) or "lemma-auth-key"
+        key = reveal_secret(identity_settings.auth_altcha_hmac_key) or "lemma-auth-key"
         return hmac.new(key.encode(), value.encode(), hashlib.sha256).hexdigest()
 
     async def enforce(self, key: str, *, limit: int, window_seconds: int) -> None:
@@ -77,12 +78,12 @@ class AuthAbuseStore:
     async def issue_altcha(self, purpose: str) -> dict[str, Any]:
         if not settings.auth_altcha_enabled:
             return {"enabled": False}
-        key = reveal_secret(settings.auth_altcha_hmac_key)
+        key = reveal_secret(identity_settings.auth_altcha_hmac_key)
         if not key:
             raise RuntimeError(
                 "AUTH_ALTCHA_HMAC_KEY is required when ALTCHA is enabled"
             )
-        maximum = settings.auth_altcha_max_number
+        maximum = identity_settings.auth_altcha_max_number
         salt = secrets.token_hex(16)
         number = secrets.randbelow(maximum + 1)
         challenge = hashlib.sha256(f"{salt}{number}".encode()).hexdigest()
@@ -129,9 +130,12 @@ class AuthAbuseStore:
             signature = str(payload["signature"])
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise AltchaRejected("Malformed proof-of-work") from exc
-        if algorithm != "SHA-256" or not 0 <= number <= settings.auth_altcha_max_number:
+        if (
+            algorithm != "SHA-256"
+            or not 0 <= number <= identity_settings.auth_altcha_max_number
+        ):
             raise AltchaRejected("Invalid proof-of-work parameters")
-        key = reveal_secret(settings.auth_altcha_hmac_key)
+        key = reveal_secret(identity_settings.auth_altcha_hmac_key)
         if not key:
             raise AltchaRejected("Proof-of-work is unavailable")
         expected_signature = hmac.new(
@@ -165,7 +169,7 @@ class AuthAbuseStore:
 
 def client_ip(scope: Any) -> str:
     peer = str((scope.get("client") or ("unknown", 0))[0])
-    trusted = set(settings.auth_trusted_proxy_ips)
+    trusted = set(identity_settings.auth_trusted_proxy_ips)
     if peer not in trusted:
         return peer
     headers = {

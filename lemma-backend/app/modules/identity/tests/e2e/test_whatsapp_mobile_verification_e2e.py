@@ -23,12 +23,15 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
     close_whatsapp_mobile_verification_service,
     get_whatsapp_mobile_verification_service,
 )
+from app.modules.identity.config import identity_settings
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
 def _enable(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")

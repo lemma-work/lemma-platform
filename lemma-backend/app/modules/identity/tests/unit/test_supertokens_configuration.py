@@ -13,23 +13,24 @@ from app.modules.identity.infrastructure.supertokens_auth.initialization import 
     initialize_supertokens,
 )
 from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
+from app.modules.identity.config import identity_settings
 
 
 def test_build_supertokens_app_info_uses_full_urls():
     original_api_url = settings.api_url
     original_auth_frontend_url = settings.auth_frontend_url
-    original_auth_website_base_path = settings.auth_website_base_path
+    original_auth_website_base_path = identity_settings.auth_website_base_path
 
     settings.api_url = "https://api.lemma.work"
     settings.auth_frontend_url = "https://auth.lemma.work"
-    settings.auth_website_base_path = "/auth"
+    identity_settings.auth_website_base_path = "/auth"
 
     try:
         app_info = build_supertokens_app_info()
     finally:
         settings.api_url = original_api_url
         settings.auth_frontend_url = original_auth_frontend_url
-        settings.auth_website_base_path = original_auth_website_base_path
+        identity_settings.auth_website_base_path = original_auth_website_base_path
 
     assert app_info.api_domain == "https://api.lemma.work"
     assert app_info.website_domain == "https://auth.lemma.work"
@@ -102,16 +103,16 @@ def test_e2e_reset_allows_repeated_supertokens_initialization(monkeypatch):
 
 def test_build_supertokens_app_info_uses_origin_when_gateway_contains_api_prefix():
     original_api_url = settings.api_url
-    original_gateway_path = settings.supertokens_api_gateway_path
+    original_gateway_path = identity_settings.supertokens_api_gateway_path
 
     settings.api_url = "http://localhost:8000/api"
-    settings.supertokens_api_gateway_path = "/api/st"
+    identity_settings.supertokens_api_gateway_path = "/api/st"
 
     try:
         app_info = build_supertokens_app_info()
     finally:
         settings.api_url = original_api_url
-        settings.supertokens_api_gateway_path = original_gateway_path
+        identity_settings.supertokens_api_gateway_path = original_gateway_path
 
     assert app_info.api_domain == "http://localhost:8000"
     assert app_info.api_gateway_path == "/api/st"
@@ -166,24 +167,24 @@ def test_get_allowed_cors_origin_regex_passthrough():
 def test_build_thirdparty_providers_includes_google_and_microsoft_when_configured():
     original_google_client_id = settings.google_client_id
     original_google_client_secret = settings.google_client_secret
-    original_microsoft_client_id = settings.microsoft_client_id
-    original_microsoft_client_secret = settings.microsoft_client_secret
-    original_microsoft_tenant_id = settings.microsoft_tenant_id
+    original_microsoft_client_id = identity_settings.microsoft_client_id
+    original_microsoft_client_secret = identity_settings.microsoft_client_secret
+    original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
     settings.google_client_id = "google-client-id"
     settings.google_client_secret = "google-client-secret"
-    settings.microsoft_client_id = "microsoft-client-id"
-    settings.microsoft_client_secret = "microsoft-client-secret"
-    settings.microsoft_tenant_id = "tenant-123"
+    identity_settings.microsoft_client_id = "microsoft-client-id"
+    identity_settings.microsoft_client_secret = "microsoft-client-secret"
+    identity_settings.microsoft_tenant_id = "tenant-123"
 
     try:
         providers = build_thirdparty_providers()
     finally:
         settings.google_client_id = original_google_client_id
         settings.google_client_secret = original_google_client_secret
-        settings.microsoft_client_id = original_microsoft_client_id
-        settings.microsoft_client_secret = original_microsoft_client_secret
-        settings.microsoft_tenant_id = original_microsoft_tenant_id
+        identity_settings.microsoft_client_id = original_microsoft_client_id
+        identity_settings.microsoft_client_secret = original_microsoft_client_secret
+        identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
 
     assert [provider.config.third_party_id for provider in providers] == [
         "google",
@@ -208,24 +209,24 @@ def test_build_thirdparty_providers_includes_google_and_microsoft_when_configure
 def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default():
     original_google_client_id = settings.google_client_id
     original_google_client_secret = settings.google_client_secret
-    original_microsoft_client_id = settings.microsoft_client_id
-    original_microsoft_client_secret = settings.microsoft_client_secret
-    original_microsoft_tenant_id = settings.microsoft_tenant_id
+    original_microsoft_client_id = identity_settings.microsoft_client_id
+    original_microsoft_client_secret = identity_settings.microsoft_client_secret
+    original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
     settings.google_client_id = None
     settings.google_client_secret = None
-    settings.microsoft_client_id = "microsoft-client-id"
-    settings.microsoft_client_secret = "microsoft-client-secret"
-    settings.microsoft_tenant_id = None
+    identity_settings.microsoft_client_id = "microsoft-client-id"
+    identity_settings.microsoft_client_secret = "microsoft-client-secret"
+    identity_settings.microsoft_tenant_id = None
 
     try:
         providers = build_thirdparty_providers()
     finally:
         settings.google_client_id = original_google_client_id
         settings.google_client_secret = original_google_client_secret
-        settings.microsoft_client_id = original_microsoft_client_id
-        settings.microsoft_client_secret = original_microsoft_client_secret
-        settings.microsoft_tenant_id = original_microsoft_tenant_id
+        identity_settings.microsoft_client_id = original_microsoft_client_id
+        identity_settings.microsoft_client_secret = original_microsoft_client_secret
+        identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
 
     assert [provider.config.third_party_id for provider in providers] == [
         "active-directory"
@@ -240,23 +241,23 @@ def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default(
 def test_build_thirdparty_providers_skips_unconfigured_providers():
     original_google_client_id = settings.google_client_id
     original_google_client_secret = settings.google_client_secret
-    original_microsoft_client_id = settings.microsoft_client_id
-    original_microsoft_client_secret = settings.microsoft_client_secret
-    original_microsoft_tenant_id = settings.microsoft_tenant_id
+    original_microsoft_client_id = identity_settings.microsoft_client_id
+    original_microsoft_client_secret = identity_settings.microsoft_client_secret
+    original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
     settings.google_client_id = "google-client-id"
     settings.google_client_secret = None
-    settings.microsoft_client_id = "microsoft-client-id"
-    settings.microsoft_client_secret = None
-    settings.microsoft_tenant_id = "tenant-123"
+    identity_settings.microsoft_client_id = "microsoft-client-id"
+    identity_settings.microsoft_client_secret = None
+    identity_settings.microsoft_tenant_id = "tenant-123"
 
     try:
         providers = build_thirdparty_providers()
     finally:
         settings.google_client_id = original_google_client_id
         settings.google_client_secret = original_google_client_secret
-        settings.microsoft_client_id = original_microsoft_client_id
-        settings.microsoft_client_secret = original_microsoft_client_secret
-        settings.microsoft_tenant_id = original_microsoft_tenant_id
+        identity_settings.microsoft_client_id = original_microsoft_client_id
+        identity_settings.microsoft_client_secret = original_microsoft_client_secret
+        identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
 
     assert providers == []

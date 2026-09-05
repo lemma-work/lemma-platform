@@ -157,6 +157,12 @@ MOVED_FROM_CORE = [
     ("reranker_mode", "RERANKER_MODE", "off"),
     ("reranker_retrieve_n", "RERANKER_RETRIEVE_N", 50),
     ("local_reranker_model", "LOCAL_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"),
+    # The 0.8.0 config audit: the last core field only this module read.
+    (
+        "e2e_disable_worker_file_autoindex",
+        "E2E_DISABLE_WORKER_FILE_AUTOINDEX",
+        False,
+    ),
 ]
 
 

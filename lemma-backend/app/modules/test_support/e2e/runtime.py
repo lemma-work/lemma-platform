@@ -604,7 +604,7 @@ async def configure_workspace_api_url(
         close_workspace_tool_runtimes,
     )
 
-    original_callback_url = settings.workspace_callback_api_url
+    original_callback_url = workspace_settings.workspace_callback_api_url
     original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
     original_function_gateway_url = function_settings.function_runtime_gateway_url
     original_function_gateway_url_env = os.environ.get("FUNCTION_RUNTIME_GATEWAY_URL")
@@ -637,7 +637,7 @@ async def configure_workspace_api_url(
             if public_callback_url is not None
             else backend_server["docker_base_url"]
         )
-        settings.workspace_callback_api_url = workspace_callback_url
+        workspace_settings.workspace_callback_api_url = workspace_callback_url
         function_settings.function_runtime_gateway_url = workspace_callback_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = workspace_callback_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = workspace_callback_url
@@ -645,11 +645,11 @@ async def configure_workspace_api_url(
             yield {
                 **backend_server,
                 **local_sandbox_server,
-                "workspace_callback_url": settings.workspace_callback_api_url,
+                "workspace_callback_url": workspace_settings.workspace_callback_api_url,
             }
         finally:
             await close_workspace_tool_runtimes()
-            settings.workspace_callback_api_url = original_callback_url
+            workspace_settings.workspace_callback_api_url = original_callback_url
             function_settings.function_runtime_gateway_url = (
                 original_function_gateway_url
             )
