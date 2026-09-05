@@ -25,6 +25,10 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.core.config import settings
+from app.modules.function.api.dependencies import (
+    build_function_service,
+    build_function_use_cases,
+)
 from app.modules.function.domain.errors import (
     FunctionNotFoundError,
     FunctionRunNotFoundError,
@@ -77,7 +81,7 @@ async def process_function_run(
     function_id: UUID | None = None
     try:
         async with worker_ctx.uow() as uow:
-            service = worker_ctx.build_function_service(uow)
+            service = build_function_service(uow)
             run = await service.run_repository.get_run(parsed_run_id)
             if run is None:
                 raise FunctionRunNotFoundError(f"Run {parsed_run_id} not found")
@@ -87,7 +91,7 @@ async def process_function_run(
             if function is None:
                 raise FunctionNotFoundError(f"Function {run.function_id} not found")
 
-        use_cases = worker_ctx.build_function_use_cases()
+        use_cases = build_function_use_cases(worker_ctx.uow_factory)
         await use_cases.execute_run_by_id(parsed_run_id)
     except Exception as exc:
         logger.debug(

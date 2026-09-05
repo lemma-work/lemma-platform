@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 158 |
-| `gap` | 2 |
+| `covered` | 160 |
+| `gap` | 0 |
 | `manual` | 4 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -231,7 +231,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a platform | `gap` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-001` A person connects a pod's agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
@@ -242,7 +242,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
-| `PS-SURF-023` A person reached on several platforms gets one predictable answer | `gap` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
+| `PS-SURF-023` A person reachable from several pods is reached by the right one | `covered` | `test_channels_are_listable`, `test_a_default_surface_can_be_chosen`, `test_my_surfaces_are_listable` |
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |

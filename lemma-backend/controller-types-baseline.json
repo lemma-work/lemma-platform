@@ -1,0 +1,14 @@
+{
+  "_comment": "Pre-existing basedpyright errors in API controllers, per file. This file may shrink freely; growing it means a new type error in a controller. See scripts/check_controller_types.py.",
+  "files": {
+    "app/modules/agent/api/controllers/agent_host_controller.py": 15,
+    "app/modules/agent/api/controllers/tool_controller.py": 1,
+    "app/modules/apps/api/controllers/app_controller.py": 3,
+    "app/modules/datastore/api/controllers/changes_controller.py": 2,
+    "app/modules/datastore/api/controllers/file_controller.py": 11,
+    "app/modules/datastore/api/controllers/record_controller.py": 4,
+    "app/modules/datastore/api/controllers/table_controller.py": 2,
+    "app/modules/function/api/controllers/function_controller.py": 1,
+    "app/modules/pod/api/controllers/resource_access_controller.py": 6
+  }
+}

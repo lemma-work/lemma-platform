@@ -323,10 +323,7 @@ async def process_agent_run(
         user_id=user_id,
         pod_id=pod_id,
         agent_name=agent_name,
-        observer=build_progress_observer(
-            uow_factory=worker_ctx.uow_factory,
-            service_factory=worker_ctx.build_surface_event_handler,
-        ),
+        observer=build_progress_observer(uow_factory=worker_ctx.uow_factory),
     )
 
 

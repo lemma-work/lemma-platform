@@ -41,8 +41,11 @@ class ResourceTable:
     #: resource as PERSONAL.
     visibility_column: InstrumentedAttribute | None
     #: Set only for the hierarchical datastore types, whose grants cascade to
-    #: descendants by path. Naming it here keeps this module the only place in
-    #: `app/core` that reaches for a datastore column.
+    #: descendants by path. Naming it here keeps the cascade rule in one place
+    #: rather than repeated at each call site. It does not make this the only
+    #: place in `app/core` reaching for a datastore column -- `resource_names.py`
+    #: and `sql_actions.py` do too, and an earlier version of this comment
+    #: claimed otherwise.
     path_column: InstrumentedAttribute | None = None
 
 

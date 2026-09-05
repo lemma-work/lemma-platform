@@ -100,15 +100,23 @@ async def deliver_voice_note(*, conversation_id: UUID, file_path: str) -> bool:
     )
 
 
-def build_progress_observer(*, uow_factory: UnitOfWorkFactory, service_factory):
-    """An observer that streams a run's progress to the surface watching it."""
+def build_progress_observer(*, uow_factory: UnitOfWorkFactory):
+    """An observer that streams a run's progress to the surface watching it.
+
+    Builds its own ingress service rather than taking one. The caller is
+    `agent`, which has no business knowing how a surfaces service is wired --
+    and the wiring it used to pass lived on `AppWorkerContext`, so `app/core`
+    had to know too. Both copies had already drifted from
+    `api/dependencies.get_surface_event_handler`, which is the one this uses.
+    """
+    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
     from app.modules.agent_surfaces.services.progress_observer import (
         SurfaceAgentRunProgressObserver,
     )
 
     return SurfaceAgentRunProgressObserver(
         uow_factory=uow_factory,
-        service_factory=service_factory,
+        service_factory=get_surface_event_handler,
     )
 
 

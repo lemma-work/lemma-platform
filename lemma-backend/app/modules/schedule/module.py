@@ -1,7 +1,8 @@
 """Schedule module registration."""
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from app.core.registry import LemmaModule
 from app.core.log.log import get_logger
@@ -76,12 +77,54 @@ def _register_streaq() -> None:
     import app.modules.schedule.events.tasks  # noqa: F401
 
 
+@asynccontextmanager
+async def _schedule_poller(context):
+    """Fire due schedules and timers, for as long as the worker runs.
+
+    Runs on every worker replica: the poll claims with `FOR UPDATE SKIP LOCKED`,
+    so replicas share the work rather than duplicating it, and there is no
+    leader to lose.
+
+    The timers belong to other modules and arrive through their contracts. This
+    used to be composed in `app/core`, whose comment said that was "where
+    crossing module boundaries is the job" -- true while core was the
+    composition root, which was deleted in #613.
+    """
+    from app.core.config import settings
+    from app.core.request_context import create_background_task
+    from app.modules.agent.contracts.timers import claim_due_snooze_waits
+    from app.modules.schedule.services.schedule_poller import run_schedule_poller
+    from app.modules.workflow.contracts.timers import claim_due_workflow_waits
+
+    task = create_background_task(
+        run_schedule_poller(
+            context.uow_factory,
+            timer_claimers=(claim_due_workflow_waits, claim_due_snooze_waits),
+            interval_seconds=settings.schedule_poll_interval_seconds,
+        ),
+        name="schedule-poller",
+    )
+    try:
+        yield
+    finally:
+        task.cancel()
+        # `CancelledError` is the only way out. The core worker also catches
+        # `Exception` here and logs it, because it tears down a dozen unrelated
+        # tasks and one of them dying its own way out must not stop the rest.
+        # This tears down exactly one, whose loop already treats every
+        # non-cancel exception as a degraded tick and keeps going -- so an
+        # `except Exception` branch here would be unreachable, and a broad catch
+        # that can never fire is worse than none.
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 module = LemmaModule(
     name="schedule",
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
-    worker_lifespans=(_reconcile_failure_breakers,),
+    worker_lifespans=(_reconcile_failure_breakers, _schedule_poller),
     stream_groups=(
         ("schedule_events", "schedule-notifications"),
         ("schedule_events", "schedule-runtime-lifecycle"),
