@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 
+from app.modules.function.config import function_settings
 from app.modules.test_support.e2e.function_helpers import (
     connector_function_code,
     create_function,
@@ -404,7 +405,6 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     test_pod,
     monkeypatch,
 ):
-    from app.core.config import settings as backend_settings
 
     pod_id = test_pod["id"]
     suffix = uuid4().hex[:8]
@@ -451,7 +451,11 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
 
     # Function creation performs schema extraction and prewarms the revision
     # worker. Restrict only the execution whose timeout behavior this test owns.
-    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
+    # `function_settings`, not `backend_settings`: this deadline moved to
+    # `FunctionSettings`, and patching it on core's object would create an
+    # attribute nothing reads while the real deadline stayed at its default --
+    # the run would not time out and the test would fail for the wrong reason.
+    monkeypatch.setattr(function_settings, "function_api_deadline_seconds", 2)
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},

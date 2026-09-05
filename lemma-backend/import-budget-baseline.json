@@ -1,13 +1,13 @@
 {
-  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py. Last raised for the GitHub App work: 8 first-party modules and zero third-party ones -- the App auth and installation services, the credential presenters, the shared webhook signature module, and the source-plugin port. Measured main at 4630/6407 against this 4585/6372 baseline before that, i.e. #598 had already spent 45 of the 50-module tolerance without raising it, so the number here had stopped describing anything.",
+  "_comment": "Modules loaded by each entrypoint before it can serve. This file may shrink freely; growing it past the tolerance means a new dependency tree arrived. See scripts/check_import_budget.py. Last raised for the GitHub App work: 8 first-party modules and zero third-party ones -- the App auth and installation services, the credential presenters, the shared webhook signature module, and the source-plugin port. Measured main at 4630/6407 against a 4585/6372 baseline before that, i.e. #598 had already spent 45 of the 50-module tolerance without raising it, so the number here had stopped describing anything. Raised again when the thirteen function_* settings moved to app/modules/function/config.py: that adds exactly one module (app.modules.function.config) to each entrypoint, and it cannot be lazy -- api/dependencies.py builds module-level caches from those fields. The raise is mostly not that one module. Measured main at 4660/6463 against the 4636/6413 baseline, so app.events had again drifted to exactly 50 of its 50-module tolerance and the next import of any size was going to fail whoever added it.",
   "tolerance": 50,
   "entrypoints": {
     "app.app": {
-      "modules": 4636,
+      "modules": 4661,
       "rss_mib": null
     },
     "app.events": {
-      "modules": 6413,
+      "modules": 6464,
       "rss_mib": null
     }
   }
