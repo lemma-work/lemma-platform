@@ -10,6 +10,8 @@ from uuid import UUID
 
 from faststream.redis import RedisRouter
 
+from app.modules.function.config import function_settings
+
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -176,15 +178,13 @@ async def prune_function_runs() -> None:
 
 
 async def _prune_function_runs() -> None:
-    from app.core.config import settings
-
-    budget = settings.function_run_retention_budget_seconds
+    budget = function_settings.function_run_retention_budget_seconds
     if budget <= 0:
         return
 
-    batch_size = settings.function_run_retention_batch_size
+    batch_size = function_settings.function_run_retention_batch_size
     cutoff = datetime.now(timezone.utc) - timedelta(
-        days=settings.function_run_retention_days
+        days=function_settings.function_run_retention_days
     )
     uow_factory = provide_uow_factory()
     started = time.monotonic()

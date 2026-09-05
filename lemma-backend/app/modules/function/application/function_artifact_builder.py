@@ -11,7 +11,7 @@ import tempfile
 from uuid import UUID
 import zipfile
 
-from app.core.config import settings
+from app.modules.function.config import function_settings
 from app.modules.function.domain.entities import (
     FunctionArtifact,
     FunctionArtifactManifest,
@@ -83,11 +83,12 @@ class FunctionArtifactBuilder:
 
     def __init__(self, storage_factory: FunctionStorageFactoryPort) -> None:
         self._storage_factory = storage_factory
-        self._uv = settings.function_builder_executable
+        self._uv = function_settings.function_builder_executable
         self._python_platform = (
-            settings.function_builder_python_platform or FUNCTION_PYTHON_PLATFORM
+            function_settings.function_builder_python_platform
+            or FUNCTION_PYTHON_PLATFORM
         )
-        self._builder_digest = settings.function_builder_digest
+        self._builder_digest = function_settings.function_builder_digest
 
     async def build(
         self,

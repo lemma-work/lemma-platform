@@ -13,6 +13,7 @@ import httpx
 from opentelemetry import trace
 
 
+from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -535,7 +536,7 @@ class FunctionDispatcher:
 
     @staticmethod
     def _runtime_gateway_url() -> str:
-        configured = settings.function_runtime_gateway_url or settings.api_url
+        configured = function_settings.function_runtime_gateway_url or settings.api_url
         return configured.rstrip("/")
 
     @staticmethod

@@ -20,6 +20,7 @@ import pytest_asyncio
 import httpx
 import uvicorn
 
+from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.modules.workspace.providers.e2b_common import (
     DEFAULT_METADATA_NAMESPACE,
@@ -604,7 +605,7 @@ async def configure_workspace_api_url(
 
     original_callback_url = settings.workspace_callback_api_url
     original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
-    original_function_gateway_url = settings.function_runtime_gateway_url
+    original_function_gateway_url = function_settings.function_runtime_gateway_url
     original_function_gateway_url_env = os.environ.get("FUNCTION_RUNTIME_GATEWAY_URL")
 
     # A sandbox running in someone else's cloud cannot reach a laptop, so the
@@ -636,7 +637,7 @@ async def configure_workspace_api_url(
             else backend_server["docker_base_url"]
         )
         settings.workspace_callback_api_url = workspace_callback_url
-        settings.function_runtime_gateway_url = workspace_callback_url
+        function_settings.function_runtime_gateway_url = workspace_callback_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = workspace_callback_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = workspace_callback_url
         try:
@@ -648,7 +649,9 @@ async def configure_workspace_api_url(
         finally:
             await close_workspace_tool_runtimes()
             settings.workspace_callback_api_url = original_callback_url
-            settings.function_runtime_gateway_url = original_function_gateway_url
+            function_settings.function_runtime_gateway_url = (
+                original_function_gateway_url
+            )
             if original_callback_url_env is None:
                 os.environ.pop("WORKSPACE_CALLBACK_API_URL", None)
             else:

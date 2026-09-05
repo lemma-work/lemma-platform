@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from app.modules.function.config import function_settings
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import (
     Context,
@@ -17,7 +18,6 @@ from app.core.authorization.context import (
 )
 from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
-from app.core.config import settings
 from app.modules.icon.contracts import IconCleanupPort
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -519,9 +519,9 @@ class FunctionService:
             deadline_at=datetime.now(timezone.utc)
             + timedelta(
                 seconds=(
-                    settings.function_job_deadline_seconds
+                    function_settings.function_job_deadline_seconds
                     if function.type == FunctionType.JOB
-                    else settings.function_api_deadline_seconds
+                    else function_settings.function_api_deadline_seconds
                 )
             ),
         )

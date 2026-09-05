@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.modules.function.config import function_settings
 from app.modules.workspace.config import workspace_settings
 
 import os
@@ -581,7 +582,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
         f"http://host.docker.internal:{callback_port}",
     )
     settings.workspace_callback_api_url = callback_url
-    settings.function_runtime_gateway_url = callback_url
+    function_settings.function_runtime_gateway_url = callback_url
     os.environ["WORKSPACE_E2E_BACKEND_PORT"] = str(callback_port)
     os.environ["WORKSPACE_CALLBACK_API_URL"] = callback_url
     os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = callback_url
@@ -815,20 +816,20 @@ async def sandbox_reachable_backend(e2e_settings):
         for key in ("WORKSPACE_CALLBACK_API_URL", "FUNCTION_RUNTIME_GATEWAY_URL")
     }
     original_callback = settings.workspace_callback_api_url
-    original_gateway = settings.function_runtime_gateway_url
+    original_gateway = function_settings.function_runtime_gateway_url
 
     async with _temporary_workspace_tunnel(
         f"http://127.0.0.1:{port}", wait_for_backend=False
     ) as public_url:
         settings.workspace_callback_api_url = public_url
-        settings.function_runtime_gateway_url = public_url
+        function_settings.function_runtime_gateway_url = public_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = public_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = public_url
         try:
             yield public_url
         finally:
             settings.workspace_callback_api_url = original_callback
-            settings.function_runtime_gateway_url = original_gateway
+            function_settings.function_runtime_gateway_url = original_gateway
             for key, value in previous.items():
                 if value is None:
                     os.environ.pop(key, None)
