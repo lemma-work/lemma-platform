@@ -205,6 +205,18 @@ class ManagedProcess:
         except ProcessLookupError:
             self._residual_process_group = False
             return
+        except PermissionError:
+            # `EPERM`, and what it means depends on whether the direct child is
+            # still ours. Once it is reaped its pid is free, and a pid recycled
+            # into a process we do not own answers `killpg` with "operation not
+            # permitted" rather than "no such process" -- our group is gone and
+            # this is done. While the direct child is still running the pid is
+            # ours, so `EPERM` is not an answer we can act on, and reporting
+            # success would leave a live process behind believed dead.
+            if direct_process_running:
+                raise
+            self._residual_process_group = False
+            return
         try:
             if direct_process_running:
                 await asyncio.wait_for(
@@ -217,6 +229,13 @@ class ManagedProcess:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # Same split as the `SIGTERM` above: a recycled pid is nothing
+                # of ours to kill, but a live direct child that refuses our
+                # signal is a fact worth surfacing rather than swallowing on the
+                # way out of a `SIGKILL` that did not land.
+                if direct_process_running:
+                    raise
             if direct_process_running:
                 await self._wait_for_direct_exit()
         finally:
@@ -271,7 +290,13 @@ class ManagedProcess:
         while asyncio.get_running_loop().time() < deadline:
             try:
                 os.killpg(self.process.pid, 0)
-            except ProcessLookupError:
+            except ProcessLookupError, PermissionError:
+                # This probe only ever runs for a *residual* group -- the direct
+                # child is already reaped by the time `terminate` reaches it. So
+                # the pid is free, and `EPERM` says as clearly as `ESRCH` does
+                # that the group we were waiting on is not there any more.
+                # Polling it until the grace ran out only produced a
+                # `TimeoutError` into a `SIGKILL` that could not land either.
                 return
             await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
         raise TimeoutError

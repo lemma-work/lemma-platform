@@ -2527,6 +2527,15 @@
             "type": "array"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "current_release_id": {
@@ -2668,6 +2677,121 @@
           "message"
         ],
         "title": "AppMessageResponse",
+        "type": "object"
+      },
+      "AppReleaseListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppReleaseResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AppReleaseListResponse",
+        "type": "object"
+      },
+      "AppReleaseResponse": {
+        "description": "One entry in an app's release history.",
+        "properties": {
+          "app_id": {
+            "format": "uuid",
+            "title": "App Id",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "has_source": {
+            "description": "Whether this release's own source archive is still stored.",
+            "title": "Has Source",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_live": {
+            "description": "True for the release this app currently serves.",
+            "title": "Is Live",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "preview_url": {
+            "readOnly": true,
+            "title": "Preview Url",
+            "type": "string"
+          },
+          "pruned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when retention removed this release's build. The entry stays in the history, but it can no longer be previewed or promoted.",
+            "title": "Pruned At"
+          },
+          "release_number": {
+            "title": "Release Number",
+            "type": "integer"
+          },
+          "version": {
+            "description": "sha256 digest of the release's dist archive.",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "app_id",
+          "release_number",
+          "version",
+          "created_at",
+          "is_live",
+          "has_source",
+          "preview_url"
+        ],
+        "title": "AppReleaseResponse",
         "type": "object"
       },
       "AppStatus": {
@@ -4459,6 +4583,7 @@
             "title": "Input Schema"
           },
           "instruction": {
+            "maxLength": 60000,
             "minLength": 1,
             "title": "Instruction",
             "type": "string"
@@ -5918,6 +6043,18 @@
         "properties": {
           "input_data": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Run a specific revision instead of the live one -- a revision number ('r12') or a hash prefix. Requires function.update: running a superseded build is an authoring action, not an execution one.",
+            "title": "Revision"
           }
         },
         "title": "ExecuteFunctionRequest",
@@ -7553,6 +7690,167 @@
           "resource_name"
         ],
         "title": "FunctionResourcePermissionResponse",
+        "type": "object"
+      },
+      "FunctionRevisionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FunctionRevisionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "FunctionRevisionListResponse",
+        "type": "object"
+      },
+      "FunctionRevisionPromoteResponse": {
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/FunctionRevisionResponse"
+          },
+          "schema_changed": {
+            "description": "True when this revision's input/output/config schemas differ from the ones that were live. The schemas move with the revision, so agents and workflows bound to the old contract may need updating.",
+            "title": "Schema Changed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revision",
+          "schema_changed"
+        ],
+        "title": "FunctionRevisionPromoteResponse",
+        "type": "object"
+      },
+      "FunctionRevisionResponse": {
+        "description": "One entry in a function's revision history.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "config_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "function_id": {
+            "format": "uuid",
+            "title": "Function Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_live": {
+            "description": "True for the revision this function runs.",
+            "title": "Is Live",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pruned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when retention removed this revision's artifact. The entry stays in the history, but it can no longer be run or promoted.",
+            "title": "Pruned At"
+          },
+          "revision_hash": {
+            "title": "Revision Hash",
+            "type": "string"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "function_id",
+          "revision_number",
+          "revision_hash",
+          "created_at",
+          "is_live"
+        ],
+        "title": "FunctionRevisionResponse",
         "type": "object"
       },
       "FunctionRunListResponse": {
@@ -14453,6 +14751,7 @@
           "instruction": {
             "anyOf": [
               {
+                "maxLength": 60000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -23080,6 +23379,137 @@
         }
       }
     },
+    "/pods/{pod_id}/apps/{app_name}/releases": {
+      "get": {
+        "operationId": "app.release.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "app_name",
+            "required": true,
+            "schema": {
+              "title": "App Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppReleaseListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List App Releases",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "app.release",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote": {
+      "post": {
+        "description": "Make an existing release the one this app serves. The release keeps its bytes; only the app's current-release pointer moves.",
+        "operationId": "app.release.promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "app_name",
+            "required": true,
+            "schema": {
+              "title": "App Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_ref",
+            "required": true,
+            "schema": {
+              "title": "Release Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote App Release",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "app.release"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "app.release",
+          "result": "entity",
+          "verb": "promote"
+        }
+      }
+    },
     "/pods/{pod_id}/apps/{app_name}/source/archive": {
       "get": {
         "operationId": "app.source.archive.get",
@@ -27790,6 +28220,207 @@
           "resource": "function.permissions",
           "result": "entity",
           "verb": "replace"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions": {
+      "get": {
+        "description": "List the built revisions of a function, newest first.",
+        "operationId": "function.revision.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Function Revisions",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}": {
+      "get": {
+        "description": "Read one revision, including its source and the schemas its code implements. A revision may be addressed by number ('r12') or hash.",
+        "operationId": "function.revision.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_ref",
+            "required": true,
+            "schema": {
+              "title": "Revision Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Function Revision",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote": {
+      "post": {
+        "description": "Make an existing revision the live one. Its input/output/config schemas are restored with it, since they are the contract its code implements.",
+        "operationId": "function.revision.promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_ref",
+            "required": true,
+            "schema": {
+              "title": "Revision Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionPromoteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote Function Revision",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "function.revision"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "entity",
+          "verb": "promote"
         }
       }
     },

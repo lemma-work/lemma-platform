@@ -22,6 +22,10 @@ it happens.
 
 - When a person creates an agent with instructions, the system shall make it
   available in that pod.
+- Authored agent instructions shall contain at most 60,000 Unicode characters.
+  Creation and instruction edits above that limit shall be rejected without
+  truncating text or replacing the saved instruction. This is a text-size limit,
+  not an exact token budget for the assembled runtime prompt.
 - When an agent is created, the system shall record `agent.created`.
 - The system shall let a person choose which sets of tools an agent may use, and
   shall give it no tools beyond those.

@@ -424,6 +424,7 @@ async def execute_function(
         user_id=user_id,
         user_email=user_email,
         request=request,
+        revision_ref=data.revision,
     )
     return FunctionRunResponse.model_validate(run)
 

@@ -307,6 +307,57 @@ FUNCTION_JOB_DEADLINE_SECONDS=600
 FUNCTION_RUNTIME_ENDPOINT_REUSE_SECONDS=60
 ```
 
+## Build retention
+
+Every app deploy stores a whole dist, and every function code save stores a whole
+artifact. Nothing removed either until this existed, so storage grew with every
+deploy for the life of the install. **Retention is on by default and deletes on
+the first run after upgrade** — an app with more than `APP_RELEASE_MAX_KEEP`
+releases will lose the oldest ones. Set the `*_ENABLED` flags to `false` before
+upgrading if you want to look first.
+
+Three knobs, because two are not enough. `KEEP_LAST` is a floor: the N newest
+survive at any age, so an app nobody has deployed in a year can still be rolled
+back the day a bad deploy lands. `KEEP_DAYS` keeps work that is still being
+iterated on. `MAX_KEEP` is the ceiling, and it is what makes the whole thing
+bounded — "keep anything recent" has no upper limit of its own, so fifty deploys
+in one afternoon would mean fifty retained builds for the next thirty days.
+
+The live release and the live revision are exempt at any age or rank, as is any
+revision a PENDING or RUNNING run is pinned to. A pruned entry keeps its row and
+shows as "build removed" rather than vanishing, so the history has no
+unexplained gaps — but its source and build are removed, so it can no longer be
+inspected, previewed, promoted or run. Failed storage deletions remain pending
+until cleanup succeeds, even after the retained count reaches its floor.
+
+```dotenv
+APP_RELEASE_RETENTION_ENABLED=true
+APP_RELEASE_KEEP_LAST=10      # floor: never prune the newest N, whatever their age
+APP_RELEASE_KEEP_DAYS=30      # keep anything younger than this, up to the ceiling
+APP_RELEASE_MAX_KEEP=20       # ceiling: must be >= KEEP_LAST or startup refuses
+APP_RELEASE_RETENTION_CRON="20 4 * * *"
+# Apps per round trip. The sweep pages until the candidate set is drained, so
+# this bounds one query rather than deciding which apps ever get swept.
+APP_RELEASE_RETENTION_BATCH=200
+# Wall-clock budget for one sweep. ZERO MEANS UNLIMITED here, unlike
+# FUNCTION_RUN_RETENTION_BUDGET_SECONDS where zero disables the sweep.
+APP_RELEASE_RETENTION_BUDGET_SECONDS=60
+
+FUNCTION_REVISION_RETENTION_ENABLED=true
+FUNCTION_REVISION_KEEP_LAST=10
+FUNCTION_REVISION_KEEP_DAYS=30
+FUNCTION_REVISION_MAX_KEEP=20
+FUNCTION_REVISION_RETENTION_CRON="40 4 * * *"
+FUNCTION_REVISION_RETENTION_BATCH=200
+FUNCTION_REVISION_RETENTION_BUDGET_SECONDS=60
+```
+
+Pruning also runs inline after a deploy or a code save, which is when storage
+actually grows; the crons are the backstop for a resource that has *stopped*
+being deployed. Watch `apps.tasks.sweep_app_releases.observed`: `examined` high
+while `pruned_apps` stays flat means the sweep is finding candidates it never
+prunes, which is worth investigating.
+
 ## URLs, CORS and cookies
 
 `API_URL` and `FRONTEND_URL` are what a browser uses, so they must be the public

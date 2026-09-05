@@ -63,6 +63,30 @@ class FunctionRunNotFoundError(FunctionDomainError):
         )
 
 
+class FunctionRevisionNotFoundError(FunctionDomainError):
+    def __init__(self, message: str = "Function revision not found"):
+        super().__init__(
+            message=message,
+            code="FUNCTION_REVISION_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class FunctionRevisionPrunedError(FunctionDomainError):
+    """A revision whose artifact retention has deleted.
+
+    Distinct from "not found": the revision existed and the history still lists
+    it, so saying so beats a 404 that reads like a mistyped version.
+    """
+
+    def __init__(self, message: str = "This revision's build has been removed"):
+        super().__init__(
+            message=message,
+            code="FUNCTION_REVISION_PRUNED",
+            status_code=410,
+        )
+
+
 class FunctionRunQueueUnavailable(FunctionDomainError):
     """The durable function-run queue could not confirm publication."""
 

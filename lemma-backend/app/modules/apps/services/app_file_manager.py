@@ -91,6 +91,16 @@ class AppFileManager:
             return
 
     async def delete_prefix(self, prefix: str) -> None:
+        """Delete everything under ``prefix``.
+
+        Listing is async: the sync ListStream blocks the event loop on every page
+        fetch against a cloud store. That was tolerable while this only ran when
+        an app was deleted; retention now walks release prefixes routinely.
+
+        A concurrent sweep can delete the same key first, so a missing object on
+        the batch delete is not an error -- unlike ``delete_file``, the batch
+        call does not swallow that itself.
+        """
         normalized_prefix = prefix.rstrip("/")
 
         # Scoped to this app. Without the app's own prefix a bare `list()` on a
@@ -105,9 +115,19 @@ class AppFileManager:
         # blocking round trip to object storage on the event loop — once per
         # page, for as many pages as the release has files.
         async for chunk in self.store.list(prefix=list_prefix):
-            paths = [item["path"] for item in chunk]
-            if paths:
+            paths = [
+                item["path"]
+                for item in chunk
+                if isinstance(item, dict) and item.get("path")
+            ]
+            if not paths:
+                continue
+            # A concurrent sweep can delete the same key first, and unlike
+            # `delete_file` the batch call does not swallow that itself.
+            try:
                 await self.store.delete_async(paths)
+            except ObstoreNotFoundError:
+                continue
         if self._local_base:
             target_dir = (
                 self._local_base

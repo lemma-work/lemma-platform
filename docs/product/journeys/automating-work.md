@@ -61,8 +61,14 @@ always reaches a conclusion a person can see.
 ### PS-FUNC-004 — A person can change a function without breaking what is running
 **Status:** covered
 
-- When a person updates a function's code, the system shall keep every earlier
-  version, so a run can be traced to the exact code that produced it.
+- When a person updates a function's code, the system shall retain a bounded
+  history of executable revisions and their source under the configured retention
+  policy. A run shall retain its exact code digest after that source expires.
+- The live revision and revisions needed by pending or running executions shall
+  not be removed. Removed revisions shall remain identifiable in history and
+  shall not be offered for execution or promotion.
+- An editor shall be able to inspect and run a retained revision with that
+  revision's input contract, and promote it with its schemas restored.
 - While a run is in flight, the system shall keep it on the version it started
   with.
 - When a person deletes a function, the system shall stop it being runnable and

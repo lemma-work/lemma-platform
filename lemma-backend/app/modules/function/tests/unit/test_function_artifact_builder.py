@@ -59,8 +59,9 @@ async def test_builder_writes_deterministic_typed_artifact_before_ready() -> Non
     )
 
     assert first.revision_hash == second.revision_hash
-    path = f"artifacts/{first.revision_hash.removeprefix('sha256:')}.zip"
-    artifact = storage.values[path]
+    assert first.artifact_path != second.artifact_path
+    assert storage.values[first.artifact_path] == storage.values[second.artifact_path]
+    artifact = storage.values[first.artifact_path]
     with zipfile.ZipFile(BytesIO(artifact)) as archive:
         assert set(archive.namelist()) == {"function.py", "manifest.json"}
         manifest = json.loads(archive.read("manifest.json"))

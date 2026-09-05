@@ -150,8 +150,12 @@ their credentials do not travel with it.
   record `app.created`.
 - When a person uploads a build, the system shall keep it as an immutable
   release and shall serve it as the app's current version.
-- The system shall keep earlier releases, so a person can tell what was serving
-  at a given time.
+- The system shall retain a bounded number of earlier builds and their source
+  under the configured retention policy, preserving the live release. History
+  shall identify removed builds without offering them for preview or promotion.
+- An editor shall be able to preview a retained release without changing the live
+  app, and promote it with its own source. If its original source is unknown,
+  an export shall not substitute source from another release.
 - When a person promotes something an agent produced into an app, the system
   shall carry it across without them rebuilding it.
 

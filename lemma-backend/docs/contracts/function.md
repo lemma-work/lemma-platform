@@ -16,6 +16,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `function.list` | GET | `/pods/{pod_id}/functions` | List Functions |
 | `function.permissions.get` | GET | `/pods/{pod_id}/functions/{function_name}/permissions` | Get Function Resource Permissions |
 | `function.permissions.replace` | PUT | `/pods/{pod_id}/functions/{function_name}/permissions` | Replace Function Resource Permissions |
+| `function.revision.get` | GET | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}` | Get Function Revision |
+| `function.revision.list` | GET | `/pods/{pod_id}/functions/{function_name}/revisions` | List Function Revisions |
+| `function.revision.promote` | POST | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote` | Promote Function Revision |
 | `function.run` | POST | `/pods/{pod_id}/functions/{function_name}/runs` | Execute Function |
 | `function.run.get` | GET | `/pods/{pod_id}/functions/{function_name}/runs/{run_id}` | Get Run |
 | `function.run.list` | GET | `/pods/{pod_id}/functions/{function_name}/runs` | List Runs |

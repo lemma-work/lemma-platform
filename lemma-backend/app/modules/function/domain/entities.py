@@ -1,5 +1,6 @@
 """Function domain entities."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import ClassVar, Literal
@@ -47,6 +48,26 @@ class FunctionDispatchMode(str, Enum):
 
 class FunctionArtifact(BaseModel):
     revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    generation: UUID | None = None
+
+    @property
+    def artifact_path(self) -> str:
+        digest = self.revision_hash.removeprefix("sha256:")
+        return (
+            f"artifact-uploads/{self.generation}/{digest}.zip"
+            if self.generation
+            else f"artifacts/{digest}.zip"
+        )
+
+    @property
+    def code_path(self) -> str:
+        digest = self.revision_hash.removeprefix("sha256:")
+        root = f"revisions/{digest}"
+        return (
+            f"revision-uploads/{self.generation}/function.py"
+            if self.generation
+            else f"{root}/function.py"
+        )
 
     model_config = {"frozen": True}
 
@@ -154,6 +175,40 @@ class FunctionEntity(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FunctionRevisionEntity(BaseModel):
+    """One built revision of a function, with the contract its code implements."""
+
+    id: UUID | None = None
+    function_id: UUID
+    revision_number: int
+    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    code_path: str
+    input_schema: JsonObject = Field(default_factory=dict)
+    output_schema: JsonObject = Field(default_factory=dict)
+    config_schema: JsonObject | None = None
+    created_by: UUID | None = None
+    label: str | None = None
+    pruned_at: datetime | None = None
+    purged_at: datetime | None = None
+    generation: UUID | None = None
+    created_at: datetime | None = None
+    # Populated only when a caller asked for the code; reading it is a storage
+    # round trip, so listing revisions never pays for it.
+    code: str | None = None
+
+    model_config = {"from_attributes": True}
+
+    @property
+    def is_pruned(self) -> bool:
+        return self.pruned_at is not None
+
+    @property
+    def artifact_path(self) -> str:
+        return FunctionArtifact(
+            revision_hash=self.revision_hash, generation=self.generation
+        ).artifact_path
+
+
 class FunctionUpdateEntity(BaseModel):
     """Entity for updating function fields."""
 
@@ -205,3 +260,12 @@ class FunctionRunEntity(BaseModel):
         events = self._domain_events.copy()
         self._domain_events.clear()
         return events
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedExecution:
+    """A resolved + authorized function and its freshly-created PENDING run,
+    handed from the DB resolve phase to the sandbox execution phase."""
+
+    function: FunctionEntity
+    run: FunctionRunEntity

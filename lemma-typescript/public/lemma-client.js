@@ -11846,6 +11846,49 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List App Releases
+     * @param podId
+     * @param appName
+     * @returns AppReleaseListResponse Successful Response
+     * @throws ApiError
+     */
+    static appReleaseList(podId, appName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/apps/{app_name}/releases",
+        path: {
+          "pod_id": podId,
+          "app_name": appName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Promote App Release
+     * Make an existing release the one this app serves. The release keeps its bytes; only the app's current-release pointer moves.
+     * @param podId
+     * @param appName
+     * @param releaseRef
+     * @returns AppDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static appReleasePromote(podId, appName, releaseRef) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote",
+        path: {
+          "pod_id": podId,
+          "app_name": appName,
+          "release_ref": releaseRef
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Download App Source Archive
      * @param podId
      * @param appName
@@ -11909,6 +11952,18 @@ var LemmaClient = (() => {
       return this.http.request("POST", `/pods/${this.podId()}/apps/from-widget`, {
         body: payload
       });
+    }
+    /** This app's release history, newest first. */
+    releases(name) {
+      return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+    }
+    /**
+     * Make an existing release the one this app serves. `releaseRef` is the
+     * release number ("7" or "v7") or a prefix of its dist digest. No bytes move
+     * -- the app's current-release pointer does.
+     */
+    promoteRelease(name, releaseRef) {
+      return this.client.request(() => AppsService.appReleasePromote(this.podId(), name, releaseRef));
     }
   };
 
@@ -12651,6 +12706,73 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Function Revisions
+     * List the built revisions of a function, newest first.
+     * @param podId
+     * @param functionName
+     * @returns FunctionRevisionListResponse Successful Response
+     * @throws ApiError
+     */
+    static functionRevisionList(podId, functionName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/functions/{function_name}/revisions",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Function Revision
+     * Read one revision, including its source and the schemas its code implements. A revision may be addressed by number ('r12') or hash.
+     * @param podId
+     * @param functionName
+     * @param revisionRef
+     * @returns FunctionRevisionResponse Successful Response
+     * @throws ApiError
+     */
+    static functionRevisionGet(podId, functionName, revisionRef) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName,
+          "revision_ref": revisionRef
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Promote Function Revision
+     * Make an existing revision the live one. Its input/output/config schemas are restored with it, since they are the contract its code implements.
+     * @param podId
+     * @param functionName
+     * @param revisionRef
+     * @returns FunctionRevisionPromoteResponse Successful Response
+     * @throws ApiError
+     */
+    static functionRevisionPromote(podId, functionName, revisionRef) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName,
+          "revision_ref": revisionRef
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Runs
      * List runs for a function
      * @param podId
@@ -12735,10 +12857,26 @@ var LemmaClient = (() => {
         get: (name) => this.client.request(() => FunctionsService.functionPermissionsGet(this.podId(), name)),
         replace: (name, payload) => this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload))
       });
+      __publicField(this, "revisions", {
+        /** This function's built revisions, newest first. */
+        list: (name) => this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+        /** One revision, with its source and the schemas its code implements. */
+        get: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
+        /**
+         * Make an existing revision live. Its schemas are restored with it, since
+         * they are the contract its code implements; the response reports whether
+         * that contract differs from the one that was live.
+         */
+        promote: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionPromote(this.podId(), name, revisionRef))
+      });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
           const payload = {
-            input_data: options.input
+            input_data: options.input,
+            // Runs a specific built revision instead of the live one. Requires
+            // function.update -- running a superseded build is an authoring
+            // action, not an execution one.
+            revision: options.revision
           };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),

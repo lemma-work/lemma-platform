@@ -1,3 +1,4 @@
+from starlette.datastructures import Headers
 import pytest
 
 from app.core.config import settings
@@ -33,15 +34,17 @@ def _base_domain(monkeypatch):
     ],
 )
 def test_app_slug_from_host(host, expected):
-    assert app_slug_from_host(host) == expected
+    assert app_slug_from_host(host) == (expected, None)
 
 
 def test_no_base_domain_disables_routing(monkeypatch):
     monkeypatch.setattr(settings, "app_base_domain", "")
-    assert app_slug_from_host("my-app.apps.lemma.localhost:8711") is None
+    assert app_slug_from_host("my-app.apps.lemma.localhost:8711") == (None, None)
 
 
-async def _drive(path, *, host=b"my-app.apps.lemma.localhost:8711", proxied=False):
+async def _drive(
+    path, *, host=b"my-app.apps.lemma.localhost:8711", proxied=False, extra_headers=None
+):
     """Run the middleware for a request and return the downstream scope.
 
     ``proxied=True`` reproduces the cloud path, where the nginx ingress has
@@ -53,7 +56,7 @@ async def _drive(path, *, host=b"my-app.apps.lemma.localhost:8711", proxied=Fals
         seen["scope"] = scope
 
     middleware = AppHostRoutingMiddleware(downstream)
-    headers = [(b"host", host)]
+    headers = [(b"host", host), *(extra_headers or [])]
     if proxied:
         headers.append((b"x-app-public-slug", b"my-app"))
     scope = {
@@ -206,3 +209,100 @@ def test_the_served_config_points_at_a_prefix_the_middleware_strips():
     # again -- the exact shape that made every pod app load signed out.
     assert not api_url.startswith("http")
     assert api_url.startswith("/")
+
+
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        # A preview host carries the release in the same label.
+        ("my-app--r7.apps.lemma.localhost:8711", ("my-app", "r7")),
+        ("my-app--r7.apps.lemma.localhost", ("my-app", "r7")),
+        # A slug's own hyphens survive: the split is on the LAST `--`, and
+        # normalize_public_slug collapses runs of `-` so a stored slug can never
+        # contain one itself.
+        ("a-long-app-name--r12.apps.lemma.localhost", ("a-long-app-name", "r12")),
+        # Addressing a release by digest prefix works the same way.
+        ("my-app--9f8e7d.apps.lemma.localhost", ("my-app", "9f8e7d")),
+        # Half a label names no app or no release -- refuse rather than guess.
+        ("--r7.apps.lemma.localhost", (None, None)),
+        ("my-app--.apps.lemma.localhost", (None, None)),
+    ],
+)
+def test_preview_host_carries_the_release(host, expected):
+    assert app_slug_from_host(host) == expected
+
+
+@pytest.mark.asyncio
+async def test_preview_host_pins_the_release_on_every_asset():
+    # The release rides the host, not the path, precisely so that a Vite build's
+    # absolute `/assets/...` request stays on the previewed release instead of
+    # falling back to whatever is live. It travels as part of the slug label --
+    # one mechanism, the same one the cloud ingress already forwards -- so there
+    # is no second header for a client to forge.
+    scope = await _drive("/assets/app.js", host=b"my-app--r7.apps.lemma.localhost:8711")
+    assert scope["path"] == "/public/apps/assets/app.js"
+    assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]
+    assert all(key != b"x-app-release" for key, _ in scope["headers"])
+
+
+@pytest.mark.parametrize(
+    "host,path",
+    [
+        (b"my-app.apps.lemma.localhost:8711", "/assets/app.js"),
+        (b"my-app--r7.apps.lemma.localhost:8711", "/assets/app.js"),
+        (b"my-app.apps.lemma.localhost:8711", "/public/sdk/lemma-client.js"),
+        (b"api.lemma.localhost:8711", "/public/apps/assets/app.js"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_client_supplied_release_header_never_survives(host, path):
+    """The security regression.
+
+    Nothing upstream sets this header -- neither nginx config does -- so one
+    arriving from a client was honoured verbatim, and anyone could serve any
+    superseded build from the canonical live host by adding a line to a request.
+    """
+    scope = await _drive(path, host=host, extra_headers=[(b"x-app-release", b"r1")])
+    assert all(key != b"x-app-release" for key, _ in scope["headers"])
+
+
+@pytest.mark.asyncio
+async def test_a_client_supplied_slug_cannot_beat_the_host():
+    """Starlette resolves a repeated header to the FIRST occurrence, so the
+    middleware has to replace rather than append."""
+    scope = await _drive(
+        "/assets/app.js",
+        host=b"my-app.apps.lemma.localhost:8711",
+        extra_headers=[(b"x-app-public-slug", b"other-app--r1")],
+    )
+    slugs = [value for key, value in scope["headers"] if key == b"x-app-public-slug"]
+    assert slugs == [b"my-app"]
+    assert Headers(raw=scope["headers"]).get("x-app-public-slug") == "my-app"
+
+
+@pytest.mark.asyncio
+async def test_a_proxied_request_is_not_rewritten_twice():
+    """In cloud the ingress resolves the label AND rewrites the path, forwarding
+    the original Host. Rewriting again would ask for
+    /public/apps/public/apps/assets/app.js and 404 every app in production."""
+    scope = await _drive(
+        "/public/apps/assets/app.js",
+        host=b"my-app--r7.apps.lemma.localhost:8711",
+        extra_headers=[(b"x-app-public-slug", b"my-app--r7")],
+    )
+    assert scope["path"] == "/public/apps/assets/app.js"
+    assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_app_host_keeps_the_proxy_supplied_slug():
+    """This branch IS the cloud ingress contract. Stripping the slug here would
+    take every app down to close a hole that only re-exposes bytes already
+    public at their own preview host."""
+    scope = await _drive(
+        "/public/apps/assets/app.js",
+        host=b"api.lemma.localhost:8711",
+        extra_headers=[(b"x-app-public-slug", b"my-app--r7")],
+    )
+    assert scope["path"] == "/public/apps/assets/app.js"
+    assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]

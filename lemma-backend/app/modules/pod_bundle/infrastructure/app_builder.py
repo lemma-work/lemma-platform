@@ -365,9 +365,9 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in a sandbox; a static source or a single ``html.html`` is deployed as-is;
-        a bundle carrying only a prebuilt ``dist.zip`` (widget/no-source app) is
-        uploaded with no source."""
+        in a sandbox; a static source is deployed as-is; a bundle carrying only a
+        prebuilt ``dist.zip`` (widget/no-source app) deploys that build as its own
+        source."""
         source_dir = resource_dir / "source"
         html_file = resource_dir / "html.html"
         dist_zip = resource_dir / "dist.zip"
@@ -375,15 +375,15 @@ class AppStepRunner:
         if source_dir.is_dir():
             source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
             tier = classify_source_dir(source_dir)
-            if tier == "vite":
-                dist_bytes = await self._sandbox.build(
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    app_slug=app_slug,
-                    source_zip=source_bytes,
-                )
-            else:  # static: the source *is* the served site.
-                dist_bytes = source_bytes
+            if tier != "vite":
+                # static: the source *is* the served site.
+                return source_bytes, source_bytes
+            dist_bytes = await self._sandbox.build(
+                user_id=user_id,
+                pod_id=pod_id,
+                app_slug=app_slug,
+                source_zip=source_bytes,
+            )
             return source_bytes, dist_bytes
 
         if html_file.is_file():
@@ -394,7 +394,11 @@ class AppStepRunner:
 
         if dist_zip.is_file():
             dist_bytes = await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
-            return None, dist_bytes
+            # No source/ directory: this bundle carries a prebuilt site with no
+            # build step behind it, so the build IS the source. Importing it with
+            # no source left the app source-less in the target pod, so the next
+            # export dropped its code again -- the same gap, one hop further on.
+            return dist_bytes, dist_bytes
 
         raise AppBuildFailedError(
             f"App '{name}' bundle has no source/ directory, html.html, or dist.zip."

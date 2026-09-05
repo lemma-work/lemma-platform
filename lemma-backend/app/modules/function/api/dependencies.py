@@ -1,5 +1,14 @@
 """Function module dependencies."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.modules.function.application.function_definition_compiler import (
+        FunctionDefinitionCompiler,
+    )
+
 from typing import Annotated
 from uuid import UUID
 
@@ -21,9 +30,6 @@ from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
     FunctionRunRepository,
-)
-from app.modules.function.application.function_definition_compiler import (
-    FunctionDefinitionCompiler,
 )
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.services.function_file_manager import FunctionFileManager
@@ -171,6 +177,10 @@ def build_function_definition_compiler(
     schema_executor: FunctionSchemaDispatcher,
 ) -> FunctionDefinitionCompiler:
     """Construct the DB-free function definition build collaborator."""
+    from app.modules.function.application.function_definition_compiler import (
+        FunctionDefinitionCompiler,
+    )
+
     return FunctionDefinitionCompiler(
         schema_executor=schema_executor,
         storage_factory=get_function_storage_factory(),

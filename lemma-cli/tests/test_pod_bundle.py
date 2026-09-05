@@ -401,7 +401,8 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
     assert list((tmp_path / "demo-pod" / "apps").iterdir()) == []
 
 
-def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
+def test_download_app_assets_exports_both_source_and_dist(tmp_path: Path):
+    """Preserve source and build without claiming cross-pod portability."""
     resource_dir = tmp_path / "apps" / "support_app"
     resource_dir.mkdir(parents=True)
 
@@ -410,10 +411,15 @@ def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
         archive.writestr("package.json", '{"name":"app"}\n')
         archive.writestr("src/main.ts", "console.log('app');\n")
 
+    dist_zip = BytesIO()
+    with ZipFile(dist_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<html></html>")
+        archive.writestr("assets/app.js", "console.log('built');")
+
     client = FakeClient(
         apps=SimpleNamespace(
             download_source_archive=lambda pod_id, app_name: source_zip.getvalue(),
-            download_dist_archive=lambda pod_id, app_name: b"pretend-dist",
+            download_dist_archive=lambda pod_id, app_name: dist_zip.getvalue(),
         )
     )
 
@@ -429,7 +435,40 @@ def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
 
     assert (resource_dir / "source" / "package.json").exists()
     assert (resource_dir / "source" / "src" / "main.ts").exists()
-    assert not (resource_dir / "dist.zip").exists()
+    assert (resource_dir / "dist.zip").exists()
+    assert not (resource_dir / "dist.json").exists()
+
+
+def test_download_app_assets_preserves_a_dist_only_app(tmp_path: Path):
+    """When source is unavailable, export retains the exact executable bytes."""
+    resource_dir = tmp_path / "apps" / "baked_app"
+    resource_dir.mkdir(parents=True)
+
+    dist_zip = BytesIO()
+    with ZipFile(dist_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<html></html>")
+        archive.writestr("assets/app.js", 'const POD="pod_123";')
+
+    client = FakeClient(
+        apps=SimpleNamespace(
+            download_source_archive=lambda pod_id, app_name: b"",
+            download_dist_archive=lambda pod_id, app_name: dist_zip.getvalue(),
+        )
+    )
+
+    from lemma_cli.cli_app.pod_bundle import _ByteBudget, _download_app_assets
+
+    _download_app_assets(
+        client,
+        "pod_123",
+        "baked_app",
+        resource_dir,
+        app_budget=_ByteBudget(per_item=10_000_000, total=20_000_000, warnings=[]),
+    )
+
+    assert (resource_dir / "dist.zip").read_bytes() == dist_zip.getvalue()
+    assert not (resource_dir / "source").exists()
+    assert not (resource_dir / "dist.json").exists()
 
 
 def test_export_pod_bundle_rejects_unknown_exclude_value(tmp_path: Path):

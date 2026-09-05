@@ -10,11 +10,15 @@ def _routers():
         router as function,
     )
 
+    from app.modules.function.api.controllers.function_revision_controller import (
+        router as function_revision,
+    )
+
     from app.modules.function.api.controllers.function_runtime_controller import (
         router as function_runtime,
     )
 
-    return [function, function_runtime]
+    return [function, function_revision, function_runtime]
 
 
 def _event_routers():

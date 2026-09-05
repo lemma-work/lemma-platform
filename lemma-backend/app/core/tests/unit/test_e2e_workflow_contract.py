@@ -303,6 +303,152 @@ def test_ci_publishes_one_authoritative_module_wise_coverage_comment() -> None:
     assert "github-script" not in e2e_workflow
 
 
+def test_a_shard_can_be_reproduced_locally_without_copying_its_markers() -> None:
+    """`make test-e2e-shard` must not carry its own copy of a marker filter.
+
+    Two of the seven shards run a different filter from the rest: `sandbox` and
+    `sandbox-2` keep `workspace` tests in, because function and workspace
+    execution against real Docker are what those shards exist to prove. The
+    target used to hard-code the *other* filter -- the one that excludes
+    `workspace` -- and ignore the `E2E_SHARD_MARKERS` variable it appeared to
+    accept.
+
+    Measured on the `sandbox` shard's own paths: CI selects 28 tests, the
+    hard-coded filter selected 6. So `make test-e2e-shard E2E_ARGS=<shard args>`
+    ran a fifth of the shard, went green, and the shard failed on the pull
+    request anyway. A local reproduction that quietly runs less than CI is worse
+    than none, because it is trusted.
+    """
+    makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
+    body = makefile.split("\ntest-e2e-shard:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert "$(E2E_SHARD_MARKERS)" in body, (
+        "test-e2e-shard must take its marker filter from E2E_SHARD_MARKERS so a "
+        "caller can pass a shard's own; a literal here cannot express the two "
+        "filters the shards actually use."
+    )
+    assert "not workspace" not in body, (
+        "a literal marker filter is back in test-e2e-shard: it would deselect "
+        "every Docker-sandbox test while claiming to reproduce a shard."
+    )
+
+
+def test_every_shard_name_resolves_for_the_local_runner() -> None:
+    """`make test-e2e-shard-ci SHARD=<name>` must work for every shard.
+
+    The runner reads `.github/e2e-shards.json`, so a regenerated layout that
+    renames or adds a shard stays reproducible without anyone editing a target.
+    """
+    runner = _REPO_ROOT / "scripts/run_e2e_shard.py"
+    assert runner.exists(), "the local shard runner is gone"
+
+    source = runner.read_text()
+    assert '.github" / "e2e-shards.json"' in source, (
+        "the runner must read the same shard file the workflow does"
+    )
+
+    names = {str(shard["name"]) for shard in _shards()}
+    assert names, "no shards defined"
+    # Every shard carries the three things the runner needs. A shard missing one
+    # would fail only when somebody tried to reproduce it, which is the moment
+    # they can least afford it.
+    for shard in _shards():
+        assert shard.get("args"), f"{shard['name']} has no args"
+        assert shard.get("markers"), f"{shard['name']} has no markers"
+        assert shard.get("workers"), f"{shard['name']} has no worker count"
+
+
+def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
+    """`make test-e2e-runtime` must select exactly what the protected job does.
+
+    The two had drifted in three ways at once: the target selected `provider`
+    where the workflow says `not provider`, omitted `not mock_sandbox_only`, and
+    left `E2E_LLM_MODE` unset. So the one command a developer would reach for to
+    reproduce the protected lane failed on tests CI never runs and covered none
+    it does.
+
+    That lane is worth being able to run. Its own workflow comment records that
+    it silently did nothing for eleven days -- `--extra markitdown` had stopped
+    existing -- and blocked every Desktop release while it did.
+    """
+    makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
+    workflow = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+
+    target = makefile.split("\ntest-e2e-runtime:\n", 1)[1].split("\n\n", 1)[0]
+
+    marker = (
+        "e2e and (slow or workspace or surface_live or indexing or local_cli "
+        "or protected) and not provider and not mock_sandbox_only"
+    )
+    assert marker in workflow, (
+        "the protected workflow's marker filter changed; update this test and "
+        "the make target together, which is the point of it being here"
+    )
+    assert marker in target, (
+        "make test-e2e-runtime no longer selects what the protected job does"
+    )
+    # The environment is part of the selection: `E2E_LLM_MODE=mock` is what
+    # keeps this lane real about Docker without needing a paid model key.
+    for setting in ("E2E_REAL=1", "E2E_LLM_MODE=mock", "LEMMA_RUN_SURFACE_LIVE_E2E=1"):
+        assert setting in target, f"{setting} missing from the target"
+
+
+#: Markers declared in `pytest.ini` that no test carries, and why that is
+#: deliberate. Both are named in CI marker filters, so they read as load-bearing
+#: and are not: `not protected` in every shard excludes nothing, and
+#: `or protected` in the protected lane selects nothing. They stay declared
+#: because `--strict-markers` is on, so the day someone marks a test with one it
+#: must already exist -- and because a lane named after a marker should keep the
+#: name available. `identity` and `pod` had no such excuse and are gone.
+RESERVED_UNUSED_MARKERS = {
+    "protected": "reserved for backend-protected-e2e.yml; nothing carries it yet",
+    "local_cli": "reserved for tests needing a local Codex/OpenCode/Claude binary",
+}
+
+
+def test_no_marker_is_declared_and_forgotten() -> None:
+    """Every declared marker is used, or is listed as deliberately reserved.
+
+    A marker nobody carries still changes how a filter reads. `not protected`
+    looks like it removes something and removes nothing; `or protected` looks
+    like it adds a lane's worth of tests and adds none. Someone reading the
+    protected lane's filter would reasonably believe it covers more than it
+    does.
+
+    This does not fail on a reserved marker -- it fails when the reserved list
+    and reality disagree in either direction, so a marker that starts being used
+    gets taken off the list, and a marker that quietly dies gets noticed.
+    """
+    import re
+
+    lines = (_REPO_ROOT / "lemma-backend/pytest.ini").read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("markers"))
+    declared: set[str] = set()
+    for line in lines[start + 1 :]:
+        if line.strip() and not line.startswith((" ", "\t")):
+            break
+        if ":" in line:
+            declared.add(line.split(":", 1)[0].strip())
+
+    used: set[str] = set()
+    for pattern in ("test_*.py", "conftest.py"):
+        for path in (_REPO_ROOT / "lemma-backend").rglob(pattern):
+            if ".venv" in str(path):
+                continue
+            source = path.read_text(errors="ignore")
+            used.update(re.findall(r"pytest\.mark\.(\w+)", source))
+            # Markers the collection hook attaches by path or fixture, which no
+            # decorator spells out.
+            used.update(re.findall(r"add_marker\(pytest\.mark\.(\w+)", source))
+
+    unused = declared - used
+    assert unused == set(RESERVED_UNUSED_MARKERS), (
+        f"declared markers nobody uses: {sorted(unused - set(RESERVED_UNUSED_MARKERS))}; "
+        f"reserved markers now in use: {sorted(set(RESERVED_UNUSED_MARKERS) - unused)}. "
+        "Use it, delete it, or record why it is reserved."
+    )
+
+
 def test_required_e2e_allows_hermetic_worker_scenarios() -> None:
     makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
 

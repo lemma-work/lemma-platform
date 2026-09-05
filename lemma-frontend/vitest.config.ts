@@ -15,6 +15,7 @@ export default defineConfig({
     test: {
         environment: 'node',
         include: [
+            'components/functions/version-history.test.tsx',
             'components/agents/agent-runtime-helpers.{test,spec}.ts',
             // Which agents the onboarding panel lists, and which of its four
             // states it is in. Pure, because the panel around it is not — and

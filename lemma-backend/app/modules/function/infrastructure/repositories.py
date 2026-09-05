@@ -40,6 +40,9 @@ from app.modules.function.domain.ports import (
     FunctionRepositoryPort,
     FunctionRunRepositoryPort,
 )
+from app.modules.function.infrastructure.revision_repository import (
+    FunctionRevisionRepositoryMixin,
+)
 from app.modules.function.infrastructure.models import (
     FunctionModel,
     FunctionRunModel,
@@ -53,7 +56,7 @@ _NON_TERMINAL_RUN_STATUSES = (
 )
 
 
-class FunctionRepository(FunctionRepositoryPort):
+class FunctionRepository(FunctionRevisionRepositoryMixin, FunctionRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,

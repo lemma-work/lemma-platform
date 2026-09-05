@@ -25,6 +25,7 @@ from app.modules.agent.contracts.widget_content import (
 from app.modules.apps.application.app_use_cases import AppUseCases
 from app.modules.apps.infrastructure.repositories import AppRepository
 from app.modules.apps.services.app_file_manager import AppFileManager
+from app.modules.apps.services.app_release_service import AppReleaseService
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.app_branding_provider import (
     build_app_branding_entitlement_port,
@@ -66,10 +67,15 @@ def get_app_service(uow: UoWDep) -> AppService:
 AppServiceDep = Annotated[AppService, Depends(get_app_service)]
 
 
+def build_app_release_service(uow) -> AppReleaseService:
+    """Construct an AppReleaseService from a unit of work."""
+    return AppReleaseService(AppRepository(uow, message_bus=get_message_bus()))
+
+
 def build_app_use_cases(uow_factory: UnitOfWorkFactory) -> AppUseCases:
     """Construct the app use-case layer (factory mode). The API and the worker
     build the same object so they share one saga implementation."""
-    return AppUseCases(uow_factory, build_app_service)
+    return AppUseCases(uow_factory, build_app_service, build_app_release_service)
 
 
 def get_app_use_cases(

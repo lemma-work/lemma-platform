@@ -117,3 +117,36 @@ async def test_service_uploads_single_standalone_index():
     assert index.startswith("<!doctype html>")
     assert "<div>chart</div>" in index
     assert "lemma-widget-height" not in index  # standalone, not embedded
+
+
+@pytest.mark.asyncio
+async def test_service_uploads_the_document_as_source_too():
+    """A promoted widget has no build step, so the document is its source.
+
+    Deploying dist-only left the app with no source archive, which made a pod
+    bundle export the build and drop the code.
+    """
+    pod_id = uuid4()
+    user_id = uuid4()
+    artifact = WidgetArtifact(content="<div>chart</div>", pod_id=pod_id, title="Board")
+    created = AppEntity(
+        id=uuid4(), pod_id=pod_id, user_id=user_id, name="board", public_slug="board"
+    )
+
+    svc = AppService(
+        app_repository=AsyncMock(),
+        file_manager_factory=lambda _id: AsyncMock(),
+        authorization_service=AsyncMock(),
+    )
+    svc.create_app_with_context = AsyncMock(return_value=created)
+    svc.upload_bundle = AsyncMock(return_value=created)
+
+    await svc.create_app_from_widget(
+        pod_id, user_id, artifact=artifact, name="Board", ctx=None
+    )
+
+    _, kwargs = svc.upload_bundle.call_args
+    assert kwargs["source_archive_bytes"] == kwargs["dist_archive_bytes"]
+    with ZipFile(io.BytesIO(kwargs["source_archive_bytes"])) as z:
+        assert z.namelist() == ["index.html"]
+        assert "<div>chart</div>" in z.read("index.html").decode()

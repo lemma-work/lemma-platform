@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from uuid import UUID
+from uuid import UUID, uuid7
 import zipfile
 
 from app.core.config import settings
@@ -124,11 +124,11 @@ class FunctionArtifactBuilder:
             # on the loop between two calls that were already careful not to.
             digest = await run_blocking(lambda: hashlib.sha256(archive).hexdigest())
             revision_hash = f"sha256:{digest}"
-            artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
-            await self._storage_factory(function_id).write_file(artifact_path, archive)
-            return FunctionArtifact(
-                revision_hash=revision_hash,
+            artifact = FunctionArtifact(revision_hash=revision_hash, generation=uuid7())
+            await self._storage_factory(function_id).write_file(
+                artifact.artifact_path, archive
             )
+            return artifact
         finally:
             await run_blocking(shutil.rmtree, build_root, True)
 

@@ -10,7 +10,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
+from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
 from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.domain.identities import function_run_job_id
@@ -193,16 +194,12 @@ def test_worker_function_service_composition_matches_current_constructor(
 ) -> None:
     storage_factory = object()
     monkeypatch.setattr(
-        AppWorkerContext,
-        "build_function_storage_factory",
-        lambda self: storage_factory,
-    )
-    context = AppWorkerContext(
-        job_queue=AsyncMock(),
-        uow_factory=AsyncMock(),
+        dependencies,
+        "get_function_storage_factory",
+        lambda: storage_factory,
     )
 
-    service = context.build_function_service(
+    service = dependencies.build_function_service(
         SimpleNamespace(session=SimpleNamespace(), set_message_bus=lambda bus: None)
     )
 

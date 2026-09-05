@@ -14,7 +14,10 @@ from app.modules.function.contracts.runtime import (
     RuntimeTerminalRequest,
 )
 from app.modules.function.application.runtime_logs import terminal_logs
-from app.modules.function.domain.entities import FunctionSessionPrincipal
+from app.modules.function.domain.entities import (
+    FunctionArtifact,
+    FunctionSessionPrincipal,
+)
 from app.modules.function.domain.ports import FunctionStorageFactoryPort
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
@@ -52,6 +55,8 @@ class FunctionRuntimeGateway:
         function_id: UUID,
         revision_hash: str,
         principal: FunctionSessionPrincipal,
+        *,
+        generation: UUID | None = None,
     ) -> bytes:
         """Return one exact immutable artifact authorized by standard claims."""
 
@@ -64,9 +69,15 @@ class FunctionRuntimeGateway:
                 principal,
                 delegated_tokens_enabled=self._delegated_tokens_enabled,
             )
+            if authorized and generation is None:
+                generation = await FunctionExecutionRepository(uow).artifact_generation(
+                    function_id, revision_hash
+                )
         if not authorized:
             raise RuntimeCredentialRejected
-        artifact_path = f"artifacts/{revision_hash.removeprefix('sha256:')}.zip"
+        artifact_path = FunctionArtifact(
+            revision_hash=revision_hash, generation=generation
+        ).artifact_path
         data = await self._storage_factory(function_id).read_bytes(artifact_path)
         # Offloaded for the reason the builder already documents at its own
         # sha256 (`function_artifact_builder.py`): the artifact is the whole
