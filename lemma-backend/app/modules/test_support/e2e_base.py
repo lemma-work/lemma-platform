@@ -904,8 +904,13 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
                 "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),
+                # `function_settings`, not `e2e_settings`: this field moved to
+                # `FunctionSettings`, and `e2e_settings` is core's. The two are
+                # separate objects, so reading it off the wrong one is an
+                # `AttributeError` in a fixture -- which the unit lane cannot
+                # see, because only a worker subprocess reaches this.
                 "FUNCTION_RUNTIME_GATEWAY_URL": (
-                    e2e_settings.function_runtime_gateway_url
+                    function_settings.function_runtime_gateway_url
                 ),
                 # The manager rebinds to this stable port each test; keep the
                 # worker pointed at it so worker-driven function jobs reach it.
