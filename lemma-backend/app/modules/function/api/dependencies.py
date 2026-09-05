@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.modules.function.config import function_settings
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.context import ResourceType
@@ -71,13 +72,13 @@ from app.modules.workspace.services.local_sandbox_client import (
 
 
 _function_session_token_cache = FunctionSessionTokenCache(
-    ttl_seconds=settings.function_session_token_cache_ttl_seconds,
-    max_entries=settings.function_session_token_cache_max_entries,
+    ttl_seconds=function_settings.function_session_token_cache_ttl_seconds,
+    max_entries=function_settings.function_session_token_cache_max_entries,
 )
 _function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
     # Clamped against the idle release that invalidates it; see the helper.
     ttl_seconds=endpoint_reuse_seconds(),
-    max_entries=settings.function_runtime_endpoint_cache_max_entries,
+    max_entries=function_settings.function_runtime_endpoint_cache_max_entries,
 )
 _function_runtime_http_clients = FunctionRuntimeHttpClientPool()
 

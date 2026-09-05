@@ -23,6 +23,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
 from app.modules.test_support import e2e_base
@@ -429,7 +430,15 @@ async def function_benchmark_runtime(
         # and leave the real one overridden for the rest of the session.
         original_backend = {
             "api_url": settings.api_url,
-            "function_runtime_gateway_url": settings.function_runtime_gateway_url,
+        }
+        # A third object, for the same reason the comment above gives about the
+        # second: `function_runtime_gateway_url` moved to `FunctionSettings`, and
+        # restoring it onto core settings would create an attribute there while
+        # leaving the real one overridden for the rest of the session.
+        original_function = {
+            "function_runtime_gateway_url": (
+                function_settings.function_runtime_gateway_url
+            ),
         }
         original_workspace = {
             "provider": workspace_settings.provider,
@@ -448,7 +457,7 @@ async def function_benchmark_runtime(
         benchmark_error: BaseException | None = None
         try:
             settings.api_url = gateway_url
-            settings.function_runtime_gateway_url = gateway_url
+            function_settings.function_runtime_gateway_url = gateway_url
             workspace_settings.provider = provider
             workspace_settings.workspace_image = selected_workspace_image
             workspace_settings.function_image = selected_function_image
@@ -582,6 +591,8 @@ async def function_benchmark_runtime(
         finally:
             for name, value in original_backend.items():
                 setattr(settings, name, value)
+            for name, value in original_function.items():
+                setattr(function_settings, name, value)
             for name, value in original_workspace.items():
                 setattr(workspace_settings, name, value)
             if original_namespace_env is None:

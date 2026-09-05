@@ -21,7 +21,7 @@ import pytest
 from lemma_sdk.config import (
     _DESKTOP_LOCAL_BASES,
     _valid_desktop_endpoint,
-    discover_local_server_config,
+    _discover_local_server_config,
 )
 
 
@@ -76,7 +76,7 @@ def test_discovery_reads_the_addresses_locald_wrote(tmp_path, monkeypatch):
         )
         monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(root))
 
-        found = discover_local_server_config()
+        found = _discover_local_server_config()
 
         assert found is not None, f"an install on {base} was not discovered"
         assert found["base_url"] == f"http://app.{base}:52414"
@@ -103,4 +103,4 @@ def test_a_state_file_naming_a_host_we_do_not_serve_is_not_discovered(
     )
     monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(tmp_path))
 
-    assert discover_local_server_config() is None
+    assert _discover_local_server_config() is None

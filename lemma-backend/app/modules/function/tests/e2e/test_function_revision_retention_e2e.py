@@ -11,7 +11,7 @@ same reason: compiling code is the only part that needs a sandbox.
 
 from __future__ import annotations
 
-from app.modules.function.config import revision_settings
+from app.modules.function.config import function_settings, revision_settings
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -107,7 +107,7 @@ async def test_the_sweep_reaches_functions_beyond_the_first_page(
     monkeypatch.setattr(revision_settings, "function_revision_keep_last", 1)
     monkeypatch.setattr(revision_settings, "function_revision_max_keep", 1)
     monkeypatch.setattr(revision_settings, "function_revision_keep_days", 0)
-    monkeypatch.setattr(settings, "function_job_deadline_seconds", 1)
+    monkeypatch.setattr(function_settings, "function_job_deadline_seconds", 1)
 
     pod_id = test_pod["id"]
     function_ids = []
@@ -144,7 +144,7 @@ async def test_a_settled_install_examines_nothing(
     monkeypatch.setattr(revision_settings, "function_revision_keep_last", 1)
     monkeypatch.setattr(revision_settings, "function_revision_max_keep", 1)
     monkeypatch.setattr(revision_settings, "function_revision_keep_days", 0)
-    monkeypatch.setattr(settings, "function_job_deadline_seconds", 1)
+    monkeypatch.setattr(function_settings, "function_job_deadline_seconds", 1)
 
     pod_id = test_pod["id"]
     name = f"fn_settled_{uuid4().hex[:8]}"
