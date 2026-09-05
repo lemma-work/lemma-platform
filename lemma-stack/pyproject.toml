@@ -20,7 +20,7 @@ dev = [
     # Bounded like lemma-backend, lemma-cli and lemma-python: ruff 0.16 widened
     # its default rule selection, so an unbounded dependency means the gate
     # changes what it enforces the day a new ruff ships.
-    "ruff>=0.14.8,<0.16",
+    "ruff>=0.14.8,<0.17",
 ]
 
 [build-system]
