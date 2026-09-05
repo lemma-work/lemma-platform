@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.usage.contracts.metering import with_external_stream_retries
 from app.modules.usage.domain.errors import (
     ProviderAttemptsExhaustedError,
     UsageLimitExceededError,
@@ -77,6 +78,8 @@ async def invoke(
     provider: TransientProvider,
     user_id: UUID,
     streaming: bool,
+    *,
+    external_stream_retries: bool = False,
 ) -> None:
     model = MeteredModel(
         FunctionModel(provider.request, stream_function=provider.stream),
@@ -92,7 +95,12 @@ async def invoke(
         factory=SessionUnitOfWorkFactory(db_manager.session_factory),
     ):
         if streaming:
-            async with model.request_stream(
+            stream_model = (
+                with_external_stream_retries(model)
+                if external_stream_retries
+                else model
+            )
+            async with stream_model.request_stream(
                 [], None, ModelRequestParameters()
             ) as stream:
                 async for _ in stream:
@@ -103,6 +111,36 @@ async def invoke(
             response = await model.request([], None, ModelRequestParameters())
             assert response.usage.input_tokens == 10
             assert response.usage.output_tokens == 1
+
+
+async def test_external_stream_retries_keep_each_attempt_in_the_ledger(
+    db_manager: DatabaseManager, retry_model_name: str
+) -> None:
+    provider = TransientProvider(503, 1)
+    user_id = uuid4()
+    with pytest.raises(ModelHTTPError):
+        await invoke(
+            db_manager,
+            retry_model_name,
+            provider,
+            user_id,
+            True,
+            external_stream_retries=True,
+        )
+    assert provider.attempts == 1
+    await assert_ledger(db_manager, user_id, attempts=1, used=Decimal(0), unconfirmed=1)
+    await invoke(
+        db_manager,
+        retry_model_name,
+        provider,
+        user_id,
+        True,
+        external_stream_retries=True,
+    )
+    assert provider.attempts == 2
+    await assert_ledger(
+        db_manager, user_id, attempts=2, used=Decimal(".05"), unconfirmed=1
+    )
 
 
 async def assert_ledger(

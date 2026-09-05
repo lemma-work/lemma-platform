@@ -72,10 +72,12 @@ class MeteredModel(WrapperModel):
         profile: Mapping[str, object],
         *,
         source: str | None = None,
+        retry_stream: bool = True,
     ) -> None:
         super().__init__(wrapped)
         self.runtime_profile = dict(profile)
         self.source = source
+        self.retry_stream = retry_stream
 
     async def request(
         self,
@@ -133,7 +135,8 @@ class MeteredModel(WrapperModel):
                 # Once the caller has the stream, only the harness can replace its
                 # partial output and resume history without repeating tool effects.
                 if (
-                    handed_to_consumer
+                    not self.retry_stream
+                    or handed_to_consumer
                     or dispatch is None
                     or dispatch.provider_error is not exc
                 ):

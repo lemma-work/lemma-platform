@@ -66,9 +66,28 @@ def meter_model(
         return (
             model
             if source is None
-            else MeteredModel(model.wrapped, model.runtime_profile, source=source)
+            else MeteredModel(
+                model.wrapped,
+                model.runtime_profile,
+                source=source,
+                retry_stream=model.retry_stream,
+            )
         )
     return MeteredModel(model, profile, source=source)
+
+
+def with_external_stream_retries(model: Model) -> Model:
+    """Let a streaming caller own recovery while still accounting each attempt."""
+    from app.modules.usage.infrastructure.metered_model import MeteredModel
+
+    if not isinstance(model, MeteredModel):
+        return model
+    return MeteredModel(
+        model.wrapped,
+        model.runtime_profile,
+        source=model.source,
+        retry_stream=False,
+    )
 
 
 async def finalize_metered_run(

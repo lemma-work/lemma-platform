@@ -59,6 +59,7 @@ from app.modules.agent.infrastructure.harnesses.provider_error_log import (
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
+from app.modules.usage.contracts.metering import with_external_stream_retries
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     provider_model_settings,
@@ -265,6 +266,9 @@ class PydanticAIHarness:
             model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)
+        # The graph driver owns stream resets, history recovery and retry limits.
+        # Retrying inside the model would hide connection drops from that driver.
+        model = with_external_stream_retries(model)
         # History processors ride as ProcessHistory capabilities (the
         # history_processors= kwarg is deprecated in pydantic-ai).
         with run_phase("summarization_model"):
