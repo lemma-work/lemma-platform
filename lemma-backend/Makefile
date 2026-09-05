@@ -418,6 +418,7 @@ USAGE_ANNOTATED_PATHS := \
 	app/modules/usage/services/batch_meter.py \
 	app/modules/usage/services/metering_scope.py \
 	app/modules/usage/services/pricing.py \
+	app/modules/usage/services/run_receipts.py \
 	app/modules/usage/services/usage_service.py \
 	app/modules/usage/services/usage_service_factory.py \
 	app/modules/usage/tests/e2e \

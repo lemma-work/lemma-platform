@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -55,6 +56,7 @@ class UsageRepositoryPort(Protocol):
         status: str | None = None,
     ) -> UsageSummary: ...
 
+    @abstractmethod
     async def get_usage_stats(
         self,
         *,
@@ -74,7 +76,8 @@ class UsageRepositoryPort(Protocol):
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
-    ) -> Sequence[UsageStatsBucket]: ...
+    ) -> Sequence[UsageStatsBucket]:
+        """Return time buckets with optional dimension grouping."""
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,12 @@ def normalize_limit_values(resolved: object) -> UsageLimitValues:
 
 
 class AccountingGateway(Protocol):
+    @abstractmethod
     async def open(
         self, allocation_id: UUID, required: Decimal | None, now: datetime
-    ) -> Allocation: ...
-    async def checkpoint(self, batch: UsageBatch, now: datetime) -> Allocation: ...
+    ) -> Allocation:
+        """Acquire exclusive authority before a provider request can spend."""
+
+    @abstractmethod
+    async def checkpoint(self, batch: UsageBatch, now: datetime) -> Allocation:
+        """Persist an idempotent receipt and return remaining authority."""

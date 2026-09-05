@@ -7,7 +7,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import func, select
 from sqlalchemy.engine import Connection
@@ -24,7 +24,6 @@ from app.modules.usage.domain.accounting import (
     UsageBatch,
 )
 from app.modules.usage.domain.errors import UsageLimitExceededError
-from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.infrastructure.allocation_repository import (
     checkpoint,
     mark_expired_uncertain,
@@ -453,7 +452,7 @@ async def test_cancelled_stream_does_not_refund_unconfirmed_provider_usage(
                 async with model.request_stream(
                     [], None, ModelRequestParameters()
                 ) as stream:
-                    async for event in stream:
+                    async for _ in stream:
                         raise asyncio.CancelledError()
         async with db_manager.session_factory() as session:
             counter = (

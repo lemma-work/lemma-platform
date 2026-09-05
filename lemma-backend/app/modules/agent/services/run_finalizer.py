@@ -186,6 +186,11 @@ class RunFinalizer:
             if finish_result is None or not finish_result.updated:
                 await self.usage_recorder.release(run.usage_reservation)
                 return
+            await self.usage_recorder.finalize_metered(
+                agent_run_id=run.agent_run_id,
+                runtime_profile=run.runtime_profile,
+                status=status.value,
+            )
             assert event is not None
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(

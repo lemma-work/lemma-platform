@@ -90,6 +90,10 @@ the existing run receipts. A runtime outside Lemma's dispatch control is refused
 for a limited system-paid profile: a run-start check cannot enforce ongoing spend.
 Embeddings, speech and search metering are outside this LLM allocation path.
 
+Run finalization drains the active metering scope before applying the final run
+status to its batch receipts. Repeated finalization updates metadata only; it
+never inserts another charge or settles the same spending authority again.
+
 ## Monetary precision
 
 Authoritative receipt costs, allocations and budget counters use PostgreSQL

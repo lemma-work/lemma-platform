@@ -17,6 +17,7 @@ from app.modules.usage.contracts.execution import (
     build_usage_service,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.usage.contracts.metering import finalize_metered_run
 
 
 class RunUsageRecorder:
@@ -65,6 +66,19 @@ class RunUsageRecorder:
                 )
                 await uow.commit()
                 return reservation
+
+    async def finalize_metered(
+        self,
+        *,
+        agent_run_id: UUID,
+        runtime_profile: dict[str, object | None] | None,
+        status: str,
+    ) -> None:
+        if runtime_profile and runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            await finalize_metered_run(agent_run_id, status, factory=self.uow_factory)
 
     async def release(self, reservation: UsageReservation | None) -> None:
         if reservation is None:

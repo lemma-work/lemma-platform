@@ -61,7 +61,8 @@ logger = get_logger(__name__)
 class FinalOutputWriter(Protocol):
     def __call__(
         self, *, output: object, tool_name: str | None, tool_call_id: str | None
-    ) -> MessageDraft | None: ...
+    ) -> MessageDraft | None:
+        """Persist final output when it produces a user-facing message."""
 
 
 class NodeLoop[DepsT]:

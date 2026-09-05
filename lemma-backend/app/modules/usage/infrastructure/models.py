@@ -15,8 +15,11 @@ from app.modules.usage.domain.accounting import money
 from app.modules.usage.domain.entities import UsageKind, UsageProfileScope
 from app.modules.usage.domain.entities import UsageRecord as UsageRecordEntity
 from app.modules.usage.infrastructure.allocation_models import (
-    UsageAllocation as UsageAllocation,
+    UsageAllocation,
 )
+
+
+__all__ = ["UsageAllocation", "UsageLimitCounter", "UsageRecord"]
 
 
 class UsageRecord(UUIDAuditBase):

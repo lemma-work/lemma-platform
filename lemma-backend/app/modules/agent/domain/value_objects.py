@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from pydantic_ai import UsageLimits
@@ -23,7 +23,6 @@ JsonPrimitive = str | int | float | bool | None
 JsonValue = object
 JsonObject = dict[str, object]
 
-ConversationAgentValue = TypeVar("ConversationAgentValue")
 ResolvedConversationAgentValue = TypeVar("ResolvedConversationAgentValue")
 
 
@@ -461,7 +460,7 @@ class ConversationAgentScope(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationAgentSelection(Generic[ConversationAgentValue]):
+class ConversationAgentSelection[ConversationAgentValue]:
     """A validated conversation-list selection before or after name resolution."""
 
     scope: ConversationAgentScope

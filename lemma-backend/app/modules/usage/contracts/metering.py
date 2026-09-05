@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.usage.services.usage_context import UsageExecutionContext
@@ -41,3 +42,12 @@ def meter_model(
             else MeteredModel(model.wrapped, model.runtime_profile, source=source)
         )
     return MeteredModel(model, profile, source=source)
+
+
+async def finalize_metered_run(
+    agent_run_id: UUID, status: str, *, factory: UnitOfWorkFactory
+) -> None:
+    """Drain a run's request receipts and retain its final outcome without rebilling."""
+    from app.modules.usage.services.run_receipts import finalize_metered_run as finalize
+
+    await finalize(agent_run_id, status, factory=factory)
