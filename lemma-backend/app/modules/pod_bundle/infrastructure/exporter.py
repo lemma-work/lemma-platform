@@ -535,18 +535,12 @@ class BundleExporter:
         ctx: Context,
         byte_budget: _ByteBudget,
     ) -> None:
-        """Bundle an app's code: its source (extracted to ``source/``) AND its
-        built ``dist.zip``.
+        """Export source and dist, prioritizing source within the byte budget.
 
-        Both, not one. Exporting source alone meant every import rebuilt in a
-        sandbox; exporting the build alone -- which is what a widget-promoted app
-        with no source archive fell back to -- shipped an app whose code was
-        simply gone. Source is an app's primary artifact and always ships when it
-        exists; the build rides along so a portable one can be deployed directly.
-
-        Best-effort and byte-budgeted: the build is dropped first when the budget
-        is tight, since it is the reconstructible half. Mirrors the CLI's
-        ``_download_app_assets`` for format parity."""
+        Source enables rebuilding for another pod; dist preserves the deployed
+        build and is the fallback when source is unavailable. Match the CLI's
+        ``_download_app_assets`` layout without claiming Vite build portability.
+        """
         from app.modules.apps.contracts import AppNotFoundError
         from app.modules.apps.contracts.provisioning import (
             read_app_archive,

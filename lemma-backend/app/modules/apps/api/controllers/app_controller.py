@@ -52,7 +52,7 @@ router = APIRouter(
     redirect_slashes=False,
 )
 
-ZIP_FILE_RESPONSE = {
+ZIP_FILE_RESPONSE: dict[int | str, dict[str, object]] = {
     200: {
         "description": "Zip archive bytes",
         "content": {
