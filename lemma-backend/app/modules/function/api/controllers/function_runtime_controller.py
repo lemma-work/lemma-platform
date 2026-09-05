@@ -56,6 +56,7 @@ async def download_definition_artifact(
     revision_hash: str,
     request: Request,
     gateway: FunctionRuntimeGatewayDep,
+    generation: UUID | None = None,
 ) -> Response:
     if not revision_hash.startswith("sha256:") or len(revision_hash) != 71:
         raise HTTPException(
@@ -67,6 +68,7 @@ async def download_definition_artifact(
             function_id,
             revision_hash,
             _principal(request),
+            **({"generation": generation} if generation else {}),
         )
     except RuntimeCredentialRejected as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc

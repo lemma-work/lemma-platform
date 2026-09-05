@@ -995,9 +995,8 @@ async def test_function_execute_requires_only_execute_not_read(
         },
     )
 
-    # Grant the custom role ONLY function.execute on the RESTRICTED function —
-    # no function.read. (RESTRICTED means no default visibility, so the role's
-    # POD_VIEWER membership grants no read on it either.)
+    # Execution implies read, but must not grant authoring rights. RESTRICTED
+    # visibility prevents the ordinary viewer from inheriting either grant.
     grant = await authenticated_client.put(
         f"/pods/{pod_id}/roles/{ctx['custom_role']}/permissions",
         json={
@@ -1028,6 +1027,23 @@ async def test_function_execute_requires_only_execute_not_read(
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["doubled"] == 42
+
+    base = f"/pods/{pod_id}/functions/{name}"
+    for path in ("/revisions", "/revisions/r1"):
+        history = await async_client.get(base + path, headers=ctx["custom_headers"])
+        assert history.status_code == 200, history.text
+        refused = await async_client.get(base + path, headers=ctx["viewer_headers"])
+        assert refused.status_code == 403, refused.text
+    refused_promotion = await async_client.post(
+        base + "/revisions/r1/promote", headers=ctx["custom_headers"]
+    )
+    assert refused_promotion.status_code == 403, refused_promotion.text
+    refused_pin = await async_client.post(
+        base + "/runs",
+        json={"input_data": {"n": 21}, "revision": "r1"},
+        headers=ctx["custom_headers"],
+    )
+    assert refused_pin.status_code == 403, refused_pin.text
 
 
 @pytest.mark.asyncio
@@ -1237,3 +1253,131 @@ async def test_deleting_a_function_keeps_the_record_of_what_it_did(
     assert surviving.function_id is None, "the run should be detached, not repointed"
     assert surviving.output_data == {"result": 42}
     assert surviving.status == "COMPLETED"
+
+
+def _revision_code(func_name: str, marker: str, *, extra_field: bool = False) -> str:
+    field = "    note: str = ''\n" if extra_field else ""
+    return f"""#input_type_name: MarkInput
+#output_type_name: MarkResult
+#function_name: {func_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+class MarkInput(BaseModel):
+    text: str
+{field}
+class MarkResult(BaseModel):
+    result: str
+
+async def {func_name}(ctx: FunctionContext, data: MarkInput) -> MarkResult:
+    return MarkResult(result="{marker}")"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_function_revision_history_and_rollback(authenticated_client, test_pod):
+    """Save code three times, then go back to the first revision.
+
+    The artifacts were always kept -- content-addressed and deleted by nothing --
+    so this exercises the index that makes them reachable, and the promotion that
+    restores both the code and the contract it implements.
+    """
+    pod_id = test_pod["id"]
+    func_name = f"func_rev_{uuid4().hex[:8]}"
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": func_name,
+            "description": "Revision history e2e",
+            "code": _revision_code(func_name, "FIRST"),
+        },
+    )
+
+    # The second revision changes the input contract; the third does not.
+    for marker, extra_field in (("SECOND", True), ("THIRD", True)):
+        update_res = await authenticated_client.patch(
+            f"/pods/{pod_id}/functions/{func_name}",
+            json={"code": _revision_code(func_name, marker, extra_field=extra_field)},
+        )
+        assert update_res.status_code == status.HTTP_200_OK, update_res.text
+
+    list_res = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}/revisions"
+    )
+    assert list_res.status_code == status.HTTP_200_OK, list_res.text
+    items = list_res.json()["items"]
+    assert [item["revision_number"] for item in items] == [3, 2, 1]  # newest first
+    assert [item["is_live"] for item in items] == [True, False, False]
+    assert all(item["pruned_at"] is None for item in items)
+
+    live_hash = items[0]["revision_hash"]
+
+    # The single-revision read carries the source and the schemas that revision
+    # implements -- the listing deliberately does not pay for either.
+    detail_res = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}/revisions/r1"
+    )
+    assert detail_res.status_code == status.HTTP_200_OK, detail_res.text
+    detail = detail_res.json()
+    assert "FIRST" in detail["code"]
+    assert "note" not in detail["input_schema"].get("properties", {})
+
+    # A revision is addressable by hash prefix too, which is what a run row has.
+    by_hash_res = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}/revisions/"
+        f"{live_hash.removeprefix('sha256:')[:12]}"
+    )
+    assert by_hash_res.status_code == status.HTTP_200_OK, by_hash_res.text
+    assert by_hash_res.json()["revision_number"] == 3
+
+    promote_res = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/revisions/r1/promote"
+    )
+    assert promote_res.status_code == status.HTTP_200_OK, promote_res.text
+    promoted = promote_res.json()
+    assert promoted["revision"]["revision_number"] == 1
+    # r1 predates the added input field, so its contract differs from the live
+    # one and callers bound to the newer schema need warning.
+    assert promoted["schema_changed"] is True
+
+    after_res = await authenticated_client.get(f"/pods/{pod_id}/functions/{func_name}")
+    assert after_res.status_code == status.HTTP_200_OK, after_res.text
+    after = after_res.json()
+    assert "FIRST" in after["code"]
+    # The contract was restored with the code, not left describing r3.
+    assert "note" not in after["input_schema"].get("properties", {})
+
+    missing_res = await authenticated_client.post(
+        f"/pods/{pod_id}/functions/{func_name}/revisions/r99/promote"
+    )
+    assert missing_res.status_code == status.HTTP_404_NOT_FOUND, missing_res.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_resaving_identical_code_does_not_mint_a_second_revision(
+    authenticated_client, test_pod
+):
+    """Artifacts are content-addressed, so unchanged code rebuilds to the same
+    hash. History must record that as one revision, not one per save."""
+    pod_id = test_pod["id"]
+    func_name = f"func_same_{uuid4().hex[:8]}"
+    code = _revision_code(func_name, "STABLE")
+
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {"name": func_name, "description": "idempotent revision", "code": code},
+    )
+    resave_res = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{func_name}", json={"code": code}
+    )
+    assert resave_res.status_code == status.HTTP_200_OK, resave_res.text
+
+    list_res = await authenticated_client.get(
+        f"/pods/{pod_id}/functions/{func_name}/revisions"
+    )
+    assert [item["revision_number"] for item in list_res.json()["items"]] == [1]

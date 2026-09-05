@@ -32,7 +32,6 @@ from app.modules.pod_bundle.infrastructure.ai_readme import (
     build_system_polish_fn,
     polish_readme,
 )
-from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.github_publisher import (
     NativeGithubOps,
     GithubPublisher,
@@ -101,6 +100,8 @@ async def _load_or_export_archive(
     pod_id: UUID,
     user_id: UUID,
 ) -> tuple[str, bytes, UUID | None]:
+    from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+
     archive = (
         await staging.get_archive("pod-publishes", publish_id)
         if state.staging_key

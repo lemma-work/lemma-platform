@@ -5,7 +5,7 @@
 import type { AppStatus } from './AppStatus.js';
 export type AppDetailResponse = {
     allowed_actions?: Array<string>;
-    created_at: any;
+    created_at: (string | null);
     current_release_id?: (string | null);
     description?: (string | null);
     id: string;

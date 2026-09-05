@@ -102,6 +102,11 @@ class FunctionSchemaDispatcher:
                         "Authorization": f"Bearer {function_token.value}",
                         "If-Match": f'"{artifact.revision_hash}"',
                         "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
+                        **(
+                            {"X-Lemma-Artifact-Generation": str(artifact.generation)}
+                            if artifact.generation
+                            else {}
+                        ),
                     },
                     timeout=httpx.Timeout(10, read=remaining),
                 )

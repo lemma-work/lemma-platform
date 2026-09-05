@@ -147,6 +147,24 @@ class FunctionExecutionRepository:
             return None
         return self._runtime_context(run, function)
 
+    async def artifact_generation(
+        self, function_id: UUID, revision_hash: str
+    ) -> UUID | None:
+        from app.modules.function.infrastructure.models import FunctionRevisionModel
+
+        return (
+            await self.session.execute(
+                select(FunctionRevisionModel.generation)
+                .where(
+                    FunctionRevisionModel.function_id == function_id,
+                    FunctionRevisionModel.revision_hash == revision_hash,
+                    FunctionRevisionModel.pruned_at.is_(None),
+                )
+                .order_by(FunctionRevisionModel.revision_number.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def authorize_definition_artifact(
         self,
         function_id: UUID,

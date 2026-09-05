@@ -1,21 +1,30 @@
 """Function module configuration.
 
-These thirteen settings moved out of `app/core/config.py`, which was 1,756 lines
-and 220 fields. Every one of them is read only inside `mod:function` -- measured,
-not assumed -- which made this the cleanest cluster in the codebase to move
-first.
+Two classes, both owned by this module.
 
-**No `AliasChoices` here, and none needed.** No settings class in this codebase
-sets `env_prefix`, so pydantic-settings derives each env var from the field name
-identically on both classes: `FUNCTION_API_DEADLINE_SECONDS` reaches this class
-exactly as it reached `Settings`. The `ca2d8cad1` precedent used aliases because
-those fields were *renamed* on the way (`agentbox_workspace_image` ->
-`workspace_image`); a move that keeps the name needs nothing.
+`FunctionSettings` holds the thirteen settings that moved out of
+`app/core/config.py`, which was 1,756 lines and 220 fields. Every one is read
+only inside `mod:function` -- measured, not assumed -- which made this the
+cleanest cluster to move first.
+
+`FunctionRevisionSettings` holds the retention knobs for immutable function
+builds. It arrived here from the other direction, with the version-history work
+in #346, and is kept as its own class because it carries a cross-field
+validator: `max_keep` below `keep_last` is a retention policy that can never be
+satisfied, and it should refuse to start rather than sweep to a floor nobody
+asked for.
+
+**No `AliasChoices` on either.** No settings class in this codebase sets
+`env_prefix`, so pydantic-settings derives each env var from the field name
+identically on whichever class holds it: `FUNCTION_API_DEADLINE_SECONDS` reaches
+this module exactly as it reached `Settings`. The `ca2d8cad1` precedent used
+aliases because those fields were *renamed* on the way; a move that keeps the
+name needs nothing.
 """
 
-from typing import Optional
+from typing import Optional, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
@@ -111,4 +120,49 @@ class FunctionSettings(BaseSettings):
     )
 
 
+class FunctionRevisionSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Revision retention. See app.core.retention for the three-knob rule; the
+    # live revision is exempt, as is any revision with a run still in flight.
+    function_revision_retention_enabled: bool = Field(default=True)
+    function_revision_keep_last: int = Field(default=10, ge=1)
+    function_revision_keep_days: int = Field(default=30, ge=0)
+    function_revision_max_keep: int = Field(default=20, ge=1)
+    function_revision_retention_cron: str = Field(default="40 4 * * *")
+    function_revision_retention_batch: int = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Functions fetched per round trip by the revision sweep. The PAGE "
+            "size, not the tick size: the sweep pages until the candidate set "
+            "drains. Env: ``FUNCTION_REVISION_RETENTION_BATCH``."
+        ),
+    )
+    function_revision_retention_budget_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Wall-clock budget for one revision sweep. ZERO MEANS UNLIMITED -- "
+            "the opposite of FUNCTION_RUN_RETENTION_BUDGET_SECONDS, where zero "
+            "disables the sweep. Draining is the point here. "
+            "Env: ``FUNCTION_REVISION_RETENTION_BUDGET_SECONDS``."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_retention_bounds(self) -> Self:
+        if self.function_revision_max_keep < self.function_revision_keep_last:
+            raise ValueError(
+                "FUNCTION_REVISION_MAX_KEEP must be >= FUNCTION_REVISION_KEEP_LAST"
+            )
+        return self
+
+
 function_settings = FunctionSettings()
+revision_settings = FunctionRevisionSettings()

@@ -690,7 +690,7 @@ def start_shared_postgres(name: str) -> LemmaPostgresContainer:
     straggler).
     """
     # Clear any straggler with this name from a previously crashed run.
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
     _ensure_docker_network(SHARED_E2E_NETWORK_NAME)
     container = (
         LemmaPostgresContainer()
@@ -773,7 +773,7 @@ def start_shared_redis(name: str) -> LemmaDockerContainer:
     straggler).
     """
     # Clear any straggler with this name from a previously crashed run.
-    subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+    subprocess.run(["docker", "rm", "-f", "-v", name], check=False, capture_output=True)
     container = LemmaDockerContainer(REDIS_IMAGE, 6379).with_run_args("--name", name)
     container.__enter__()  # start detached; intentionally no matching __exit__
     _wait_for_tcp(container, 6379, _env_int("REDIS_STARTUP_TIMEOUT_SECONDS", 120))

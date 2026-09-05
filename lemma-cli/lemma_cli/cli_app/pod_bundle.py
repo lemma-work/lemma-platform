@@ -755,6 +755,14 @@ def _download_app_assets(
     *,
     app_budget: _ByteBudget,
 ) -> None:
+    """Download an app's source AND its build.
+
+    Both, not one. Source alone meant every import rebuilt in a sandbox; the
+    build alone -- the fallback for an app with no source archive -- shipped a
+    bundle whose code was gone. Mirrors the backend exporter's
+    ``_export_app_assets``; the two must stay in step or an export round-trips
+    differently depending on which one produced it.
+    """
     pod_sdk = client.pod(pod_id)
     try:
         archive_bytes = pod_sdk.apps.download_source_archive(app_name)
@@ -776,7 +784,8 @@ def _download_app_assets(
                     )
             archive.extractall(source_dir)
         _collapse_single_file_app_source(resource_dir)
-        return
+        if (resource_dir / "html.html").is_file():
+            return
 
     try:
         dist_archive = pod_sdk.apps.download_dist_archive(app_name)

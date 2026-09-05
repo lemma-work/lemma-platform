@@ -43,6 +43,7 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.infrastructure.models import (
     FunctionModel,
+    FunctionRevisionModel,
     FunctionRunModel,
 )
 
@@ -135,9 +136,25 @@ async def _create_run(
         status=FunctionStatus.READY,
         visibility="POD",
         revision_hash=artifact.revision_hash,
+        code_path=artifact.code_path,
     )
     session.add(function)
     await session.flush()
+    await get_function_storage_factory()(function_id).write_file(
+        artifact.code_path, code
+    )
+    session.add(
+        FunctionRevisionModel(
+            function_id=function_id,
+            revision_number=1,
+            revision_hash=artifact.revision_hash,
+            generation=artifact.generation,
+            code_path=artifact.code_path,
+            input_schema={},
+            output_schema={},
+            created_by=user_id,
+        )
+    )
 
     run_id = uuid7()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=_RUN_DEADLINE_SECONDS)

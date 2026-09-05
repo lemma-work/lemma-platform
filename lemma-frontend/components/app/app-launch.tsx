@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from 'next-themes';
-import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
+import { Copy, ExternalLink, History, RefreshCw, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ResourceHeader } from '@/components/pod/resource-layout';
@@ -19,6 +19,7 @@ import { crossSiteFramesCarryCookies } from '@/lib/desktop/local-capabilities';
 import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
+import { AppVersionsPanel } from '@/components/app/app-versions-panel';
 
 interface AppFrameProps {
     podId: string;
@@ -69,13 +70,20 @@ export function AppFrame({
     const [frameKey, setFrameKey] = useState(0);
     const [frameLoaded, setFrameLoaded] = useState(false);
     const [frameFailed, setFrameFailed] = useState(false);
+    const [versionsOpen, setVersionsOpen] = useState(false);
+    // A previewed release is served from its own host (`slug--r7.<domain>`), so
+    // pointing the frame at it is the whole mechanism -- a build asks for its
+    // assets at an absolute `/assets/...`, which only resolves to the right
+    // release when the release is in the host.
+    const [preview, setPreview] = useState<{ url: string; releaseNumber: number } | null>(null);
+    const frameUrl = preview?.url ?? url;
 
     const postAppTheme = useCallback(() => {
         const iframe = iframeRef.current;
         if (!iframe?.contentWindow) return;
         let targetOrigin: string;
         try {
-            targetOrigin = new URL(url, window.location.href).origin;
+            targetOrigin = new URL(frameUrl, window.location.href).origin;
         } catch {
             return;
         }
@@ -90,7 +98,7 @@ export function AppFrame({
             readToken: (name) => rootStyles.getPropertyValue(name),
             fontFamily: bodyStyles.fontFamily,
         }), targetOrigin);
-    }, [resolvedTheme, url]);
+    }, [frameUrl, resolvedTheme]);
 
     useEffect(() => {
         if (!frameLoaded) return;
@@ -120,7 +128,7 @@ export function AppFrame({
 
     const copyLink = async () => {
         try {
-            await navigator.clipboard.writeText(url);
+            await navigator.clipboard.writeText(frameUrl);
             toast.success('App link copied');
         } catch {
             toast.error('Could not copy the app link');
@@ -152,6 +160,16 @@ export function AppFrame({
                     actions={(
                         <TooltipProvider>
                             <div className="flex shrink-0 items-center gap-1">
+                                {appName ? (
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={() => setVersionsOpen(true)} aria-label="App versions">
+                                                <History className="h-4 w-4" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Versions</TooltipContent>
+                                    </Tooltip>
+                                ) : null}
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={reloadFrame} aria-label="Reload app">
@@ -207,7 +225,7 @@ export function AppFrame({
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
-                                            <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
+                                            <a href={appInstallUrl(frameUrl)} target="_blank" rel="noreferrer">
                                                 <ExternalLink className="h-4 w-4" />
                                             </a>
                                         </Button>
@@ -219,6 +237,41 @@ export function AppFrame({
                     )}
                 />
             ) : null}
+
+            {preview ? (
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-2">
+                    <p className="text-xs text-[var(--text-secondary)]">
+                        Previewing <span className="font-medium">v{preview.releaseNumber}</span> — this
+                        is not what visitors see.
+                    </p>
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="sm"
+                        className="h-7 shrink-0 px-2 text-xs"
+                        onClick={() => {
+                            setPreview(null);
+                            setFrameLoaded(false);
+                        }}
+                    >
+                        Back to live
+                    </Button>
+                </div>
+            ) : null}
+
+            <AppVersionsPanel
+                podId={podId}
+                appName={appName ?? null}
+                open={versionsOpen}
+                onOpenChange={setVersionsOpen}
+                canPromote={canShare}
+                previewingReleaseNumber={preview?.releaseNumber ?? null}
+                onPreview={(release) => {
+                    setPreview({ url: release.preview_url, releaseNumber: release.release_number });
+                    setFrameLoaded(false);
+                    setVersionsOpen(false);
+                }}
+            />
 
             <div className="embedded-canvas relative min-h-0 flex-1 overflow-hidden">
                 {embeddable && !frameLoaded && !frameFailed ? (
@@ -258,7 +311,7 @@ export function AppFrame({
                                 className="mt-4 gap-2"
                                 onClick={() => trackAppOpened(profile?.created_at ?? null)}
                             >
-                                <a href={appInstallUrl(url)} target="_blank" rel="noreferrer">
+                                <a href={appInstallUrl(frameUrl)} target="_blank" rel="noreferrer">
                                     <ExternalLink className="h-4 w-4" />
                                     Open app
                                 </a>
@@ -268,8 +321,8 @@ export function AppFrame({
                 ) : (
                 <iframe
                     ref={iframeRef}
-                    key={`${url}-${frameKey}`}
-                    src={url}
+                    key={`${frameUrl}-${frameKey}`}
+                    src={frameUrl}
                     title={title}
                     className="embedded-canvas h-full w-full border-0"
                     allow="clipboard-read; clipboard-write; fullscreen"
