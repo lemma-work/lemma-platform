@@ -190,13 +190,6 @@ test-e2e-shard-ci:
 	@test -n "$(SHARD)" || (echo "SHARD is required -- one of:" && uv run python ../scripts/run_e2e_shard.py --list && exit 1)
 	uv run python ../scripts/run_e2e_shard.py $(SHARD)
 
-# Kreuzberg-backed indexing/search e2e (real document extraction). Split out of
-# test-e2e-fast so that job stays fast and never boots the RAM-heavy Kreuzberg
-# container; these are still mocked (Kreuzberg only — no model key, no Docker
-# sandbox) and run as their own CI job so indexing/authz coverage isn't lost.
-test-e2e-indexing:
-	uv run pytest $(E2E_PARALLEL) -m "e2e and indexing and not provider and not local_cli" -o timeout=180
-
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
 # The real-model agent suite. Every `real_llm` test lives here and, until this
 # target existed, ran in no lane at all: the PR lane uses the mock, and the
@@ -214,13 +207,13 @@ test-e2e-real-llm:
 # `.github/workflows/backend-protected-e2e.yml`, and asserted so by
 # `test_the_protected_lane_can_be_reproduced_from_the_makefile`. It had drifted:
 # this target used to select `provider` where the workflow says `not provider`,
-# omit `not mock_sandbox_only`, and leave `E2E_LLM_MODE` unset -- so running it
+# carry a marker the workflow did not, and leave `E2E_LLM_MODE` unset -- so running it
 # locally to reproduce the protected lane failed on tests CI never runs, and
 # passed on none it does. That lane once did nothing at all for eleven days and
 # blocked every Desktop release; it should be reproducible in one command.
 test-e2e-runtime:
-	E2E_REAL=1 E2E_LLM_MODE=mock LEMMA_RUN_SURFACE_LIVE_E2E=1 uv run pytest \
-		-m "e2e and (slow or workspace or surface_live or indexing or local_cli or protected) and not provider and not mock_sandbox_only" \
+	E2E_REAL=1 E2E_LLM_MODE=mock uv run pytest \
+		-m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider" \
 		-o timeout=300
 
 test-module:

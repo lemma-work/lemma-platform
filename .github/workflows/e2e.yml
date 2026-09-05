@@ -5,8 +5,14 @@ name: Backend E2E
 # (from testcontainers on the runner). Only the two nondeterministic/expensive
 # externals are stubbed: the LLM (a deterministic FunctionModel) and the sandbox
 # workspace (an in-process fake) — so it needs NO model API keys and NO Docker
-# workspace image. Slow, live-provider, local-CLI, and real-indexing tests live
-# in "Backend protected E2E" instead.
+# workspace image. Slow, live-provider and local-CLI tests live in "Backend
+# protected E2E" instead.
+#
+# Indexing tests used to be in that list. They are not any more: the `indexing`
+# shard below runs them on every pull request, against the real Kreuzberg
+# extraction container but still with no model key and no Docker sandbox. They
+# are also still selected by the protected lane, which runs them again in real
+# mode — a second configuration, not a second copy.
 #
 # The `sandbox` shard is the exception: it runs the function and workspace
 # journeys against the REAL Docker sandbox (dropping "not workspace" from its
