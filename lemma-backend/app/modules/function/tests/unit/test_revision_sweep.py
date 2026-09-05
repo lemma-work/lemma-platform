@@ -15,9 +15,9 @@ import pytest
 
 from app.modules.function.events.handlers import _sweep_function_revisions as _sweep
 
-# Compiling the candidate query configures every mapper in the registry.
-from app.modules.identity.infrastructure import models as _identity_models  # noqa: F401
-from app.modules.pod.infrastructure import models as _pod_models  # noqa: F401
+from app.modules.test_support.mappers import configure_test_mappers
+
+configure_test_mappers()
 
 pytestmark = pytest.mark.unit
 

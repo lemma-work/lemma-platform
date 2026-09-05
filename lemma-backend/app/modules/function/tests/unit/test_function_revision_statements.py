@@ -1,11 +1,4 @@
-"""How ``record_revision`` talks to the database.
-
-Two things matter and neither is visible from the entity it returns: the upsert
-must clear the tombstone (re-saving code whose artifact retention deleted has
-already rewritten the bytes, so "build removed" has stopped being true), and it
-must never read the row back -- the old fallback's bare ``assert`` would have
-raised AssertionError if the conflicting transaction rolled back in between.
-"""
+"""Deduplicate retained revisions without reviving a removed storage generation."""
 
 from __future__ import annotations
 
@@ -16,10 +9,9 @@ import pytest
 from app.modules.function.domain.entities import FunctionRevisionEntity
 from app.modules.function.infrastructure.repositories import FunctionRepository
 
-# Rendering an ORM insert configures every mapper in the registry, and these
-# models carry relationships that name classes from other modules.
-from app.modules.identity.infrastructure import models as _identity_models  # noqa: F401
-from app.modules.pod.infrastructure import models as _pod_models  # noqa: F401
+from app.modules.test_support.mappers import configure_test_mappers
+
+configure_test_mappers()
 
 pytestmark = pytest.mark.unit
 

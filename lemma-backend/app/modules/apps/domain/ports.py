@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from abc import abstractmethod
 from typing import Optional, Protocol, Tuple
 from uuid import UUID
 
@@ -11,61 +12,97 @@ from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 
 
 class AppRepositoryPort(Protocol):
-    async def get_for_update(self, owner_id: UUID) -> AppEntity | None: ...
+    @abstractmethod
+    async def get_for_update(self, owner_id: UUID) -> AppEntity | None:
+        raise NotImplementedError
 
-    async def mark_releases_purged(self, version_ids: tuple[UUID, ...]) -> None: ...
+    @abstractmethod
+    async def mark_releases_purged(self, version_ids: tuple[UUID, ...]) -> None:
+        raise NotImplementedError
 
-    async def create(self, entity: AppEntity) -> AppEntity: ...
+    @abstractmethod
+    async def create(self, entity: AppEntity) -> AppEntity:
+        raise NotImplementedError
 
-    async def get(self, id: UUID) -> Optional[AppEntity]: ...
+    @abstractmethod
+    async def get(self, id: UUID) -> Optional[AppEntity]:
+        raise NotImplementedError
 
+    @abstractmethod
     async def get_by_name(
         self, pod_id: UUID, name: str, ctx: Context | None = None
-    ) -> Optional[AppEntity]: ...
+    ) -> Optional[AppEntity]:
+        raise NotImplementedError
 
-    async def get_by_public_slug(self, public_slug: str) -> Optional[AppEntity]: ...
+    @abstractmethod
+    async def get_by_public_slug(self, public_slug: str) -> Optional[AppEntity]:
+        raise NotImplementedError
 
-    async def update(self, app: AppEntity) -> AppEntity: ...
+    @abstractmethod
+    async def update(self, app: AppEntity) -> AppEntity:
+        raise NotImplementedError
 
-    async def delete(self, id: UUID) -> bool: ...
+    @abstractmethod
+    async def delete(self, id: UUID) -> bool:
+        raise NotImplementedError
 
+    @abstractmethod
     async def list_by_pod(
         self, pod_id: UUID, limit: int = 100, cursor: str | None = None
-    ) -> Tuple[list[AppEntity], str | None]: ...
+    ) -> Tuple[list[AppEntity], str | None]:
+        raise NotImplementedError
 
+    @abstractmethod
     async def list_visible_by_pod(
         self,
         pod_id: UUID,
         ctx: Context,
         limit: int = 100,
         cursor: str | None = None,
-    ) -> Tuple[list[AppEntity], str | None]: ...
+    ) -> Tuple[list[AppEntity], str | None]:
+        raise NotImplementedError
 
-    async def record_release(self, entity: AppReleaseEntity) -> AppReleaseEntity: ...
+    @abstractmethod
+    async def record_release(self, entity: AppReleaseEntity) -> AppReleaseEntity:
+        raise NotImplementedError
 
-    async def get_release(self, id: UUID) -> Optional[AppReleaseEntity]: ...
+    @abstractmethod
+    async def get_release(self, id: UUID) -> Optional[AppReleaseEntity]:
+        raise NotImplementedError
 
+    @abstractmethod
     async def get_release_by_version(
         self, app_id: UUID, version: str
-    ) -> Optional[AppReleaseEntity]: ...
+    ) -> Optional[AppReleaseEntity]:
+        raise NotImplementedError
 
+    @abstractmethod
     async def get_release_by_number(
         self, app_id: UUID, release_number: int
-    ) -> Optional[AppReleaseEntity]: ...
+    ) -> Optional[AppReleaseEntity]:
+        raise NotImplementedError
 
+    @abstractmethod
     async def attach_release_source(
         self,
         release_id: UUID,
         *,
         source_archive_path: str,
         source_digest: str | None,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
-    async def set_current_release(self, app_id: UUID, release_id: UUID) -> None: ...
+    @abstractmethod
+    async def set_current_release(self, app_id: UUID, release_id: UUID) -> None:
+        raise NotImplementedError
 
-    async def mark_releases_pruned(self, release_ids: list[UUID]) -> None: ...
+    @abstractmethod
+    async def mark_releases_pruned(self, release_ids: list[UUID]) -> None:
+        raise NotImplementedError
 
-    async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]: ...
+    @abstractmethod
+    async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
+        raise NotImplementedError
 
 
 class AppStoragePort(Protocol):

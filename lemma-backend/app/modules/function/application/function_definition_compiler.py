@@ -57,7 +57,8 @@ class FunctionDefinitionCompiler:
             try:
                 await storage.delete_file(path)
             except FileNotFoundError:
-                pass
+                # Cleanup is idempotent; a previous attempt may have removed it.
+                continue
 
     async def build_artifact(
         self,

@@ -747,6 +747,7 @@ async def test_redeploying_a_pruned_build_serves_it_again(
     app_name = f"app_revive_{uuid4().hex[:8]}"
     first = f"FIRST_{uuid4().hex[:6]}"
     second = f"SECOND_{uuid4().hex[:6]}"
+    archives = {marker: build_dist_archive(marker) for marker in (first, second)}
 
     create_res = await authenticated_client.post(
         f"/pods/{pod_id}/apps",
@@ -761,7 +762,7 @@ async def test_redeploying_a_pruned_build_serves_it_again(
             files={
                 "dist_archive": (
                     "dist.zip",
-                    build_dist_archive(marker),
+                    archives[marker],
                     "application/zip",
                 )
             },
