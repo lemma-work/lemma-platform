@@ -1838,7 +1838,7 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
 	@echo "→ Import-bound defaults…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
-	@echo "→ Controller types…"
+	@echo "→ Typed surfaces…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors

@@ -101,7 +101,7 @@ help:
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
 	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
-	@echo "  make lint-controller-types  # new basedpyright errors in API controllers"
+	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
@@ -410,9 +410,10 @@ lint-unbounded:
 lint-import-bound-defaults:
 	uv run python scripts/check_import_bound_defaults.py
 
-# A controller is where a signature meets a caller, so it is where a keyword
-# argument that stopped matching its callee lands -- #620 shipped exactly that
-# to CI. `typecheck-critical` names paths by hand and did not name these.
+# Where a signature meets a caller: every module's HTTP controllers, plus
+# `agent_surfaces/services`, the most entangled service layer in the backend.
+# #620 shipped a keyword argument that stopped matching its callee straight to
+# CI; `typecheck-critical` names paths by hand and did not name these.
 lint-controller-types:
 	uv run python scripts/check_controller_types.py
 
