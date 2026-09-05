@@ -11,6 +11,24 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "agent_memory_section_max_chars",
         "agent_memory_brief_cache_ttl_seconds",
         "function_run_poll_interval_seconds",
+        # The thirteen that moved to `app/modules/function/config.py`. Every one
+        # is read only inside `mod:function`, which is what made this the
+        # cleanest cluster to move first. No `AliasChoices` was needed: no
+        # settings class sets `env_prefix`, so pydantic-settings derives the env
+        # var from the field name identically on both classes.
+        "function_api_deadline_seconds",
+        "function_builder_digest",
+        "function_builder_executable",
+        "function_builder_python_platform",
+        "function_job_deadline_seconds",
+        "function_run_retention_batch_size",
+        "function_run_retention_budget_seconds",
+        "function_run_retention_days",
+        "function_runtime_endpoint_cache_max_entries",
+        "function_runtime_endpoint_reuse_seconds",
+        "function_runtime_gateway_url",
+        "function_session_token_cache_max_entries",
+        "function_session_token_cache_ttl_seconds",
         "conversation_title_model",
         "local_agent_runtime_config_path",
         "icon_upload_max_bytes",

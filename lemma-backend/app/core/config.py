@@ -1178,55 +1178,6 @@ class Settings(BaseSettings):
             "single shared Kreuzberg under parallel load. Production leaves False."
         ),
     )
-    function_builder_executable: str = Field(
-        default="uv",
-        description="Executable used only while prebuilding function dependencies",
-    )
-    function_builder_python_platform: Optional[str] = Field(
-        default=None,
-        description="uv Linux wheel target matching the function runtime image",
-    )
-    function_builder_digest: str = Field(
-        default="local-uv-builder-1",
-        description="Immutable builder identity included in function revision hashes",
-    )
-    function_session_token_cache_ttl_seconds: int = Field(
-        default=300,
-        ge=30,
-        le=3600,
-    )
-    function_session_token_cache_max_entries: int = Field(
-        default=4096,
-        ge=1,
-        le=100_000,
-    )
-    function_runtime_endpoint_reuse_seconds: int = Field(
-        default=60,
-        ge=5,
-        le=240,
-        description=(
-            "How far ahead a function-runtime lease is requested beyond the "
-            "current invocation's own needs, so a busy pod reuses one lease "
-            "instead of paying a control-plane call per invocation. "
-            "The sandbox runtime treats a lease as activity and keeps the sandbox alive "
-            "for the horizon it grants, so this must stay well below "
-            "WORKSPACE_IDLE_RELEASE_SECONDS: otherwise a single invocation "
-            "keeps a pod's sandbox billing long after the last function ran. "
-            "Function execution is the activity that should keep a sandbox "
-            "warm - never the mere existence of a cached endpoint. "
-            "Read the deployed idle release rather than the field default when "
-            "tuning this - production runs 180, not 900, so the usable ceiling "
-            "is far below this field's own maximum. The effective value is "
-            "clamped against it at construction; see endpoint_reuse_seconds."
-        ),
-    )
-    function_runtime_endpoint_cache_max_entries: int = Field(
-        default=4096,
-        ge=1,
-        le=100_000,
-    )
-    function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
-    function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
     workflow_wait_retention_days: int = Field(
         default=30,
         ge=1,
@@ -1243,37 +1194,6 @@ class Settings(BaseSettings):
         description=(
             "Wall-clock budget for one workflow-wait sweep. Zero disables it."
         ),
-    )
-    function_run_retention_days: int = Field(
-        default=30,
-        ge=1,
-        description=(
-            "How long a terminal function run is kept. Runs carry their whole "
-            "input and output payload plus captured logs, so this table grows "
-            "faster in bytes than in rows, and until this existed nothing ever "
-            "removed one. Longer than the event-delivery window because these "
-            "rows are user-visible run history, not delivery receipts."
-        ),
-    )
-    function_run_retention_batch_size: int = Field(
-        default=1_000,
-        ge=1,
-        le=10_000,
-        description="Rows removed per transaction by the function-run sweep.",
-    )
-    function_run_retention_budget_seconds: float = Field(
-        default=45.0,
-        ge=0.0,
-        description=(
-            "Wall-clock budget for one function-run retention sweep. Deletes "
-            "run in batches until drained or the budget is spent, so a backlog "
-            "clears over successive runs rather than never. Zero disables the "
-            "sweep entirely."
-        ),
-    )
-    function_runtime_gateway_url: Optional[str] = Field(
-        default=None,
-        description="Backend URL reachable from function sandboxes",
     )
     workspace_callback_api_url: Optional[str] = Field(
         default=None,

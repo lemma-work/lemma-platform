@@ -11,6 +11,7 @@ from uuid import UUID
 
 from faststream.redis import RedisRouter
 
+
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -24,7 +25,6 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.core.config import settings
 from app.modules.function.api.dependencies import (
     build_function_service,
     build_function_use_cases,
@@ -34,7 +34,7 @@ from app.modules.function.domain.errors import (
     FunctionRunNotFoundError,
     FunctionRunQueueUnavailable,
 )
-from app.modules.function.config import revision_settings
+from app.modules.function.config import function_settings, revision_settings
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
 )
@@ -180,13 +180,13 @@ async def prune_function_runs() -> None:
 
 
 async def _prune_function_runs() -> None:
-    budget = settings.function_run_retention_budget_seconds
+    budget = function_settings.function_run_retention_budget_seconds
     if budget <= 0:
         return
 
-    batch_size = settings.function_run_retention_batch_size
+    batch_size = function_settings.function_run_retention_batch_size
     cutoff = datetime.now(timezone.utc) - timedelta(
-        days=settings.function_run_retention_days
+        days=function_settings.function_run_retention_days
     )
     uow_factory = provide_uow_factory()
     started = time.monotonic()

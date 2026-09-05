@@ -698,7 +698,7 @@ requires-dist = [
 dev = [
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "lemma-pod-bundle", directory = "../../../../lemma-pod-bundle" },
+    { name = "lemma-pod-bundle", editable = "../../../../lemma-pod-bundle" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "pytest" },
     { name = "pytest-asyncio" },

@@ -10,6 +10,7 @@ import pytest
 
 from sandbox_runtime.protocol import WorkloadKind
 
+from app.modules.function.config import function_settings
 from app.modules.workspace.services.local_sandbox_client import (
     LocalSandboxClient,
 )
@@ -214,12 +215,12 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     del e2e_settings
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    original_gateway_url = settings.function_runtime_gateway_url
+    original_gateway_url = function_settings.function_runtime_gateway_url
     # The URL the *sandbox* uses to fetch its artifact, which is not always the
     # one this process would use. A local container reaches the host gateway; a
     # sandbox in E2B's cloud needs a publicly resolvable address, and the
     # fixture publishes whichever applies (starting a tunnel when it must).
-    settings.function_runtime_gateway_url = configure_workspace_api_url[
+    function_settings.function_runtime_gateway_url = configure_workspace_api_url[
         "workspace_callback_url"
     ]
     try:
@@ -308,7 +309,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     finally:
         if "runtime_http_clients" in locals():
             await runtime_http_clients.close()
-        settings.function_runtime_gateway_url = original_gateway_url
+        function_settings.function_runtime_gateway_url = original_gateway_url
 
 
 @pytest.mark.asyncio
@@ -339,8 +340,8 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
     del e2e_settings
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    original_gateway_url = settings.function_runtime_gateway_url
-    settings.function_runtime_gateway_url = configure_workspace_api_url[
+    original_gateway_url = function_settings.function_runtime_gateway_url
+    function_settings.function_runtime_gateway_url = configure_workspace_api_url[
         "workspace_callback_url"
     ]
 
@@ -407,7 +408,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
         )
     finally:
         await runtime_http_clients.close()
-        settings.function_runtime_gateway_url = original_gateway_url
+        function_settings.function_runtime_gateway_url = original_gateway_url
         async with client_factory() as client:
             with contextlib.suppress(Exception):
                 await client.destroy_sandbox(
