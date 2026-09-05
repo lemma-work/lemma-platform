@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.function.config import function_settings
 from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
 from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
@@ -123,11 +124,12 @@ async def test_run_retention_drains_a_backlog_larger_than_one_batch(
     monkeypatch,
 ) -> None:
     """The point of the sweep: a backlog has to clear, not tick down by one batch."""
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_batch_size", 10)
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 60.0)
-    monkeypatch.setattr(settings, "function_run_retention_days", 30)
+    monkeypatch.setattr(function_settings, "function_run_retention_batch_size", 10)
+    monkeypatch.setattr(
+        function_settings, "function_run_retention_budget_seconds", 60.0
+    )
+    monkeypatch.setattr(function_settings, "function_run_retention_days", 30)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10, 10, 3], seen)
@@ -145,11 +147,10 @@ async def test_run_retention_drains_a_backlog_larger_than_one_batch(
 
 @pytest.mark.asyncio
 async def test_run_retention_stops_when_its_budget_is_spent(monkeypatch) -> None:
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_batch_size", 10)
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 5.0)
-    monkeypatch.setattr(settings, "function_run_retention_days", 30)
+    monkeypatch.setattr(function_settings, "function_run_retention_batch_size", 10)
+    monkeypatch.setattr(function_settings, "function_run_retention_budget_seconds", 5.0)
+    monkeypatch.setattr(function_settings, "function_run_retention_days", 30)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10] * 50, seen)
@@ -165,9 +166,8 @@ async def test_run_retention_stops_when_its_budget_is_spent(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_a_zero_retention_budget_disables_the_sweep(monkeypatch) -> None:
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 0.0)
+    monkeypatch.setattr(function_settings, "function_run_retention_budget_seconds", 0.0)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10], seen)
