@@ -939,16 +939,21 @@ fn resolve_executable_in(
     search_paths: impl IntoIterator<Item = PathBuf>,
 ) -> Option<PathBuf> {
     for directory in search_paths {
-        let candidate = directory.join(command);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
+        // Windows first. Node installs an extension-less `npm` shell script
+        // beside `npm.cmd`, and CreateProcess cannot run it: the adapter cache
+        // warm-up failed with "%1 is not a valid Win32 application" (os error
+        // 193) because the bare name matched before the launcher did. The same
+        // shape applies to any agent shipping a POSIX shim next to its .cmd.
         #[cfg(windows)]
         for extension in ["exe", "cmd", "bat"] {
             let candidate = directory.join(format!("{command}.{extension}"));
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+        let candidate = directory.join(command);
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     None
@@ -1465,6 +1470,23 @@ mod tests {
         assert_eq!(
             resolve_executable_in("codex", [root.path().to_path_buf()]),
             Some(executable)
+        );
+    }
+
+    // npm installs `npm` and `npm.cmd` side by side, and only the second is a
+    // thing CreateProcess can run. Resolving the bare name first is what made
+    // the adapter cache warm-up report "%1 is not a valid Win32 application",
+    // leaving every npm-distributed adapter stuck at Installing.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_launcher_beats_the_posix_shim_beside_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("npm"), b"#!/bin/sh\n").unwrap();
+        let launcher = root.path().join("npm.cmd");
+        std::fs::write(&launcher, b"@echo off\n").unwrap();
+        assert_eq!(
+            resolve_executable_in("npm", [root.path().to_path_buf()]),
+            Some(launcher)
         );
     }
 
