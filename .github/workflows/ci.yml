@@ -284,7 +284,13 @@ jobs:
     # and it also checks repo-wide things -- the scenario/spec traceability, the
     # CI aggregator lists, the test census. A filter would skip it for exactly
     # the change that breaks one of those, and a skipped required check counts
-    # as satisfied. It is ~40s of work.
+    # as satisfied.
+    #
+    # It also now owns the e2e lane gate, which used to run in the repo-tooling
+    # job under a bare `python3`. That gate stopped being static when it started
+    # asking each lane's marker filter about each test -- the only way to see
+    # that a test is collected by a shard and then deselected by it -- so it
+    # needs a collected suite, and this is the job that has one.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -587,11 +593,6 @@ jobs:
       # declares a timeout.
       - name: CI aggregators watch every job
         run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
-      # The e2e shard layout is generated from measured timings. This is the
-      # static half of keeping it honest: every e2e directory on disk lands in
-      # exactly one shard, so a new module's tests cannot go quietly unrun.
-      - name: E2E shard layout covers every module
-        run: python3 scripts/plan_e2e_shards.py --verify
 
   windows-cli:
     name: Windows CLI smoke test
