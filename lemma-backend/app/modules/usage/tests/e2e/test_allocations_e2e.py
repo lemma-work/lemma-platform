@@ -29,8 +29,8 @@ from app.modules.usage.infrastructure.allocation_repository import (
     mark_expired_uncertain,
     open_allocation,
 )
+from app.modules.usage.infrastructure.allocation_models import UsageAllocation
 from app.modules.usage.infrastructure.models import (
-    UsageAllocation,
     UsageLimitCounter,
     UsageRecord,
 )

@@ -183,14 +183,17 @@ class RunFinalizer:
                         started_at=run.started_at,
                     )
                     uow.collect_events([event])
+            if finish_result is not None:
+                # A retry must repair receipts even when the run is terminal.
+                # The stored outcome wins over a retry's fallback failure status.
+                await self.usage_recorder.finalize_metered(
+                    agent_run_id=run.agent_run_id,
+                    runtime_profile=run.runtime_profile,
+                    status=finish_result.status.value,
+                )
             if finish_result is None or not finish_result.updated:
                 await self.usage_recorder.release(run.usage_reservation)
                 return
-            await self.usage_recorder.finalize_metered(
-                agent_run_id=run.agent_run_id,
-                runtime_profile=run.runtime_profile,
-                status=status.value,
-            )
             assert event is not None
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
