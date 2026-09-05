@@ -73,11 +73,12 @@ observed-usage path. Embeddings, speech and search are outside this LLM path.
 Each provider attempt has its own journal entry, including retries. SDK and HTTP
 retries below the metered boundary are disabled so retry attempts cannot bypass
 the budget check. The boundary uses bounded retries for supported transient
-failures. In the agent harness, the graph driver owns streaming retries, including
-failures before the first token, so it can reset partial output and restore
+failures. In the agent harness, the graph driver owns connection recovery, including
+drops before the first token, so it can reset partial output and restore
 history. Every re-entered request still passes through metering. Standalone model
 callers retain pre-stream retries; a stream already handed to its consumer is
-not silently replayed inside the model.
+not silently replayed inside the model. Explicit retryable HTTP responses remain
+handled at the model boundary, including their `Retry-After` headers.
 
 Confirmed provider rejections with no billable work can settle at zero cost.
 Timeouts, lost responses, missing final usage and worker crashes cannot establish

@@ -1,5 +1,6 @@
 """Accounting failures retain useful UI classifications without provider data."""
 
+import httpx
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
@@ -12,6 +13,7 @@ from app.modules.agent.services.run_finalizer import (
     run_failure_message,
 )
 from app.modules.usage.domain.accounting import AccountingConflictError
+from app.modules.usage.infrastructure.provider_retries import is_harness_owned_drop
 from app.modules.usage.domain.errors import (
     ProviderAttemptsExhaustedError,
     UsageCheckpointError,
@@ -56,3 +58,45 @@ def test_checkpoint_failure_explains_retained_authority() -> None:
     assert "recorded for reconciliation" in run_failure_message(
         ExceptionGroup("finalization", [RuntimeError("private"), error])
     )
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        httpx.ReadError("connection died"),
+        httpx.ConnectError("never opened"),
+        TimeoutError("no bytes"),
+    ],
+)
+def test_a_dropped_connection_is_left_for_the_harness(dropped: Exception) -> None:
+    """The metering layer must not retry what the harness reports.
+
+    A drop while the stream is opening is the same failure as one mid-answer,
+    and the harness owns both: it resumes from recorded messages and emits a
+    ``stream_reset`` so the client discards the half-answer. Retrying here
+    hides that, and the exhausted attempts arrive as
+    ``ProviderAttemptsExhaustedError`` -- which is how a dropped connection came
+    to be reported as "temporarily unavailable, try again later" instead of the
+    sentence that says nothing was lost.
+    """
+    assert is_harness_owned_drop(dropped)
+    assert is_retryable_stream_error(dropped)
+
+
+def test_a_drop_wrapped_by_the_provider_client_is_still_the_harness_s() -> None:
+    # openai and anthropic both wrap the transport error rather than raise it,
+    # so a check that only looks at the outermost exception sees nothing.
+    wrapped = RuntimeError("provider client")
+    wrapped.__cause__ = httpx.ReadError("connection died")
+    assert is_harness_owned_drop(wrapped)
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_a_provider_that_answered_is_still_retried_here(status: int) -> None:
+    """`Retry-After` handling is the point of retrying in this layer.
+
+    The provider replied, so there is no partial stream to reset and nothing
+    for the harness to resume from -- retrying underneath it costs nothing and
+    is where the header is honoured.
+    """
+    assert not is_harness_owned_drop(ModelHTTPError(status, "model"))

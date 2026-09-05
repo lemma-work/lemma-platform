@@ -29,6 +29,7 @@ from app.modules.usage.domain.errors import (
 from app.modules.usage.infrastructure.provider_retries import (
     MAX_PROVIDER_ATTEMPTS,
     PROVIDER_ERRORS,
+    is_harness_owned_drop,
     retry_delay,
     confirmed_rejection,
 )
@@ -72,12 +73,12 @@ class MeteredModel(WrapperModel):
         profile: Mapping[str, object],
         *,
         source: str | None = None,
-        retry_stream: bool = True,
+        retry_stream_connections: bool = True,
     ) -> None:
         super().__init__(wrapped)
         self.runtime_profile = dict(profile)
         self.source = source
-        self.retry_stream = retry_stream
+        self.retry_stream_connections = retry_stream_connections
 
     async def request(
         self,
@@ -134,11 +135,23 @@ class MeteredModel(WrapperModel):
             except PROVIDER_ERRORS as exc:
                 # Once the caller has the stream, only the harness can replace its
                 # partial output and resume history without repeating tool effects.
+                #
+                # The same is true before handover for a dropped connection: the
+                # harness resumes from recorded messages and emits `stream_reset`
+                # so the client discards what it was shown. Retrying here instead
+                # is invisible to it, and swaps the original error for
+                # `ProviderAttemptsExhaustedError` on the way out -- which is how
+                # a dropped connection came to be reported as "try again later".
+                # A `ModelHTTPError` still retries here: the provider answered,
+                # there is no partial stream, and that is what the `Retry-After`
+                # handling is for.
                 if (
-                    not self.retry_stream
-                    or handed_to_consumer
+                    handed_to_consumer
                     or dispatch is None
                     or dispatch.provider_error is not exc
+                    or (
+                        not self.retry_stream_connections and is_harness_owned_drop(exc)
+                    )
                 ):
                     raise
                 await _retry_or_raise(exc, attempt)

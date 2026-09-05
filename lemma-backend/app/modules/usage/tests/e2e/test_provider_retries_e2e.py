@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+import httpx
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models import ModelRequestParameters
@@ -43,18 +44,26 @@ def retry_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 
 class TransientProvider:
     def __init__(
-        self, status: int, failures: int, on_failure: Callable[[], None] | None = None
+        self,
+        status: int,
+        failures: int,
+        on_failure: Callable[[], None] | None = None,
+        *,
+        connection_drop: bool = False,
     ) -> None:
         self.status = status
         self.failures = failures
         self.attempts = 0
         self.on_failure = on_failure
+        self.connection_drop = connection_drop
 
     def attempt(self) -> None:
         self.attempts += 1
         if self.attempts <= self.failures:
             if self.on_failure is not None:
                 self.on_failure()
+            if self.connection_drop:
+                raise httpx.ReadError("connection interrupted")
             raise ModelHTTPError(self.status, "test", headers={"Retry-After": "0"})
 
     async def request(
@@ -113,29 +122,33 @@ async def invoke(
             assert response.usage.output_tokens == 1
 
 
-async def test_external_stream_retries_keep_each_attempt_in_the_ledger(
-    db_manager: DatabaseManager, retry_model_name: str
+@pytest.mark.parametrize("external_stream_retries", [False, True])
+async def test_connection_recovery_has_one_owner_and_accounts_each_attempt(
+    db_manager: DatabaseManager, retry_model_name: str, external_stream_retries: bool
 ) -> None:
-    provider = TransientProvider(503, 1)
+    provider = TransientProvider(503, 1, connection_drop=True)
     user_id = uuid4()
-    with pytest.raises(ModelHTTPError):
-        await invoke(
-            db_manager,
-            retry_model_name,
-            provider,
-            user_id,
-            True,
-            external_stream_retries=True,
+    if external_stream_retries:
+        with pytest.raises(httpx.ReadError):
+            await invoke(
+                db_manager,
+                retry_model_name,
+                provider,
+                user_id,
+                True,
+                external_stream_retries=True,
+            )
+        assert provider.attempts == 1
+        await assert_ledger(
+            db_manager, user_id, attempts=1, used=Decimal(0), unconfirmed=1
         )
-    assert provider.attempts == 1
-    await assert_ledger(db_manager, user_id, attempts=1, used=Decimal(0), unconfirmed=1)
     await invoke(
         db_manager,
         retry_model_name,
         provider,
         user_id,
         True,
-        external_stream_retries=True,
+        external_stream_retries=external_stream_retries,
     )
     assert provider.attempts == 2
     await assert_ledger(

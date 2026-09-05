@@ -25,6 +25,42 @@ PROVIDER_ERRORS = (
 )
 _RETRYABLE_STATUSES = frozenset({408, 409, 429})
 
+#: The transport-level drops the *harness* owns, not this layer.
+#:
+#: A connection that dies while a stream is being opened is the same failure as
+#: one that dies mid-answer, and the harness already handles it: it retries from
+#: the messages it has recorded, and emits a ``stream_reset`` token so the client
+#: discards the half-answer it was shown. Retrying underneath that is invisible
+#: to it -- the reset never fires, and once the attempts run out the original
+#: error is replaced by ``ProviderAttemptsExhaustedError``, so the specific
+#: "the connection kept dropping" message becomes unreachable and the reader is
+#: told to try again later with no idea what happened.
+#:
+#: ``ModelHTTPError`` is deliberately absent: the provider answered, there is no
+#: partial stream to reset, and retrying it here is what buys the ``Retry-After``
+#: handling above.
+_HARNESS_OWNED_DROPS = (
+    httpx.TransportError,
+    httpx2.TransportError,
+    OpenAIConnectionError,
+    AnthropicConnectionError,
+    TimeoutError,
+)
+
+
+def is_harness_owned_drop(exc: BaseException) -> bool:
+    """Whether the harness's own stream retry should see this, unretried."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ModelHTTPError):
+            return False
+        if isinstance(current, _HARNESS_OWNED_DROPS):
+            return True
+        current = current.__cause__
+    return False
+
 
 def retry_delay(exc: Exception, attempt: int) -> float | None:
     """Return bounded backoff for a transient provider failure, otherwise None."""
