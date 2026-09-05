@@ -822,7 +822,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Settings behavior tests
-        working-directory: desktop/ui
+        working-directory: desktop/ui-tests
         shell: bash
         run: |
           npm ci --ignore-scripts
@@ -1162,7 +1162,7 @@ jobs:
         run: cargo test --workspace --exclude lemma-guestd --locked
 
       - name: Settings behavior tests
-        working-directory: desktop/ui
+        working-directory: desktop/ui-tests
         shell: bash
         run: |
           npm ci --ignore-scripts

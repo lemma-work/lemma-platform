@@ -242,7 +242,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Settings behavior tests
-        working-directory: desktop/ui
+        working-directory: desktop/ui-tests
         run: |
           npm ci --ignore-scripts
           npx --no-install playwright install chromium

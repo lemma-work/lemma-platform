@@ -974,7 +974,7 @@ desktop-test: _desktop-ensure-sidecars
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace tests…"
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
-	@node --test desktop/ui/tests/*.test.mjs
+	@node --test desktop/ui-tests/tests/*.test.mjs
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
@@ -1068,9 +1068,9 @@ desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desk
 
 .PHONY: desktop-test-browser
 desktop-test-browser:
-	@npm ci --prefix desktop/ui --ignore-scripts --no-audit --no-fund
-	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui && npx --no-install playwright install chromium; fi
-	@npm --prefix desktop/ui run test:browser
+	@npm ci --prefix desktop/ui-tests --ignore-scripts --no-audit --no-fund
+	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui-tests && npx --no-install playwright install chromium; fi
+	@npm --prefix desktop/ui-tests run test:browser
 
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \

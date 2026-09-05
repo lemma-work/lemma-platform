@@ -1,10 +1,10 @@
 //! Pinned ACP adapter manifest and local harness discovery.
 
-use crate::NoConsoleWindow;
+use crate::setup_process::{self, SetupProcessError};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -649,9 +649,7 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
         .ok_or_else(|| anyhow::anyhow!("npm is required to install ACP adapters"))?;
     std::fs::create_dir_all(staging)?;
     let mut command = Command::new(npm);
-    command
-        .no_console_window()
-        .args(["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    command.args(["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
     // Lemma exists to drive the agent the user already has, holding the user's
     // own credentials and configuration. Downloading a second copy contradicts
     // that even when it works, and it was most of why a first run took minutes.
@@ -663,13 +661,21 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
     if spec.omit_optional_dependencies {
         command.arg("--omit=optional");
     }
-    let status = command
+    command
         .args(["--package-lock=true", "--prefix"])
         .arg(staging)
-        .arg(package)
-        .stdin(Stdio::null())
-        .status()?;
-    anyhow::ensure!(status.success(), "npm adapter installation failed");
+        .arg(package);
+    let output = setup_process::run(command, Duration::from_secs(300), 4 * 1024 * 1024).map_err(
+        |error| {
+            anyhow::anyhow!(
+                "npm adapter installation failed: {error}. Recheck your network and retry."
+            )
+        },
+    )?;
+    anyhow::ensure!(
+        output.status.success(),
+        "npm adapter installation failed; check registry access and available disk space, then retry"
+    );
 
     let package_name = package
         .rsplit_once('@')
@@ -838,7 +844,6 @@ pub fn reason_without_marker(reason: &str) -> &str {
 /// install. Nothing is slower for the larger budget: a healthy agent answers and
 /// the loop exits, so this is only ever reached by one that never will.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
-const VERSION_PROBE_POLL: Duration = Duration::from_millis(25);
 
 /// Why an agent's version is unknown.
 ///
@@ -863,43 +868,25 @@ fn probe_version_within(
     timeout: Duration,
 ) -> Result<String, VersionUnknown> {
     let mut command = Command::new(executable);
-    command
-        .no_console_window()
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped());
-    let mut child = command.spawn().map_err(|_| VersionUnknown::Failed)?;
-    let started = std::time::Instant::now();
-    loop {
-        if started.elapsed() > timeout {
-            // Killed, not abandoned. Dropping a `Child` neither reaps nor stops
-            // it, so every timeout used to leave the agent running against a
-            // question nobody was waiting for an answer to any more.
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(VersionUnknown::TimedOut);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|_| VersionUnknown::Failed)?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let text = if stdout.trim().is_empty() {
-                    stderr.trim().to_owned()
-                } else {
-                    stdout.trim().to_owned()
-                };
-                return (!text.is_empty())
-                    .then_some(text)
-                    .ok_or(VersionUnknown::Failed);
-            }
-            Ok(Some(_)) | Err(_) => return Err(VersionUnknown::Failed),
-            Ok(None) => std::thread::sleep(VERSION_PROBE_POLL),
-        }
+    command.args(arguments);
+    let output =
+        setup_process::run(command, timeout, 1024 * 1024).map_err(|error| match error {
+            SetupProcessError::TimedOut => VersionUnknown::TimedOut,
+            SetupProcessError::OutputLimit | SetupProcessError::Io(_) => VersionUnknown::Failed,
+        })?;
+    if !output.status.success() {
+        return Err(VersionUnknown::Failed);
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = if stdout.trim().is_empty() {
+        stderr.trim().to_owned()
+    } else {
+        stdout.trim().to_owned()
+    };
+    (!text.is_empty())
+        .then_some(text)
+        .ok_or(VersionUnknown::Failed)
 }
 
 fn version_is_at_least(installed: &str, minimum: &str) -> bool {
@@ -1055,6 +1042,23 @@ fn push_unique(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn version_discovery_does_not_deadlock_on_full_output_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("chatty-agent");
+        std::fs::write(&executable, "#!/bin/sh\nprintf 'agent 1.2.3\\n'\ni=0\nwhile [ \"$i\" -lt 30000 ]; do printf 'stdout diagnostic\\n'; printf 'stderr diagnostic\\n' >&2; i=$((i+1)); done\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = probe_version_within(&executable, &[], Duration::from_secs(5));
+        assert!(
+            output
+                .as_ref()
+                .is_ok_and(|text| text.starts_with("agent 1.2.3")),
+            "{output:?}"
+        );
+    }
 
     /// A script that reports it started, waits, and reports it finished.
     ///

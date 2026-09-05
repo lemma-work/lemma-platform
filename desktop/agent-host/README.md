@@ -75,6 +75,14 @@ The built-in adapter pack is pinned in
 | Cursor | ACP v1 | Native `cursor-agent acp` |
 | OpenCode | ACP v1 | Native `opencode acp` |
 
+Setup commands drain stdout and stderr concurrently. Version discovery has a
+30-second deadline and a 1 MiB limit per output stream; npm installation has a
+five-minute deadline and a 4 MiB limit per stream. Exceeding either limit fails
+the operation and stops its process group on Unix or job on Windows. Remaining
+descendants are also stopped when the parent exits successfully. These are
+setup cleanup boundaries, not filesystem or network isolation. Failed adapter
+downloads do not activate the staged cache, and setup can be retried.
+
 The release lock records exact npm adapter versions and their registry SRI
 digests. The current bootstrap uses npm's own integrity verification for those
 exact packages; a fully offline, Lemma-signed adapter pack remains a GA release

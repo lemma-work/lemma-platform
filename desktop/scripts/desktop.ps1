@@ -108,9 +108,9 @@ switch ($Verb) {
         try {
             cargo test @CargoScope --locked
             Invoke-Checked 'cargo test'
-            node --test ui/tests/settings.test.mjs
+            node --test ui-tests/tests/*.test.mjs
             Invoke-Checked 'settings behavior tests'
-            Push-Location ui
+            Push-Location ui-tests
             try {
                 npm ci --ignore-scripts --no-audit --no-fund
                 Invoke-Checked 'settings browser dependencies'
