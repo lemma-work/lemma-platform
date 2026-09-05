@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from app.modules.usage.contracts import ModelPricing
 
-from app.modules.usage.domain.accounting import CostSource, TokenCounts
+from app.modules.usage.domain.accounting import TokenCounts
 from app.modules.usage.infrastructure.price_catalog import (
     Rate,
     RateCard,
@@ -14,14 +14,13 @@ from app.modules.usage.infrastructure.price_catalog import (
 def test_batch_cost_is_sum_of_request_prices_not_price_of_batch_tokens() -> None:
     card = RateCard(
         model="tiered",
-        source=CostSource.REGISTERED,
         rates={"input_mtok": Rate(base=Decimal("1"), tiers=((100, Decimal("2")),))},
     )
     request = TokenCounts(input_tokens=75)
     request_cost = card.price(request)
     assert request_cost is not None
     assert request_cost + request_cost == Decimal("0.000150")
-    assert card.price(request.plus(request)) == Decimal("0.000300")
+    assert card.price(TokenCounts(input_tokens=150)) == Decimal("0.000300")
 
 
 def test_known_provider_prices_automatically_but_private_gateway_is_only_an_estimate() -> (
@@ -33,7 +32,7 @@ def test_known_provider_prices_automatically_but_private_gateway_is_only_an_esti
             "protocol": "ANTHROPIC_COMPATIBLE",
         },
         {},
-        datetime.now(timezone.utc),
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
     unknown = resolve_rate_card(
         {
@@ -41,18 +40,28 @@ def test_known_provider_prices_automatically_but_private_gateway_is_only_an_esti
             "config": {"base_url": "https://gateway.example"},
         },
         {},
-        datetime.now(timezone.utc),
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
-    assert known.source == CostSource.ESTIMATED
     assert known.priceable
-    assert unknown.source == CostSource.ESTIMATED
     assert not unknown.priceable
+    counts = TokenCounts(input_tokens=1000, output_tokens=100)
+    assert known.price(counts) == unknown.price(counts) == Decimal(".0045")
+
+
+def test_missing_rates_cannot_turn_even_empty_usage_into_a_free_request() -> None:
+    card = resolve_rate_card(
+        {"provider_model_name": "unlisted-test-model"},
+        {},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert not card.priceable
+    assert card.price(TokenCounts()) is None
+    assert card.price(TokenCounts(input_tokens=1000, output_tokens=100)) is None
 
 
 def test_explicit_zero_price_is_known_and_priceable() -> None:
     card = RateCard(
         model="free",
-        source=CostSource.REGISTERED,
         enforceable=True,
         rates={
             "input_mtok": Rate(base=Decimal(0)),
@@ -66,7 +75,6 @@ def test_explicit_zero_price_is_known_and_priceable() -> None:
 def test_cache_buckets_are_inclusive_not_additional_input() -> None:
     card = RateCard(
         model="cached",
-        source=CostSource.REGISTERED,
         rates={
             "input_mtok": Rate(base=Decimal("1")),
             "cache_read_mtok": Rate(base=Decimal(".1")),
@@ -81,7 +89,6 @@ def test_cache_buckets_are_inclusive_not_additional_input() -> None:
 def test_audio_receipts_use_audio_rates() -> None:
     card = RateCard(
         model="audio",
-        source=CostSource.REGISTERED,
         enforceable=True,
         rates={
             "input_mtok": Rate(base=Decimal("1")),
@@ -136,7 +143,6 @@ def test_gemini_pricing_does_not_require_context_metadata() -> None:
 def test_missing_output_price_is_not_a_free_output_price() -> None:
     card = RateCard(
         model="incomplete",
-        source=CostSource.REGISTERED,
         enforceable=True,
         rates={"input_mtok": Rate(base=Decimal("1"))},
     )
@@ -148,7 +154,6 @@ def test_missing_output_price_is_not_a_free_output_price() -> None:
 def test_unpriced_audio_and_cache_receipts_do_not_look_like_zero_cost() -> None:
     card = RateCard(
         model="text-only-rates",
-        source=CostSource.REGISTERED,
         rates={
             "input_mtok": Rate(base=Decimal("1")),
             "output_mtok": Rate(base=Decimal("1")),
@@ -176,7 +181,6 @@ def test_registered_custom_gateway_prices_without_context_metadata() -> None:
 def test_receipt_tiers_use_actual_input_and_start_only_above_threshold() -> None:
     card = RateCard(
         model="tiered",
-        source=CostSource.REGISTERED,
         rates={
             "input_mtok": Rate(base=Decimal("1"), tiers=((100, Decimal("2")),)),
             "output_mtok": Rate(base=Decimal("3"), tiers=((100, Decimal("6")),)),

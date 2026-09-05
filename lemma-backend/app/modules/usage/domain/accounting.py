@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
-from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,13 +17,6 @@ def money(value: Decimal | int | str | float) -> Decimal:
     if not amount.is_finite() or amount < 0:
         raise ValueError("Usage money must be finite and nonnegative")
     return amount.quantize(MONEY_QUANTUM, rounding=ROUND_CEILING)
-
-
-class CostSource(StrEnum):
-    REGISTERED = "REGISTERED"
-    ESTIMATED = "ESTIMATED"
-    UNKNOWN = "UNKNOWN"
-    LEGACY = "LEGACY"
 
 
 class MeteringIdentity(BaseModel):
@@ -59,21 +51,6 @@ class TokenCounts(BaseModel):
     unpriced_requests: int = Field(default=0, ge=0)
     unconfirmed_requests: int = Field(default=0, ge=0)
     request_count: int = Field(default=0, ge=0)
-
-    def plus(self, other: "TokenCounts") -> "TokenCounts":
-        return TokenCounts(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
-            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
-            input_audio_tokens=self.input_audio_tokens + other.input_audio_tokens,
-            output_audio_tokens=self.output_audio_tokens + other.output_audio_tokens,
-            cache_audio_read_tokens=self.cache_audio_read_tokens
-            + other.cache_audio_read_tokens,
-            unpriced_requests=self.unpriced_requests + other.unpriced_requests,
-            unconfirmed_requests=self.unconfirmed_requests + other.unconfirmed_requests,
-            request_count=self.request_count + other.request_count,
-        )
 
 
 class BudgetWindow(BaseModel):

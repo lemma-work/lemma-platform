@@ -83,9 +83,9 @@ def test_usage_upgrade_follows_app_and_function_history_and_can_roll_back() -> N
                     ).fetchone()
                     assert index == (True, True, "(request_id IS NOT NULL)")
                     assert connection.execute(
-                        "SELECT cost_amount, cost_source, cached_input_tokens, request_id "
+                        "SELECT cost_amount, cached_input_tokens, request_id "
                         "FROM usage_records WHERE profile_id = 'legacy'"
-                    ).fetchone() == (None, "LEGACY", None, None)
+                    ).fetchone() == (None, None, None)
                     assert connection.execute(
                         "SELECT numeric_precision, numeric_scale FROM information_schema.columns "
                         "WHERE table_name = 'usage_records' AND column_name = 'cost_amount'"

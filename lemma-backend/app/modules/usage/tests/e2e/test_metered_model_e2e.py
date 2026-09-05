@@ -46,6 +46,47 @@ def bounded_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         UsageService._SYSTEM_MODEL_PRICING.pop(name, None)
 
 
+@pytest.mark.parametrize("model_name", ["unlisted-test-model", "claude-sonnet-4-5"])
+async def test_limited_request_requires_trusted_rates_before_provider_io(
+    db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch, model_name: str
+) -> None:
+    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    dispatched = False
+
+    async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal dispatched
+        dispatched = True
+        return ModelResponse(
+            parts=[TextPart("ok")], usage=RequestUsage(input_tokens=10)
+        )
+
+    user_id = uuid4()
+    model = MeteredModel(
+        FunctionModel(provider),
+        {
+            "profile_id": "system:unconfigured-gateway",
+            "scope": "SYSTEM",
+            "model_name": model_name,
+            "config": {"base_url": "https://gateway.example"},
+        },
+    )
+    async with metering_execution(
+        UsageExecutionContext(user_id=user_id, organization_id=None, pod_id=None),
+        factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+    ):
+        with pytest.raises(UsageLimitExceededError):
+            await model.request([], None, ModelRequestParameters())
+
+    assert not dispatched
+    async with db_manager.session_factory() as session:
+        assert (
+            await session.scalar(
+                select(UsageRecord).where(UsageRecord.user_id == user_id)
+            )
+            is None
+        )
+
+
 async def test_early_stream_exit_records_unconfirmed_usage(
     db_manager: DatabaseManager, bounded_model_name: str
 ) -> None:

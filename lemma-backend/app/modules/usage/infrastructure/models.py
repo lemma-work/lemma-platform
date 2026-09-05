@@ -54,9 +54,6 @@ class UsageRecord(UUIDAuditBase):
     cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 9), nullable=True)
     cached_input_tokens: Mapped[int | None] = mapped_column(nullable=True)
     cache_write_tokens: Mapped[int | None] = mapped_column(nullable=True)
-    cost_source: Mapped[str] = mapped_column(
-        String(20), server_default="LEGACY", default="LEGACY"
-    )
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     record_metadata: Mapped[dict[str, object] | None] = mapped_column(
         "metadata",
@@ -129,7 +126,6 @@ class UsageRecord(UUIDAuditBase):
             cost_amount=self.cost_amount,
             cached_input_tokens=self.cached_input_tokens,
             cache_write_tokens=self.cache_write_tokens,
-            cost_source=self.cost_source,
             status=self.status,
             metadata=self.record_metadata or {},
             occurred_at=self.occurred_at,
@@ -177,7 +173,6 @@ class UsageRecord(UUIDAuditBase):
             ),
             cached_input_tokens=entity.cached_input_tokens,
             cache_write_tokens=entity.cache_write_tokens,
-            cost_source=entity.cost_source,
             status=entity.status,
             record_metadata=entity.metadata,
             occurred_at=entity.occurred_at,

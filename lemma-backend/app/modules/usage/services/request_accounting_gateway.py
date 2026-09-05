@@ -58,17 +58,12 @@ class PostgresRequestAccountingGateway:
             if window.limit is not None
         ]
 
-    async def check(self, now: datetime) -> None:
-        async with self.factory() as uow:
-            windows = self._windows(await self._limits(uow), now)
-            await request_accounting.check(uow.session, windows)
-
     async def begin(
         self, request_id: UUID, now: datetime, *, priceable: bool = True
     ) -> bool:
         async with self.factory() as uow:
             windows = self._windows(await self._limits(uow), now)
-            limited = any(window.limit is not None for window in windows)
+            limited = bool(windows)
             if limited and (not priceable or not self.pricing.priceable):
                 raise UsageLimitExceededError(
                     "This request needs supported usage reporting and a known price to run with monetary limits"

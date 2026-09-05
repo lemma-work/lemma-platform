@@ -175,9 +175,7 @@ class MeteredModel(WrapperModel):
         priceable = priceable_text_request(
             messages, prepared_parameters, effective
         ) and not _compound_billing(effective)
-        request_id, occurred_at, limited = await meter.before(
-            priceable=priceable and pricing.priceable
-        )
+        request_id, occurred_at, limited = await meter.before(priceable=priceable)
         if limited:
             effective["max_tokens"] = output_ceiling
         dispatch = Dispatch(effective, request_id, occurred_at)

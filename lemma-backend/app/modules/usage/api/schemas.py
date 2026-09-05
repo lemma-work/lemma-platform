@@ -29,7 +29,6 @@ class UsageRecordResponse(BaseModel):
     units: float
     cached_input_tokens: int | None = None
     cache_write_tokens: int | None = None
-    cost_source: str = "LEGACY"
     cost_usd: float | None = None
     status: str | None = None
     metadata: dict[str, object]

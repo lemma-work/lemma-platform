@@ -143,5 +143,5 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
         print(
             f"real-accounting streaming={streaming} model={receipt.model_name} "
             f"input={usage.input_tokens} cached={usage.cache_read_tokens} "
-            f"output={usage.output_tokens} cost_usd={expected_cost} source={card.source.value}"
+            f"output={usage.output_tokens} cost_usd={expected_cost}"
         )

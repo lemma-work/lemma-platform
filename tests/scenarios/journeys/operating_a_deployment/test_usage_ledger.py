@@ -177,7 +177,3 @@ async def test_usage_can_be_filtered_to_a_run(after_a_run):
     )
     assert payload["items"]
     assert all(entry["agent_run_id"] == run_id for entry in payload["items"])
-    assert all(
-        entry["cost_source"] in {"REGISTERED", "ESTIMATED", "UNKNOWN", "LEGACY"}
-        for entry in payload["items"]
-    )

@@ -55,7 +55,6 @@ class UsageRecord(Entity):
     units: float = Field(default=0.0, ge=0.0)
     cached_input_tokens: int | None = Field(default=None, ge=0)
     cache_write_tokens: int | None = Field(default=None, ge=0)
-    cost_source: str = "LEGACY"
     cost_amount: Decimal | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0.0)
     status: str | None = None

@@ -16,7 +16,6 @@ from app.modules.usage.config import UsageSettings
 from app.modules.usage.domain.accounting import (
     AccountingConflictError,
     BudgetWindow,
-    CostSource,
     MeteringIdentity,
     RequestReceipt,
     TokenCounts,
@@ -47,7 +46,6 @@ def gateway_for(
         ),
         RateCard(
             model="actual",
-            source=CostSource.REGISTERED,
             enforceable=True,
             rates={
                 "input_mtok": Rate(base=Decimal(1)),
@@ -172,12 +170,12 @@ async def test_current_limit_rechecks_exact_historical_cost_and_legacy_fallback(
             ]
         )
     gateway = gateway_for(db_manager, user_id)
-    await gateway.check(now)
+    await gateway.begin(uuid4(), now)
     monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.300000001)
     with pytest.raises(UsageLimitExceededError):
-        await gateway.check(now)
+        await gateway.begin(uuid4(), now)
     monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.4)
-    await gateway.check(now)
+    await gateway.begin(uuid4(), now)
 
 
 async def test_missing_provider_usage_is_audited_without_inventing_cost(
@@ -204,7 +202,7 @@ async def test_missing_provider_usage_is_audited_without_inventing_cost(
     assert records[0].cost_amount is None
     assert records[0].record_metadata is not None
     assert records[0].record_metadata["usage"] == receipt.counts.model_dump(mode="json")
-    await gateway.check(now)
+    await gateway.begin(uuid4(), now)
 
 
 async def test_late_receipt_charges_dispatch_week_without_blocking_new_week(
@@ -223,13 +221,16 @@ async def test_late_receipt_charges_dispatch_week_without_blocking_new_week(
         occurred_at=dispatch_time,
     )
     assert not await gateway.record(receipt, now=next_week)
-    await gateway.check(next_week)
+    next_request_id = uuid4()
+    await gateway.begin(next_request_id, next_week)
     with pytest.raises(UsageLimitExceededError):
-        await gateway.check(dispatch_time)
+        await gateway.begin(uuid4(), dispatch_time)
     records = await records_for(db_manager, user_id)
-    assert len(records) == 1
-    assert records[0].occurred_at == dispatch_time
-    assert records[0].cost_amount == Decimal("1.1")
+    assert len(records) == 2
+    assert {row.request_id: (row.occurred_at, row.cost_amount) for row in records} == {
+        request_id: (dispatch_time, Decimal("1.1")),
+        next_request_id: (next_week, None),
+    }
 
 
 async def test_request_identity_cannot_be_replayed_into_another_scope(
@@ -307,7 +308,7 @@ async def test_existing_ledger_writer_cannot_bypass_a_previously_checked_budget(
     user_id = uuid4()
     now = datetime.now(timezone.utc)
     gateway = gateway_for(db_manager, user_id)
-    await gateway.check(now)
+    await gateway.begin(uuid4(), now)
     # Compatibility writers still create ordinary ledger rows during rollout.
     async with db_manager.session_factory() as session, session.begin():
         session.add(
@@ -322,4 +323,4 @@ async def test_existing_ledger_writer_cannot_bypass_a_previously_checked_budget(
             )
         )
     with pytest.raises(UsageLimitExceededError):
-        await gateway.check(now)
+        await gateway.begin(uuid4(), now)

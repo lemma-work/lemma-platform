@@ -41,7 +41,6 @@ class UsageRecordResponse:
         cache_write_tokens (int | None | Unset):
         cached_input_tokens (int | None | Unset):
         conversation_id (None | Unset | UUID):
-        cost_source (str | Unset):  Default: 'LEGACY'.
         cost_usd (float | None | Unset):
         organization_id (None | Unset | UUID):
         parent_agent_run_id (None | Unset | UUID):
@@ -69,7 +68,6 @@ class UsageRecordResponse:
     cache_write_tokens: int | None | Unset = UNSET
     cached_input_tokens: int | None | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
-    cost_source: str | Unset = "LEGACY"
     cost_usd: float | None | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
     parent_agent_run_id: None | Unset | UUID = UNSET
@@ -143,8 +141,6 @@ class UsageRecordResponse:
         else:
             conversation_id = self.conversation_id
 
-        cost_source = self.cost_source
-
         cost_usd: float | None | Unset
         if isinstance(self.cost_usd, Unset):
             cost_usd = UNSET
@@ -217,8 +213,6 @@ class UsageRecordResponse:
             field_dict["cached_input_tokens"] = cached_input_tokens
         if conversation_id is not UNSET:
             field_dict["conversation_id"] = conversation_id
-        if cost_source is not UNSET:
-            field_dict["cost_source"] = cost_source
         if cost_usd is not UNSET:
             field_dict["cost_usd"] = cost_usd
         if organization_id is not UNSET:
@@ -340,8 +334,6 @@ class UsageRecordResponse:
 
         conversation_id = _parse_conversation_id(d.pop("conversation_id", UNSET))
 
-        cost_source = d.pop("cost_source", UNSET)
-
         def _parse_cost_usd(data: object) -> float | None | Unset:
             if data is None:
                 return data
@@ -442,7 +434,6 @@ class UsageRecordResponse:
             cache_write_tokens=cache_write_tokens,
             cached_input_tokens=cached_input_tokens,
             conversation_id=conversation_id,
-            cost_source=cost_source,
             cost_usd=cost_usd,
             organization_id=organization_id,
             parent_agent_run_id=parent_agent_run_id,

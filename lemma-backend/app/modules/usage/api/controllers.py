@@ -70,7 +70,6 @@ def _record_response(record: UsageRecord) -> UsageRecordResponse:
         cost_usd=record.cost_usd,
         cached_input_tokens=record.cached_input_tokens,
         cache_write_tokens=record.cache_write_tokens,
-        cost_source=record.cost_source,
         status=record.status,
         metadata=record.metadata,
         occurred_at=record.occurred_at,

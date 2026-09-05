@@ -18,12 +18,6 @@ def upgrade() -> None:
     ):
         op.add_column("usage_records", sa.Column(name, kind, nullable=True))
     op.add_column(
-        "usage_records",
-        sa.Column(
-            "cost_source", sa.String(20), nullable=False, server_default="LEGACY"
-        ),
-    )
-    op.add_column(
         "usage_limit_counters", sa.Column("limit_usd", sa.Numeric(24, 9), nullable=True)
     )
     op.add_column(
@@ -69,7 +63,6 @@ def downgrade() -> None:
             postgresql_using=f"{name}::double precision",
         )
     for name in (
-        "cost_source",
         "cache_write_tokens",
         "cached_input_tokens",
         "cost_amount",

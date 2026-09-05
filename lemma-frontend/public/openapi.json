@@ -15633,11 +15633,6 @@
             ],
             "title": "Conversation Id"
           },
-          "cost_source": {
-            "default": "LEGACY",
-            "title": "Cost Source",
-            "type": "string"
-          },
           "cost_usd": {
             "anyOf": [
               {

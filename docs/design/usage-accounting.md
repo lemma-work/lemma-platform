@@ -47,10 +47,11 @@ nearest nanodollar. Explicit zero prices are valid; a missing price is unknown,
 not zero. A known subtotal remains useful when other requests are unpriced;
 uncertainty metadata records what that subtotal cannot explain.
 
-The pinned `genai-prices` snapshot supplies catalog estimates without network
-lookups. Registered prices take precedence. A model-name match behind an unknown
-gateway can support reporting, but limited usage requires a trusted provider
-endpoint or registered prices. Pricing does not require a model context ceiling.
+The pinned `genai-prices` snapshot supplies catalog rates without network
+lookups. Configured prices take precedence. Each receipt retains the applied rate
+card and its version so its cost can be reproduced. A model-name match behind an
+unknown gateway can support reporting, but limited usage requires a trusted provider
+endpoint or configured prices. Pricing does not require a model context ceiling.
 Provider invoices remain the authority for reconciliation. Updating the snapshot
 is a reviewed release change; no background refresh changes request pricing.
 

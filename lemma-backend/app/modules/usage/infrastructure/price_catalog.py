@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.usage.contracts import ModelPricing
 from app.modules.usage.domain.accounting import (
-    CostSource,
     TokenCounts,
     money,
 )
@@ -26,7 +25,6 @@ class Rate(BaseModel):
 
 class RateCard(BaseModel):
     model_config = ConfigDict(frozen=True)
-    source: CostSource = CostSource.UNKNOWN
     provider: str | None = None
     model: str
     version: str = __version__
@@ -34,7 +32,7 @@ class RateCard(BaseModel):
     rates: dict[str, Rate] = Field(default_factory=dict)
 
     def price(self, counts: TokenCounts) -> Decimal | None:
-        if self.source == CostSource.UNKNOWN:
+        if not self.rates:
             return None
         categories = {
             "input_mtok": counts.input_tokens,
@@ -77,7 +75,6 @@ class RateCard(BaseModel):
         """A trusted endpoint has prices for ordinary input and output tokens."""
         return (
             self.enforceable
-            and self.source != CostSource.UNKNOWN
             and "input_mtok" in self.rates
             and "output_mtok" in self.rates
         )
@@ -94,7 +91,6 @@ def resolve_rate_card(
     )
     if override is not None:
         return RateCard(
-            source=CostSource.REGISTERED,
             model=model,
             enforceable=True,
             version="registered",
@@ -149,7 +145,6 @@ def _automatic_rate_card(
                     tiers=tuple((tier.start, tier.price) for tier in value.tiers),
                 )
         return RateCard(
-            source=CostSource.ESTIMATED,
             provider=provider.id,
             model=info.id,
             rates=rates,

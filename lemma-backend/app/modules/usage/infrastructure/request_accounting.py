@@ -132,7 +132,6 @@ async def begin(
             profile_id=identity.profile_id,
             profile_scope=identity.profile_scope,
             model_name=identity.model_name,
-            cost_source=pricing.source.value,
             occurred_at=now,
             record_metadata={
                 "metering_state": "PENDING",
