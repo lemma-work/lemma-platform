@@ -28,6 +28,9 @@ import {
 // Rows → turns: the conversation-shaped model (ask, work pill, speech,
 // artifacts, interaction cards) the transcript renders.
 import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
+import { firstSource, readCounterpart } from "@/lib/assistant/conversation-source";
+import { ConversationSourceBanner } from "./conversation-source-marks";
+import { useLemmaAuth } from "@/lib/hooks/use-lemma-auth";
 import { toast } from "sonner";
 import { thisComputer } from "@/lib/desktop/this-computer";
 import { cn } from "@/lib/utils";
@@ -378,6 +381,22 @@ export function AssistantExperienceView({
     }),
     [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId],
   );
+  // Where this conversation arrived from, and the other human in it. Read off
+  // the messages rather than the conversation row so the bar is right on a
+  // surface the controller opened without a separate fetch; null for the whole
+  // of the history that was typed here.
+  const { user: signedInUser } = useLemmaAuth();
+  const conversationSource = useMemo(
+    () => firstSource(controllerMessages),
+    [controllerMessages],
+  );
+  // Absent whenever the sender is the reader, which is the usual case: a
+  // conversation carries one member's messages and this copy is theirs. Naming
+  // them to themselves is not attribution.
+  const conversationCounterpart = useMemo(
+    () => readCounterpart(controllerMessages, signedInUser),
+    [controllerMessages, signedInUser],
+  );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
   // A pending question or approval lives in the transcript as a card now, so
@@ -710,6 +729,17 @@ export function AssistantExperienceView({
               isConversationBusy={isConversationBusy}
               isUpdatingModel={isUpdatingModel}
               onModelChange={(nextModel, runtime) => { void handleModelChange(nextModel, runtime); }}
+            />
+          ) : null}
+
+          {/* Above the scroll area, not inside it. A conversation that arrived
+              from Slack or WhatsApp says so permanently, and a bar outside the
+              scroller can do that without ever covering the messages it is
+              introducing. Absent for everything typed here. */}
+          {conversationSource ? (
+            <ConversationSourceBanner
+              source={conversationSource}
+              counterpart={conversationCounterpart}
             />
           ) : null}
 
