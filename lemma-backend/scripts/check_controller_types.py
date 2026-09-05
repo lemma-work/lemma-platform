@@ -42,21 +42,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = ROOT / "controller-types-baseline.json"
 
-#: The surface. Every module's HTTP controllers, and nothing else — widening
-#: this to whole modules would drag in thousands of pre-existing diagnostics and
-#: bury the signal this exists for.
-CONTROLLER_GLOB = "app/modules/*/api/controllers"
+#: The surface. Two kinds of directory, and not whole modules — widening this
+#: further drags in thousands of pre-existing diagnostics and buries the signal.
+#:
+#: Controllers are where a signature meets a caller across an HTTP boundary.
+#: `agent_surfaces/services` is here for the same reason and a sharper one: it
+#: is the most entangled service layer in the backend, carrying 266 of these
+#: errors, and it is the module where a constructor is most likely to be wired
+#: from three places at once.
+TYPED_GLOBS = (
+    "app/modules/*/api/controllers",
+    "app/modules/agent_surfaces/services",
+)
 
 
 def _targets() -> list[str]:
-    return sorted(str(path) for path in ROOT.glob(CONTROLLER_GLOB) if path.is_dir())
+    return sorted(
+        str(path) for glob in TYPED_GLOBS for path in ROOT.glob(glob) if path.is_dir()
+    )
 
 
 def collect() -> Counter[str]:
     """Error count per controller file, relative to the backend root."""
     targets = _targets()
     if not targets:
-        raise SystemExit(f"no controller directories matched {CONTROLLER_GLOB!r}")
+        raise SystemExit(f"no directories matched {TYPED_GLOBS!r}")
     result = subprocess.run(
         ["uv", "run", "basedpyright", "--outputjson", "--level", "error", *targets],
         cwd=ROOT,
@@ -105,9 +115,9 @@ def main() -> int:
     if args.update_baseline:
         payload = {
             "_comment": (
-                "Pre-existing basedpyright errors in API controllers, per file. "
+                "Pre-existing basedpyright errors in the typed surfaces, per file. "
                 "This file may shrink freely; growing it means a new type error "
-                "in a controller. See scripts/check_controller_types.py."
+                "in one of them. See scripts/check_controller_types.py."
             ),
             "files": dict(sorted(counts.items())),
         }
@@ -129,22 +139,22 @@ def main() -> int:
     )
 
     if fixed:
-        print(f"✓ {fixed} baselined controller error(s) gone — run --update-baseline")
+        print(f"✓ {fixed} baselined type error(s) gone — run --update-baseline")
 
     if grew:
-        print("New type errors in API controllers:\n")
+        print("New type errors in a typed surface:\n")
         for name, (was, now) in sorted(grew.items()):
             print(f"  {name}: {was} -> {now}")
         print(
-            "\nRun `uv run basedpyright --level error <file>` to see them. A "
-            "controller is where a\nsignature meets a caller: a keyword argument "
-            "that no longer matches its callee looks\nexactly like this, and "
-            "reaches production as a 500 rather than a failing test."
+            "\nRun `uv run basedpyright --level error <file>` to see them. These "
+            "are the places a\nsignature meets a caller: a keyword argument that "
+            "no longer matches its callee looks\nexactly like this, and reaches "
+            "production as a 500 rather than a failing test."
         )
         return 1
 
     print(
-        f"✓ controller types: no new errors "
+        f"✓ typed surfaces: no new errors "
         f"({sum(baseline.values())} baselined across {len(baseline)} file(s))"
     )
     return 0
