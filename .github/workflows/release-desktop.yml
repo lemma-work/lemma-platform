@@ -801,6 +801,23 @@ jobs:
         shell: pwsh
         run: desktop/scripts/build-sidecar.ps1
 
+      - name: Lint Windows desktop
+        working-directory: desktop
+        run: cargo clippy --workspace --exclude lemma-guestd --locked --all-targets -- -D warnings
+
+      - name: Test Windows desktop
+        working-directory: desktop
+        run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       - name: Sign native runtime bridge
         if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh

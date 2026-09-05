@@ -48,12 +48,20 @@ async function settings(t, mode = 'local') {
       },
       refresh() { emit(structuredClone(this.snapshot)); },
       disconnect() { listeners['lemma:locald-disconnected']?.({ payload: null }); },
-      completeSave() {
+      failSave(message = 'Settings changed elsewhere. Review and retry.') {
+        const { args } = this.calls.findLast((call) => call.command === 'apply_operator_config');
+        emit({ event: 'error', id: args.id, code: 'config-conflict', message });
+      },
+      completeSave(emitEvent = true) {
         const { args } = this.calls.findLast((call) => call.command === 'apply_operator_config');
         const { section } = args.payload;
         this.snapshot.operator.config[section.name] = section.value;
         this.snapshot.operator.config.revision += 1;
-        emit({ event: 'config.applied', id: args.id, operator: structuredClone(this.snapshot.operator) });
+        this.snapshot.config_operations = {
+          ...this.snapshot.config_operations,
+          [args.id]: { status: 'succeeded', operator: structuredClone(this.snapshot.operator) },
+        };
+        if (emitEvent) emit({ event: 'config.applied', id: args.id, operator: structuredClone(this.snapshot.operator) });
       },
     };
     window.__fixture = fixture;
@@ -64,7 +72,10 @@ async function settings(t, mode = 'local') {
         if (command === 'control_snapshot') { fixture.refresh(); return; }
         if (command === 'runtime_info') return { desktopRelease: 'test', repairAvailable: false };
         if (command === 'check_for_app_update') return { updatesSupported: false, currentVersion: 'test', channel: 'dev' };
-        if (command === 'discover_provider_models') return ['discovered'];
+        if (command === 'discover_provider_models') {
+          if (fixture.delayDiscovery) return new Promise((resolve) => { fixture.finishDiscovery = resolve; });
+          return ['discovered'];
+        }
       } },
       event: { listen(name, listener) { listeners[name] = listener; return Promise.resolve(() => {}); } },
     };
@@ -127,4 +138,87 @@ test('cloud mode opens this computer without provisioning a local stack', async 
   assert.equal(commands.includes('runtime.prepare'), false);
   assert.equal(commands.includes('prepare_runtime'), false);
   assert.equal(commands.includes('start'), false);
+});
+
+test('a failed apply keeps credentials and its inline error through refresh', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-key').fill('replacement-canary');
+  await page.locator('.config-page.active [data-save]').click();
+  await page.evaluate(() => window.__fixture.failSave());
+  await page.evaluate(() => window.__fixture.refresh());
+  assert.match(await page.locator('.config-page.active .section-error').textContent(), /changed elsewhere/);
+  assert.equal(await page.locator('#ai-key').inputValue(), 'replacement-canary');
+  assert.equal(await page.locator('.config-page.active [data-save]').isEnabled(), true);
+  await page.locator('.config-page.active [data-save]').click();
+  const payload = await page.evaluate(() => window.__fixture.calls.findLast((call) => call.command === 'apply_operator_config').args.payload);
+  assert.equal(payload.expected_revision, 1);
+  assert.deepEqual(payload.secrets['ai.api_key'], { action: 'replace', value: 'replacement-canary' });
+});
+
+test('reconnect consumes a durable save outcome when the completion event was lost', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-key').fill('save-canary');
+  await page.locator('.config-page.active [data-save]').click();
+  await page.evaluate(() => {
+    window.__fixture.disconnect();
+    window.__fixture.completeSave(false);
+    window.__fixture.refresh();
+  });
+  assert.equal(await page.locator('#ai-key').inputValue(), '');
+  assert.equal(await page.locator('.config-page.active').evaluate((node) => node.classList.contains('dirty')), false);
+  await page.getByRole('button', { name: 'Back to Lemma' }).click();
+  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'close_local_settings').length), 1);
+  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length), 1);
+});
+
+test('model discovery reuses the saved credential and rejects an answer for an old endpoint', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.evaluate(() => { window.__fixture.delayDiscovery = true; });
+  await page.locator('#ai-discover').click();
+  const payload = await page.evaluate(() => window.__fixture.calls.findLast((call) => call.command === 'discover_provider_models').args.payload);
+  assert.equal(Object.hasOwn(payload, 'api_key'), false);
+  await page.locator('#ai-base').fill('https://new-draft.example/v1');
+  await page.evaluate(() => window.__fixture.finishDiscovery(['stale-model']));
+  await page.waitForFunction(() => !document.getElementById('ai-discover').disabled);
+  assert.equal(await page.locator('#ai-model-panel').isVisible(), false);
+  assert.equal(await page.locator('#ai-model option').count(), 0);
+});
+
+test('closing with two dirty sections saves them sequentially before leaving', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-key').fill('provider-canary');
+  await page.getByRole('button', { name: 'Integrations', exact: true }).click();
+  await page.locator('summary').filter({ hasText: 'Gmail, Calendar, and Drive OAuth app' }).click();
+  await page.locator('#google-id').fill('integration-canary');
+  await page.getByRole('button', { name: 'Back to Lemma' }).click();
+  await page.locator('#unsaved-save').click();
+  await page.waitForFunction(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length === 1);
+  assert.equal(await page.evaluate(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings')), false);
+  await page.evaluate(() => window.__fixture.completeSave());
+  await page.waitForFunction(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').length === 2);
+  const saves = await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'apply_operator_config').map((call) => call.args.payload));
+  assert.deepEqual(saves.map((save) => [save.section.name, save.expected_revision]), [['ai', 1], ['integrations', 2]]);
+  assert.equal(saves[1].section.value.google_client_id, 'integration-canary');
+  assert.equal(Object.hasOwn(saves[1].secrets, 'ai.api_key'), false);
+  await page.evaluate(() => window.__fixture.completeSave());
+  await page.waitForFunction(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings'));
+  assert.equal(await page.locator('#unsaved-dialog').isVisible(), false);
+});
+
+test('discard cannot close settings while an admitted save is unfinished', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-key').fill('pending-canary');
+  await page.locator('.config-page.active [data-save]').click();
+  await page.getByRole('button', { name: 'Back to Lemma' }).click();
+  await page.locator('#unsaved-discard').click();
+  assert.match(await page.locator('#unsaved-status').textContent(), /still running/);
+  assert.equal(await page.evaluate(() => window.__fixture.calls.some((call) => call.command === 'close_local_settings')), false);
+  await page.evaluate(() => window.__fixture.failSave());
+  await page.locator('#unsaved-discard').click();
+  assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'close_local_settings').length), 1);
 });
