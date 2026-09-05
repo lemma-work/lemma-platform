@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -94,7 +95,7 @@ async def test_concurrent_fresh_window_never_admits_above_exact_limit(db_manager
             ).all()
         )
     assert len(counters) == 1
-    assert counters[0].reserved_usd == pytest.approx(0.05)
+    assert counters[0].reserved_usd == Decimal("0.05")
 
 
 async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manager):
@@ -122,4 +123,4 @@ async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manage
     async with db_manager.session_factory() as session:
         counters = list((await session.scalars(select(UsageLimitCounter))).all())
     assert len(counters) == 2
-    assert all(counter.reserved_usd == pytest.approx(0.01) for counter in counters)
+    assert all(counter.reserved_usd == Decimal("0.01") for counter in counters)

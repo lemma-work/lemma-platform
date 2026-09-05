@@ -34,6 +34,11 @@ class UsagePricing:
                     input_per_million_usd=float(values["input_per_million_usd"]),
                     output_per_million_usd=float(values["output_per_million_usd"]),
                     unit_usd=float(values.get("unit_usd", 0.0)),
+                    cache_write_per_million_usd=(
+                        float(values["cache_write_per_million_usd"])
+                        if values.get("cache_write_per_million_usd") is not None
+                        else None
+                    ),
                     cached_input_per_million_usd=(
                         float(values["cached_input_per_million_usd"])
                         if values.get("cached_input_per_million_usd") is not None

@@ -22,9 +22,7 @@ from openai.types.chat import ChatCompletionStreamOptionsParam
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
-from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from tenacity import stop_after_attempt, wait_exponential
@@ -163,7 +161,9 @@ def _build_provider_client(headers: Mapping[str, object]) -> httpx.AsyncClient:
                 fallback_strategy=wait_exponential(multiplier=1, max=30),
                 max_wait=60,
             ),
-            stop=stop_after_attempt(3),
+            # A lost response may already be billable. Retry at the metered
+            # model boundary so each dispatch owns a separate request bound.
+            stop=stop_after_attempt(1),
             reraise=True,
         ),
         wrapped=pooled,
@@ -256,7 +256,7 @@ class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
         return {"include_usage": True}
 
 
-def pydantic_ai_model_from_runtime_profile(
+def _unmetered_model_from_runtime_profile(
     *,
     runtime_profile: Mapping[str, object] | None,
     runtime_credentials: Mapping[str, object] | None = None,
@@ -336,21 +336,46 @@ def pydantic_ai_model_from_runtime_profile(
         )
 
     if protocol == "ANTHROPIC_COMPATIBLE":
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+        from anthropic import AsyncAnthropic
+
         base_url = config.get("base_url")
         resolved_base_url = base_url if isinstance(base_url, str) and base_url else None
         provider = AnthropicProvider(
-            api_key=api_key,
-            base_url=resolved_base_url,
-            http_client=get_provider_http_client(
-                protocol="anthropic",
-                base_url=resolved_base_url or "https://api.anthropic.com",
+            anthropic_client=AsyncAnthropic(
+                max_retries=0,
                 api_key=api_key,
-                headers=headers,
-            ),
+                base_url=resolved_base_url,
+                http_client=get_provider_http_client(
+                    protocol="anthropic",
+                    base_url=resolved_base_url or "https://api.anthropic.com",
+                    api_key=api_key,
+                    headers=headers,
+                ),
+            )
         )
         return AnthropicModel(model_name_value, provider=provider)
 
     return None
+
+
+def pydantic_ai_model_from_runtime_profile(
+    *,
+    runtime_profile: Mapping[str, object] | None,
+    runtime_credentials: Mapping[str, object] | None = None,
+    fallback_model_name: str | None = None,
+) -> Model | None:
+    from app.modules.usage.contracts.metering import meter_model
+
+    model = _unmetered_model_from_runtime_profile(
+        runtime_profile=runtime_profile,
+        runtime_credentials=runtime_credentials,
+        fallback_model_name=fallback_model_name,
+    )
+    if model is None or runtime_profile is None:
+        return model
+    return meter_model(model, runtime_profile)
 
 
 def require_pydantic_ai_model_from_runtime_profile(

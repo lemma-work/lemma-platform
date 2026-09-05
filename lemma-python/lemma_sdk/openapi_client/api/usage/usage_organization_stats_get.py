@@ -16,6 +16,8 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     organization_id: UUID,
     *,
+    agent_run_id: None | Unset | UUID = UNSET,
+    conversation_id: None | Unset | UUID = UNSET,
     start: datetime.datetime | None | Unset = UNSET,
     end: datetime.datetime | None | Unset = UNSET,
     days: int | Unset = 30,
@@ -34,6 +36,24 @@ def _get_kwargs(
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
+
+    json_agent_run_id: None | str | Unset
+    if isinstance(agent_run_id, Unset):
+        json_agent_run_id = UNSET
+    elif isinstance(agent_run_id, UUID):
+        json_agent_run_id = str(agent_run_id)
+    else:
+        json_agent_run_id = agent_run_id
+    params["agent_run_id"] = json_agent_run_id
+
+    json_conversation_id: None | str | Unset
+    if isinstance(conversation_id, Unset):
+        json_conversation_id = UNSET
+    elif isinstance(conversation_id, UUID):
+        json_conversation_id = str(conversation_id)
+    else:
+        json_conversation_id = conversation_id
+    params["conversation_id"] = json_conversation_id
 
     json_start: None | str | Unset
     if isinstance(start, Unset):
@@ -182,6 +202,8 @@ def sync_detailed(
     organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    agent_run_id: None | Unset | UUID = UNSET,
+    conversation_id: None | Unset | UUID = UNSET,
     start: datetime.datetime | None | Unset = UNSET,
     end: datetime.datetime | None | Unset = UNSET,
     days: int | Unset = 30,
@@ -202,6 +224,8 @@ def sync_detailed(
 
     Args:
         organization_id (UUID):
+        agent_run_id (None | Unset | UUID):
+        conversation_id (None | Unset | UUID):
         start (datetime.datetime | None | Unset):
         end (datetime.datetime | None | Unset):
         days (int | Unset):  Default: 30.
@@ -228,6 +252,8 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         organization_id=organization_id,
+        agent_run_id=agent_run_id,
+        conversation_id=conversation_id,
         start=start,
         end=end,
         days=days,
@@ -256,6 +282,8 @@ def sync(
     organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    agent_run_id: None | Unset | UUID = UNSET,
+    conversation_id: None | Unset | UUID = UNSET,
     start: datetime.datetime | None | Unset = UNSET,
     end: datetime.datetime | None | Unset = UNSET,
     days: int | Unset = 30,
@@ -276,6 +304,8 @@ def sync(
 
     Args:
         organization_id (UUID):
+        agent_run_id (None | Unset | UUID):
+        conversation_id (None | Unset | UUID):
         start (datetime.datetime | None | Unset):
         end (datetime.datetime | None | Unset):
         days (int | Unset):  Default: 30.
@@ -303,6 +333,8 @@ def sync(
     return sync_detailed(
         organization_id=organization_id,
         client=client,
+        agent_run_id=agent_run_id,
+        conversation_id=conversation_id,
         start=start,
         end=end,
         days=days,
@@ -325,6 +357,8 @@ async def asyncio_detailed(
     organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    agent_run_id: None | Unset | UUID = UNSET,
+    conversation_id: None | Unset | UUID = UNSET,
     start: datetime.datetime | None | Unset = UNSET,
     end: datetime.datetime | None | Unset = UNSET,
     days: int | Unset = 30,
@@ -345,6 +379,8 @@ async def asyncio_detailed(
 
     Args:
         organization_id (UUID):
+        agent_run_id (None | Unset | UUID):
+        conversation_id (None | Unset | UUID):
         start (datetime.datetime | None | Unset):
         end (datetime.datetime | None | Unset):
         days (int | Unset):  Default: 30.
@@ -371,6 +407,8 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         organization_id=organization_id,
+        agent_run_id=agent_run_id,
+        conversation_id=conversation_id,
         start=start,
         end=end,
         days=days,
@@ -397,6 +435,8 @@ async def asyncio(
     organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    agent_run_id: None | Unset | UUID = UNSET,
+    conversation_id: None | Unset | UUID = UNSET,
     start: datetime.datetime | None | Unset = UNSET,
     end: datetime.datetime | None | Unset = UNSET,
     days: int | Unset = 30,
@@ -417,6 +457,8 @@ async def asyncio(
 
     Args:
         organization_id (UUID):
+        agent_run_id (None | Unset | UUID):
+        conversation_id (None | Unset | UUID):
         start (datetime.datetime | None | Unset):
         end (datetime.datetime | None | Unset):
         days (int | Unset):  Default: 30.
@@ -445,6 +487,8 @@ async def asyncio(
         await asyncio_detailed(
             organization_id=organization_id,
             client=client,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             start=start,
             end=end,
             days=days,

@@ -1115,7 +1115,10 @@ def test_lemma_harness_builds_dynamic_openai_compatible_model():
     # that the OpenAI-compatible protocol picked an OpenAI chat model at all.
     from pydantic_ai.models.openai import OpenAIChatModel
 
-    assert isinstance(model, OpenAIChatModel)
+    from app.modules.usage.infrastructure.metered_model import MeteredModel
+
+    assert isinstance(model, MeteredModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
 
 
 def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
@@ -1133,7 +1136,10 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     )
 
     assert model is not None
-    assert type(model).__name__ == "AnthropicModel"
+    from app.modules.usage.infrastructure.metered_model import MeteredModel
+
+    assert isinstance(model, MeteredModel)
+    assert type(model.wrapped).__name__ == "AnthropicModel"
 
 
 def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):

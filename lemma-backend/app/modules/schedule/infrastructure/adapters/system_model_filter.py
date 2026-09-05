@@ -16,6 +16,8 @@ schedule states here is its own ceiling.
 
 from __future__ import annotations
 
+from app.modules.usage.contracts.metering import metering_execution
+
 import json
 
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
@@ -30,8 +32,6 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
-    record_pydantic_ai_result_usage,
-    reserve_usage_for_runtime,
 )
 
 #: The one property this filter adds to whatever schema the schedule declared,
@@ -100,31 +100,15 @@ class SystemModelScheduleFilter:
             workload_type="schedule",
             workload_id=schedule.id,
         )
-        reservation = await reserve_usage_for_runtime(
-            organization_id=usage_context.organization_id,
-            user_id=usage_context.user_id,
-            runtime_profile=runtime.runtime_profile,
-        )
-
         agent = PydanticAIAgent(
             runtime.model,
             system_prompt=self._system_prompt(instruction),
             output_type=StructuredDict(schema),
         )
-        result = None
-        try:
+        async with metering_execution(usage_context):
             result = await agent.run(
                 self._user_message(event_payload),
                 usage_limits=runtime.usage_limits,
-            )
-        finally:
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="COMPLETED" if result is not None else "FAILED",
-                reservation=reservation,
-                metadata={"helper": "schedule_filter"},
             )
 
         output = result.output

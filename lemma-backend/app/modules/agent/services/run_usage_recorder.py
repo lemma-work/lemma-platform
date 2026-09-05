@@ -28,6 +28,13 @@ class RunUsageRecorder:
         user_id,
         runtime_profile: dict[str, object | None],
     ) -> UsageReservation | None:
+        if runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            # Provider dispatch owns admission; a second run-wide hold would
+            # reserve the same work twice and cannot follow retries or helpers.
+            return None
         profile_id = runtime_profile.get("profile_id")
         profile_scope = runtime_profile.get("scope")
         model_name = runtime_profile.get("model_name")
@@ -37,6 +44,11 @@ class RunUsageRecorder:
             model_name = str(runtime_profile.get("provider_model_name") or "default")
         with run_phase("usage_reserve"):
             async with self.uow_factory() as uow:
+                await self._service(uow).require_remote_budget_support(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    profile_scope=profile_scope,
+                )
                 reservation = await self._service(uow).reserve_for_profile(
                     organization_id=organization_id,
                     user_id=user_id,
@@ -63,6 +75,11 @@ class RunUsageRecorder:
         status: str,
         reservation: UsageReservation | None,
     ) -> None:
+        if runtime_profile and runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            return
         async with self.uow_factory() as uow:
             await self._service(uow).record_agent_run_usage(
                 ctx=ctx,

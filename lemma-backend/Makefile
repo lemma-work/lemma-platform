@@ -382,6 +382,12 @@ typecheck-critical:
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
 		app/modules/usage/domain \
+		app/modules/usage/services/accounting_gateway.py \
+		app/modules/usage/services/batch_meter.py \
+		app/modules/usage/services/metering_scope.py \
+		app/modules/usage/infrastructure/allocation_repository.py \
+		app/modules/usage/infrastructure/metered_model.py \
+		app/modules/usage/infrastructure/price_catalog.py \
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \

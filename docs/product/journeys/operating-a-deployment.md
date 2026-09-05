@@ -63,13 +63,13 @@ rather than degrading in a way that only shows up as confused users.
 
 **Contracts:** `usage.organization.limits.get`
 
-### PS-OPS-011 — A missing price never blocks work
+### PS-OPS-011 — Unpriced work remains available without monetary limits
 **Status:** covered
 
-- Where the system cannot price a model, it shall allow the run and record it
-  unpriced.
-- The system shall never refuse work because its own pricing table is
-  incomplete.
+- Where no monetary limit applies, the system shall allow an unpriceable model
+  and record its usage as unpriced.
+- Where a monetary limit applies, the system shall require a price and request
+  bound before spending, and explain what configuration is missing.
 
 **Contracts:** `usage.organization.limits.get`, `agent_run.completed`
 
@@ -81,6 +81,11 @@ rather than degrading in a way that only shows up as confused users.
 - The system shall not silently downgrade a model, shorten a run, or drop work
   to stay inside a limit.
 - When a limit resets, the system shall allow work again without intervention.
+- Ongoing runs shall obtain authority before each model request; concurrent
+  runs cannot spend the same allowance. Batched persistence shall not weaken
+  this protection.
+- An interrupted run without a final usage receipt shall retain its outstanding
+  authority as uncertain, rather than silently refunding potentially spent money.
 
 **Contracts:** `usage.organization.limits.get`
 

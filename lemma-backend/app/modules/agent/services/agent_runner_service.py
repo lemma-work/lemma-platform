@@ -27,9 +27,7 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.errors import (
-    ConversationNotFoundError,
-)
+from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRuntimeConfig,
@@ -41,9 +39,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.domain.runtime_profiles import (
-    RuntimeProfileProtocol,
-)
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.repositories import (
@@ -84,8 +80,8 @@ from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
-    usage_execution_context,
 )
+from app.modules.usage.contracts.metering import metering_execution
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
@@ -352,7 +348,9 @@ class AgentRunnerService:
                             source_type="agent_run",
                             source_id=str(agent_run_id),
                         )
-                        with usage_execution_context(run_usage_context):
+                        async with metering_execution(
+                            run_usage_context, factory=self.uow_factory
+                        ):
                             await self.event_pump.drive(
                                 observe_first_output(
                                     harness.run(

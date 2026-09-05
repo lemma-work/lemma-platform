@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from app.modules.usage.domain.accounting import money
+
 from datetime import datetime
 from collections.abc import Mapping, Sequence
 from uuid import UUID
@@ -50,6 +53,8 @@ class UsageRepository(UsageRepositoryPort):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -66,6 +71,10 @@ class UsageRepository(UsageRepositoryPort):
             stmt = stmt.where(UsageRecordModel.user_id == user_id)
         if agent_id is not None:
             stmt = stmt.where(UsageRecordModel.agent_id == agent_id)
+        if agent_run_id is not None:
+            stmt = stmt.where(UsageRecordModel.agent_run_id == agent_run_id)
+        if conversation_id is not None:
+            stmt = stmt.where(UsageRecordModel.conversation_id == conversation_id)
         if profile_id:
             stmt = stmt.where(UsageRecordModel.profile_id == profile_id)
         if profile_scope:
@@ -99,6 +108,8 @@ class UsageRepository(UsageRepositoryPort):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -117,6 +128,8 @@ class UsageRepository(UsageRepositoryPort):
             pod_id=pod_id,
             user_id=user_id,
             agent_id=agent_id,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             profile_id=profile_id,
             profile_scope=profile_scope,
             model_name=model_name,
@@ -144,6 +157,8 @@ class UsageRepository(UsageRepositoryPort):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -168,6 +183,8 @@ class UsageRepository(UsageRepositoryPort):
             "pod_id": pod_id,
             "user_id": user_id,
             "agent_id": agent_id,
+            "agent_run_id": agent_run_id,
+            "conversation_id": conversation_id,
             "profile_id": profile_id,
             "profile_scope": profile_scope,
             "model_name": model_name,
@@ -180,6 +197,8 @@ class UsageRepository(UsageRepositoryPort):
             pod_id=pod_id,
             user_id=user_id,
             agent_id=agent_id,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             start_date=start,
             end_date=end,
             period_days=(end - start).days,
@@ -224,10 +243,9 @@ class UsageRepository(UsageRepositoryPort):
             func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
             func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
             func.sum(UsageRecordModel.units).label("units"),
-            # COALESCE, not SUM alone: an unpriced model meters tokens with a
-            # null cost, and summing nulls into the total would erase every
-            # priced row in the same bucket.
-            func.sum(func.coalesce(UsageRecordModel.cost_usd, 0.0)).label("cost_usd"),
+            func.sum(func.coalesce(UsageRecordModel.cost_usd, 0.0))
+            .filter(UsageRecordModel.profile_scope == "SYSTEM")
+            .label("cost_usd"),
             func.count().label("record_count"),
         ).where(
             UsageRecordModel.occurred_at >= start,
@@ -356,7 +374,7 @@ class UsageRepository(UsageRepositoryPort):
             )
             self.session.add(counter)
             await self.session.flush()
-        counter.reserved_usd = max(0.0, float(counter.reserved_usd or 0.0) + amount_usd)
+        counter.reserved_usd = money(counter.reserved_usd or 0) + money(amount_usd)
         await self.session.flush()
         return counter.id
 
@@ -428,21 +446,21 @@ class UsageRepository(UsageRepositoryPort):
             # Synchronize pre-migration/history spend without ever lowering the
             # transactionally maintained counter.
             counter.used_usd = max(
-                float(counter.used_usd or 0.0), scope.initial_used_usd
+                money(counter.used_usd or 0), money(scope.initial_used_usd)
             )
             counters.append(counter)
 
         if any(
-            float(counter.used_usd or 0.0)
-            + float(counter.reserved_usd or 0.0)
-            + amount_usd
-            > scope.limit_usd
+            money(counter.used_usd or 0)
+            + money(counter.reserved_usd or 0)
+            + money(amount_usd)
+            > money(scope.limit_usd)
             for counter, scope in zip(counters, ordered, strict=True)
         ):
             return None
 
         for counter in counters:
-            counter.reserved_usd = float(counter.reserved_usd or 0.0) + amount_usd
+            counter.reserved_usd = money(counter.reserved_usd or 0) + money(amount_usd)
         await self.session.flush()
         return [counter.id for counter in counters]
 
@@ -458,8 +476,8 @@ class UsageRepository(UsageRepositoryPort):
         result = await self.session.execute(stmt.with_for_update())
         for counter in result.scalars().all():
             counter.reserved_usd = max(
-                0.0,
-                float(counter.reserved_usd or 0.0) - amount_usd,
+                Decimal(0),
+                money(counter.reserved_usd or 0) - money(amount_usd),
             )
         await self.session.flush()
 
@@ -480,9 +498,9 @@ class UsageRepository(UsageRepositoryPort):
         )
         for counter in result.scalars().all():
             counter.reserved_usd = max(
-                0.0, float(counter.reserved_usd or 0.0) - reserved_usd
+                Decimal(0), money(counter.reserved_usd or 0) - money(reserved_usd)
             )
-            counter.used_usd = max(0.0, float(counter.used_usd or 0.0) + actual_usd)
+            counter.used_usd = money(counter.used_usd or 0) + money(actual_usd)
         await self.session.flush()
 
     async def get_usage_stats(
@@ -496,6 +514,8 @@ class UsageRepository(UsageRepositoryPort):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -529,9 +549,12 @@ class UsageRepository(UsageRepositoryPort):
             func.sum(UsageRecordModel.input_tokens).label("input_tokens"),
             func.sum(UsageRecordModel.output_tokens).label("output_tokens"),
             func.sum(UsageRecordModel.units).label("units"),
-            func.coalesce(func.sum(UsageRecordModel.cost_usd), 0.0).label(
-                "system_cost_usd"
-            ),
+            func.coalesce(
+                func.sum(UsageRecordModel.cost_usd).filter(
+                    UsageRecordModel.profile_scope == "SYSTEM"
+                ),
+                0.0,
+            ).label("system_cost_usd"),
         ]
         if group_column is not None:
             columns.insert(1, group_column)
@@ -545,6 +568,8 @@ class UsageRepository(UsageRepositoryPort):
             pod_id=pod_id,
             user_id=user_id,
             agent_id=agent_id,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             profile_id=profile_id,
             profile_scope=profile_scope,
             model_name=model_name,

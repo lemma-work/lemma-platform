@@ -156,3 +156,28 @@ async def test_a_failed_run_is_recorded_too(world, run):
         "a run that spent tokens and then failed left no usage record, so its "
         "cost is invisible in every report"
     )
+
+
+@scenario("An operator can inspect a single run’s usage")
+@proves("PS-OPS-003")
+@covers("usage.organization.events.list")
+async def test_usage_can_be_filtered_to_a_run(after_a_run):
+    alice, organization, _pod, _agent = after_a_run
+    recorded = await eventually(
+        lambda: _events(alice, organization),
+        bool,
+        describe="the run to reach the usage ledger",
+        timeout=UNTIL_A_RUN_SETTLES,
+    )
+    run_id = next(
+        entry["agent_run_id"] for entry in recorded if entry.get("agent_run_id")
+    )
+    payload = await alice.api.get(
+        f"/usage/organizations/{organization['id']}/events?agent_run_id={run_id}"
+    )
+    assert payload["items"]
+    assert all(entry["agent_run_id"] == run_id for entry in payload["items"])
+    assert all(
+        entry["cost_source"] in {"REGISTERED", "ESTIMATED", "UNKNOWN", "LEGACY"}
+        for entry in payload["items"]
+    )

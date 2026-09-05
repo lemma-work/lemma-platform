@@ -52,12 +52,8 @@ from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.modules.usage.contracts import UsageReservation
-from app.modules.usage.contracts.execution import (
-    record_pydantic_ai_result_usage,
-    reserve_usage_for_runtime,
-)
 from app.modules.usage.contracts.execution import UsageExecutionContext
+from app.modules.usage.contracts.metering import metering_execution
 
 logger = get_logger(__name__)
 
@@ -170,15 +166,6 @@ class ConversationTitleGenerator:
         runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
         model_for_profile: Callable[..., Model] | None = None,
         llm_agent: Callable[..., PydanticAIAgent] | None = None,
-        # Titling never inspects the reservation; it only hands it back to
-        # `record_usage`. Typed as what it is all the same — `object` made the
-        # seam and the real function disagree, and the `or` below unions the
-        # two, which is a `UsageReservation | object | None` that
-        # `record_pydantic_ai_result_usage` will not accept.
-        reserve_usage: (
-            Callable[..., Awaitable["UsageReservation | None"]] | None
-        ) = None,
-        record_usage: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         # `None` rather than the real callable as a default, deliberately. A
         # default argument is evaluated once, when this module is imported, so
@@ -191,8 +178,6 @@ class ConversationTitleGenerator:
         self._runtime_profiles = runtime_profiles
         self._model_for_profile = model_for_profile
         self._llm_agent = llm_agent
-        self._reserve_usage = reserve_usage
-        self._record_usage = record_usage
 
     async def generate(
         self,
@@ -220,39 +205,15 @@ class ConversationTitleGenerator:
             pod_id=pod_id,
             source_type="conversation_title",
         )
-        reservation = await (self._reserve_usage or reserve_usage_for_runtime)(
-            organization_id=organization_id,
-            user_id=user_id,
-            runtime_profile=runtime_profile,
-        )
         agent = (self._llm_agent or PydanticAIAgent)(
             model, system_prompt=_TITLE_SYSTEM_PROMPT
         )
-        result = None
-        try:
+        async with metering_execution(usage_context):
             result = await agent.run(
                 _build_user_prompt(user_text, reply_text),
                 usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
                 model_settings=_TITLE_MODEL_SETTINGS,
             )
-            await (self._record_usage or record_pydantic_ai_result_usage)(
-                ctx=usage_context,
-                runtime_profile=runtime_profile,
-                result=result,
-                status="COMPLETED",
-                reservation=reservation,
-                metadata={"helper": "conversation_title"},
-            )
-        except Exception:
-            await (self._record_usage or record_pydantic_ai_result_usage)(
-                ctx=usage_context,
-                runtime_profile=runtime_profile,
-                result=result,
-                status="FAILED",
-                reservation=reservation,
-                metadata={"helper": "conversation_title"},
-            )
-            raise
 
         return _sanitize_title(str(result.output))
 

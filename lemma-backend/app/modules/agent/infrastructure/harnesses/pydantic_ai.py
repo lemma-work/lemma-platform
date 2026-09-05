@@ -1,6 +1,7 @@
 """PydanticAI harness implementation."""
 
 from __future__ import annotations
+from pydantic_ai.models import Model
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -258,7 +259,7 @@ class PydanticAIHarness:
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
         if is_mock_llm_enabled():
-            model = build_mock_model(conversation)
+            model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)
         agent_kwargs: dict[str, object] = {
@@ -316,6 +317,7 @@ class PydanticAIHarness:
                 user_id=conversation.user_id,
                 fallback=model,
             )
+            summarization_model = _meter_compaction_model(summarization_model, options)
         history_processors = build_history_processors(
             options,
             summarization_model=summarization_model,
@@ -544,3 +546,23 @@ def _runtime_profile_model(options: HarnessOptions):
 
 # Every usage field the harness reports, in one place so a retry can carry all of
 # them forward without the accumulator and the emitter drifting apart.
+
+
+def _meter_mock_model(conversation: Conversation, options: HarnessOptions) -> Model:
+    from app.modules.usage.contracts.metering import meter_model
+
+    model = build_mock_model(conversation)
+    profile = options.extra.get("runtime_profile")
+    return meter_model(model, profile) if isinstance(profile, dict) else model
+
+
+def _meter_compaction_model(model: Model | str, options: HarnessOptions) -> Model | str:
+    from app.modules.usage.contracts.metering import meter_model
+
+    if isinstance(model, Model):
+        return meter_model(
+            model,
+            options.extra.get("runtime_profile") or {},
+            source="history_compaction",
+        )
+    return model

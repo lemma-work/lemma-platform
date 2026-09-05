@@ -14,6 +14,13 @@ configured, the tool says so.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from app.modules.usage.contracts.execution import (
+    UsageExecutionContext,
+    current_usage_context,
+)
+from app.modules.usage.contracts.metering import metering_execution
+
 import asyncio
 import os
 from collections.abc import Sequence
@@ -183,7 +190,21 @@ async def describe_images(
 
     agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
     try:
-        async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
+        current = current_usage_context()
+        usage_context = (
+            replace(current, source_type="vision")
+            if current
+            else UsageExecutionContext(
+                user_id=user_id,
+                organization_id=organization_id,
+                pod_id=None,
+                source_type="vision",
+            )
+        )
+        async with (
+            metering_execution(usage_context),
+            asyncio.timeout(VISION_TIMEOUT_SECONDS),
+        ):
             result = await agent.run(
                 prompt,
                 usage_limits=UsageLimits(

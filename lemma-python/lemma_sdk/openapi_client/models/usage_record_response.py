@@ -38,7 +38,10 @@ class UsageRecordResponse:
         user_id (UUID):
         agent_id (None | Unset | UUID):
         agent_run_id (None | Unset | UUID):
+        cache_write_tokens (int | None | Unset):
+        cached_input_tokens (int | None | Unset):
         conversation_id (None | Unset | UUID):
+        cost_source (str | Unset):  Default: 'LEGACY'.
         cost_usd (float | None | Unset):
         organization_id (None | Unset | UUID):
         parent_agent_run_id (None | Unset | UUID):
@@ -63,7 +66,10 @@ class UsageRecordResponse:
     user_id: UUID
     agent_id: None | Unset | UUID = UNSET
     agent_run_id: None | Unset | UUID = UNSET
+    cache_write_tokens: int | None | Unset = UNSET
+    cached_input_tokens: int | None | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
+    cost_source: str | Unset = "LEGACY"
     cost_usd: float | None | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
     parent_agent_run_id: None | Unset | UUID = UNSET
@@ -117,6 +123,18 @@ class UsageRecordResponse:
         else:
             agent_run_id = self.agent_run_id
 
+        cache_write_tokens: int | None | Unset
+        if isinstance(self.cache_write_tokens, Unset):
+            cache_write_tokens = UNSET
+        else:
+            cache_write_tokens = self.cache_write_tokens
+
+        cached_input_tokens: int | None | Unset
+        if isinstance(self.cached_input_tokens, Unset):
+            cached_input_tokens = UNSET
+        else:
+            cached_input_tokens = self.cached_input_tokens
+
         conversation_id: None | str | Unset
         if isinstance(self.conversation_id, Unset):
             conversation_id = UNSET
@@ -124,6 +142,8 @@ class UsageRecordResponse:
             conversation_id = str(self.conversation_id)
         else:
             conversation_id = self.conversation_id
+
+        cost_source = self.cost_source
 
         cost_usd: float | None | Unset
         if isinstance(self.cost_usd, Unset):
@@ -191,8 +211,14 @@ class UsageRecordResponse:
             field_dict["agent_id"] = agent_id
         if agent_run_id is not UNSET:
             field_dict["agent_run_id"] = agent_run_id
+        if cache_write_tokens is not UNSET:
+            field_dict["cache_write_tokens"] = cache_write_tokens
+        if cached_input_tokens is not UNSET:
+            field_dict["cached_input_tokens"] = cached_input_tokens
         if conversation_id is not UNSET:
             field_dict["conversation_id"] = conversation_id
+        if cost_source is not UNSET:
+            field_dict["cost_source"] = cost_source
         if cost_usd is not UNSET:
             field_dict["cost_usd"] = cost_usd
         if organization_id is not UNSET:
@@ -275,6 +301,28 @@ class UsageRecordResponse:
 
         agent_run_id = _parse_agent_run_id(d.pop("agent_run_id", UNSET))
 
+        def _parse_cache_write_tokens(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cache_write_tokens = _parse_cache_write_tokens(
+            d.pop("cache_write_tokens", UNSET)
+        )
+
+        def _parse_cached_input_tokens(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        cached_input_tokens = _parse_cached_input_tokens(
+            d.pop("cached_input_tokens", UNSET)
+        )
+
         def _parse_conversation_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -291,6 +339,8 @@ class UsageRecordResponse:
             return cast(None | Unset | UUID, data)
 
         conversation_id = _parse_conversation_id(d.pop("conversation_id", UNSET))
+
+        cost_source = d.pop("cost_source", UNSET)
 
         def _parse_cost_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -389,7 +439,10 @@ class UsageRecordResponse:
             user_id=user_id,
             agent_id=agent_id,
             agent_run_id=agent_run_id,
+            cache_write_tokens=cache_write_tokens,
+            cached_input_tokens=cached_input_tokens,
             conversation_id=conversation_id,
+            cost_source=cost_source,
             cost_usd=cost_usd,
             organization_id=organization_id,
             parent_agent_run_id=parent_agent_run_id,

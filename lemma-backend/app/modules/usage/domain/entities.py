@@ -52,6 +52,9 @@ class UsageRecord(Entity):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     units: float = Field(default=0.0, ge=0.0)
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
+    cost_source: str = "LEGACY"
     cost_usd: float | None = Field(default=None, ge=0.0)
     status: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
@@ -63,6 +66,8 @@ class UsageRecord(Entity):
 
 
 class UsageSummary(BaseModel):
+    agent_run_id: UUID | None = None
+    conversation_id: UUID | None = None
     organization_id: UUID | None = None
     pod_id: UUID | None = None
     user_id: UUID | None = None
@@ -86,7 +91,10 @@ class UsageSummary(BaseModel):
         self.total_input_tokens += record.input_tokens
         self.total_output_tokens += record.output_tokens
         self.total_units += record.units
-        if record.cost_usd is not None:
+        if (
+            record.cost_usd is not None
+            and record.profile_scope == UsageProfileScope.SYSTEM
+        ):
             self.system_cost_usd += record.cost_usd
 
         self._add_bucket(self.total_by_profile, record.profile_id, record)
@@ -122,7 +130,10 @@ class UsageSummary(BaseModel):
         bucket["total_tokens"] = _as_int(bucket["total_tokens"]) + record.total_tokens
         bucket["units"] = _as_float(bucket["units"]) + record.units
         bucket["record_count"] = _as_int(bucket["record_count"]) + 1
-        if record.cost_usd is not None:
+        if (
+            record.cost_usd is not None
+            and record.profile_scope == UsageProfileScope.SYSTEM
+        ):
             bucket["system_cost_usd"] = (
                 _as_float(bucket["system_cost_usd"]) + record.cost_usd
             )

@@ -29,11 +29,6 @@ from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.pricing import UsagePricing
 
 meter = metrics.get_meter(__name__)
-# Every record is already durable in ``usage_records``; these make the same
-# numbers chartable next to latency and error rate instead of only queryable
-# per-trace. Labelled by model and token type only -- organization and pod stay
-# out of the label set, because spend per tenant is a question for the table,
-# not for a metric whose cardinality would then track the customer count.
 token_counter = meter.create_counter("lemma.llm.tokens")
 cost_counter = meter.create_counter("lemma.llm.cost_usd")
 
@@ -256,14 +251,6 @@ class UsageService(UsagePricing):
         output_tokens: int,
         cost_usd: float | None,
     ) -> None:
-        """Mirror one usage record onto the metrics pipeline.
-
-        Split by token type rather than summed: input and output are priced
-        differently and move independently, so one series for both hides the
-        thing you would actually want to see. Cost is emitted separately
-        because an unpriced model still meters tokens with a null cost, and
-        adding zero there would understate spend rather than leave a gap.
-        """
         labels = {
             "gen_ai.request.model": model_name,
             "operation": usage_kind,
@@ -355,6 +342,8 @@ class UsageService(UsagePricing):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -371,6 +360,8 @@ class UsageService(UsagePricing):
             pod_id=pod_id,
             user_id=user_id,
             agent_id=agent_id,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             profile_id=profile_id,
             profile_scope=profile_scope,
             model_name=model_name,
@@ -389,6 +380,8 @@ class UsageService(UsagePricing):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -407,6 +400,8 @@ class UsageService(UsagePricing):
                 pod_id=pod_id,
                 user_id=user_id,
                 agent_id=agent_id,
+                agent_run_id=agent_run_id,
+                conversation_id=conversation_id,
                 profile_id=profile_id,
                 profile_scope=profile_scope,
                 model_name=model_name,
@@ -424,6 +419,19 @@ class UsageService(UsagePricing):
                 **kwargs,
             )
         )
+
+    async def require_remote_budget_support(
+        self, *, organization_id: UUID | None, user_id: UUID, profile_scope: str
+    ) -> None:
+        if not self._is_system_scope(profile_scope):
+            return
+        values = await self._resolve_usage_limit_values(
+            organization_id=organization_id, user_id=user_id
+        )
+        if self._has_applicable_limit(values, organization_id):
+            raise UsageLimitExceededError(
+                "This runtime cannot enforce a budget before each provider dispatch. Use a managed runtime or your own provider credentials."
+            )
 
     async def get_usage_limits(
         self,
@@ -452,16 +460,6 @@ class UsageService(UsagePricing):
             if limit_values.user_limit_scope == "global"
             else ()
         )
-        # Six serial aggregates became three. The two user windows are one scan
-        # with a FILTER apiece, and the reserved counters are one grouped read
-        # of all three scopes; only the organization total keeps a statement of
-        # its own, because its predicate is a whole org rather than one user in
-        # it and folding it in would widen the scan to every user.
-        #
-        # Not cached, and not gathered. These numbers gate spending, so a cached
-        # answer lets a caller overspend by the TTL; and six concurrent
-        # checkouts from a pool_size=10, max_overflow=0 pool is a worse trade
-        # than three sequential statements.
         org_used = 0.0
         if organization_id is not None:
             org_used = await self.usage_repository.get_system_cost(
