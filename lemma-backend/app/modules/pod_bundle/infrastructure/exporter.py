@@ -33,6 +33,8 @@ from lemma_pod_bundle.layout import (
     TABLE_DATA_FILE,
     _record_export_contents,
     _write_json,
+    extract_large_text,
+    normalize_file_folders,
 )
 from lemma_pod_bundle.normalize import (
     _attach_permissions_payload,
@@ -184,7 +186,7 @@ class BundleExporter:
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
-        folder_paths = _normalize_file_folders(file_folders)
+        folder_paths = normalize_file_folders(file_folders)
         wants_data = bool(data_tables_set)
         warnings: list[str] = []
         record_budget = _RecordBudget(
@@ -327,7 +329,7 @@ class BundleExporter:
                         # _resource_grants_payload for why None differs from [].
                         if grants is not None:
                             payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(
+                    payload = extract_large_text(
                         payload,
                         field_name="code",
                         file_name="code.py",
@@ -736,51 +738,12 @@ def _normalize_include(include: list[str] | None) -> set[str]:
     return resolved or set(_EXPORT_RESOURCE_TYPES)
 
 
-def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
-    """Folder paths to export, normalized to a leading slash and de-duplicated.
-
-    Order is preserved so warnings come back in the order the caller asked."""
-    if not file_folders:
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in file_folders:
-        if not raw or not raw.strip():
-            continue
-        path = "/" + raw.strip().strip("/")
-        if path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
-
-
 def _normalize_data_tables(data_tables: list[str] | None) -> set[str]:
     """The set of table names to seed row data for. ``None``/empty means none
     Blank entries are dropped."""
     if not data_tables:
         return set()
     return {name.strip() for name in data_tables if name and name.strip()}
-
-
-def _extract_large_text(
-    payload: dict[str, Any],
-    *,
-    field_name: str,
-    file_name: str,
-    resource_dir: Path,
-) -> dict[str, Any]:
-    """Extract a large text field (``code``/``instruction``) to a sidecar file
-    referenced by ``$file`` — byte-identical to the CLI's ``_extract_large_text``."""
-    from lemma_pod_bundle.layout import RAW_FILE_REF_KEY
-
-    value = payload.get(field_name)
-    if not isinstance(value, str):
-        return payload
-    (resource_dir / file_name).write_text(value, encoding="utf-8")
-    next_payload = dict(payload)
-    next_payload[field_name] = {RAW_FILE_REF_KEY: file_name}
-    return next_payload
 
 
 def _extract_zip_bytes(data: bytes, dest_dir: Path) -> None:

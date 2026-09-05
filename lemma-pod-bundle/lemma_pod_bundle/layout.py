@@ -139,6 +139,63 @@ def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     }
 
 
+def extract_large_text(
+    payload: dict[str, Any],
+    *,
+    field_name: str,
+    file_name: str,
+    resource_dir: Path,
+) -> dict[str, Any]:
+    """Move a large text field out to a sidecar file, referenced by ``$file``.
+
+    A function's ``code`` and an agent's ``instruction`` are the two that earn
+    this: inline they turn a bundle's JSON into something no diff tool renders
+    usefully.
+
+    Here rather than in either exporter because both exporters need it and both
+    had a copy. The backend's carried a comment calling itself "byte-identical
+    to the CLI's" -- which was not quite true even as it was written, the two
+    differing in a docstring and where they imported ``RAW_FILE_REF_KEY``, and
+    was in any case a claim nothing checked. Its sibling
+    ``normalize_file_folders`` had already drifted for real.
+    """
+    value = payload.get(field_name)
+    if not isinstance(value, str):
+        return payload
+    (resource_dir / file_name).write_text(value, encoding="utf-8")
+    next_payload = dict(payload)
+    next_payload[field_name] = {RAW_FILE_REF_KEY: file_name}
+    return next_payload
+
+
+def normalize_file_folders(file_folders: list[str] | None) -> list[str]:
+    """Folder paths, given a leading slash and de-duplicated, order preserved.
+
+    Order is preserved so a caller's warnings come back in the order it asked.
+
+    ``"/"`` is *kept* here and refused by the caller. That is the backend's
+    behaviour and it is the better one: the CLI used to drop it silently in its
+    own copy of this function, so `--folder /` exported nothing and said nothing
+    about why. Both export the same bytes either way -- the backend refuses
+    ``/`` a layer down -- so the whole of the difference was whether the person
+    who typed it found out. Policy belongs where there is somewhere to put the
+    warning.
+    """
+    if not file_folders:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in file_folders:
+        if not raw or not raw.strip():
+            continue
+        path = "/" + raw.strip().strip("/")
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
 def _resource_manifest_path(
     resource_dir: Path,
     resource_name: str,

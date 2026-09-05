@@ -35,11 +35,12 @@ from lemma_pod_bundle.jsonc import (
 from lemma_pod_bundle.layout import (
     APP_MANIFEST_ALIAS as APP_MANIFEST_ALIAS,
     EXPORTABLE_RESOURCE_DIRS,
+    extract_large_text,
+    normalize_file_folders,
     FILES_MANIFEST,
     FORMAT_VERSION as FORMAT_VERSION,
     JSON_FILE_REF_KEY as JSON_FILE_REF_KEY,
     POD_MEMBER_TOKEN,
-    RAW_FILE_REF_KEY,
     RESOURCE_DIR_ALIASES as RESOURCE_DIR_ALIASES,
     RESOURCE_DIRS,
     SYSTEM_TABLE_COLUMNS as SYSTEM_TABLE_COLUMNS,
@@ -727,22 +728,6 @@ def _resolve_grant_permissions(
     return {"grants": kept}
 
 
-def _extract_large_text(
-    payload: dict[str, Any],
-    *,
-    field_name: str,
-    file_name: str,
-    resource_dir: Path,
-) -> dict[str, Any]:
-    value = payload.get(field_name)
-    if not isinstance(value, str):
-        return payload
-    (resource_dir / file_name).write_text(value, encoding="utf-8")
-    next_payload = dict(payload)
-    next_payload[field_name] = {RAW_FILE_REF_KEY: file_name}
-    return next_payload
-
-
 def _collapse_single_file_app_source(resource_dir: Path) -> None:
     """Rewrite a one-file `source/index.html` app back to `html.html`.
 
@@ -801,27 +786,6 @@ def _download_app_assets(
         name=f"apps/{app_name}/dist.zip", size=len(dist_archive)
     ):
         (resource_dir / "dist.zip").write_bytes(dist_archive)
-
-
-def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
-    """Folder paths normalized to a leading slash, de-duplicated, order kept.
-
-    ``/`` is dropped: it is the whole file tree, which is exactly what naming
-    folders exists to avoid.
-    """
-    if not file_folders:
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in file_folders:
-        if not raw or not raw.strip():
-            continue
-        path = "/" + raw.strip().strip("/")
-        if path == "/" or path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
 
 
 def _is_pod_visible_file(item: dict[str, Any]) -> bool:
@@ -896,8 +860,21 @@ def _export_pod_files(
     """
     files_root = bundle_root / "files"
     files_root.mkdir(parents=True, exist_ok=True)
-    folders = _normalize_file_folders(file_folders)
     notes = warnings if warnings is not None else []
+    folders = []
+    for folder in normalize_file_folders(file_folders):
+        if folder == "/":
+            # Refused by name, and said out loud. The normalizer used to drop
+            # this silently, so `--folder /` selected nothing and explained
+            # nothing; the backend refused it with exactly this warning. Both
+            # exported the same bytes, so the whole of the difference was
+            # whether the person who typed it found out.
+            notes.append(
+                "folder '/' is not exportable: name the folders you want "
+                "rather than the pod's whole file tree"
+            )
+            continue
+        folders.append(folder)
     if not folders:
         return {"folders": 0, "files": 0}
     _, all_items = fetch_files_index(client, pod_id)
@@ -1132,7 +1109,7 @@ def export_pod_bundle(
             function_permissions = _stamp_account_grant_metadata(
                 client, to_plain(pod_sdk.functions.permissions(function_name))
             )
-            function_payload = _extract_large_text(
+            function_payload = extract_large_text(
                 _attach_permissions_payload(
                     _normalize_function_payload(full_function),
                     function_permissions,
@@ -1158,7 +1135,7 @@ def export_pod_bundle(
             agent_permissions = _stamp_account_grant_metadata(
                 client, to_plain(pod_sdk.agents.permissions(agent_name))
             )
-            agent_payload = _extract_large_text(
+            agent_payload = extract_large_text(
                 _attach_permissions_payload(
                     _normalize_agent_payload(full_agent),
                     agent_permissions,

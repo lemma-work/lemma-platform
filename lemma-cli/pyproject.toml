@@ -148,7 +148,15 @@ addopts = "-ra --import-mode=importlib --strict-markers"
 # This only affects local uv resolution — the published wheel pins lemma-sdk
 # from PyPI (see [project.dependencies]).
 lemma-sdk = { path = "../lemma-python" }
-lemma-pod-bundle = { path = "../lemma-pod-bundle" }
+# Editable, unlike lemma-sdk above. A non-editable path dependency is copied
+# into the venv at sync time and the version is pinned, so uv has no reason to
+# re-resolve when the source changes -- and the copy went stale. `uv run pytest`
+# loaded a `lemma_pod_bundle` that still leaked `installation_id` from a schedule
+# config, the exact leak #604 fixed, while the shipped wheel did not: `setup.py`
+# re-vendors from `../lemma-pod-bundle` on every build. So the tests were green
+# against code that does not ship, and `test_pod_bundle.py` exercised the very
+# function that had regressed without noticing.
+lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 
 # Ruff config. `select` is explicit because ruff's default is four families
 # (E4, E7, E9, F): "lint passes" meant unused imports and syntax errors, and
