@@ -20,7 +20,15 @@ fn run() -> io::Result<()> {
         "serve" => serve(),
         // Deliberately never constructs a Daemon: this is what a user reaches
         // for when the daemon is the thing that will not start.
-        "reset" => lemma_locald::reset::reset_install(LocalPaths::discover()?),
+        "reset" => {
+            if arguments.next().as_deref() != Some("--confirm=erase-local-lemma")
+                || arguments.next().is_some()
+            {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                    "Reset permanently deletes this installation's local databases, files and credentials. There is no automatic backup. To confirm, use: lemma-locald reset --confirm=erase-local-lemma"));
+            }
+            lemma_locald::reset::reset_install(LocalPaths::discover()?)
+        }
         "status" => client_request(json!({"cmd": "status", "id": "cli-status"})),
         "ping" => client_request(json!({"cmd": "ping", "id": "cli-ping"})),
         "send" => {
@@ -44,7 +52,7 @@ fn run() -> io::Result<()> {
         }
         "--help" | "-h" => {
             println!(
-                "lemma-locald {}\n\nUSAGE:\n  lemma-locald serve\n  lemma-locald reset    destroy this installation's local state\n  lemma-locald status\n  lemma-locald ping\n  lemma-locald send '<json>'",
+                "lemma-locald {}\n\nUSAGE:\n  lemma-locald serve\n  lemma-locald reset --confirm=erase-local-lemma    destroy this installation's local state\n  lemma-locald status\n  lemma-locald ping\n  lemma-locald send '<json>'",
                 env!("CARGO_PKG_VERSION")
             );
             Ok(())

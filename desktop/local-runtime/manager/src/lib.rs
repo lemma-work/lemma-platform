@@ -614,6 +614,19 @@ impl ManagedRuntime {
     /// installation's.
     #[cfg(target_os = "macos")]
     pub fn reclaim_owned_macos_vm(&self) -> io::Result<()> {
+        self.reclaim_macos_vm(true)
+    }
+
+    /// Destructive recovery also handles a helper from a replaced app bundle.
+    /// Its recorded executable and start identity still have to match the
+    /// running process; its path need not match the newly installed binary.
+    #[cfg(target_os = "macos")]
+    pub fn reclaim_owned_macos_vm_for_reset(&self) -> io::Result<()> {
+        self.reclaim_macos_vm(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reclaim_macos_vm(&self, require_current_executable: bool) -> io::Result<()> {
         let raw = match fs::read(&self.vm_process_marker) {
             Ok(raw) if raw.len() <= 64 * 1024 => raw,
             Ok(_) => return Ok(()),
@@ -626,7 +639,6 @@ impl ManagedRuntime {
         if marker.schema_version != VM_PROCESS_MARKER_SCHEMA_VERSION {
             return Ok(());
         }
-        let expected = self.config.vz_executable.canonicalize()?;
         let identity = match process_identity(marker.pid) {
             Ok(identity) => identity,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -636,10 +648,16 @@ impl ManagedRuntime {
         };
         if identity.executable == marker.executable
             && identity.start_identity == marker.start_identity
-            && Path::new(&identity.executable)
-                .canonicalize()
-                .is_ok_and(|actual| actual == expected)
         {
+            if require_current_executable {
+                let expected = self.config.vz_executable.canonicalize()?;
+                if !Path::new(&identity.executable)
+                    .canonicalize()
+                    .is_ok_and(|actual| actual == expected)
+                {
+                    return Err(io::Error::other("the running VM belongs to a different app release; use confirmed installation cleanup"));
+                }
+            }
             terminate_verified_process(marker.pid)?;
         }
         remove_if_present(&self.vm_process_marker)

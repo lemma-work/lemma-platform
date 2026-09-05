@@ -27,6 +27,7 @@
     "allow-local-recovery-options",
     "allow-reset-local-data",
     "allow-reset-full-reinstall",
+    "allow-restart-into-recovery",
     "allow-check-for-app-update",
     "allow-install-app-update"
   ]

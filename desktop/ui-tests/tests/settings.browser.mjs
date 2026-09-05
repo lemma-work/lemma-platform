@@ -9,7 +9,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function settings(t, mode = 'local') {
+async function settings(t, mode = 'local', daemonOffline = false) {
   const context = await browser.newContext({ viewport: { width: 1000, height: 760 } });
   t.after(() => context.close());
   const page = await context.newPage();
@@ -24,7 +24,7 @@ async function settings(t, mode = 'local') {
       contentType: name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript',
     });
   });
-  await page.addInitScript((mode) => {
+  await page.addInitScript(({mode, daemonOffline}) => {
     const listeners = {};
     const emit = (event) => listeners['lemma:locald-event']?.({ payload: event });
     const fixture = {
@@ -69,7 +69,11 @@ async function settings(t, mode = 'local') {
     window.__TAURI__ = {
       core: { async invoke(command, args) {
         fixture.calls.push({ command, args });
-        if (command === 'control_snapshot') { fixture.refresh(); return; }
+        if (command === 'control_snapshot') {
+          if (daemonOffline) throw new Error('The old daemon cannot start');
+          fixture.refresh(); return;
+        }
+        if (command === 'reset_full_reinstall' || command === 'reset_local_data') return 'cancelled';
         if (command === 'runtime_info') return { desktopRelease: 'test', repairAvailable: false };
         if (command === 'check_for_app_update') return { updatesSupported: false, currentVersion: 'test', channel: 'dev' };
         if (command === 'discover_provider_models') {
@@ -79,9 +83,10 @@ async function settings(t, mode = 'local') {
       } },
       event: { listen(name, listener) { listeners[name] = listener; return Promise.resolve(() => {}); } },
     };
-  }, mode);
+  }, {mode, daemonOffline});
   await page.goto('https://desktop.test/control.html');
-  await page.waitForFunction(() => document.getElementById('metric-ai').textContent === 'Ready');
+  if (daemonOffline) await page.waitForFunction(() => !document.getElementById('snapshot-unavailable').hidden);
+  else await page.waitForFunction(() => document.getElementById('metric-ai').textContent === 'Ready');
   return page;
 }
 
@@ -221,4 +226,15 @@ test('discard cannot close settings while an admitted save is unfinished', async
   await page.evaluate(() => window.__fixture.failSave());
   await page.locator('#unsaved-discard').click();
   assert.equal(await page.evaluate(() => window.__fixture.calls.filter((call) => call.command === 'close_local_settings').length), 1);
+});
+
+test('force cleanup is reachable without a daemon and cancellation never reports erased data', async (t) => {
+  const page = await settings(t, 'hosted', true);
+  await page.getByRole('button', { name: 'Recovery', exact: true }).click();
+  await page.getByRole('button', { name: 'Force cleanup and reinstall', exact: true }).click();
+  const calls = await page.evaluate(() => window.__fixture.calls);
+  assert.equal(calls.filter((call) => call.command === 'reset_full_reinstall').length, 1);
+  assert.equal(calls.some((call) => call.command === 'prepare_runtime' || call.command === 'start'), false);
+  assert.doesNotMatch(await page.locator('#toast').textContent(), /was removed|were removed|was erased/);
+  assert.equal(await page.getByRole('button', { name: 'Force cleanup and reinstall', exact: true }).isEnabled(), true);
 });

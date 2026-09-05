@@ -1,6 +1,6 @@
 //! Pinned ACP adapter manifest and local harness discovery.
 
-use crate::setup_process::{self, SetupProcessError};
+use lemma_desktop_process::{self as setup_process, SetupProcessError};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};

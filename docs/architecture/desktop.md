@@ -137,6 +137,25 @@ generation; a new user start creates a new one. After stable Ready, transient
 recovery stays in the workspace. A sustained terminal failure opens recovery
 after a grace interval.
 
+Recovery is available from the welcome screen, desktop settings, and the tray,
+including cloud mode and daemon failures. Restart into Recovery pauses automatic
+service startup and runtime downloads. Force cleanup requires an app-owned
+confirmation with Cancel focused. It deletes this installation's local data,
+credentials, runtime downloads, Agent Host pairings and managed working folders;
+external project folders and cloud data are retained. It is separate from updates
+and makes no automatic backup. Failed runtime or credential cleanup preserves
+its recovery records for a retry. The standalone daemon reset command requires
+`--confirm=erase-local-lemma` and refuses an active control endpoint even if its
+authentication token is corrupt.
+
+Confirmations and menu errors use a bundled app overlay, with a single pending
+operation and a dedicated IPC capability. Escape, Enter on the default Cancel,
+and window close cancel the operation; old responses cannot authorize a later
+operation. Closing the main window keeps services and the tray running. Quit
+stops work on a worker with a bounded exit deadline; the final event-loop exit
+handler never waits on daemon I/O or process cleanup. A daemon handshake has both
+a deadline and an allocation limit, including Windows named pipes.
+
 ## 5. Host process contract
 
 The host-pack manifest requires exactly:

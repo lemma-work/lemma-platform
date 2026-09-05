@@ -36,10 +36,12 @@ const COMMANDS: &[&str] = &[
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",
+    "resolve_confirmation",
     "open_developer_tools",
     "local_recovery_options",
     "reset_local_data",
     "reset_full_reinstall",
+    "restart_into_recovery",
     "check_for_app_update",
     "install_app_update",
 ];

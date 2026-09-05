@@ -497,8 +497,10 @@ and unrelated listeners occupying persisted ports.
 
 ### Recovery and update scenarios
 
-None of these are reachable from a fake engine, so they belong here rather than
-in the Rust suite. Each one is a path that used to have no way out.
+Run these against disposable native installations as well as the Rust and
+browser regressions. Never corrupt or reset an installation containing real
+accounts, credentials, or project work. Passing fixture tests does not qualify
+a shipped artifact.
 
 19. **Incompatible data.** Install a build pinned to an older Postgres major,
     create a pod with data, then install one pinned to a newer major and press
@@ -516,11 +518,16 @@ in the Rust suite. Each one is a path that used to have no way out.
     running. `ps` must show no `lemma-vz` at the moment the disk is discarded,
     and the app must come back to a clean workspace.
 22. **Start over from a wedged installation.** Truncate `locald/control.token`
-    *and* corrupt `operator-config.json`, launch, and confirm the splash names
-    the actual reason. After **Start over**:
-    `security find-generic-password -s work.lemma.local` finds nothing, the
-    locald root and `runtime/releases` are gone, `runtime/install.log`
-    **survives**, and the next launch shows the chooser.
+    *and* corrupt `operator-config.json` in a disposable installation. Open
+    **Recovery** from the welcome screen or tray. **Restart into Recovery**
+    must pause services and downloads. **Force cleanup and reinstall** must
+    open Lemma's in-app confirmation with Cancel focused. Enter, Escape, and
+    closing the window must preserve all fixture data. After explicitly
+    choosing **Erase Local Lemma**, the locald root, downloaded releases,
+    Agent Host pairings and managed folders are gone; external project canaries
+    and the runtime installation log survive, and the chooser returns. Test
+    credential removal with a dedicated test identity only. A live endpoint or
+    failed credential/VM cleanup must report failure and retain retry records.
 23. **Start over with an orphaned VM.** `kill -9` the locald pid, leaving
     `lemma-vz` alive, then start over. The helper must be gone afterwards — it
     is reclaimed by verified identity, not by name.

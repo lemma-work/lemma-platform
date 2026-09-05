@@ -730,6 +730,7 @@
   <div class="progress"><div id="bar"></div></div>
   <div class="corner left">
     <button id="toggle-log" type="button">log</button>
+    <button id="open-recovery" type="button">recovery</button>
     <button id="switch-mode" type="button" hidden>use lemma cloud</button>
   </div>
   <div class="corner right" id="runinfo"></div>
@@ -768,6 +769,7 @@
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
         recoveryOptions: () => invoke("local_recovery_options"),
+        openRecovery: () => invoke("open_control_center", { page: "recovery" }),
         resetLocalData: () => invoke("reset_local_data"),
         resetFullReinstall: () => invoke("reset_full_reinstall"),
         onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
@@ -1322,6 +1324,9 @@
    * would read as "cancelled" every time.
    */
   let recoveryOffered = false;
+  document.getElementById("open-recovery").addEventListener("click", () => {
+    window.lemmaDesktop.openRecovery?.().catch((error) => { errdetail.textContent = String(error); });
+  });
   async function showRecoveryButtons(offer, dataIsUnreadable) {
     if (!offer) {
       resetDataBtn.hidden = true;

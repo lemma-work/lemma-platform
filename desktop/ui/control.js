@@ -27,6 +27,7 @@ const titles = {
   channels: ["Channels", "Make agents reachable through only the receivers you explicitly enable."],
   runtime: ["Runtime", "Application health, lifecycle controls, and private dependency status."],
   updates: ["Updates", "Exact release matching, verified packs, and safe repair boundaries."],
+  recovery: ["Recovery", "Repair a broken installation or explicitly erase local Lemma and set up again."],
   diagnostics: ["Diagnostics", "Local paths, canonical origins, logs, and non-destructive repair."],
 };
 
@@ -300,6 +301,7 @@ function labelSecretButton(button, input) {
 }
 
 function configureInteractionHandlers() {
+  document.querySelectorAll('[data-action="reset-local-data"]').forEach((button) => { button.disabled = !LOCAL_MODE; });
   document.querySelectorAll(".nav-item").forEach((button) => {
     if (!LOCAL_MODE && LOCAL_PAGES.has(button.dataset.page)) {
       button.disabled = true;
@@ -726,6 +728,7 @@ const confirmAction = (title, message, confirmLabel) =>
 async function runDesktopAction(button) {
   try {
     const action = button.dataset.action;
+    if (action === "restart-recovery") await invoke("restart_into_recovery");
     if (action === "start") await invoke("start");
     if (action === "restart") await invoke("restart");
     if (action === "stop") await invoke("stop", { includeInfra: false });
@@ -789,26 +792,33 @@ async function runDesktopAction(button) {
     if (action === "reset-local-data") {
       button.disabled = true;
       button.textContent = "Resetting…";
-      await invoke("reset_local_data");
-      toast("Local data was erased. Lemma is starting with a clean workspace.");
+      const outcome = await invoke("reset_local_data");
+      $("recovery-status").textContent = outcome === "started"
+        ? "Local data reset has started. Wait for the installation to report completion."
+        : "Reset cancelled. No cleanup was started.";
     }
     if (action === "full-reinstall") {
       button.disabled = true;
       button.textContent = "Starting over…";
-      await invoke("reset_full_reinstall");
-      toast("Everything local was removed. Choose how to run Lemma to set up again.");
+      const outcome = await invoke("reset_full_reinstall");
+      $("recovery-status").textContent = outcome === "completed"
+        ? "Cleanup completed. Choose how to run Lemma to set up again."
+        : "Cleanup cancelled. No cleanup was started.";
     }
   } catch (error) {
+    if (["reset-local-data", "full-reinstall"].includes(button.dataset.action)) {
+      $("recovery-status").textContent = friendlyError(error);
+    }
     toast(friendlyError(error), true);
   } finally {
     for (const [action, label] of [
       ["reset-local-data", "Reset local data"],
-      ["full-reinstall", "Start over"],
+      ["full-reinstall", "Force cleanup and reinstall"],
       ["check-app-update", "Check for updates"],
       ["install-app-update", "Download and install"],
     ]) {
       document.querySelectorAll(`[data-action="${action}"]`).forEach((item) => {
-        item.disabled = action === "install-app-update" && appUpdate?.dataCompatibility !== "compatible";
+        item.disabled = (action === "install-app-update" && appUpdate?.dataCompatibility !== "compatible") || (action === "reset-local-data" && !LOCAL_MODE);
         item.textContent = label;
       });
     }
@@ -1242,7 +1252,7 @@ const FRIENDLY_ERRORS = [
   [/control token/i,
    "Lemma couldn't authenticate with its own background service. Restarting Lemma replaces the credential."],
   [/local data must be reset/i,
-   "The workspace data on this Mac can't be read by this version of Lemma. Reset local data below to start clean."],
+   "This version cannot read the existing workspace data. Keep the data and return to a compatible version, or use Recovery only if you intend to erase it."],
   [/another local operation is running|busy/i,
    "Lemma is already doing something. Wait for it to finish and try again."],
   [/broken pipe|connection reset/i,

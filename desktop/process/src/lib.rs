@@ -1,4 +1,4 @@
-//! Supervision for short-lived discovery and adapter installation commands.
+//! Supervision for short-lived installation, recovery, and discovery commands.
 //!
 //! This owns a process tree for cleanup; it does not grant or enforce project
 //! execution permissions and must not be used as an execution sandbox.
@@ -11,7 +11,7 @@ use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SetupProcessError {
+pub enum SetupProcessError {
     #[error("command exceeded its time limit")]
     TimedOut,
     #[error("command exceeded its output limit")]
@@ -29,7 +29,7 @@ impl Drop for OwnedProcess {
     }
 }
 
-pub(crate) fn run(
+pub fn run(
     command: Command,
     timeout: Duration,
     output_limit: usize,
@@ -84,7 +84,14 @@ async fn run_async(
         .ok_or_else(|| io::Error::other("missing stderr"))?;
     let result = tokio::time::timeout(timeout, async {
         let (status, stdout, stderr) = tokio::try_join!(
-            async { child.0.wait().await.map_err(SetupProcessError::from) },
+            async {
+                // A Windows job wait includes descendants. Wait for the leader
+                // first so a successful setup command cannot be held open by
+                // a background child; its remaining children belong to us.
+                let status = child.0.inner_mut().wait().await?;
+                let _ = child.0.start_kill();
+                Ok::<_, SetupProcessError>(status)
+            },
             read_bounded(stdout, output_limit),
             read_bounded(stderr, output_limit),
         )?;
@@ -131,7 +138,7 @@ mod tests {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.args([
             "--exact",
-            "setup_process::tests::process_fixture",
+            "tests::process_fixture",
             "--ignored",
             "--nocapture",
         ]);

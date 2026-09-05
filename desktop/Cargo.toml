@@ -21,6 +21,7 @@ resolver = "2"
 members = [
     "locald",
     "agent-host",
+    "process",
     "local-runtime/manager",
     "local-runtime/hostctl",
     "local-runtime/guestd",
@@ -72,6 +73,7 @@ tempfile = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+lemma-desktop-process = { path = "process" }
 # macos-private-api is what gates WebviewWindowBuilder::transparent, which an
 # NSVisualEffectView has to sit behind to be visible at all. It is also what
 # makes a build ineligible for the Mac App Store — fine for the dmg/app targets
@@ -80,11 +82,6 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "unst
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-deep-link = "2"
-# Quit has to be able to ask before it stops the stack, and it has to be able to
-# ask when there is no webview to ask in: ⌘Q from the tray with every window
-# hidden is the ordinary case. An OS-drawn alert is the only surface that
-# survives that, so this is used from Rust only and needs no capability entry.
-tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -980,9 +980,8 @@ const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
 /// shell is a different program as far as the vault is concerned, and would
 /// prompt or fail.
 ///
-/// Failures are collected rather than raised: a reset that stopped at the first
-/// stubborn keychain item would leave the rest behind *and* skip removing the
-/// state directory, which is the part the user actually asked for.
+/// Try every key and return failures so recovery can retain the installation
+/// identity until a later retry has removed the remaining entries.
 pub fn purge_secrets(install_id: &str) -> Vec<String> {
     let vault = PlatformVault;
     let mut failures = Vec::new();

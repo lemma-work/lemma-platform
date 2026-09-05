@@ -1,0 +1,27 @@
+[package]
+name = "lemma-desktop-process"
+version.workspace = true
+edition = "2024"
+rust-version = "1.88"
+license = "AGPL-3.0-or-later"
+description = "Bounded process supervision for Lemma Desktop setup and recovery"
+
+[dependencies]
+process-wrap = { version = "=9.1.0", default-features = false, features = ["tokio1", "process-group", "job-object", "creation-flags", "kill-on-drop"] }
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

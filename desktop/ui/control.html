@@ -27,6 +27,7 @@
         <button class="nav-item" data-page="runtime"><span>Runtime</span><i class="health-dot" id="dot-runtime"></i></button>
         <div class="nav-group">Desktop</div>
         <button class="nav-item" data-page="updates"><span>Updates</span><i class="health-dot" id="dot-updates"></i></button>
+        <button class="nav-item" data-page="recovery"><span>Recovery</span><i class="health-dot"></i></button>
         <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot"></i></button>
       </nav>
 
@@ -251,12 +252,24 @@
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
         </article>
-        <!-- A separate panel, not more buttons in the one above: that panel
-             promises it does not delete workspace data, and these do. -->
+      </section>
+
+      <section class="page" data-page="recovery">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Restart into Recovery</h2><p>Open Lemma without starting services or downloading a runtime. Use this if setup is stuck. This action does not erase data.</p></div></div>
+          <div class="button-row"><button class="btn" data-action="restart-recovery">Restart into Recovery</button></div>
+        </article>
         <article class="panel danger-zone">
-          <div class="panel-heading"><div><h2>Destructive recovery</h2><p>These permanently delete data on this Mac. Use them when Lemma cannot start and repair has not helped.</p></div></div>
-          <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button><button class="btn danger solid" data-action="full-reinstall">Start over</button></div>
-          <p class="limitation-note" id="recovery-note">Reset local data erases your pods, files and accounts and keeps your AI provider settings and the downloaded runtime. Start over erases everything, including stored keys, and downloads the runtime again.</p>
+          <div class="panel-heading"><div><h2>Force cleanup and fresh installation</h2><p>This recovery path works independently of the running background service, including installations left by older versions.</p></div></div>
+          <p class="danger-warning">Permanently deletes local pods, databases, accounts, files, schedules, provider keys, downloaded runtime files, and this installation's Agent Host pairings and managed working folders. Active local work stops. There is no automatic backup.</p>
+          <p>External project folders and Lemma Cloud workspace data are kept. The Lemma app and diagnostic logs are kept. Choosing Local Lemma afterwards downloads its verified services again and requires an internet connection.</p>
+          <div class="button-row"><button class="btn danger solid" data-action="full-reinstall">Force cleanup and reinstall</button></div>
+          <p class="limitation-note">An in-app confirmation is required before anything is deleted. If cleanup fails, the error explains what remains and how to retry.</p>
+          <p id="recovery-status" role="status" aria-live="polite"></p>
+        </article>
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Reset local workspace data</h2><p>Erases local pods, files and accounts while keeping your AI provider settings and downloaded runtime. Requires a working local installation.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="reset-local-data">Reset local data</button></div>
         </article>
       </section>
 

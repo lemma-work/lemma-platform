@@ -14,7 +14,6 @@ pub mod permissions;
 pub mod protocol;
 pub mod runtime;
 pub mod service;
-mod setup_process;
 
 /// Spawn a child without flashing up a console window.
 ///
