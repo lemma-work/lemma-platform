@@ -51,6 +51,7 @@ from app.modules.agent.services.runtime_model_factory import (
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
+    ResolvedAgentRuntime,
 )
 from app.modules.usage.contracts.execution import UsageExecutionContext
 from app.modules.usage.contracts.metering import metering_execution
@@ -165,7 +166,7 @@ class ConversationTitleGenerator:
         *,
         runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
         model_for_profile: Callable[..., Model] | None = None,
-        llm_agent: Callable[..., PydanticAIAgent] | None = None,
+        llm_agent: Callable[..., PydanticAIAgent[None, str]] | None = None,
     ) -> None:
         # `None` rather than the real callable as a default, deliberately. A
         # default argument is evaluated once, when this module is imported, so
@@ -222,7 +223,7 @@ class ConversationTitleGenerator:
         *,
         organization_id: UUID | None,
         user_id: UUID,
-    ):
+    ) -> ResolvedAgentRuntime:
         service = (self._runtime_profiles or AgentRuntimeProfileService)()
         try:
             return await service.resolve(
@@ -267,7 +268,7 @@ class ConversationTitleService:
             Callable[[UUID, dict[str, object]], Awaitable[None]] | None
         ) = None,
         counter: OutcomeCounter = title_counter,
-    ):
+    ) -> None:
         # `None` rather than the real collaborator, for the two names tests
         # replace by patching a module attribute. A default is evaluated once,
         # at import, so `= publish_conversation_event` would capture the

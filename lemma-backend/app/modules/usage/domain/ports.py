@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal, Protocol, Sequence
 from uuid import UUID
 
+from app.modules.usage.domain.accounting import Allocation, UsageBatch
 from app.modules.usage.domain.entities import UsageRecord, UsageSummary
+from app.modules.usage.domain.query_types import UsageStatsBucket
 
 
 class UsageRepositoryPort(Protocol):
@@ -71,7 +74,7 @@ class UsageRepositoryPort(Protocol):
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
-    ) -> Sequence[dict[str, object]]: ...
+    ) -> Sequence[UsageStatsBucket]: ...
 
 
 @dataclass(frozen=True)
@@ -133,3 +136,10 @@ def normalize_limit_values(resolved: object) -> UsageLimitValues:
         user_monthly_limit_usd=None,
         user_limit_scope="organization",
     )
+
+
+class AccountingGateway(Protocol):
+    async def open(
+        self, allocation_id: UUID, required: Decimal | None, now: datetime
+    ) -> Allocation: ...
+    async def checkpoint(self, batch: UsageBatch, now: datetime) -> Allocation: ...

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -55,6 +56,7 @@ class UsageRecord(Entity):
     cached_input_tokens: int | None = Field(default=None, ge=0)
     cache_write_tokens: int | None = Field(default=None, ge=0)
     cost_source: str = "LEGACY"
+    cost_amount: Decimal | None = Field(default=None, ge=0)
     cost_usd: float | None = Field(default=None, ge=0.0)
     status: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)

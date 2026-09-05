@@ -4,8 +4,9 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Protocol
 from uuid import UUID, uuid4
+
+from app.modules.usage.domain.ports import AccountingGateway
 
 from app.core.request_context import create_inherited_task
 from app.modules.usage.domain.accounting import (
@@ -14,13 +15,6 @@ from app.modules.usage.domain.accounting import (
     UsageBatch,
     AccountingConflictError,
 )
-
-
-class AccountingGateway(Protocol):
-    async def open(
-        self, allocation_id: UUID, required: Decimal | None, now: datetime
-    ) -> Allocation: ...
-    async def checkpoint(self, batch: UsageBatch, now: datetime) -> Allocation: ...
 
 
 def utc_now() -> datetime:
@@ -47,6 +41,7 @@ class BatchMeter:
         self.counts = TokenCounts()
         self.cost: Decimal | None = Decimal(0)
         self.uncertain = Decimal(0)
+        self.over_bound_cost = Decimal(0)
         self.inflight: dict[UUID, Decimal] = {}
         self.first_request_at: datetime | None = None
         self.pending: UsageBatch | None = None
@@ -127,7 +122,11 @@ class BatchMeter:
                     and self.allocation.limited
                     and (cost is None or cost > bound)
                 ):
-                    self.uncertain += bound
+                    if cost is None:
+                        self.uncertain += bound
+                    else:
+                        self.over_bound_cost += cost
+                    self._add_usage(counts, cost)
                     raise AccountingConflictError(
                         "Provider usage exceeded its authorized bound"
                     )
@@ -185,17 +184,21 @@ class BatchMeter:
                 counts=self.counts,
                 cost=self.cost,
                 uncertain=self.uncertain,
+                over_bound_cost=self.over_bound_cost,
                 occurred_at=self.first_request_at or now,
                 close=close,
             )
             self.counts = TokenCounts()
             self.cost = Decimal(0)
             self.uncertain = Decimal(0)
+            self.over_bound_cost = Decimal(0)
             self.first_request_at = now if self.inflight else None
         batch = self.pending
         self.allocation = await self.gateway.checkpoint(batch, now)
         self.sequence = batch.sequence
         self.pending = None
+        if batch.close:
+            self._reset_allocation()
 
     def _reset_allocation(self) -> None:
         self.allocation = None

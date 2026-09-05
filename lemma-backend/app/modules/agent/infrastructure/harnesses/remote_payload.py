@@ -19,6 +19,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
@@ -84,12 +85,12 @@ def run_start_payload(
     }
 
 
-async def mcp_payload(
+async def mcp_payload[DepsT: AgentContext](
     *,
     agent_run_id: UUID,
     conversation_id: UUID,
-    ctx: AgentContext,
-    options: HarnessOptions,
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
     prompt: str | None = None,
     extra_tool_names: Sequence[str] = (),
 ) -> JsonObject:
@@ -177,11 +178,11 @@ def _token_expiry_iso(token: str) -> str | None:
     return datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
 
 
-async def _exported_tool_names(
+async def _exported_tool_names[DepsT: AgentContext](
     *,
     agent_run_id: UUID,
-    ctx: AgentContext,
-    options: HarnessOptions,
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
     prompt: str | None,
     extra_names: Sequence[str] = (),
 ) -> list[str]:
@@ -199,7 +200,7 @@ async def _exported_tool_names(
             "conversation_mcp": True,
             "model_name": options.model_name,
         },
-        model_settings=options.model_settings,
+        model_settings=provider_model_settings(options.model_settings),
     )
     names: list[str] = []
     for raw_toolset in options.toolsets:
@@ -296,7 +297,9 @@ def _turn_messages(
     return ordered[-1:]
 
 
-def _runtime_profile_value(options: HarnessOptions, key: str) -> object | None:
+def _runtime_profile_value[DepsT](
+    options: HarnessOptions[DepsT], key: str
+) -> object | None:
     profile = options.extra.get("runtime_profile")
     return profile.get(key) if isinstance(profile, dict) else None
 

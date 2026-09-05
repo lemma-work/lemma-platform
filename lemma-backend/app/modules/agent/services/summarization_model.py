@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 from uuid import UUID
 
+from pydantic_ai.models import Model
+
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 
@@ -35,12 +37,12 @@ def configured_summarization_model_name() -> str | None:
     return value or None
 
 
-async def resolve_summarization_model(
+async def resolve_summarization_model[T](
     *,
     organization_id: UUID | None,
     user_id: UUID,
-    fallback: object,
-) -> object:
+    fallback: T,
+) -> Model | T:
     """A pydantic-ai model for compaction, or ``fallback`` (the run's model)."""
     model_name = configured_summarization_model_name()
     if not model_name:

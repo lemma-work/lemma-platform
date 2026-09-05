@@ -19,7 +19,9 @@ from dataclasses import replace
 import httpx
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionStreamOptionsParam
+from pydantic import ConfigDict, TypeAdapter, with_config
 from pydantic_ai import UsageLimits
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
@@ -72,6 +74,24 @@ _credential_labels: OrderedDict[str, str] = OrderedDict()
 _credential_sequence = itertools.count(1)
 
 
+@with_config(ConfigDict(arbitrary_types_allowed=True, extra="allow"))
+class ProviderModelSettings(ModelSettings):
+    """Validate shared model settings while preserving provider extension keys."""
+
+
+_PROVIDER_SETTINGS_ADAPTER = TypeAdapter(ProviderModelSettings)
+
+
+def provider_model_settings(
+    settings: Mapping[str, object] | None,
+) -> ModelSettings | None:
+    return (
+        _PROVIDER_SETTINGS_ADAPTER.validate_python(settings)
+        if settings is not None
+        else None
+    )
+
+
 def _credential_label(api_key: str | None) -> str:
     if not api_key:
         return "anonymous"
@@ -85,7 +105,7 @@ def _credential_label(api_key: str | None) -> str:
     return label
 
 
-def _evict_oldest(cache: OrderedDict, limit: int) -> None:
+def _evict_oldest[K, V](cache: OrderedDict[K, V], limit: int) -> None:
     while len(cache) > limit:
         cache.popitem(last=False)
 

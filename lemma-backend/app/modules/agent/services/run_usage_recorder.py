@@ -6,26 +6,33 @@ one implementation instead of duplicating reserve/record/release plumbing.
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.usage.contracts import UsageReservation
-from app.modules.usage.contracts.execution import UsageService, build_usage_service
+from app.modules.usage.contracts import AgentRunUsage, UsageReservation
+from app.modules.usage.contracts.execution import (
+    UsageExecutionContext,
+    UsageService,
+    build_usage_service,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
 
 
 class RunUsageRecorder:
     """Thin façade over `UsageService` for the agent run lifecycle."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
-    def _service(self, uow) -> UsageService:
+    def _service(self, uow: SqlAlchemyUnitOfWork) -> UsageService:
         return build_usage_service(uow)
 
     async def reserve(
         self,
         *,
-        organization_id,
-        user_id,
+        organization_id: UUID | None,
+        user_id: UUID,
         runtime_profile: dict[str, object | None],
     ) -> UsageReservation | None:
         if runtime_profile.get("protocol") in {
@@ -69,9 +76,9 @@ class RunUsageRecorder:
     async def record(
         self,
         *,
-        ctx,
+        ctx: UsageExecutionContext,
         runtime_profile: dict[str, object | None] | None,
-        usage_data,
+        usage_data: AgentRunUsage,
         status: str,
         reservation: UsageReservation | None,
     ) -> None:

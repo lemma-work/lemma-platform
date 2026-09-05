@@ -27,8 +27,10 @@ behind an unknown gateway is a reporting estimate, not sufficient for admission.
 Unknown models remain usable when no monetary limit applies. With a monetary
 limit, missing prices, missing context bounds, and provider-native tools whose
 charges cannot be bounded are refused before dispatch. The current adapter also
-refuses native compaction/advisor and one-hour cache modes under monetary caps,
-because their complete billable breakdown is not exposed by its receipt.
+refuses native compaction/advisor, one-hour cache modes, premium service tiers,
+and raw provider body overrides under monetary caps. Their charges or effective
+request ceilings cannot be verified against the frozen rate card. Admission
+checks the merged model defaults and request settings used by the provider.
 
 The local meter checkpoints after `USAGE_BATCH_REQUESTS` (default 10) or
 `USAGE_BATCH_SECONDS` (30), and closes at execution exit. A request that cannot
@@ -54,7 +56,8 @@ its next request when a monetary limit has been introduced.
 
 A checkpoint is identified by allocation and sequence, with a digest of the
 immutable payload. Losing the commit acknowledgement is safe: the same payload
-can be retried without charging again. A conflicting payload is rejected.
+can be retried without charging again, including allocation closure and renewal.
+A conflicting payload is rejected.
 Empty heartbeats and closes update allocation state without inventing model usage.
 
 A failed or interrupted request without a final provider receipt retains its
@@ -64,6 +67,16 @@ recovery on subsequent admissions. `USAGE_ALLOCATION_TIMEOUT_SECONDS` (120)
 classifies an abandoned allocation; it never authorizes a refund. A late receipt
 from an expired worker can settle its original allocation idempotently.
 Outstanding authority ceases to affect admission when its budget window ends.
+
+An early normal stream exit also lacks a final receipt. Only a complete response
+settles measured cost; incomplete, interrupted, or suspended responses retain
+authority. All-zero token usage also retains authority: provider adapters use it
+when the response omits usage, so it cannot prove a free request.
+If a final reported cost exceeds the authorized bound, the run fails,
+but the full known charge still counts toward subsequent admission. The receipt
+preserves token counts and `over_bound_cost_usd` for investigation. Settlement
+releases at most the available hold; any concurrent request that becomes uncertain
+still retains its liability, without granting new spending authority.
 
 There is deliberately no automatic reconciliation against a provider invoice.
 An explicitly uncertain request cannot be relabeled as an actual charge without
@@ -76,6 +89,20 @@ Remote agent hosts using their own provider credentials remain observable throug
 the existing run receipts. A runtime outside Lemma's dispatch control is refused
 for a limited system-paid profile: a run-start check cannot enforce ongoing spend.
 Embeddings, speech and search metering are outside this LLM allocation path.
+
+## Monetary precision
+
+Authoritative receipt costs, allocations and budget counters use PostgreSQL
+`NUMERIC(24, 9)`: fifteen integer digits and nine fractional USD digits. Pricing
+uses `Decimal`, rounds each request's total upward to the nearest nanodollar,
+and adds those rounded charges exactly. Rounding adds less than one nanodollar
+per priced request; it never silently discards a tiny positive charge.
+
+Reports and initial budget counters sum the exact cost column. Historical rows
+without that column are converted from their legacy float to nine decimal places
+before aggregation; this cannot recover precision already lost in old records.
+The old `cost_usd` field remains a compatibility number for API responses and
+telemetry, not the authoritative cost for new receipts or budget accounting.
 
 ## Migration and verification
 
@@ -95,3 +122,12 @@ PostgreSQL concurrency, late receipts, wrapper failures, events and migration
 round trips. The batch-boundary unit test measures database gateway calls rather
 than asserting an environment-dependent latency. Run `make quality` at the repo
 root and the backend unit lane before merging.
+
+For a configured provider, run `E2E_LLM_MODE=real uv run pytest
+app/modules/usage/tests/e2e/test_real_model_accounting_e2e.py -s` from the backend.
+This opt-in check makes small real agent requests against disposable PostgreSQL,
+compares provider tokens with receipts and independent rate arithmetic, and verifies
+ongoing admission. It preserves deployment pricing and excludes the deterministic
+suite's synthetic rates. The result checks the recorded estimate, not an invoice.
+`make typecheck-critical` checks the accounting tests with their own configuration
+so the backend's general test exclusions cannot silently skip them.

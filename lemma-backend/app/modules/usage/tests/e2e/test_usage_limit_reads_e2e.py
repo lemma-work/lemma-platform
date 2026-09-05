@@ -19,7 +19,9 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.test_support.query_counting import (
     counted_queries,
@@ -56,7 +58,9 @@ def _record(
     )
 
 
-async def _seed(session, *, user_id: UUID, org_id: UUID, other_org_id: UUID) -> dict:
+async def _seed(
+    session: AsyncSession, *, user_id: UUID, org_id: UUID, other_org_id: UUID
+) -> dict[str, datetime]:
     """Rows spanning both windows, plus every row the filters must exclude."""
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -160,7 +164,7 @@ async def _seed(session, *, user_id: UUID, org_id: UUID, other_org_id: UUID) -> 
 
 @pytest.mark.parametrize("exclusions", [(), ("other",)])
 async def test_batched_window_costs_equal_the_per_window_reads(
-    db_manager, exclusions
+    db_manager: DatabaseManager, exclusions: tuple[str, ...]
 ) -> None:
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id, org_id, other_org_id = uuid4(), uuid4(), uuid4()
@@ -215,7 +219,9 @@ async def test_batched_window_costs_equal_the_per_window_reads(
     )
 
 
-async def test_batched_reserved_costs_equal_the_per_scope_reads(db_manager) -> None:
+async def test_batched_reserved_costs_equal_the_per_scope_reads(
+    db_manager: DatabaseManager,
+) -> None:
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id, org_id, other_org_id = uuid4(), uuid4(), uuid4()
 
@@ -224,7 +230,7 @@ async def test_batched_reserved_costs_equal_the_per_scope_reads(db_manager) -> N
         windows = await _seed(
             uow.session, user_id=user_id, org_id=org_id, other_org_id=other_org_id
         )
-        scopes = [
+        scopes: list[tuple[UUID | None, UUID | None, str, datetime]] = [
             (org_id, user_id, "user_week", windows["week_start"]),
             (org_id, user_id, "user_month", windows["month_start"]),
             (org_id, None, "org_month", windows["month_start"]),
@@ -255,7 +261,9 @@ async def test_batched_reserved_costs_equal_the_per_scope_reads(db_manager) -> N
     )
 
 
-async def test_a_scope_with_no_counter_row_reads_as_zero(db_manager) -> None:
+async def test_a_scope_with_no_counter_row_reads_as_zero(
+    db_manager: DatabaseManager,
+) -> None:
     """An absent counter must be 0.0, not a missing key.
 
     ``get_usage_limits`` indexes the result directly, so a scope that has

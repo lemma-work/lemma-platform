@@ -5,8 +5,12 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from app.modules.usage.domain.accounting import Allocation, UsageBatch
-from app.modules.usage.services.batch_meter import AccountingGateway
+from app.modules.usage.domain.accounting import (
+    AccountingConflictError,
+    Allocation,
+    UsageBatch,
+)
+from app.modules.usage.domain.ports import AccountingGateway
 
 
 class MemoryAccounting(AccountingGateway):
@@ -17,6 +21,7 @@ class MemoryAccounting(AccountingGateway):
         self.receipts: dict[tuple[UUID, int], UsageBatch] = {}
         self.checkpointed = asyncio.Event()
         self.fail_ack = False
+        self.closed_allocations: set[UUID] = set()
 
     async def open(
         self, allocation_id: UUID, required: Decimal | None, now: datetime
@@ -35,7 +40,11 @@ class MemoryAccounting(AccountingGateway):
         key = (batch.allocation_id, batch.sequence)
         if key in self.receipts:
             assert self.receipts[key] == batch
+        elif batch.allocation_id in self.closed_allocations:
+            raise AccountingConflictError("Allocation has already closed")
         self.receipts[key] = batch
+        if batch.close:
+            self.closed_allocations.add(batch.allocation_id)
         self.checkpointed.set()
         if self.fail_ack:
             self.fail_ack = False

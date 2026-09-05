@@ -1,0 +1,13 @@
+{
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "standard",
+  "include": [
+    "app/modules/usage/tests/e2e",
+    "app/modules/usage/tests/fakes.py",
+    "app/modules/usage/tests/unit/test_accounting_money.py",
+    "app/modules/usage/tests/unit/test_batch_meter.py",
+    "app/modules/usage/tests/unit/test_price_catalog.py",
+    "app/modules/agent/tests/unit/test_runtime_model_settings.py"
+  ],
+  "exclude": []
+}

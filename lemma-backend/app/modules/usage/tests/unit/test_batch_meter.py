@@ -3,9 +3,56 @@ from decimal import Decimal
 
 import pytest
 
-from app.modules.usage.domain.accounting import TokenCounts
+from app.modules.usage.domain.accounting import AccountingConflictError, TokenCounts
 from app.modules.usage.services.batch_meter import BatchMeter
 from app.modules.usage.tests.fakes import MemoryAccounting
+
+
+async def test_over_bound_receipt_preserves_actual_cost_and_measured_usage() -> None:
+    gateway = MemoryAccounting()
+    meter = BatchMeter(gateway, seconds=3600)
+    try:
+        ticket = await meter.before(Decimal("0.2"))
+        with pytest.raises(AccountingConflictError):
+            await meter.after(
+                ticket, TokenCounts(input_tokens=300, request_count=1), Decimal("0.3")
+            )
+    finally:
+        await meter.close()
+    receipt = next(iter(gateway.receipts.values()))
+    assert receipt.counts.input_tokens == 300
+    assert receipt.counts.request_count == 1
+    assert receipt.uncertain == 0
+    assert receipt.cost == Decimal("0.3")
+    assert receipt.over_bound_cost == Decimal("0.3")
+
+
+@pytest.mark.parametrize("renew", [True, False])
+async def test_lost_close_acknowledgement_retries_without_closing_twice(
+    renew: bool,
+) -> None:
+    gateway = MemoryAccounting()
+    meter = BatchMeter(gateway, seconds=3600)
+    try:
+        ticket = await meter.before(Decimal("0.9"))
+        await meter.after(ticket, TokenCounts(request_count=1), Decimal("0.8"))
+        gateway.fail_ack = True
+        with pytest.raises(ConnectionError):
+            if renew:
+                await meter.before(Decimal("0.4"))
+            else:
+                await meter.close()
+        if renew:
+            ticket = await meter.before(Decimal("0.4"))
+            await meter.after(ticket, TokenCounts(request_count=1), Decimal("0.1"))
+        await meter.close()
+        assert meter.closed
+        assert len(gateway.closed_allocations) == (2 if renew else 1)
+        assert sum(receipt.cost or 0 for receipt in gateway.receipts.values()) == (
+            Decimal("0.9") if renew else Decimal("0.8")
+        )
+    finally:
+        await meter.close()
 
 
 async def test_requests_within_an_allocation_only_write_at_batch_boundaries() -> None:

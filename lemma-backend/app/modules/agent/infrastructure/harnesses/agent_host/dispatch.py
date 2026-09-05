@@ -55,12 +55,12 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
 logger = get_logger(__name__)
 
 
-async def refresh_credential(
+async def refresh_credential[DepsT: AgentContext](
     *,
     uow_factory: UnitOfWorkFactory,
     agent_run_id: UUID,
-    ctx: AgentContext,
-    options: HarnessOptions,
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
     agent: Agent,
     conversation: Conversation,
 ) -> datetime | None:
@@ -117,15 +117,15 @@ def _resumed_tool_call_id(run: AgentRun | None) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-async def enqueue_run(
+async def enqueue_run[DepsT: AgentContext](
     *,
     uow_factory: UnitOfWorkFactory,
     event_timeout_seconds: float,
     agent: Agent,
     conversation: Conversation,
     messages: Sequence[Message],
-    ctx: AgentContext,
-    options: HarnessOptions,
+    ctx: DepsT,
+    options: HarnessOptions[DepsT],
     agent_run_id: UUID,
     run_config: AgentHostRunConfig,
 ) -> DispatchedRun:

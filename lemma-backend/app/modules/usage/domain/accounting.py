@@ -66,10 +66,17 @@ class TokenCounts(BaseModel):
 
     def plus(self, other: "TokenCounts") -> "TokenCounts":
         return TokenCounts(
-            **{
-                name: getattr(self, name) + getattr(other, name)
-                for name in type(self).model_fields
-            }
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            input_audio_tokens=self.input_audio_tokens + other.input_audio_tokens,
+            output_audio_tokens=self.output_audio_tokens + other.output_audio_tokens,
+            cache_audio_read_tokens=self.cache_audio_read_tokens
+            + other.cache_audio_read_tokens,
+            unpriced_requests=self.unpriced_requests + other.unpriced_requests,
+            unconfirmed_requests=self.unconfirmed_requests + other.unconfirmed_requests,
+            request_count=self.request_count + other.request_count,
         )
 
 
@@ -103,6 +110,7 @@ class UsageBatch(BaseModel):
     counts: TokenCounts
     cost: Decimal | None = Field(default=None, ge=0)
     uncertain: Decimal = Field(default=Decimal(0), ge=0)
+    over_bound_cost: Decimal = Field(default=Decimal(0), ge=0)
     occurred_at: datetime
     close: bool = False
 

@@ -16,7 +16,9 @@ def test_batch_cost_is_sum_of_request_prices_not_price_of_batch_tokens() -> None
         rates={"input_mtok": Rate(base=Decimal("1"), tiers=((100, Decimal("2")),))},
     )
     request = TokenCounts(input_tokens=75)
-    assert card.price(request) + card.price(request) == Decimal("0.000150")
+    request_cost = card.price(request)
+    assert request_cost is not None
+    assert request_cost + request_cost == Decimal("0.000150")
     assert card.price(request.plus(request)) == Decimal("0.000300")
 
 

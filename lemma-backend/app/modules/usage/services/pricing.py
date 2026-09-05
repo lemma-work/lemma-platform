@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 
 from app.core.log.log import get_logger
 from app.modules.usage.contracts import ModelPricing
+from app.modules.usage.domain.accounting import money
 
 logger = get_logger(__name__)
 
@@ -66,7 +68,7 @@ class UsagePricing:
         output_tokens: int,
         units: float,
         cache_read_tokens: int = 0,
-    ) -> tuple[float | None, bool]:
+    ) -> tuple[Decimal | None, bool]:
         if not self._is_system_scope(profile_scope):
             return None, False
         pricing, pricing_missing = self._resolve_pricing(
@@ -83,14 +85,16 @@ class UsagePricing:
             else pricing.input_per_million_usd
         )
         input_cost = (
-            non_cached / 1_000_000 * pricing.input_per_million_usd
-            + cache_read / 1_000_000 * cached_rate
-        )
+            non_cached * Decimal(str(pricing.input_per_million_usd))
+            + cache_read * Decimal(str(cached_rate))
+        ) / Decimal(1_000_000)
         output_cost = (
-            max(0, output_tokens) / 1_000_000
-        ) * pricing.output_per_million_usd
-        unit_cost = max(0.0, units) * pricing.unit_usd
-        return round(input_cost + output_cost + unit_cost, 8), pricing_missing
+            max(0, output_tokens) * Decimal(str(pricing.output_per_million_usd))
+        ) / Decimal(1_000_000)
+        unit_cost = max(Decimal(0), Decimal(str(units))) * Decimal(
+            str(pricing.unit_usd)
+        )
+        return money(input_cost + output_cost + unit_cost), pricing_missing
 
     def _resolve_pricing(
         self, model_name: str, provider_model_name: str | None
@@ -103,8 +107,10 @@ class UsagePricing:
 
     @staticmethod
     def _coerce_token_count(value: object) -> int:
+        if not isinstance(value, (int, float, str)):
+            return 0
         try:
-            return max(0, int(value))  # type: ignore[arg-type]
+            return max(0, int(value))
         except TypeError, ValueError:
             return 0
 
@@ -130,7 +136,7 @@ class UsagePricing:
                     value = value()
                 except TypeError:
                     continue
-            if value is None:
+            if not isinstance(value, (int, float, str)):
                 continue
             try:
                 return max(0, int(value))

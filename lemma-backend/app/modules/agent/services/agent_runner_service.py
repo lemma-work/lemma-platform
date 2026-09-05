@@ -6,6 +6,9 @@ from collections.abc import Sequence
 import time
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
+from pydantic_ai.output import OutputSpec
+from pydantic_ai.capabilities import AgentCapability
+from pydantic_ai.toolsets import AbstractToolset
 
 import anyio
 from pydantic_ai import UsageLimits
@@ -168,7 +171,7 @@ class AgentRunnerService:
         harness_registry: HarnessRegistry,
         fallback_model_name: str | None = None,
         fixed_usage_limits: UsageLimits | None = None,
-    ):
+    ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
@@ -249,8 +252,8 @@ class AgentRunnerService:
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
             # tools over MCP, layering current-time/caching/todo capabilities.
-            harness_toolsets: list[object] = full_toolsets
-            harness_capabilities: list[object] = []
+            harness_toolsets: list[AbstractToolset[ConversationContext]] = full_toolsets
+            harness_capabilities: list[AgentCapability[ConversationContext]] = []
             harness_model_settings: JsonObject | None = None
             if resolved_runtime.harness_kind == HarnessKind.LEMMA:
                 harness_model_settings = _profile_model_settings(
@@ -334,10 +337,7 @@ class AgentRunnerService:
                         "gen_ai.request.model",
                         resolved_runtime.model_name_for_harness,
                     )
-                    # What a trace UI shows as the run's input and output. Without
-                    # them a session reads as a column of timestamps: the turns are
-                    # grouped correctly and every row is blank, so finding the run
-                    # you want means opening each one.
+                    # Trace summaries let operators identify a turn without opening it.
                     record_span_input(span, _run_input_text(messages))
                     observer_started = await notify_run_started(
                         observer, conversation, ctx, agent_run_id
@@ -576,7 +576,7 @@ class AgentRunnerService:
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation
-    ) -> object | None:
+    ) -> OutputSpec[object] | None:
         # TASK conversations always get the final_answer tool: it drives the task
         # lifecycle (status WAITING/COMPLETED/FAILED), not just structured output.
         # The output *schema* is only applied when the agent configures one — see

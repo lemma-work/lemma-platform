@@ -70,9 +70,10 @@ def test_usage_upgrade_follows_app_and_function_history_and_can_roll_back() -> N
                 assert connection.execute(
                     "SELECT to_regclass('app_releases'), to_regclass('function_revisions')"
                 ).fetchone() == ("app_releases", "function_revisions")
-                allocation_table = connection.execute(
+                allocation_row = connection.execute(
                     "SELECT to_regclass('usage_allocations')"
-                ).fetchone()[0]
-                assert allocation_table == (
+                ).fetchone()
+                assert allocation_row is not None
+                assert allocation_row[0] == (
                     "usage_allocations" if revision == "head" else None
                 )

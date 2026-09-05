@@ -30,6 +30,7 @@ from uuid import UUID
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent
 from pydantic_ai.messages import UserContent
+from pydantic_ai.models import Model
 from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
@@ -96,7 +97,9 @@ def vision_delegate_available() -> bool:
     return configured_vision_model_name() is not None
 
 
-async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
+async def _resolve_vision_model(
+    *, organization_id: UUID | None, user_id: UUID
+) -> Model:
     """A vision-capable pydantic-ai model, or raise.
 
     Asserts the resolved catalog entry actually declares VISION so a misconfigured

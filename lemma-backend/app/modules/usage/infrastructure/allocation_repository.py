@@ -22,6 +22,7 @@ from app.modules.usage.domain.accounting import (
 )
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.infrastructure.allocation_models import UsageAllocation
+from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import UsageLimitCounter, UsageRecord
 from app.modules.usage.infrastructure.price_catalog import RateCard
 
@@ -68,7 +69,7 @@ async def _window_counter(
     if inserted is not None:
         # Only a newly created window scans legacy history. Subsequent admissions
         # read the transactionally maintained counter, never the usage ledger.
-        query = select(func.coalesce(func.sum(UsageRecord.cost_usd), 0)).where(
+        query = select(func.coalesce(func.sum(recorded_cost()), 0)).where(
             UsageRecord.profile_scope == "SYSTEM",
             UsageRecord.occurred_at >= window.start,
             UsageRecord.occurred_at < window.end,
@@ -179,8 +180,6 @@ async def checkpoint(
             "Checkpoint sequence is not the next unsettled batch"
         )
     cost = money(batch.cost or 0)
-    if row.limited and cost + batch.uncertain > row.remaining - row.uncertain:
-        raise AccountingConflictError("Reported usage exceeds the allocation")
     counters = list(
         (
             await session.scalars(
@@ -196,20 +195,15 @@ async def checkpoint(
             )
         ).all()
     )
-    row.uncertain += batch.uncertain
-    release = cost if row.limited else Decimal(0)
-    if batch.close and row.limited:
-        release = row.remaining - row.uncertain
+    release, liability = _settle_authority(row, batch, cost)
     for counter in counters:
         if counter.reserved_usd < release:
             raise AccountingConflictError(
                 "Reserved counter does not cover its allocation"
             )
-        counter.reserved_usd -= release
+        counter.reserved_usd += liability - release
         counter.used_usd += cost
         _collect_warning(counter, events, warning_fraction)
-    if row.limited:
-        row.remaining -= release
     row.sequence = batch.sequence
     row.last_receipt_digest = digest
     row.state = (
@@ -220,6 +214,26 @@ async def checkpoint(
     row.expires_at = now + timedelta(seconds=timeout_seconds)
     await _record_batch(session, row, batch, digest, events)
     return _allocation(row)
+
+
+def _settle_authority(
+    row: UsageAllocation, batch: UsageBatch, cost: Decimal
+) -> tuple[Decimal, Decimal]:
+    # Admission bounds dispatch; a final provider receipt is still a real charge
+    # when the bound was wrong. Consume the available hold and account all cost.
+    release = min(cost, row.remaining - row.uncertain) if row.limited else Decimal(0)
+    row.remaining -= release
+    row.uncertain += batch.uncertain
+    # Concurrent requests may become uncertain after an overage spent their hold.
+    # Preserve that liability without creating any additional spending authority.
+    liability = (
+        max(Decimal(0), row.uncertain - row.remaining) if row.limited else Decimal(0)
+    )
+    row.remaining += liability
+    if batch.close and row.limited:
+        release += row.remaining - row.uncertain
+        row.remaining = row.uncertain
+    return release, liability
 
 
 async def _record_batch(
@@ -265,21 +279,36 @@ async def _record_batch(
             "request_count": batch.counts.request_count,
             "usage": batch.counts.model_dump(mode="json"),
             "uncertain_usd": str(batch.uncertain),
+            "over_bound_cost_usd": str(batch.over_bound_cost),
             "execution_id": str(identity.execution_id),
         },
     )
     session.add(record)
     await session.flush()
     if events is not None:
-        payload = record.to_entity().model_dump()
+        entity = record.to_entity()
         events.append(
             ModelUsageEvent(
-                usage_id=record.id,
-                **{
-                    key: value
-                    for key, value in payload.items()
-                    if key in ModelUsageEvent.model_fields and key != "id"
-                },
+                usage_id=entity.id,
+                organization_id=entity.organization_id,
+                pod_id=entity.pod_id,
+                user_id=entity.user_id,
+                agent_id=entity.agent_id,
+                conversation_id=entity.conversation_id,
+                agent_run_id=entity.agent_run_id,
+                parent_agent_run_id=entity.parent_agent_run_id,
+                source_type=entity.source_type,
+                source_id=entity.source_id,
+                profile_id=entity.profile_id,
+                profile_scope=entity.profile_scope,
+                model_name=entity.model_name,
+                usage_kind=entity.usage_kind,
+                input_tokens=entity.input_tokens,
+                output_tokens=entity.output_tokens,
+                units=entity.units,
+                cost_usd=entity.cost_usd,
+                status=entity.status,
+                metadata=entity.metadata,
             )
         )
 

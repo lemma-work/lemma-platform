@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
@@ -134,18 +135,18 @@ class AgentRuntimeProfileService:
         self,
         repository: AgentRuntimeProfileRepository | None = None,
         host_repository: AgentHostRepository | None = None,
-    ):
+    ) -> None:
         self.repository = repository
         self.host_repository = host_repository
         self.creation = RuntimeProfileCreation(repository, host_repository)
 
-    def _session(self):
+    def _session(self) -> AsyncSession | None:
         """The session behind the repository, so the connection can be released.
 
         ``None`` when there is no repository (unit tests); `connection_released`
         treats that as nothing to release and passes straight through.
         """
-        return getattr(getattr(self.repository, "uow", None), "session", None)
+        return self.repository.uow.session if self.repository is not None else None
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
         """The deployment's own profile, or nothing when it is misconfigured.

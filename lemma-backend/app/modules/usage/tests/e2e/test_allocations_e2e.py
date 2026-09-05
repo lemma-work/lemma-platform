@@ -1,26 +1,34 @@
 """Real transactions prove authority cannot be duplicated or refunded on expiry."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, func
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models.function import AgentInfo
+from sqlalchemy import func, select
+from sqlalchemy.engine import Connection
 
+from app.core.domain.events import DomainEvent
+from app.core.infrastructure.db.manager import DatabaseManager
 from app.modules.usage.domain.accounting import (
+    AccountingConflictError,
+    Allocation,
+    AllocationState,
     BudgetWindow,
     MeteringIdentity,
     TokenCounts,
     UsageBatch,
-    AllocationState,
-    AccountingConflictError,
 )
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.infrastructure.allocation_repository import (
-    open_allocation,
     checkpoint,
     mark_expired_uncertain,
+    open_allocation,
 )
 from app.modules.usage.infrastructure.models import (
     UsageAllocation,
@@ -32,7 +40,7 @@ from app.modules.usage.infrastructure.price_catalog import RateCard
 pytestmark = pytest.mark.e2e
 
 
-def context():
+def context() -> tuple[datetime, MeteringIdentity, BudgetWindow]:
     now = datetime.now(timezone.utc)
     identity = MeteringIdentity(
         execution_id=uuid4(),
@@ -53,10 +61,12 @@ def context():
     return now, identity, window
 
 
-async def test_concurrent_allocations_cannot_share_last_budget(db_manager):
+async def test_concurrent_allocations_cannot_share_last_budget(
+    db_manager: DatabaseManager,
+) -> None:
     now, identity, window = context()
 
-    async def admit():
+    async def admit() -> Allocation | None:
         try:
             async with db_manager.session_factory() as session, session.begin():
                 return await open_allocation(
@@ -87,7 +97,9 @@ async def test_concurrent_allocations_cannot_share_last_budget(db_manager):
         assert counter.used_usd == 0
 
 
-async def test_expiry_preserves_authority_and_late_receipt_is_idempotent(db_manager):
+async def test_expiry_preserves_authority_and_late_receipt_is_idempotent(
+    db_manager: DatabaseManager,
+) -> None:
     now, identity, window = context()
     async with db_manager.session_factory() as session, session.begin():
         allocation = await open_allocation(
@@ -105,6 +117,7 @@ async def test_expiry_preserves_authority_and_late_receipt_is_idempotent(db_mana
         assert await mark_expired_uncertain(session, now + timedelta(minutes=3)) == 1
     async with db_manager.session_factory() as session:
         row = await session.get(UsageAllocation, allocation.id)
+        assert row is not None
         assert row.state == AllocationState.UNCERTAIN
         counter = (
             await session.scalars(
@@ -124,7 +137,7 @@ async def test_expiry_preserves_authority_and_late_receipt_is_idempotent(db_mana
         close=True,
     )
 
-    async def settle():
+    async def settle() -> None:
         async with db_manager.session_factory() as session, session.begin():
             await checkpoint(
                 session, batch, now=now + timedelta(minutes=4), timeout_seconds=120
@@ -159,21 +172,24 @@ async def test_expiry_preserves_authority_and_late_receipt_is_idempotent(db_mana
             )
 
 
-async def test_real_model_wrapper_batches_receipts_and_closes_on_failure(db_manager):
-    from pydantic_ai.models.function import FunctionModel
+async def test_real_model_wrapper_batches_receipts_and_closes_on_failure(
+    db_manager: DatabaseManager,
+) -> None:
     from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models import ModelRequestParameters
+    from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RequestUsage
+
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
     from app.modules.usage.infrastructure.metered_model import MeteredModel
     from app.modules.usage.services.metering_scope import metering_execution
     from app.modules.usage.services.usage_context import UsageExecutionContext
-    from app.modules.usage.services.usage_service import UsageService, ModelPricing
+    from app.modules.usage.services.usage_service import ModelPricing, UsageService
 
     user_id = uuid4()
     calls = 0
 
-    async def provider(messages, info):
+    async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal calls
         calls += 1
         if calls == 13:
@@ -216,15 +232,22 @@ async def test_real_model_wrapper_batches_receipts_and_closes_on_failure(db_mana
         )
         assert len(rows) == 2
         assert [row.input_tokens for row in rows] == [1000, 200]
-        assert sum(row.cost_amount for row in rows) == Decimal(".00144")
+        total = Decimal(0)
+        for row in rows:
+            assert row.cost_amount is not None
+            total += row.cost_amount
+        assert total == Decimal(".00144")
         assert all(row.cost_source == "REGISTERED" for row in rows)
 
 
-async def test_accounting_migration_round_trip_preserves_legacy_usage(db_manager):
+async def test_accounting_migration_round_trip_preserves_legacy_usage(
+    db_manager: DatabaseManager,
+) -> None:
     from importlib import import_module
+
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
-    from sqlalchemy import inspect, Numeric
+    from sqlalchemy import Numeric, inspect
 
     migration = import_module("migrations.versions.2026-09-06_usage_allocations_0030")
     now, identity, window = context()
@@ -242,7 +265,7 @@ async def test_accounting_migration_round_trip_preserves_legacy_usage(db_manager
         )
     async with db_manager.engine.begin() as connection:
 
-        def round_trip(sync_connection):
+        def round_trip(sync_connection: Connection) -> None:
             with Operations.context(MigrationContext.configure(sync_connection)):
                 migration.downgrade()
                 migration.upgrade()
@@ -268,7 +291,9 @@ async def test_accounting_migration_round_trip_preserves_legacy_usage(db_manager
         assert record.allocation_id is None
 
 
-async def test_warning_and_model_events_are_emitted_once_with_the_receipt(db_manager):
+async def test_warning_and_model_events_are_emitted_once_with_the_receipt(
+    db_manager: DatabaseManager,
+) -> None:
     from app.modules.usage.domain.events import ModelUsageEvent, UsageLimitWarningEvent
 
     now, identity, window = context()
@@ -291,7 +316,7 @@ async def test_warning_and_model_events_are_emitted_once_with_the_receipt(db_man
         cost=Decimal(".8"),
         occurred_at=now,
     )
-    events = []
+    events: list[DomainEvent] = []
     async with db_manager.session_factory() as session, session.begin():
         await checkpoint(session, batch, now=now, timeout_seconds=120, events=events)
     assert len([event for event in events if isinstance(event, ModelUsageEvent)]) == 1
@@ -299,7 +324,7 @@ async def test_warning_and_model_events_are_emitted_once_with_the_receipt(db_man
         len([event for event in events if isinstance(event, UsageLimitWarningEvent)])
         == 1
     )
-    replay_events = []
+    replay_events: list[DomainEvent] = []
     async with db_manager.session_factory() as session, session.begin():
         await checkpoint(
             session, batch, now=now, timeout_seconds=120, events=replay_events
@@ -311,14 +336,15 @@ async def test_warning_and_model_events_are_emitted_once_with_the_receipt(db_man
     "priced,activate_after_start", [(True, False), (False, False), (True, True)]
 )
 async def test_limit_is_enforced_before_an_ongoing_request_dispatch(
-    db_manager, priced, activate_after_start
-):
-    from app.modules.usage.config import UsageSettings
-    from pydantic_ai.models.function import FunctionModel
-    from pydantic_ai.models import ModelRequestParameters
+    db_manager: DatabaseManager, priced: bool, activate_after_start: bool
+) -> None:
     from pydantic_ai.messages import ModelResponse, TextPart
+    from pydantic_ai.models import ModelRequestParameters
+    from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RequestUsage
+
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.usage.config import UsageSettings
     from app.modules.usage.domain.ports import UsageLimitValues
     from app.modules.usage.infrastructure.metered_model import MeteredModel
     from app.modules.usage.services.metering_scope import metering_execution
@@ -326,17 +352,19 @@ async def test_limit_is_enforced_before_an_ongoing_request_dispatch(
     from app.modules.usage.services.usage_limit_provider import (
         configure_usage_limit_provider,
     )
-    from app.modules.usage.services.usage_service import UsageService, ModelPricing
+    from app.modules.usage.services.usage_service import ModelPricing, UsageService
 
     class Limits:
-        async def resolve_limits(self, *, organization_id, user_id):
+        async def resolve_limits(
+            self, *, organization_id: UUID | None, user_id: UUID
+        ) -> UsageLimitValues:
             return UsageLimitValues(
                 user_weekly_limit_usd=1.1 if not activate_after_start or calls else None
             )
 
     calls = 0
 
-    async def provider(messages, info):
+    async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         nonlocal calls
         calls += 1
         return ModelResponse(
@@ -373,9 +401,12 @@ async def test_limit_is_enforced_before_an_ongoing_request_dispatch(
         UsageService._SYSTEM_MODEL_PRICING.pop(model_name, None)
 
 
-async def test_cancelled_stream_does_not_refund_unconfirmed_provider_usage(db_manager):
-    from pydantic_ai.models.function import FunctionModel
+async def test_cancelled_stream_does_not_refund_unconfirmed_provider_usage(
+    db_manager: DatabaseManager,
+) -> None:
     from pydantic_ai.models import ModelRequestParameters
+    from pydantic_ai.models.function import FunctionModel
+
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
     from app.modules.usage.domain.ports import UsageLimitValues
     from app.modules.usage.infrastructure.metered_model import MeteredModel
@@ -384,13 +415,17 @@ async def test_cancelled_stream_does_not_refund_unconfirmed_provider_usage(db_ma
     from app.modules.usage.services.usage_limit_provider import (
         configure_usage_limit_provider,
     )
-    from app.modules.usage.services.usage_service import UsageService, ModelPricing
+    from app.modules.usage.services.usage_service import ModelPricing, UsageService
 
     class Limits:
-        async def resolve_limits(self, *, organization_id, user_id):
+        async def resolve_limits(
+            self, *, organization_id: UUID | None, user_id: UUID
+        ) -> UsageLimitValues:
             return UsageLimitValues(user_weekly_limit_usd=1)
 
-    async def provider(messages, info):
+    async def provider(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str]:
         yield "partial answer"
         yield "not consumed"
 
@@ -436,6 +471,7 @@ async def test_cancelled_stream_does_not_refund_unconfirmed_provider_usage(db_ma
                     select(UsageRecord).where(UsageRecord.user_id == user_id)
                 )
             ).one()
+            assert record.record_metadata is not None
             assert record.record_metadata["uncertain_usd"] == "1.000000000"
     finally:
         configure_usage_limit_provider(None)

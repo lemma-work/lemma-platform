@@ -16,13 +16,28 @@ from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
+from pydantic_ai.tools import RunContext
 
 from app.modules.usage.domain.accounting import TokenCounts
 from app.modules.usage.domain.errors import UsageContextMissingError
 from app.modules.usage.services.metering_scope import current_metering_scope
 
 
-def _counts(usage: RequestUsage) -> TokenCounts:
+def _counts(usage: RequestUsage) -> TokenCounts | None:
+    # Adapters normalize an absent provider receipt to all-zero usage. A complete
+    # response alone cannot prove that a model request consumed no paid tokens.
+    if not any(
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens,
+            usage.input_audio_tokens,
+            usage.output_audio_tokens,
+            usage.cache_audio_read_tokens,
+        )
+    ):
+        return None
     return TokenCounts(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
@@ -57,7 +72,8 @@ class MeteredModel(WrapperModel):
             response = await self.wrapped.request(
                 messages, dispatch.settings, model_request_parameters
             )
-            dispatch.usage = response.usage
+            if response.state == "complete":
+                dispatch.usage = response.usage
             return response
 
     @asynccontextmanager
@@ -66,16 +82,17 @@ class MeteredModel(WrapperModel):
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
-        run_context=None,
+        run_context: RunContext[object] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
         async with self._dispatch(model_settings, model_request_parameters) as dispatch:
             async with self.wrapped.request_stream(
                 messages, dispatch.settings, model_request_parameters, run_context
             ) as stream:
                 yield stream
-            # The adapter has finalized its receipt on context exit. A partial
-            # stream has no final receipt and retains its request bound instead.
-            dispatch.usage = stream.usage
+            # A normal context exit can follow an early break. Only exhaustion
+            # with a complete provider response makes the usage receipt final.
+            if stream.get().state == "complete":
+                dispatch.usage = stream.usage
 
     @asynccontextmanager
     async def _dispatch(
@@ -85,7 +102,7 @@ class MeteredModel(WrapperModel):
         if scope is None:
             raise UsageContextMissingError()
         meter, pricing = scope.meter(self.runtime_profile, self.source)
-        effective: ModelSettings = {**(settings or {})}
+        effective: ModelSettings = {**(self.wrapped.settings or {}), **(settings or {})}
         output_ceiling = (
             effective.get("max_tokens") or scope.settings.usage_request_output_ceiling
         )
@@ -123,8 +140,13 @@ class Dispatch:
 def _compound_billing(settings: Mapping[str, object]) -> bool:
     # These provider features can add billable iterations or TTL-dependent
     # charges which the adapter does not expose in its normalized receipt.
-    if settings.get("anthropic_context_management") or settings.get(
-        "anthropic_advisor"
+    if (
+        settings.get("extra_body")
+        or settings.get("anthropic_context_management")
+        or settings.get("anthropic_advisor")
+        or settings.get("anthropic_speed") == "fast"
+        or settings.get("service_tier") == "priority"
+        or settings.get("openai_service_tier") == "priority"
     ):
         return True
     return any(

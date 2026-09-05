@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import DateTime, Float, Index, String, Numeric
@@ -12,6 +11,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.usage.domain.accounting import money
+from app.modules.usage.domain.entities import UsageKind, UsageProfileScope
 from app.modules.usage.domain.entities import UsageRecord as UsageRecordEntity
 from app.modules.usage.infrastructure.allocation_models import (
     UsageAllocation as UsageAllocation,
@@ -60,7 +61,7 @@ class UsageRecord(UUIDAuditBase):
         String(20), server_default="LEGACY", default="LEGACY"
     )
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    record_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+    record_metadata: Mapped[dict[str, object] | None] = mapped_column(
         "metadata",
         JSONB,
         default=dict,
@@ -125,6 +126,7 @@ class UsageRecord(UUIDAuditBase):
             output_tokens=self.output_tokens,
             units=self.units,
             cost_usd=self.cost_usd,
+            cost_amount=self.cost_amount,
             cached_input_tokens=self.cached_input_tokens,
             cache_write_tokens=self.cache_write_tokens,
             cost_source=self.cost_source,
@@ -137,12 +139,12 @@ class UsageRecord(UUIDAuditBase):
     def from_entity(cls, entity: UsageRecordEntity) -> "UsageRecord":
         usage_kind = (
             entity.usage_kind.value
-            if hasattr(entity.usage_kind, "value")
+            if isinstance(entity.usage_kind, UsageKind)
             else str(entity.usage_kind)
         )
         profile_scope = (
             entity.profile_scope.value
-            if hasattr(entity.profile_scope, "value")
+            if isinstance(entity.profile_scope, UsageProfileScope)
             else str(entity.profile_scope)
         )
         return cls(
@@ -166,6 +168,13 @@ class UsageRecord(UUIDAuditBase):
             output_tokens=entity.output_tokens,
             units=entity.units,
             cost_usd=entity.cost_usd,
+            cost_amount=(
+                money(entity.cost_amount)
+                if entity.cost_amount is not None
+                else money(entity.cost_usd)
+                if entity.cost_usd is not None
+                else None
+            ),
             cached_input_tokens=entity.cached_input_tokens,
             cache_write_tokens=entity.cache_write_tokens,
             cost_source=entity.cost_source,

@@ -246,15 +246,13 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
         enable_prompt_caching=True,
     )
     assert any(
-        isinstance(c, InstructedToolsetCapability)
-        and c.get_serialization_name() == "web_search"
+        isinstance(c, InstructedToolsetCapability) and c.name == "web_search"
         for c in capabilities
     )
     # The workspace CLI toolset is wrapped as an instructed capability that carries
     # its usage fragment.
     assert any(
-        isinstance(c, InstructedToolsetCapability)
-        and c.get_serialization_name() == "workspace_cli"
+        isinstance(c, InstructedToolsetCapability) and c.name == "workspace_cli"
         for c in capabilities
     )
     assert any(isinstance(c, _CT) for c in capabilities)
@@ -880,8 +878,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     speech_caps = [
         c
         for c in capabilities
-        if isinstance(c, InstructedToolsetCapability)
-        and c.get_serialization_name() == "speech"
+        if isinstance(c, InstructedToolsetCapability) and c.name == "speech"
     ]
     assert len(speech_caps) == 1
     instructions = speech_caps[0].get_instructions()
@@ -955,8 +952,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
     # The workspace_cli usage instructions still ride along, unaffected by
     # whether view_image is present.
     assert any(
-        isinstance(c, InstructedToolsetCapability)
-        and c.get_serialization_name() == "workspace_cli"
+        isinstance(c, InstructedToolsetCapability) and c.name == "workspace_cli"
         for c in vision_caps
     )
 
@@ -1022,8 +1018,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     messaging = [
         c
         for c in capabilities
-        if isinstance(c, InstructedToolsetCapability)
-        and c.get_serialization_name() == "messaging"
+        if isinstance(c, InstructedToolsetCapability) and c.name == "messaging"
     ]
     assert len(messaging) == 1, "deferring messaging dropped its instructions"
     instructions = messaging[0].get_instructions()

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
 
 from app.core.api.dependencies import UoWDep
-from app.modules.usage.domain.errors import UsageAccessDeniedError
 from app.modules.identity.contracts import (
     AuthenticatedUser as UserEntity,
+)
+from app.modules.identity.contracts import (
     OrganizationRole,
 )
 from app.modules.identity.contracts.organizations import organization_member_role
@@ -20,10 +22,13 @@ from app.modules.usage.api.schemas import (
     UsageListResponse,
     UsageQueryParams,
     UsageRecordResponse,
+    UsageStatsBucketResponse,
     UsageStatsQueryParams,
     UsageStatsResponse,
     UsageSummaryResponse,
 )
+from app.modules.usage.domain.entities import UsageRecord, UsageSummary
+from app.modules.usage.domain.errors import UsageAccessDeniedError
 
 router = APIRouter(prefix="/usage", tags=["Usage"], redirect_slashes=False)
 
@@ -34,11 +39,11 @@ def _datetime_range(params: UsageQueryParams) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _usage_kind_value(value: object) -> str:
-    return value.value if hasattr(value, "value") else str(value)
+def _usage_kind_value(value: str | Enum) -> str:
+    return value.value if isinstance(value, Enum) else str(value)
 
 
-def _record_response(record) -> UsageRecordResponse:
+def _record_response(record: UsageRecord) -> UsageRecordResponse:
     return UsageRecordResponse(
         id=record.id,
         organization_id=record.organization_id,
@@ -53,7 +58,7 @@ def _record_response(record) -> UsageRecordResponse:
         profile_id=record.profile_id,
         profile_scope=(
             record.profile_scope.value
-            if hasattr(record.profile_scope, "value")
+            if isinstance(record.profile_scope, Enum)
             else str(record.profile_scope)
         ),
         model_name=record.model_name,
@@ -73,7 +78,7 @@ def _record_response(record) -> UsageRecordResponse:
     )
 
 
-def _summary_response(summary) -> UsageSummaryResponse:
+def _summary_response(summary: UsageSummary) -> UsageSummaryResponse:
     return UsageSummaryResponse(
         organization_id=summary.organization_id,
         pod_id=summary.pod_id,
@@ -233,7 +238,7 @@ async def get_usage_stats(
         status=params.status,
     )
     return UsageStatsResponse(
-        items=rows,
+        items=[UsageStatsBucketResponse.model_validate(row) for row in rows],
         total=len(rows),
         start_date=start,
         end_date=end,
