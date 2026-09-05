@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr
 
-from app.core.config import Settings as CoreSettings
+from app.core.config import Settings as CoreSettings, reveal_secret
 from app.modules.identity.config import (
     TELEGRAM_OIDC_ISSUER,
     TELEGRAM_OIDC_JWKS_URI,
@@ -136,3 +136,31 @@ def test_the_two_configured_predicates_moved_with_their_fields():
     assert settings.is_telegram_oidc_configured() is False
     assert not hasattr(CoreSettings, "is_microsoft_oauth_configured")
     assert not hasattr(CoreSettings, "is_telegram_oidc_configured")
+
+
+# Identity's credential-valued fields. `microsoft_client_secret` was covered by
+# `core/tests/unit/test_settings_secrets.py` until it moved here; the rest never
+# had this assertion at all, which the move is a good moment to fix.
+SECRET_FIELDS = (
+    "auth_altcha_hmac_key",
+    "auth_bounce_webhook_secret",
+    "microsoft_client_secret",
+    "telegram_oidc_client_secret",
+)
+
+
+@pytest.mark.parametrize("field", SECRET_FIELDS)
+def test_an_identity_secret_is_hidden_in_a_repr(field: str) -> None:
+    annotation = IdentitySettings.model_fields[field].annotation
+    assert "SecretStr" in str(annotation), (
+        f"{field} is typed {annotation}, so its value appears in full in any "
+        f"repr of the settings object -- a traceback, a log record, a debugger"
+    )
+
+    plaintext = f"the-real-{field.replace('_', '-')}"
+    configured = IdentitySettings.model_construct(**{field: SecretStr(plaintext)})
+
+    assert plaintext not in repr(getattr(configured, field))
+    assert plaintext not in repr(configured)
+    # And still usable at the point of use, which is the other half.
+    assert reveal_secret(getattr(configured, field)) == plaintext

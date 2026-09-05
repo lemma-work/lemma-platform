@@ -937,7 +937,9 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
-                "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),
+                "WORKSPACE_CALLBACK_API_URL": (
+                    workspace_settings.workspace_callback_api_url
+                ),
                 # `function_settings`, not `e2e_settings`: this field moved to
                 # `FunctionSettings`, and `e2e_settings` is core's. The two are
                 # separate objects, so reading it off the wrong one is an

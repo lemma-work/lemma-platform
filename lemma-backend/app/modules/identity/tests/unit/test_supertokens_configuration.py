@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from supertokens_python.recipe import emailverification
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
-from app.core.config import Settings, settings
+from app.core.config import settings
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     build_supertokens_app_info,
     build_thirdparty_providers,
@@ -13,7 +13,7 @@ from app.modules.identity.infrastructure.supertokens_auth.initialization import 
     initialize_supertokens,
 )
 from app.modules.test_support.e2e_base import _reset_supertokens_testing_state
-from app.modules.identity.config import identity_settings
+from app.modules.identity.config import IdentitySettings, identity_settings
 
 
 def test_build_supertokens_app_info_uses_full_urls():
@@ -38,12 +38,10 @@ def test_build_supertokens_app_info_uses_full_urls():
 
 
 def test_auth_website_base_path_defaults_to_auth_and_is_normalised():
-    default_settings = Settings(_env_file=None, environment="testing")
-    explicit_settings = Settings(
-        _env_file=None,
-        environment="testing",
-        auth_website_base_path="auth/",
-    )
+    # The field and its normalising validator moved to `IdentitySettings`
+    # together; asserted here rather than on core, which no longer has either.
+    default_settings = IdentitySettings(_env_file=None)
+    explicit_settings = IdentitySettings(_env_file=None, auth_website_base_path="auth/")
 
     assert default_settings.auth_website_base_path == "/auth"
     assert explicit_settings.auth_website_base_path == "/auth"
@@ -55,11 +53,7 @@ def test_auth_website_base_path_defaults_to_auth_and_is_normalised():
 )
 def test_auth_website_base_path_rejects_non_path_values(value: str):
     with pytest.raises(ValidationError):
-        Settings(
-            _env_file=None,
-            environment="testing",
-            auth_website_base_path=value,
-        )
+        IdentitySettings(_env_file=None, auth_website_base_path=value)
 
 
 def test_email_verification_mode_follows_configuration(monkeypatch):
