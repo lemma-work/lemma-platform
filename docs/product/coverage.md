@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **164** |
 
-Scenario tests declaring a promise: 386.
+Scenario tests declaring a promise: 387.
 
 ## Contract coverage
 
@@ -165,9 +165,9 @@ working one. It is listed because `covered` otherwise reads as
 | --- | --- | --- |
 | `PS-OPS-001` An organization can see what its model work cost | `covered` | `test_usage_can_be_broken_down`, `test_usage_is_readable_by_a_member`, `test_an_outsider_cannot_read_usage` |
 | `PS-OPS-002` A person can see their own usage | `covered` | `test_own_usage_is_readable` |
-| `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too` |
+| `PS-OPS-003` Usage records are a ledger, not a cache | `covered` | `test_a_run_is_always_recorded`, `test_a_usage_record_is_attributed`, `test_a_failed_run_is_recorded_too`, `test_usage_can_be_filtered_to_a_run` |
 | `PS-OPS-010` Limits are visible before they are hit | `covered` | `test_limits_are_visible` |
-| `PS-OPS-011` A missing price never blocks work | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
+| `PS-OPS-011` Unpriced work remains available without monetary limits | `covered` | `test_a_run_is_always_recorded`, `test_an_unknown_price_never_blocks_a_run` |
 | `PS-OPS-012` Exceeding a limit is refused clearly, not degraded | `covered` | `test_work_over_the_limit_is_refused_clearly` |
 | `PS-OPS-020` Deleting a pod actually stops everything it was doing | `covered` | `test_a_deleted_pod_stops_answering_its_surfaces`, `test_a_deleted_pod_runs_nothing_further`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-OPS-021` A person can take their data out | `covered` | `test_an_exported_bundle_is_readable_without_lemma` |

@@ -8,6 +8,7 @@ deployments; the tests below use a local fixture.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -217,7 +218,7 @@ def test_glm_cost_uses_glm_pricing():
         units=0.0,
     )
     # 1000/1e6*1.40 + 500/1e6*4.40
-    assert cost == pytest.approx(0.0036)
+    assert cost == Decimal("0.0036")
     assert fallback is False
 
 
@@ -230,7 +231,7 @@ def test_glm_cost_resolves_by_provider_id_only():
         output_tokens=0,
         units=0.0,
     )
-    assert cost == pytest.approx(1.40)
+    assert cost == Decimal("1.40")
     assert fallback is False
 
 
@@ -244,7 +245,7 @@ def test_kimi_k2_6_priced_at_corrected_rate():
         output_tokens=1_000_000,
         units=0.0,
     )
-    assert cost == pytest.approx(0.95 + 4.00)
+    assert cost == Decimal("4.95")
     assert fallback is False
 
 
@@ -269,8 +270,8 @@ def test_cost_applies_cached_token_discount():
         cache_read_tokens=400,
     )
     # 600 uncached @ 1.40 + 400 cached @ 0.26
-    expected = 600 / 1_000_000 * 1.40 + 400 / 1_000_000 * 0.26
-    assert with_cache == pytest.approx(expected)
+    expected = Decimal("0.000944")
+    assert with_cache == expected
     assert with_cache < no_cache
 
 
@@ -285,7 +286,7 @@ def test_cost_cache_read_capped_at_input():
         units=0.0,
         cache_read_tokens=1000,
     )
-    assert cost == pytest.approx(100 / 1_000_000 * 0.26)
+    assert cost == Decimal("0.000026")
     assert cost >= 0
 
 

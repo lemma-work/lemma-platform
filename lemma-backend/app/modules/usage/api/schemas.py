@@ -27,6 +27,8 @@ class UsageRecordResponse(BaseModel):
     output_tokens: int
     total_tokens: int
     units: float
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
     cost_usd: float | None = None
     status: str | None = None
     metadata: dict[str, object]
@@ -35,6 +37,8 @@ class UsageRecordResponse(BaseModel):
 
 
 class UsageSummaryResponse(BaseModel):
+    agent_run_id: UUID | None = None
+    conversation_id: UUID | None = None
     organization_id: UUID | None = None
     pod_id: UUID | None = None
     user_id: UUID | None = None
@@ -53,6 +57,8 @@ class UsageSummaryResponse(BaseModel):
 
 
 class UsageQueryParams(BaseModel):
+    agent_run_id: UUID | None = None
+    conversation_id: UUID | None = None
     start: datetime | None = Field(default=None)
     end: datetime | None = Field(default=None)
     days: int = Field(default=30, ge=1, le=365)

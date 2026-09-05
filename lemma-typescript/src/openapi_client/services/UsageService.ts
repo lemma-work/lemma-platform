@@ -13,6 +13,8 @@ export class UsageService {
     /**
      * List Usage Events
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -31,6 +33,8 @@ export class UsageService {
      */
     public static usageOrganizationEventsList(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -52,6 +56,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -94,6 +100,8 @@ export class UsageService {
     /**
      * Get My Usage
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -112,6 +120,8 @@ export class UsageService {
      */
     public static usageOrganizationMeSummaryGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -133,6 +143,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -155,6 +167,8 @@ export class UsageService {
     /**
      * Get Usage Stats
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -175,6 +189,8 @@ export class UsageService {
      */
     public static usageOrganizationStatsGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -198,6 +214,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -222,6 +240,8 @@ export class UsageService {
     /**
      * Get Organization Usage Summary
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -240,6 +260,8 @@ export class UsageService {
      */
     public static usageOrganizationSummaryGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -261,6 +283,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,

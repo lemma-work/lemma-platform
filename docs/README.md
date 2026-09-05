@@ -30,6 +30,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Desktop architecture](architecture/desktop.md) | Process ownership, lifecycle protocol, ports, and local state |
 | [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, and how Desktop supervises them |
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
+| [Usage accounting](design/usage-accounting.md) | Spending authority, batched receipts, ongoing limits, failure recovery and rollout |
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |
 | [App and function versions](design/app-function-versioning.md) | Revision identity, previews, rollback, bounded retention, and concurrent cleanup |
 | [Product analytics](design/product-analytics.md) | The product-analytics plane, its event contract, origins, and the privacy boundary |
