@@ -47,7 +47,11 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "0030_usage_cost_breakdown"
-down_revision = "0029_github_app_reauth"
+# Re-parented onto main's head when this branch merged: #346 landed
+# 0021_app_release_history and 0022_function_revisions as children of
+# 0029_github_app_reauth, which is where this one also hung. Two heads is
+# not a conflict alembic can resolve, and the chain is linear by policy.
+down_revision = "0022_function_revisions"
 branch_labels = None
 depends_on = None
 
