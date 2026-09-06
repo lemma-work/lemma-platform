@@ -24,7 +24,7 @@ SHELL := /bin/bash
         desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
         desktop-concepts desktop-concepts-check \
-        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
+        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-agent-host-e2e desktop-agent-host-browser-e2e \
         desktop-verify-guest desktop-clean \
         version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
@@ -1201,7 +1201,22 @@ desktop-exe:
 	@echo "      pwsh desktop\\scripts\\desktop.ps1 exe"
 	@exit 1
 
-# The one command that answers "does ACP chat over Agent Host actually work?"
+# The real backend and Rust host share the same HTTP path as a browser chat.
+# A scripted ACP provider makes streaming and disconnects deterministic without
+# using installed agent accounts. Testcontainers owns the disposable services.
+desktop-agent-host-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@cd lemma-backend && uv run pytest \
+		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py -m 'not agent_host_browser' --no-showlocals
+
+desktop-agent-host-browser-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@npm --prefix lemma-typescript run build
+	@cd lemma-backend && CORS_ORIGIN_REGEX='^http://127[.]0[.]0[.]1:[0-9]+$$' \
+		uv run pytest app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
+		-m agent_host_browser --no-showlocals
+
+# Does ACP chat over Agent Host work with authenticated provider agents?
 # Drives Codex, Claude Code and OpenCode over real ACP and asserts each streams
 # a real answer back through the host protocol, keeps one provider session
 # across two turns, and survives a session the provider has forgotten.

@@ -135,6 +135,10 @@ async fn a_crashed_agent_keeps_partial_text_and_reports_one_failed_terminal() {
         .collect::<Vec<_>>();
     assert_eq!(terminals.len(), 1);
     assert_eq!(terminals[0].payload["state"], "FAILED");
+    assert_ne!(
+        terminals[0].payload.get("supersedes_stream"),
+        Some(&json!(true))
+    );
     assert!(
         events
             .iter()

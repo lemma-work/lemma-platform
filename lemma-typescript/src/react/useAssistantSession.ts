@@ -13,6 +13,7 @@ import { parseAssistantStreamEvent, upsertConversationMessage } from "../assista
 import {
   conversationMessageText,
   getLatestAssistantMessage,
+  isConversationRunningStatus,
 } from "./assistant-output.js";
 import { normalizeError } from "./utils.js";
 
@@ -212,12 +213,6 @@ function normalizeConversationStatus(status: unknown): string | undefined {
   if (typeof status !== "string") return undefined;
   const normalized = status.trim().toUpperCase();
   return normalized.length > 0 ? normalized : undefined;
-}
-
-function isConversationRunningStatus(status: unknown): boolean {
-  const normalized = normalizeConversationStatus(status);
-  if (!normalized) return false;
-  return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING";
 }
 
 /** Did a re-read of the conversation actually bring anything back?
@@ -1322,19 +1317,17 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       const scope = normalizeScope(client, defaultScope);
       const scopedClient = applyPodScope(client, scope.podId);
 
-      await scopedClient.conversations.stopRun(id, {
+      const stopped = await scopedClient.conversations.stopRun(id, {
         pod_id: scope.podId ?? undefined,
       });
-      setConversationStatus("WAITING");
-      clearStreamingText();
-      clearStreamingThinking();
+      setConversationStatus(normalizeConversationStatus(stopped.status) ?? "STOP_REQUESTED");
     } catch (stopError) {
       const normalized = normalizeError(stopError, "Failed to stop conversation.");
       setError(normalized);
       onErrorRef.current?.(stopError);
       throw normalized;
     }
-  }, [clearStreamingText, clearStreamingThinking, client, conversationId, defaultScope, setConversationStatus]);
+  }, [client, conversationId, defaultScope, setConversationStatus]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);

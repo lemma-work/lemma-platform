@@ -40,7 +40,7 @@ var LemmaUI = (() => {
   function isConversationRunningStatus(status) {
     const normalized = normalizeConversationStatus(status);
     if (!normalized) return false;
-    return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING";
+    return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING" || normalized === "STOP_REQUESTED";
   }
   function extractTextFromStructuredContentEntry(entry) {
     if (typeof entry === "string") return entry.trim();
@@ -921,20 +921,18 @@ var LemmaUI = (() => {
         }
       });
       __publicField(this, "stop", async (explicitConversationId) => {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         this.patch({ error: null });
         try {
           const id = requireConversationId(explicitConversationId != null ? explicitConversationId : this.state.conversationId);
           const scope = normalizeScope(this.client, this.scopeDefaults);
           const scopedClient = applyPodScope(this.client, scope.podId);
-          await scopedClient.conversations.stopRun(id, { pod_id: (_a = scope.podId) != null ? _a : void 0 });
-          this.setConversationStatus("WAITING");
-          this.clearStreamingText();
-          this.clearStreamingThinking();
+          const stopped = await scopedClient.conversations.stopRun(id, { pod_id: (_a = scope.podId) != null ? _a : void 0 });
+          this.setConversationStatus((_b = normalizeConversationStatus(stopped.status)) != null ? _b : "STOP_REQUESTED");
         } catch (stopError) {
           const normalized = normalizeError(stopError, "Failed to stop conversation.");
           this.patch({ error: normalized });
-          (_c = (_b = this.options).onError) == null ? void 0 : _c.call(_b, stopError);
+          (_d = (_c = this.options).onError) == null ? void 0 : _d.call(_c, stopError);
           throw normalized;
         }
       });

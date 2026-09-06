@@ -56,6 +56,35 @@ async fn control_plane() -> ControlPlane {
     .await
 }
 
+#[tokio::test]
+async fn redelivery_preserves_the_entire_command_until_acknowledged() {
+    let control = control_plane().await;
+    publish(
+        &control,
+        json!({"harnesses": [snapshot("cursor", "READY", "rev-1")]}),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let poll = async |acknowledged: Vec<Value>| {
+        client
+            .post(control.base_url.join("agent-host/poll").unwrap())
+            .bearer_auth(HOST_SECRET)
+            .json(&json!({"acknowledged_command_ids": acknowledged}))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+    let first = poll(vec![]).await;
+    let second = poll(vec![]).await;
+    assert_eq!(first["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(first["commands"], second["commands"]);
+    let acknowledged = poll(vec![first["commands"][0]["command_id"].clone()]).await;
+    assert_eq!(acknowledged["commands"], json!([]));
+}
+
 fn event(control: &ControlPlane, sequence: u64, text: &str) -> Value {
     json!({
         "run_id": control.run_id, "lease_epoch": 1, "sequence": sequence,

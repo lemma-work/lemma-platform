@@ -238,12 +238,15 @@ The crate has:
 - a loopback HTTP end-to-end test covering pairing, polling, harness
   publication, event replay, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and
+- a real backend/worker/Rust-host HTTP test, with a scripted ACP provider,
+  proving live conversation streaming, second turns, persistence after a
+  client disconnect or provider crash, and concurrent tool approvals;
 - Desktop/locald supervision tests that verify restart and full process-tree
   cleanup; and
 - a control-plane contract test that pins the properties the stand-in backend in
   `tests/support` has to share with the real one.
 
-That last one earned its place. Every end-to-end test here drives the shipped
+The Rust end-to-end tests drive the shipped
 host binary against that stand-in, which proves something about the host only
 while the stand-in behaves like the backend. It did not: `agent_host_harnesses`
 is unique on `(host_id, harness_key)` so a harness keeps one id for the life of
@@ -279,6 +282,64 @@ Set `LEMMA_REAL_AGENT_E2E_AGENTS=codex,opencode` to select a subset. These tests
 are release qualification, not public CI: they require dedicated provider test
 accounts and spend real quota. The paired fixture exercises the real Rust host;
 the backend's HTTP integration tests separately exercise its control-plane implementation.
+
+Run `make desktop-agent-host-e2e` from the repository root to join those halves:
+it builds the Rust host and pairs it with the real backend and worker. PostgreSQL,
+Redis, and authentication services run in disposable test containers. The public
+conversation SSE client must receive Unicode text before the scripted provider
+is allowed to finish; subsequent turns and saved messages must preserve it.
+Another case closes the client midstream and checks that the answer still
+finishes and persists without repeating provider dispatch. This lane needs Rust,
+backend dependencies, and Docker on macOS or Linux, with no provider credentials.
+It runs in the required Desktop contracts CI job. Native Windows provider and
+packaged-app qualification remain separate.
+
+`make desktop-agent-host-browser-e2e` adds the real web chat: sending a message,
+reading the approval card, approving or denying the native tool, live Unicode
+streaming, Stop, simultaneous approvals with different decisions, a provider
+crash, closing/reopening a streaming chat, and reloading
+the resulting transcript. Install the locked dependencies in `lemma-typescript`,
+`lemma-frontend`, and `desktop/ui-tests`, then install Playwright Chromium with
+`npm exec --prefix desktop/ui-tests -- playwright install chromium`. Alternatively,
+set `LEMMA_TEST_BROWSER_CHANNEL=chrome` to use installed Chrome. The test creates
+its own account, host, frontend server and browser profile; process groups and
+containers are cleaned on failure too. Screenshots and frontend diagnostics go
+under `output/playwright/`. This also runs in Desktop contracts CI.
+
+### JSON ACP scenarios
+
+The provider's wire messages live in `tests/fixtures/scenarios/*.json` and run
+through `scripted_acp_agent.py <traffic-log> json:<scenario-path>`. They are
+synthetic ACP v1 exchanges, consumed by the same ACP SDK as installed providers.
+They do not replace backend endpoints or the chat UI with mocks. The streaming
+fixtures are also shared with the Rust process-level regressions.
+
+A version-1 scenario has `steps` and an optional `stopReason`. Each step has one
+action:
+
+- `send`: an actual ACP JSON-RPC notification or permission request.
+- `await_permission`: wait for a response by request `id`, then replay the
+  `selected[optionId]` or `cancelled` steps. Unknown responses fail the test.
+- `await_cancel`: require the host's `session/cancel` notification.
+- `await_release`: wait until the test client has observed live output and
+  creates the traffic log's sibling `.release` file.
+- `exit`: simulate a provider process failure with the given exit code.
+
+The parallel fixture sends both requests before either is answered. The HTTP
+test answers the second first and makes different decisions, then checks exact
+ACP responses, complete arguments, and one saved result per tool. Waiting for
+approval uses a connection-owned task so later notifications and requests can
+continue. Add only synthetic or fully sanitized provider exchanges to this
+directory; keep the live-provider lane to detect adapter/protocol drift.
+
+The supervisor owns worker, probe, delivery, and run tasks: cancellation or an
+error cancels their work instead of detaching it. A closed installation-change
+channel stops the worker, and refresh requests share one active discovery round.
+The worker regressions cover these paths without launching installed providers.
+
+The shared chat SDK treats `STOP_REQUESTED` as an active run until it settles.
+Reopening a stopping conversation reattaches its stream, and requesting Stop
+retains partial text while the final transcript is persisted.
 
 `streaming_flow_e2e` runs without provider accounts. Its ACP subprocess waits for
 the receiver to observe live Unicode text before finishing. It also tests a lost

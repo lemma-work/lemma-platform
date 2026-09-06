@@ -608,8 +608,13 @@ async fn a_real_agents_native_tool_waits_for_lemmas_approval() {
         let requests = control.permission_requests();
         assert!(
             !requests.is_empty(),
-            "{agent} wrote outside its sandbox without ever asking Lemma; a \
-             harness that never parks a request is not gated at all"
+            "{agent} never requested permission; wrote={}, answer={:?}, terminal={:?}",
+            gated.happened(),
+            control.assistant_text(),
+            control
+                .events()
+                .iter()
+                .find(|event| event.event_type == EventType::Terminal)
         );
         // Lemma renders these as approval cards and addresses its decision to
         // the request id, so a request missing either is unanswerable.
@@ -661,7 +666,13 @@ async fn a_real_agents_denied_tool_is_stopped_without_waiting_out_the_timeout() 
 
         assert!(
             !control.permission_requests().is_empty(),
-            "{agent} never asked, so there was nothing to deny"
+            "{agent} never asked, so there was nothing to deny; wrote={}, answer={:?}, terminal={:?}",
+            gated.happened(),
+            control.assistant_text(),
+            control
+                .events()
+                .iter()
+                .find(|event| event.event_type == EventType::Terminal)
         );
         // A blocked command is also what a host that denies everything by
         // itself produces, so require that Lemma got to decide while the agent

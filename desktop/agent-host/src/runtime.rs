@@ -28,6 +28,30 @@ use crate::protocol::{
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// A supervisor owns its tasks even when its future is cancelled or errors.
+/// Dropping Tokio's bare handle would detach the task and its subprocesses.
+struct OwnedTask<T>(JoinHandle<T>);
+
+impl<T> OwnedTask<T> {
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+
+    fn abort(&self) {
+        self.0.abort();
+    }
+
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        (&mut self.0).await
+    }
+}
+
+impl<T> Drop for OwnedTask<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 /// How soon to try again when publishing harnesses fails.
 ///
 /// The refresh interval is tuned for "has anything about the installed agents
@@ -236,7 +260,7 @@ impl HostRuntime {
         }
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
-            HashMap::<Uuid, (watch::Sender<bool>, JoinHandle<anyhow::Result<()>>)>::new();
+            HashMap::<Uuid, (watch::Sender<bool>, OwnedTask<anyhow::Result<()>>)>::new();
         let mut scan = tokio::time::interval(DISK_SCAN_INTERVAL);
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // One sweep for the process, announced to every worker.
@@ -291,7 +315,7 @@ impl HostRuntime {
                     for target_id in stopped {
                         if let Some((shutdown, handle)) = targets.remove(&target_id) {
                             let _ = shutdown.send(true);
-                            match handle.await {
+                            match handle.join().await {
                                 Ok(Ok(())) => {}
                                 Ok(Err(error)) => {
                                     // A rejected credential never recovers by
@@ -348,7 +372,7 @@ impl HostRuntime {
                         )?;
                         targets.insert(target_id, (
                             shutdown_tx,
-                            tokio::spawn(async move { worker.run().await }),
+                            OwnedTask(tokio::spawn(async move { worker.run().await })),
                         ));
                     }
                 }
@@ -358,7 +382,7 @@ impl HostRuntime {
             let _ = shutdown.send(true);
         }
         for (target_id, (_, handle)) in targets {
-            if let Ok(Err(error)) = handle.await {
+            if let Ok(Err(error)) = handle.join().await {
                 tracing::warn!(%target_id, %error, "target worker failed during shutdown");
             }
         }
@@ -507,6 +531,7 @@ struct TargetWorker {
         mpsc::UnboundedSender<Option<ProbedHarnesses>>,
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
+    probe_task: Option<OwnedTask<()>>,
 }
 
 /// Delivery of journaled events to Lemma, off the poll loop.
@@ -687,7 +712,7 @@ async fn deliver_events(
 /// the next turn resumes from. `kill_at` is the backstop for an adapter that
 /// ignores it, and is only set once a cancellation has actually been asked for.
 struct ActiveRun {
-    handle: JoinHandle<anyhow::Result<()>>,
+    handle: OwnedTask<anyhow::Result<()>>,
     cancel: watch::Sender<bool>,
     kill_at: Option<tokio::time::Instant>,
 }
@@ -769,6 +794,7 @@ impl TargetWorker {
             transient_backoff: TransientBackoff::new(),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
+            probe_task: None,
         })
     }
 
@@ -778,11 +804,11 @@ impl TargetWorker {
         // Aborted at the end of this function; the shutdown path takes the same
         // lock and does the last flush itself, so nothing in the journal is left
         // behind by stopping it.
-        let delivery = tokio::spawn(deliver_events(
+        let delivery = OwnedTask(tokio::spawn(deliver_events(
             Arc::clone(&self.flusher),
             Arc::clone(&self.events_ready),
             self.shutdown.clone(),
-        ));
+        )));
         let outcome = self.poll_loop().await;
         delivery.abort();
         outcome
@@ -796,7 +822,7 @@ impl TargetWorker {
         // still waiting when it next reaches the select.
         let mut agents_changed = self.agents_changed.clone();
         loop {
-            if *self.shutdown.borrow() {
+            if *self.shutdown.borrow() || self.shutdown.has_changed().is_err() {
                 return self.graceful_shutdown().await;
             }
             self.reap_finished().await;
@@ -855,7 +881,10 @@ impl TargetWorker {
                 // so noticing a newly installed agent waited out a held poll and
                 // took up to `POLL_HOLD` rather than the two seconds the
                 // interval reads as.
-                _ = agents_changed.changed() => {
+                changed = agents_changed.changed() => {
+                    if changed.is_err() {
+                        return self.graceful_shutdown().await;
+                    }
                     self.refresh_due = std::time::Instant::now();
                     None
                 }
@@ -1376,9 +1405,6 @@ impl TargetWorker {
                         RunState::Failed
                     };
                     let raw = error.to_string();
-                    // A recognised failure is one we are restating in our own
-                    // words -- and the adapter has already streamed its own
-                    // into the transcript, so Lemma is told to drop that.
                     if authentication_hint(&adapter_name, &raw).is_some() {
                         // The freshest evidence anyone has that this agent is
                         // signed out. Probing is what publishes AUTH_REQUIRED,
@@ -1390,7 +1416,10 @@ impl TargetWorker {
                     }
                     let rewritten = authentication_hint(&adapter_name, &raw)
                         .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)));
-                    let supersedes = rewritten.is_some();
+                    // Rewriting an internal error does not mean the text it
+                    // interrupted was an error. Drop only a proven duplicate.
+                    let supersedes =
+                        rewritten.is_some() && callbacks.stream_matches_failure(&raw)?;
                     let message = rewritten.unwrap_or_else(|| redact_error(&raw));
                     terminal_failure_detail(
                         &journal,
@@ -1422,7 +1451,7 @@ impl TargetWorker {
         self.active_runs.insert(
             run_id,
             ActiveRun {
-                handle,
+                handle: OwnedTask(handle),
                 cancel: cancel_tx,
                 kill_at: None,
             },
@@ -1605,6 +1634,16 @@ impl TargetWorker {
     /// after another. The machine appears with its agents almost immediately;
     /// their config options arrive a moment later.
     fn refresh_harnesses(&mut self) {
+        if self
+            .probe_task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            // Coalesce refresh requests while a probe is still running. A
+            // changed installation is checked once more after it completes.
+            self.reprobe_requested.store(true, Ordering::SeqCst);
+            return;
+        }
         let client = self.client.clone();
         let sender = self.probed.0.clone();
         // Everything the spawned work needs, taken before the task is built:
@@ -1719,7 +1758,7 @@ impl TargetWorker {
         // failed validation as "unknown configuration selection". Getting the
         // machine online is what the poll does; the harnesses can wait for
         // their probe.
-        tokio::spawn(async move {
+        self.probe_task = Some(OwnedTask(tokio::spawn(async move {
             let discovered = discover_manifest.discover();
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
             let probes = enriched
@@ -1798,7 +1837,7 @@ impl TargetWorker {
                     let _ = sender.send(None);
                 }
             }
-        });
+        })));
     }
 
     fn store_published(&mut self, probed: ProbedHarnesses) {
@@ -1997,7 +2036,7 @@ impl TargetWorker {
             .collect::<Vec<_>>();
         for run_id in finished {
             if let Some(active) = self.active_runs.remove(&run_id)
-                && let Err(error) = active.handle.await
+                && let Err(error) = active.handle.join().await
                 && !error.is_cancelled()
             {
                 tracing::error!(%run_id, %error, "agent run task terminated unexpectedly");
@@ -2089,7 +2128,7 @@ impl TargetWorker {
         self.active_runs.insert(
             run_id,
             ActiveRun {
-                handle,
+                handle: OwnedTask(handle),
                 cancel: watch::channel(false).0,
                 kill_at: None,
             },
@@ -2207,6 +2246,32 @@ impl JournalCallbacks {
     fn flush_stream_segments(&self) -> anyhow::Result<()> {
         self.flush_stream_segment(true)?;
         self.flush_stream_segment(false)
+    }
+
+    fn stream_matches_failure(&self, error: &str) -> anyhow::Result<bool> {
+        let expected = error
+            .strip_prefix("Internal error: ")
+            .unwrap_or(error)
+            .trim();
+        if expected.is_empty() {
+            return Ok(false);
+        }
+        let mut text = String::new();
+        let mut differs = false;
+        self.journal
+            .visit_run_events(self.target_id, self.run_id, self.lease_epoch, |event| {
+                if event.event_type == EventType::AgentMessageUpsert && !differs {
+                    let segment = chunk_text(&event.payload);
+                    // A reply longer than the error cannot be its duplicate;
+                    // avoid retaining an entire long conversation to compare it.
+                    if text.len().saturating_add(segment.len()) > expected.len() {
+                        differs = true;
+                    } else {
+                        text.push_str(&segment);
+                    }
+                }
+            })?;
+        Ok(!differs && text == expected)
     }
 }
 
@@ -2615,7 +2680,7 @@ fn adapter_failure_message(harness: &str, error: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{harness} failed to start a session on this computer. \
+        "{harness} encountered an error on this computer. \
          Check that it runs on its own in a terminal, then try again. \
          Its own error was: {}",
         error.trim()
@@ -2914,6 +2979,78 @@ mod target_worker_tests {
         fn drop(&mut self) {
             self.server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn a_closed_supervisor_channel_stops_the_worker_without_refreshing() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        harness.worker.refresh_due = std::time::Instant::now() + Duration::from_secs(60);
+        // This fixture's change sender has already gone away, as it does when
+        // the supervisor errors or is cancelled. Closure is not an install.
+        tokio::time::timeout(Duration::from_secs(2), harness.worker.poll_loop())
+            .await
+            .expect("a closed channel must not spin the poll loop")
+            .unwrap();
+        assert!(harness.worker.probe_task.is_none());
+        assert!(harness.worker.draining);
+    }
+
+    #[tokio::test]
+    async fn repeated_refreshes_share_one_probe_and_worker_drop_cancels_its_tasks() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        let (probe_owner, probe_dropped) = tokio::sync::oneshot::channel::<()>();
+        let probe = tokio::spawn(async move {
+            let _owner = probe_owner;
+            std::future::pending::<()>().await;
+        });
+        let probe_id = probe.id();
+        harness.worker.probe_task = Some(super::OwnedTask(probe));
+        let (run_owner, run_dropped) = tokio::sync::oneshot::channel::<()>();
+        harness.worker.track_run(
+            Uuid::new_v4(),
+            tokio::spawn(async move {
+                let _owner = run_owner;
+                std::future::pending::<anyhow::Result<()>>().await
+            }),
+        );
+        for _ in 0..20 {
+            harness.worker.refresh_harnesses();
+        }
+        assert_eq!(harness.worker.probe_task.as_ref().unwrap().0.id(), probe_id);
+        assert!(
+            harness
+                .worker
+                .reprobe_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        drop(harness);
+        for dropped in [probe_dropped, run_dropped] {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), dropped)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_task_join_does_not_detach_the_child() {
+        let (owner, dropped) = tokio::sync::oneshot::channel::<()>();
+        let child = super::OwnedTask(tokio::spawn(async move {
+            let _owner = owner;
+            std::future::pending::<()>().await;
+        }));
+        let parent = tokio::spawn(child.join());
+        tokio::task::yield_now().await;
+        parent.abort();
+        assert!(parent.await.unwrap_err().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), dropped)
+                .await
+                .unwrap()
+                .is_err()
+        );
     }
 
     /// Wait for `predicate`, or fail rather than hang.
@@ -3872,6 +4009,47 @@ mod stream_upsert_tests {
     }
 
     #[test]
+    fn only_the_exact_streamed_failure_can_be_replaced_by_an_error_hint() {
+        for (streamed, error, matches) in [
+            (
+                "Failed to authenticate",
+                "Internal error: Failed to authenticate",
+                true,
+            ),
+            ("Failed to authenticate", "Failed to authenticate", true),
+            (
+                "Here is the partial answer",
+                "Internal error: connection closed",
+                false,
+            ),
+            (
+                "Useful work. Failed to authenticate",
+                "Internal error: Failed to authenticate",
+                false,
+            ),
+            ("", "Internal error: Failed to authenticate", false),
+            ("", "", false),
+        ] {
+            let (_directory, callbacks, _run_id) = fixture();
+            for character in streamed.chars() {
+                callbacks
+                    .event(
+                        EventType::AgentMessageChunk,
+                        None,
+                        payload(&character.to_string()),
+                    )
+                    .unwrap();
+            }
+            callbacks.flush_stream_segments().unwrap();
+            assert_eq!(
+                callbacks.stream_matches_failure(error).unwrap(),
+                matches,
+                "{streamed:?}, {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
         let (_directory, callbacks, _run_id) = fixture();
         let callbacks = Arc::new(callbacks);
@@ -4170,7 +4348,7 @@ mod adapter_failure_message_tests {
         let raw = r#"Internal error: OpenCode service failure: {"service": "session"}"#;
         let framed = super::adapter_failure_message("OpenCode", raw).expect("framed");
 
-        assert!(framed.starts_with("OpenCode failed to start a session"));
+        assert!(framed.starts_with("OpenCode encountered an error"));
         // The adapter's own words survive: they are the only thing that
         // explains an unfamiliar failure.
         assert!(framed.contains(raw));

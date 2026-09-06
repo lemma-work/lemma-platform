@@ -88,6 +88,32 @@ function makeController(events: unknown[], hooks: Partial<FakeClientHooks> = {})
 }
 
 describe("AgentController", () => {
+  it("keeps received text and the server's stopping status until the run settles", async () => {
+    const client = fakeClient({ events: [] });
+    let channel!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({ start(value) { channel = value; } });
+    vi.spyOn(client.conversations, "sendMessageStream").mockResolvedValue(stream);
+    vi.spyOn(client.conversations, "stopRun").mockImplementation(async (id) => ({
+      ...await client.conversations.get(id), status: "STOP_REQUESTED",
+    }));
+    const controller = new AgentController({ client, scope: { podId: "pod-1" } });
+    await controller.createConversation();
+    const sending = controller.sendMessage("start");
+    channel.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "token", kind: "text", data: "Partial answer" })}\n\n`));
+    try {
+      await vi.waitFor(() => expect(controller.getState().streamingText).toBe("Partial answer"));
+      await controller.stop();
+      expect(controller.getState().status).toBe("STOP_REQUESTED");
+      expect(controller.getState().streamingText).toBe("Partial answer");
+    } finally {
+      channel.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "completed", data: { status: "STOPPED" } })}\n\n`));
+      channel.close();
+      await sending;
+      controller.destroy();
+    }
+  });
+
   it("streams a turn: tokens, final message, terminal status", async () => {
     const finalMessage = {
       id: "msg-1",
