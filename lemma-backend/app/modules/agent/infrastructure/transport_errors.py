@@ -29,6 +29,7 @@ from pydantic_ai.exceptions import (
 )
 
 from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.core.domain.errors import DomainError
 
 __all__ = ["RETRYABLE_STATUS_CODES", "is_retryable_stream_error", "retry_after_seconds"]
 
@@ -41,6 +42,7 @@ RETRYABLE_STATUS_CODES = frozenset({408, 409, 429})
 # fight the thing that asked us to stop.
 _NEVER_RETRY: tuple[type[BaseException], ...] = (
     asyncio.CancelledError,
+    DomainError,
     KeyboardInterrupt,
     SystemExit,
     AgentInputRequired,

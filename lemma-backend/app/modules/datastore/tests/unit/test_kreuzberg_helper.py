@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -435,28 +436,32 @@ def test_get_pages_normalizes_page_content_and_images():
 
 
 @pytest.mark.asyncio
-async def test_extract_retries_transient_connection_error_then_succeeds(monkeypatch):
+async def test_extract_retries_transient_connection_error_then_succeeds() -> None:
     """A transient connection refusal is retried with backoff and the extraction
     succeeds once the service is reachable again."""
     sleeps: list[float] = []
 
-    async def _fake_sleep(delay):
+    async def _fake_sleep(delay: float) -> None:
         sleeps.append(delay)
-
-    monkeypatch.setattr(kreuzberg_module.asyncio, "sleep", _fake_sleep)
 
     # `read`, not `json`: the helper reads bytes and parses them off the event
     # loop, because an extract response carries the whole document and can
     # carry base64 images with it.
     _body = [{"content": "ok", "chunks": [{"text": "ok"}]}]
+
+    async def _read_response() -> bytes:
+        # Body I/O can yield independently of the extractor's retry backoff.
+        await asyncio.sleep(0)
+        return json.dumps(_body).encode()
+
     response = SimpleNamespace(
         status=200,
         json=AsyncMock(return_value=_body),
-        read=AsyncMock(return_value=json.dumps(_body).encode()),
+        read=AsyncMock(side_effect=_read_response),
     )
     session = SimpleNamespace(post=_FlakyPost(fail_times=2, response=response))
 
-    helper = KreuzbergHelper()
+    helper = KreuzbergHelper(sleep=_fake_sleep)
     result = await helper._extract(
         session,
         file_content=b"bytes",
@@ -581,19 +586,17 @@ async def test_extract_streams_content_path_instead_of_buffering(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_extract_raises_after_exhausting_transient_retries(monkeypatch):
+async def test_extract_raises_after_exhausting_transient_retries() -> None:
     """Persistent connection failures are retried a bounded number of times and
     then surface as a single RuntimeError rather than retrying forever."""
     sleeps: list[float] = []
 
-    async def _fake_sleep(delay):
+    async def _fake_sleep(delay: float) -> None:
         sleeps.append(delay)
-
-    monkeypatch.setattr(kreuzberg_module.asyncio, "sleep", _fake_sleep)
 
     session = SimpleNamespace(post=_FlakyPost(fail_times=99, response=None))
 
-    helper = KreuzbergHelper()
+    helper = KreuzbergHelper(sleep=_fake_sleep)
     with pytest.raises(KreuzbergTransientError, match="connection failed"):
         await helper._extract(
             session,

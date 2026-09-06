@@ -18,6 +18,10 @@ pytestmark = pytest.mark.unit
 
 # (field, ENV var, default)
 EXPECTED = [
+    # Per-request accounting, from #478.
+    ("usage_request_output_ceiling", "USAGE_REQUEST_OUTPUT_CEILING", 8192),
+    ("usage_limit_warn_fraction", "USAGE_LIMIT_WARN_FRACTION", 0.8),
+    # Deployment-wide spend limits, moved off `app/core/config.py`.
     ("usage_org_monthly_limit_usd", "USAGE_ORG_MONTHLY_LIMIT_USD", None),
     ("usage_user_weekly_limit_usd", "USAGE_USER_WEEKLY_LIMIT_USD", None),
     ("usage_user_monthly_limit_usd", "USAGE_USER_MONTHLY_LIMIT_USD", None),
