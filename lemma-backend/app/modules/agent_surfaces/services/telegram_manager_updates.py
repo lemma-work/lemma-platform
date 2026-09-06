@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.services.telegram_manager_store import (
     TelegramManagedBotSetup,
     TelegramManagedBotSetupStatus,
 )
-from app.modules.connectors.domain.errors import ConnectorNotFoundError
+from app.modules.connectors.contracts import ConnectorNotFoundError
 
 logger = get_logger(__name__)
 

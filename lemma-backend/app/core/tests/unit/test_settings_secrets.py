@@ -21,13 +21,12 @@ from app.core.config import Settings, reveal_secret
 # Every field on the core Settings whose value is a credential. Adding one that
 # is not here is the case this test cannot catch, so keep it as things are added.
 #
-# `microsoft_client_secret` is not missing: it left with the rest of identity's
-# settings, and the same assertion follows it in
+# `microsoft_client_secret` and `google_client_secret` are not missing: they left
+# with the rest of identity's settings, and the same assertion follows them in
 # `identity/tests/unit/test_identity_config.py`. A secret moving class must not
 # be a secret losing its cover.
 SECRET_FIELDS = (
     "brave_search_api_key",
-    "google_client_secret",
     "secret_encryption_key",
     "smtp_password",
 )

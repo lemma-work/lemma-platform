@@ -78,18 +78,27 @@ BASELINE_COMMENT = (
 # Import path -> exported singleton name. Each entry is a module-level
 # `BaseSettings` instance that code reads configuration from.
 SETTINGS_SOURCES = {
-    "app.core.config": "settings",
-    "app.core.infrastructure.events.config": "event_transport_settings",
-    "app.modules.agent.config": "agent_settings",
-    "app.modules.agent_surfaces.config": "surface_settings",
-    "app.modules.apps.config": "apps_settings",
-    "app.modules.connectors.config": "connector_settings",
-    "app.modules.datastore.config": "datastore_settings",
-    "app.modules.icon.config": "icon_settings",
-    "app.modules.pod_bundle.config": "pod_bundle_settings",
-    "app.modules.schedule.config": "schedule_settings",
-    "app.modules.workspace.config": "workspace_settings",
+    "app.core.config": ("settings",),
+    "app.core.infrastructure.events.config": ("event_transport_settings",),
+    "app.modules.agent.config": ("agent_settings",),
+    "app.modules.agent_surfaces.config": ("surface_settings",),
+    "app.modules.apps.config": ("apps_settings",),
+    "app.modules.connectors.config": ("connector_settings",),
+    "app.modules.datastore.config": ("datastore_settings",),
+    "app.modules.function.config": ("function_settings", "revision_settings"),
+    "app.modules.icon.config": ("icon_settings",),
+    "app.modules.identity.config": ("identity_settings",),
+    "app.modules.pod_bundle.config": ("pod_bundle_settings",),
+    "app.modules.schedule.config": ("schedule_settings",),
+    "app.modules.usage.config": ("usage_settings",),
+    "app.modules.workflow.config": ("workflow_settings",),
+    "app.modules.workspace.config": ("workspace_settings",),
 }
+
+# `test_every_settings_singleton_is_checked` asserts this covers the tree. The
+# list had fallen four behind while `app/core/config.py` was being split: every
+# field that moved to `identity`, `usage`, `workflow` or `function` left the one
+# gate that would have caught a stale reader, and nothing said so.
 
 # The builtins. `monkeypatch.setattr` is deliberately absent -- see the blind
 # spots above.
@@ -164,9 +173,10 @@ def _known_attributes() -> dict[str, set[str]]:
     import importlib
 
     known: dict[str, set[str]] = {}
-    for module_path, name in SETTINGS_SOURCES.items():
+    for module_path, names in SETTINGS_SOURCES.items():
         module = importlib.import_module(module_path)
-        known[name] = set(dir(getattr(module, name)))
+        for name in names:
+            known[name] = set(dir(getattr(module, name)))
     return known
 
 
@@ -181,11 +191,11 @@ def _local_aliases(tree: ast.Module) -> dict[str, str]:
         if not isinstance(node, ast.ImportFrom) or node.module is None:
             continue
         exported = SETTINGS_SOURCES.get(node.module)
-        if exported is None:
+        if not exported:
             continue
         for alias in node.names:
-            if alias.name == exported:
-                aliases[alias.asname or alias.name] = exported
+            if alias.name in exported:
+                aliases[alias.asname or alias.name] = alias.name
     return aliases
 
 
@@ -567,7 +577,8 @@ def main() -> int:
     if not new:
         print(
             f"✓ settings attributes: no new violations "
-            f"({len(SETTINGS_SOURCES)} objects, {dynamic_sites} dynamic sites, "
+            f"({sum(len(names) for names in SETTINGS_SOURCES.values())} objects, "
+            f"{dynamic_sites} dynamic sites, "
             f"{sum(baseline.values())} baselined)"
         )
         # A baselined `dynamic-name` is a name nothing can check. A baselined

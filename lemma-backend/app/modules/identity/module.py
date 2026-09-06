@@ -65,11 +65,34 @@ async def _close_user_cache(app):
         await close_whatsapp_mobile_verification_service()
 
 
+@asynccontextmanager
+async def _configure_supertokens(context):
+    """Configure SuperTokens for the worker process.
+
+    The API process does this from `app/app.py`; the worker used to do it from
+    `streaq_runtime`, which is one of the two things that made core import a
+    module. Identity owns the auth stack, so identity configures it.
+
+    Safe to run here rather than earlier: `identity` is first in `OSS_MODULES`,
+    so this is the first module lifespan entered, and the only things core does
+    between its old call site and this point are building `AppWorkerContext`
+    and entering the outbox dispatcher -- neither of which authenticates
+    anything. Every job handler that does runs after all lifespans are up.
+    """
+    from app.modules.identity.infrastructure.supertokens_auth.initialization import (
+        initialize_supertokens,
+    )
+
+    initialize_supertokens()
+    yield
+
+
 module = LemmaModule(
     name="identity",
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_close_user_cache,),
+    worker_lifespans=(_configure_supertokens,),
     stream_groups=(
         ("identity_events", "identity-email-events"),
         ("identity_events", "identity-mobile-verification-events"),

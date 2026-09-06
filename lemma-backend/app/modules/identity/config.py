@@ -201,6 +201,25 @@ class IdentitySettings(BaseSettings):
             raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
         return "/" + "/".join(segments) if segments else "/"
 
+    # Google OAuth. Moved here with Microsoft's trio, which went in #630 -- the
+    # two are read ten lines apart in `supertokens_auth/initialization.py`, and
+    # only one of them had made the trip.
+    google_client_id: Optional[str] = Field(
+        default=None, description="Google OAuth Client ID"
+    )
+    google_client_secret: Optional[SecretStr] = Field(
+        default=None, description="Google OAuth Client Secret"
+    )
+
+    def is_google_oauth_configured(self) -> bool:
+        """Check if Google OAuth is properly configured."""
+        return all(
+            [
+                self.google_client_id,
+                self.google_client_secret,
+            ]
+        )
+
     def is_microsoft_oauth_configured(self) -> bool:
         """Check if Microsoft OAuth is properly configured."""
         return all(
