@@ -160,6 +160,9 @@ operation. Closing the main window keeps services and the tray running. Quit
 stops work on a worker with a bounded exit deadline; the final event-loop exit
 handler never waits on daemon I/O or process cleanup. A daemon handshake has both
 a deadline and an allocation limit, including Windows named pipes.
+The exit watchdog must exceed the combined sharing, handshake, graceful stop,
+and verified VM/process fallback deadlines. A shorter watchdog can terminate
+the cleanup worker itself and leave this installation's processes running.
 
 ## 5. Host process contract
 
@@ -282,11 +285,22 @@ zero opacity can leave usable controls in the accessibility tree while the
 window looks blank. Native qualification checks both the visible page and its
 accessibility tree, including opening settings before deployment setup.
 
+Native credential reads have a bounded caller deadline and admit at most one
+outstanding OS read. If Keychain or Credential Manager stops answering, setup
+reports an error while retaining stored credentials and application data.
+Retry does not accumulate blocked native calls. A read that completes after
+its caller times out cannot populate the cache; a concurrent replacement or
+removal also takes precedence over an older read. Writes are not abandoned on
+a read deadline, because their eventual outcome must remain known.
+
 The first screen describes both deployment choices before sign-in: Lemma Cloud
 stores workspace data online and can use this computer's agents; Local Lemma
 stores application data and runs services on this computer. Both can send
 requested data to configured providers and connectors. Local setup requires a
 separate install action; returning to the choices performs no installation.
+The shell owns automatic startup on launch and mode changes. Loading or
+reloading the splash only observes state, so it cannot race a second start
+against the shell. Start and Retry remain explicit user actions.
 
 On macOS, host services connect to the private VM through its local IP address.
 The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -185,11 +185,17 @@ impl PlatformVault {
 
 impl SecretVault for PlatformVault {
     fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
-        match Self::entry(install_id, name)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::v1::Error::NoEntry) => Ok(None),
-            Err(error) => Err(vault_error(error)),
-        }
+        static READS: OnceLock<crate::vault_reads::VaultReads> = OnceLock::new();
+        let install_id = install_id.to_owned();
+        let name = name.to_owned();
+        READS.get_or_init(Default::default).read(
+            Duration::from_secs(15),
+            move || match Self::entry(&install_id, &name)?.get_password() {
+                Ok(value) => Ok(Some(value)),
+                Err(keyring::v1::Error::NoEntry) => Ok(None),
+                Err(error) => Err(vault_error(error)),
+            },
+        )
     }
 
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
@@ -253,11 +259,15 @@ impl SecretVault for CachingVault {
         // prompt, and holding the cache across it would stall every other
         // secret this process wants behind the one the user is looking at.
         let value = self.inner.get(install_id, name)?;
-        self.seen
+        // A save may have replaced or removed the secret during the native
+        // read. Its newer cache entry must win over this delayed result.
+        Ok(self
+            .seen
             .lock()
             .expect("secret cache poisoned")
-            .insert(key, value.clone());
-        Ok(value)
+            .entry(key)
+            .or_insert(value)
+            .clone())
     }
 
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
@@ -1676,6 +1686,59 @@ mod tests {
                 .unwrap()
                 .remove(&format!("{install_id}:{name}"));
             Ok(())
+        }
+    }
+
+    /// A vault that remembers what was asked of it, and in what order.
+    #[test]
+    fn delayed_native_read_cannot_undo_a_saved_replacement_or_removal() {
+        use std::sync::mpsc;
+        struct DelayedVault {
+            inner: MemoryVault,
+            started: mpsc::Sender<()>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+        impl SecretVault for DelayedVault {
+            fn get(&self, install: &str, name: &str) -> io::Result<Option<String>> {
+                let value = self.inner.get(install, name)?;
+                self.started.send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap();
+                Ok(value)
+            }
+            fn set(&self, install: &str, name: &str, value: &str) -> io::Result<()> {
+                self.inner.set(install, name, value)
+            }
+            fn delete(&self, install: &str, name: &str) -> io::Result<()> {
+                self.inner.delete(install, name)
+            }
+        }
+        for replacement in [Some("new"), None] {
+            let (started, ready) = mpsc::channel();
+            let (resume, wait) = mpsc::channel();
+            let inner = MemoryVault::default();
+            inner.set("install", "ai.api_key", "old").unwrap();
+            let vault = Arc::new(CachingVault::new(Arc::new(DelayedVault {
+                inner,
+                started,
+                resume: Mutex::new(wait),
+            })));
+            let reader = Arc::clone(&vault);
+            let read = std::thread::spawn(move || reader.get("install", "ai.api_key").unwrap());
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            match replacement {
+                Some(value) => vault.set("install", "ai.api_key", value).unwrap(),
+                None => vault.delete("install", "ai.api_key").unwrap(),
+            }
+            resume.send(()).unwrap();
+            assert_eq!(read.join().unwrap().as_deref(), replacement);
+            assert_eq!(
+                vault.get("install", "ai.api_key").unwrap().as_deref(),
+                replacement
+            );
         }
     }
 

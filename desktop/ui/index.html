@@ -1458,19 +1458,9 @@
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
   refreshDiagnosticLog();
-  function shouldAutoStart(s) {
-    return Boolean(
-      s &&
-      s.mode === "local" &&
-      (s.phaseKey === "boot" || s.phaseKey === "stopped") &&
-      !s.error &&
-      !s.running &&
-      !s.ready
-    );
-  }
-  // Why this document was opened. The splash reloads with no memory, so
-  // without this it reads "nothing is running" as "start Lemma" — which is
-  // right when the user opened the app and wrong when they asked it to stop.
+  // The shell owns launch and connection-mode startup. Loading a document is
+  // only observation: an automatic start here races the shell's request.
+  // Explicit Start and Retry buttons still send their own user actions.
   const openIntent = new URLSearchParams(location.search).get("intent");
 
   window.lemmaDesktop.getState().then((s) => {
@@ -1486,9 +1476,6 @@
       bar.style.width = "100%";
     } else {
       renderState(s);
-      if (shouldAutoStart(s)) {
-        requestStart();
-      }
     }
   });
 </script>

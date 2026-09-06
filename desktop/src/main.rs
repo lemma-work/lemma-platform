@@ -1882,7 +1882,7 @@ fn connect_locald() -> Result<LocaldConnection, String> {
     stream
         .flush()
         .map_err(|error| format!("daemon authentication failed: {error}"))?;
-    let line = ipc_read::handshake_line(&mut stream, Duration::from_secs(3), 1024 * 1024)
+    let line = ipc_read::handshake_line(&mut stream, LOCALD_HANDSHAKE_BUDGET, 1024 * 1024)
         .map_err(|error| format!("daemon handshake failed: {error}"))?;
     let hello: Value = serde_json::from_str(line.trim_end())
         .map_err(|error| format!("invalid daemon handshake: {error}"))?;
@@ -1920,7 +1920,7 @@ fn wait_for_locald_exit(attempts: usize, reason: &str) -> Result<(), String> {
         if LocalSocketStream::connect(name.clone()).is_err() {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(LOCALD_EXIT_POLL);
     }
     Err(format!(
         "the local service manager did not stop for {reason}"
@@ -1970,7 +1970,7 @@ fn stop_locald(
         ));
     }
     force_terminate_packaged_locald(original_pid)?;
-    wait_for_locald_exit(150, reason)
+    wait_for_locald_exit(LOCALD_FORCE_EXIT_ATTEMPTS, reason)
 }
 
 #[cfg(target_os = "macos")]
@@ -2058,7 +2058,7 @@ fn stop_packaged_vz_child(parent_pid: i32) -> Result<(), String> {
             }
             continue;
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        let deadline = std::time::Instant::now() + VM_STOP_GRACE_BUDGET;
         while std::time::Instant::now() < deadline {
             if unsafe { libc::kill(child_pid, 0) } != 0 {
                 break;
@@ -2067,7 +2067,7 @@ fn stop_packaged_vz_child(parent_pid: i32) -> Result<(), String> {
         }
         if unsafe { libc::kill(child_pid, 0) } == 0 {
             let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
-            let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let reap_deadline = std::time::Instant::now() + VM_STOP_REAP_BUDGET;
             while std::time::Instant::now() < reap_deadline {
                 if unsafe { libc::kill(child_pid, 0) } != 0 {
                     std::thread::sleep(Duration::from_millis(500));
@@ -2887,15 +2887,9 @@ fn show_splash(app: &AppHandle) {
 
 /// The splash, told what it is watching.
 ///
-/// It reloads as a fresh document every time, so it has no memory of why it was
-/// opened — it asks for state and, finding nothing running, assumes it is meant
-/// to start Lemma. That is right when the user opened the app and wrong when
-/// they asked it to stop: the screen said "Starting Lemma" through a shutdown,
-/// and worse, actually issued a start that raced the stop it was showing.
-///
-/// The intent rides in the query string because `show_splash` navigates, so
-/// there is no live page left to tell. `native_splash_url` matches on path, so
-/// the splash stays recognised as the splash.
+/// The intent rides in the query string because navigation discards the old
+/// page. A stop must display shutdown progress even before its first state
+/// event arrives. Startup itself is owned by the shell, never page loading.
 fn show_splash_with_intent(app: &AppHandle, intent: &str) {
     let _ = open_app_window(
         app,
@@ -6801,14 +6795,18 @@ fn finish_quit(app: &AppHandle) {
     );
 }
 
-/// How long a quit waits for the daemon before leaving without it.
-///
-/// Short on purpose. By the time this runs the services are already stopped --
-/// the long wait is `QUIT_STOP_BUDGET`, above -- so what is left is a
-/// supervisor with nothing to supervise, and that exits in well under a second
-/// unless it is wedged. Waiting longer for a wedged one only makes quitting
-/// feel broken as well.
-const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
+/// The watchdog must outlive the verified VM-stop fallback. Exiting the shell
+/// earlier kills its cleanup worker and leaves the VM and daemon orphaned.
+/// This work runs off the UI thread; the app remains responsive throughout.
+const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(70);
+const LOCALD_HANDSHAKE_BUDGET: Duration = Duration::from_secs(3);
+const LOCALD_EXIT_POLL: Duration = Duration::from_millis(100);
+const QUIT_DAEMON_GRACE_ATTEMPTS: usize = 30;
+const LOCALD_FORCE_EXIT_ATTEMPTS: usize = 150;
+#[cfg(any(target_os = "macos", test))]
+const VM_STOP_GRACE_BUDGET: Duration = Duration::from_secs(25);
+#[cfg(any(target_os = "macos", test))]
+const VM_STOP_REAP_BUDGET: Duration = Duration::from_secs(5);
 
 /// Quit has to mean quit.
 ///
@@ -6850,9 +6848,8 @@ fn leave_nothing_running(app: &AppHandle) {
     // it shuts down, and a writer belonging to a window that is going away is
     // one more thing that can block the exit.
     disconnect_locald(app);
-    // Half the budget for the graceful ask, so a daemon that ignores it still
-    // leaves room for the forced arm to verify identity and signal.
-    let outcome = connect_locald().and_then(|connection| stop_locald(connection, "quitting", 30));
+    let outcome = connect_locald()
+        .and_then(|connection| stop_locald(connection, "quitting", QUIT_DAEMON_GRACE_ATTEMPTS));
     match outcome {
         Ok(()) => append_install_log("[quit] the local service manager stopped"),
         // Not fatal, and deliberately not a dialog. The user has asked to
@@ -9453,6 +9450,19 @@ mod tests {
                 "{retired:?} is supervisor vocabulary, not a product menu item"
             );
         }
+    }
+
+    #[test]
+    fn quit_watchdog_outlives_the_owned_runtime_cleanup_deadlines() {
+        let cleanup = RELEASE_ON_EXIT_TIMEOUT
+            + LOCALD_HANDSHAKE_BUDGET * 2
+            + LOCALD_EXIT_POLL * (QUIT_DAEMON_GRACE_ATTEMPTS + LOCALD_FORCE_EXIT_ATTEMPTS) as u32
+            + VM_STOP_GRACE_BUDGET
+            + VM_STOP_REAP_BUDGET;
+        assert!(
+            QUIT_DAEMON_BUDGET > cleanup + Duration::from_secs(5),
+            "the shell must not terminate its cleanup worker before it can stop an unresponsive VM"
+        );
     }
 
     #[test]

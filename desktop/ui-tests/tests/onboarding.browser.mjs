@@ -9,7 +9,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false } = {}) {
+async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null } = {}) {
   const context = await browser.newContext({
     viewport,
     reducedMotion: 'reduce',
@@ -34,7 +34,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
       await route.abort();
     }
   });
-  await page.addInitScript(() => {
+  await page.addInitScript(initialState => {
     window.__fixture = { calls: [], rejectInstall: false };
     window.__TAURI__ = {
       event: { listen: async (name, listener) => {
@@ -42,7 +42,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
       } },
       core: { async invoke(command, args) {
         window.__fixture.calls.push({ command, args });
-        if (command === 'get_state') return {
+        if (command === 'get_state') return initialState || {
           mode: 'undecided', phaseKey: 'boot', status: 'waiting',
           running: false, ready: false, error: false, setup: true,
         };
@@ -53,9 +53,9 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
         }
       } },
     };
-  });
+  }, initialState);
   await page.goto('https://desktop.test/index.html');
-  await page.locator('#choose').waitFor({ state: 'visible' });
+  if (!initialState) await page.locator('#choose').waitFor({ state: 'visible' });
   return page;
 }
 
@@ -63,6 +63,21 @@ async function deploymentCalls(page) {
   return page.evaluate(() => window.__fixture.calls.filter(call =>
     ['set_connection_mode', 'start', 'reset_local_data', 'reset_full_reinstall'].includes(call.command)));
 }
+
+test('opening or reloading the splash never duplicates shell-owned startup', async t => {
+  for (const phaseKey of ['boot', 'stopped']) {
+    const page = await onboarding(t, { initialState: {
+      mode: 'local', phaseKey, running: false, ready: false, error: false,
+    } });
+    assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} page load must only observe`);
+    await page.reload();
+    assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} reload must only observe`);
+    if (phaseKey === 'stopped') {
+      await page.getByRole('button', { name: 'Start Lemma', exact: true }).click();
+      assert.deepEqual((await deploymentCalls(page)).map(call => call.command), ['start']);
+    }
+  }
+});
 
 test('deployment choices disclose storage and execution before cloud sign-in', async t => {
   const page = await onboarding(t);
