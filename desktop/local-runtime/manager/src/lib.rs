@@ -109,6 +109,14 @@ pub struct ManagedRuntimeStatus {
     pub balloon_target_bytes: Option<u64>,
 }
 
+fn guest_request_budget(operation: &str) -> Duration {
+    match operation {
+        "system.shutdown" => Duration::from_secs(8),
+        "health" => Duration::from_secs(5),
+        _ => Duration::from_secs(8 * 60),
+    }
+}
+
 pub struct ManagedRuntime {
     config: ManagedRuntimeConfig,
     capability_file: PathBuf,
@@ -195,31 +203,29 @@ impl ManagedRuntime {
             "operation": operation,
             "parameters": parameters,
         });
-        let encoded = serde_json::to_vec(&request)?;
-        let mut child = Command::new(&self.config.bridge_executable)
+        let mut encoded = serde_json::to_vec(&request)?;
+        encoded.push(b'\n');
+        let mut command = Command::new(&self.config.bridge_executable);
+        command
             .no_console_window()
             .arg("request")
             .env("LEMMA_GUEST_CAPABILITY_FILE", &self.capability_file)
             .env("LEMMA_GUEST_CONTROL_SOCKET", &self.control_socket)
-            .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("runtime bridge stdin unavailable"))?;
-        stdin.write_all(&encoded)?;
-        stdin.write_all(b"\n")?;
-        drop(stdin);
-        let output = child.wait_with_output()?;
-        if output.stdout.len() > MAX_RESPONSE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "guest response exceeded 4 MiB",
-            ));
-        }
+            .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution);
+        let budget = guest_request_budget(operation);
+        let output =
+            lemma_desktop_process::run_with_input(command, encoded, budget, MAX_RESPONSE_BYTES)
+                .map_err(|error| match error {
+                    lemma_desktop_process::SetupProcessError::TimedOut => io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "runtime bridge exceeded its request deadline",
+                    ),
+                    lemma_desktop_process::SetupProcessError::OutputLimit => io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "runtime bridge exceeded its output limit",
+                    ),
+                    lemma_desktop_process::SetupProcessError::Io(error) => error,
+                })?;
         if output.stdout.is_empty() {
             let detail = first_diagnostic(&output.stderr, "private guest did not respond");
             return Err(io::Error::new(

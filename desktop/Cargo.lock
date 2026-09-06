@@ -2702,6 +2702,7 @@ name = "lemma-runtime-manager"
 version = "0.7.2"
 dependencies = [
  "getrandom 0.3.4",
+ "lemma-desktop-process",
  "libc",
  "serde",
  "serde_json",

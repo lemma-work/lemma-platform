@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SetupProcessError {
@@ -34,6 +34,24 @@ pub fn run(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
+    run_with_optional_input(command, None, timeout, output_limit)
+}
+
+pub fn run_with_input(
+    command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<Output, SetupProcessError> {
+    run_with_optional_input(command, Some(input), timeout, output_limit)
+}
+
+fn run_with_optional_input(
+    command: Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<Output, SetupProcessError> {
     // Discovery is synchronous and is also invoked by async host operations.
     // A dedicated runtime avoids nesting block_on inside their Tokio runtime.
     std::thread::Builder::new()
@@ -42,20 +60,34 @@ pub fn run(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(run_async(command, timeout, output_limit))
+                .block_on(run_async_with_input(command, input, timeout, output_limit))
         })?
         .join()
         .map_err(|_| io::Error::other("setup supervisor panicked"))?
 }
 
+#[cfg(test)]
 async fn run_async(
     command: Command,
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
+    run_async_with_input(command, None, timeout, output_limit).await
+}
+
+async fn run_async_with_input(
+    command: Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<Output, SetupProcessError> {
     let mut command = tokio::process::Command::from(command);
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut command = CommandWrap::from(command);
@@ -82,8 +114,9 @@ async fn run_async(
         .stderr()
         .take()
         .ok_or_else(|| io::Error::other("missing stderr"))?;
+    let stdin = child.0.stdin().take();
     let result = tokio::time::timeout(timeout, async {
-        let (status, stdout, stderr) = tokio::try_join!(
+        let (status, stdout, stderr, input_result) = tokio::try_join!(
             async {
                 // A Windows job wait includes descendants. Wait for the leader
                 // first so a successful setup command cannot be held open by
@@ -94,7 +127,23 @@ async fn run_async(
             },
             read_bounded(stdout, output_limit),
             read_bounded(stderr, output_limit),
+            async {
+                let result = async {
+                    if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                        stdin.write_all(&input).await?;
+                        stdin.shutdown().await?;
+                    }
+                    Ok::<_, io::Error>(())
+                }
+                .await;
+                Ok::<_, SetupProcessError>(result)
+            },
         )?;
+        // A child may reject the request before reading stdin. Preserve its
+        // status and diagnostic instead of replacing them with BrokenPipe.
+        if status.success() {
+            input_result?;
+        }
         Ok(Output {
             status,
             stdout,
@@ -147,6 +196,47 @@ mod tests {
     }
 
     #[test]
+    fn stdin_and_both_outputs_make_progress_together() {
+        let input = vec![b'i'; 512 * 1024];
+        let output = run_with_input(
+            fixture_command("stdin-echo"),
+            input.clone(),
+            Duration::from_secs(5),
+            2 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.windows(input.len()).any(|part| part == input));
+        assert_eq!(output.stderr, vec![b'e'; 256 * 1024]);
+    }
+
+    #[test]
+    fn an_unread_stdin_pipe_is_covered_by_the_same_deadline() {
+        assert!(matches!(
+            run_with_input(
+                fixture_command("stdin-stall"),
+                vec![b'i'; 2 * 1024 * 1024],
+                Duration::from_millis(100),
+                4096
+            ),
+            Err(SetupProcessError::TimedOut)
+        ));
+    }
+
+    #[test]
+    fn an_early_rejection_keeps_the_childs_diagnostic() {
+        let output = run_with_input(
+            fixture_command("reject-input"),
+            vec![b'i'; 2 * 1024 * 1024],
+            Duration::from_secs(5),
+            4096,
+        )
+        .unwrap();
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(output.stderr, b"unsupported request");
+    }
+
+    #[test]
     #[ignore = "subprocess fixture invoked by the supervision tests"]
     fn process_fixture() {
         let Ok(mode) = std::env::var("LEMMA_SETUP_TEST_MODE") else {
@@ -156,6 +246,23 @@ mod tests {
             "output" => {
                 std::io::stdout().write_all(b"setup stdout").unwrap();
                 std::io::stderr().write_all(b"setup stderr").unwrap();
+            }
+            "stdin-echo" => {
+                use std::io::Read;
+                std::io::stdout()
+                    .write_all(&vec![b'o'; 256 * 1024])
+                    .unwrap();
+                std::io::stderr()
+                    .write_all(&vec![b'e'; 256 * 1024])
+                    .unwrap();
+                let mut input = Vec::new();
+                std::io::stdin().read_to_end(&mut input).unwrap();
+                std::io::stdout().write_all(&input).unwrap();
+            }
+            "stdin-stall" => std::thread::sleep(Duration::from_secs(10)),
+            "reject-input" => {
+                std::io::stderr().write_all(b"unsupported request").unwrap();
+                std::process::exit(23);
             }
             "failure" => std::process::exit(23),
             "stdout-flood" | "stderr-flood" => {
