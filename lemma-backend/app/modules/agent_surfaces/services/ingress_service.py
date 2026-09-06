@@ -200,6 +200,7 @@ class AgentSurfaceIngressService(
                 adapter=adapter,
                 context=parsed_context,
                 credentials=credentials,
+                event_dedup_store=self.event_dedup_store,
             )
             return
 

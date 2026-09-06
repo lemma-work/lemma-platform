@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.config import settings
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -144,6 +145,38 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     ) -> None:
         await WhatsAppPlatformService(credentials).add_processing_indicator(
             event, metadata
+        )
+
+    def unresolved_sender_reply(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Say which number we did not recognise, rather than "please sign up".
+
+        The default prompt tells the sender to create an account, which is
+        wrong for most people who reach this: they have one, and what is
+        missing is the mobile number on it. Meta signed the payload carrying
+        their ``wa_id``, so the number is not a guess -- naming it turns an
+        inaccurate instruction into the one fact that lets someone fix this,
+        and it is their own number, which they already know.
+
+        Nothing is claimed about whether an account exists. That question is
+        only answerable to someone who has proved who they are, and saying
+        either answer here would tell any sender whether a number is
+        registered.
+        """
+        if not event.is_dm:
+            return None
+        # Meta's `wa_id` is E.164 without the `+`, and the parser stores it
+        # verbatim. Everywhere a person sees their own number it has the `+`.
+        digits = "".join(c for c in str(event.sender_phone or "") if c.isdigit())
+        if not digits:
+            return None
+        number = f"+{digits}"
+        profile_url = f"{settings.frontend_url.rstrip('/')}/profile"
+        return (
+            f"I don't recognise {number}. Add it as the mobile number on your "
+            f"Lemma profile and I'll know it's you: {profile_url}",
+            {},
         )
 
     async def download_attachment(

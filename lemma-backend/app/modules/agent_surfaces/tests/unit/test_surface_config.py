@@ -49,6 +49,11 @@ EXPECTED = [
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
     (
+        "surface_stranger_reply_window_seconds",
+        "SURFACE_STRANGER_REPLY_WINDOW_SECONDS",
+        3600,
+    ),
+    (
         "surface_runtime_history_max_messages",
         "SURFACE_RUNTIME_HISTORY_MAX_MESSAGES",
         40,
