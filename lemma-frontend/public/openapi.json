@@ -9224,21 +9224,6 @@
             ],
             "title": "Organization Id"
           },
-          "payer": {
-            "anyOf": [
-              {
-                "enum": [
-                  "personal",
-                  "organization"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payer"
-          },
           "plan_name": {
             "anyOf": [
               {
@@ -9249,6 +9234,21 @@
               }
             ],
             "title": "Plan Name"
+          },
+          "plan_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "PERSONAL",
+                  "TEAM"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Type"
           },
           "warning_percent": {
             "title": "Warning Percent",
@@ -9264,7 +9264,7 @@
         },
         "required": [
           "organization_id",
-          "payer",
+          "plan_type",
           "plan_name",
           "windows",
           "allowed",

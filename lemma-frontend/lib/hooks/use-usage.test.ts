@@ -11,7 +11,7 @@ vi.mock('@/lib/sdk/lemma-client', () => ({ getLemmaClient: () => ({ request }) }
 afterEach(() => { cleanup(); request.mockReset(); });
 
 function result(organizationId: string): MyUsageLimitsResponse {
-    return { organization_id: organizationId, payer: 'organization', plan_name: organizationId, windows: [], allowed: true, warning_percent: 80 };
+    return { organization_id: organizationId, plan_type: 'TEAM', plan_name: organizationId, windows: [], allowed: true, warning_percent: 80 };
 }
 
 function harness() {

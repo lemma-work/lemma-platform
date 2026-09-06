@@ -289,7 +289,7 @@ _NAME_TO_MODULE = {
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
-    'MyUsageLimitsResponsePayerType0': 'my_usage_limits_response_payer_type_0',
+    'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
@@ -819,7 +819,7 @@ if TYPE_CHECKING:
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
     from .my_usage_limits_response import MyUsageLimitsResponse
-    from .my_usage_limits_response_payer_type_0 import MyUsageLimitsResponsePayerType0
+    from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
@@ -1362,7 +1362,7 @@ __all__ = [
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
     'MyUsageLimitsResponse',
-    'MyUsageLimitsResponsePayerType0',
+    'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',

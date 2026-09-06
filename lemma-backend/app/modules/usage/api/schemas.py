@@ -139,7 +139,7 @@ class UsageAllowanceResponse(BaseModel):
 
 class MyUsageLimitsResponse(BaseModel):
     organization_id: UUID | None
-    payer: Literal["personal", "organization"] | None
+    plan_type: Literal["PERSONAL", "TEAM"] | None
     plan_name: str | None
     windows: list[UsageAllowanceResponse]
     allowed: bool

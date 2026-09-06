@@ -82,7 +82,7 @@ async def test_personal_reports_exclude_paid_organizations_and_other_users(
         user_weekly_limit_usd=10,
         user_limit_scope="global",
         excluded_organization_ids=(paid_org,),
-        payer="personal",
+        plan_type="PERSONAL",
         plan_name="Personal",
     )
     now = datetime.now(timezone.utc)
@@ -128,7 +128,7 @@ async def test_member_sees_shared_percentage_but_not_shared_dollars(
     plan.values = UsageLimitValues(
         org_monthly_limit_usd=10,
         user_weekly_limit_usd=5,
-        payer="organization",
+        plan_type="TEAM",
         plan_name="Team",
     )
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
@@ -152,7 +152,7 @@ async def test_member_sees_shared_percentage_but_not_shared_dollars(
     )
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["payer"] == "organization"
+    assert data["plan_type"] == "TEAM"
     assert {window["key"]: window["used_percent"] for window in data["windows"]} == {
         "user_weekly": 20,
         "org_monthly": 60,
@@ -180,7 +180,7 @@ async def test_unlimited_zero_and_overshoot(
 ) -> None:
     user = UUID(fixed_test_user["id"])
     plan.values = UsageLimitValues(
-        user_monthly_limit_usd=cap, user_limit_scope="global", payer="personal"
+        user_monthly_limit_usd=cap, user_limit_scope="global", plan_type="PERSONAL"
     )
     async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
         uow.session.add(receipt(None, user, "2", datetime.now(timezone.utc)))

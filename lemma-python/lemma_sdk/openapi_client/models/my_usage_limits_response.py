@@ -7,8 +7,8 @@ from uuid import UUID
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..models.my_usage_limits_response_payer_type_0 import (
-    MyUsageLimitsResponsePayerType0,
+from ..models.my_usage_limits_response_plan_type_type_0 import (
+    MyUsageLimitsResponsePlanTypeType0,
 )
 
 if TYPE_CHECKING:
@@ -24,16 +24,16 @@ class MyUsageLimitsResponse:
     Attributes:
         allowed (bool):
         organization_id (None | UUID):
-        payer (MyUsageLimitsResponsePayerType0 | None):
         plan_name (None | str):
+        plan_type (MyUsageLimitsResponsePlanTypeType0 | None):
         warning_percent (float):
         windows (list[UsageAllowanceResponse]):
     """
 
     allowed: bool
     organization_id: None | UUID
-    payer: MyUsageLimitsResponsePayerType0 | None
     plan_name: None | str
+    plan_type: MyUsageLimitsResponsePlanTypeType0 | None
     warning_percent: float
     windows: list[UsageAllowanceResponse]
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -47,14 +47,14 @@ class MyUsageLimitsResponse:
         else:
             organization_id = self.organization_id
 
-        payer: None | str
-        if isinstance(self.payer, MyUsageLimitsResponsePayerType0):
-            payer = self.payer.value
-        else:
-            payer = self.payer
-
         plan_name: None | str
         plan_name = self.plan_name
+
+        plan_type: None | str
+        if isinstance(self.plan_type, MyUsageLimitsResponsePlanTypeType0):
+            plan_type = self.plan_type.value
+        else:
+            plan_type = self.plan_type
 
         warning_percent = self.warning_percent
 
@@ -69,8 +69,8 @@ class MyUsageLimitsResponse:
             {
                 "allowed": allowed,
                 "organization_id": organization_id,
-                "payer": payer,
                 "plan_name": plan_name,
+                "plan_type": plan_type,
                 "warning_percent": warning_percent,
                 "windows": windows,
             }
@@ -100,27 +100,27 @@ class MyUsageLimitsResponse:
 
         organization_id = _parse_organization_id(d.pop("organization_id"))
 
-        def _parse_payer(data: object) -> MyUsageLimitsResponsePayerType0 | None:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                payer_type_0 = MyUsageLimitsResponsePayerType0(data)
-
-                return payer_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(MyUsageLimitsResponsePayerType0 | None, data)
-
-        payer = _parse_payer(d.pop("payer"))
-
         def _parse_plan_name(data: object) -> None | str:
             if data is None:
                 return data
             return cast(None | str, data)
 
         plan_name = _parse_plan_name(d.pop("plan_name"))
+
+        def _parse_plan_type(data: object) -> MyUsageLimitsResponsePlanTypeType0 | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                plan_type_type_0 = MyUsageLimitsResponsePlanTypeType0(data)
+
+                return plan_type_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(MyUsageLimitsResponsePlanTypeType0 | None, data)
+
+        plan_type = _parse_plan_type(d.pop("plan_type"))
 
         warning_percent = d.pop("warning_percent")
 
@@ -134,8 +134,8 @@ class MyUsageLimitsResponse:
         my_usage_limits_response = cls(
             allowed=allowed,
             organization_id=organization_id,
-            payer=payer,
             plan_name=plan_name,
+            plan_type=plan_type,
             warning_percent=warning_percent,
             windows=windows,
         )

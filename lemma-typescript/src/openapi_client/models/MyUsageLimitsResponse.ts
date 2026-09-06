@@ -6,8 +6,8 @@ import type { UsageAllowanceResponse } from './UsageAllowanceResponse.js';
 export type MyUsageLimitsResponse = {
     allowed: boolean;
     organization_id: (string | null);
-    payer: ('personal' | 'organization' | null);
     plan_name: (string | null);
+    plan_type: ('PERSONAL' | 'TEAM' | null);
     warning_percent: number;
     windows: Array<UsageAllowanceResponse>;
 };

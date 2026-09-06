@@ -7,9 +7,9 @@ import { formatUsagePercent } from "./usage-format";
 
 export function usagePlanLabel(data: MyUsageLimitsResponse): string {
   const owner =
-    data.payer === "organization"
+    data.plan_type === "TEAM"
       ? "Organization plan"
-      : data.payer === "personal"
+      : data.plan_type === "PERSONAL"
         ? "Your plan"
         : "Usage limits";
   return data.plan_name ? `${owner} · ${data.plan_name}` : owner;
@@ -51,11 +51,11 @@ export function UsageAllowances({
         <h3 className="text-sm font-medium text-[var(--text-primary)]">
           {usagePlanLabel(data)}
         </h3>
-        {data.payer === "organization" ? (
+        {data.plan_type === "TEAM" ? (
           <p className="mt-1 text-xs text-[var(--text-secondary)]">
             This organization funds your usage here.
           </p>
-        ) : data.payer === "personal" ? (
+        ) : data.plan_type === "PERSONAL" ? (
           <p className="mt-1 text-xs text-[var(--text-secondary)]">
             Shared across workspaces using your plan.
           </p>

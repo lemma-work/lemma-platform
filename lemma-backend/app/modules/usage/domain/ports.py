@@ -90,7 +90,7 @@ class UsageLimitValues:
     user_monthly_limit_usd: float | None = None
     user_limit_scope: Literal["organization", "global"] = "organization"
     excluded_organization_ids: tuple[UUID, ...] = ()
-    payer: Literal["personal", "organization"] | None = None
+    plan_type: Literal["PERSONAL", "TEAM"] | None = None
     plan_name: str | None = None
 
 

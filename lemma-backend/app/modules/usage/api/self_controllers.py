@@ -97,7 +97,7 @@ async def my_limits(
         )
     return MyUsageLimitsResponse(
         organization_id=organization_id,
-        payer=values.payer,
+        plan_type=values.plan_type,
         plan_name=values.plan_name,
         windows=windows,
         allowed=all(window.allowed for window in windows),
