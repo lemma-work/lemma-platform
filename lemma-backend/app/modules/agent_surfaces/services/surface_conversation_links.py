@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ThreadShape,
     thread_shape,
 )
+from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
@@ -221,6 +222,7 @@ class SurfaceConversationLinkMixin:
                     "surface_id": str(surface.id),
                     "surface_platform": surface.surface_type.value,
                     "external_channel_id": parsed.external_channel_id,
+                    "channel_name": configured_channel_name(surface, parsed),
                     "external_thread_id": parsed.external_thread_id,
                     "external_user_id": external_user_id,
                     "external_message_id": parsed.external_message_id,
@@ -258,6 +260,7 @@ class SurfaceConversationLinkMixin:
             "surface_id": str(surface.id),
             "surface_platform": surface.surface_type.value,
             "external_channel_id": parsed.external_channel_id,
+            "channel_name": configured_channel_name(surface, parsed),
             "external_thread_id": parsed.external_thread_id,
             "external_user_id": external_user_id,
             "external_message_id": parsed.external_message_id,
