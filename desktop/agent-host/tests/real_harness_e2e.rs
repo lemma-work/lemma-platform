@@ -1,4 +1,4 @@
-//! Opt-in tests against the developer's authenticated local ACP harnesses.
+//! Opt-in tests against authenticated local ACP harnesses using dedicated test accounts.
 //!
 //! These are ignored in CI because they spend real provider quota and depend on
 //! local Codex, Claude Code, and `OpenCode` credentials.
@@ -10,27 +10,18 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{post, put};
-use axum::{Json, Router};
 use chrono::Utc;
 
-use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
+use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunOutcome, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::AdapterManifest;
-use lemma_agent_host::api::TargetClient;
-use lemma_agent_host::config::{HostConfig, HostPaths};
+use lemma_agent_host::config::HostPaths;
 use lemma_agent_host::permissions::PermissionGate;
-use lemma_agent_host::protocol::{Event, EventBatch, EventType, JsonMap, RunSpec, RunState};
-use lemma_agent_host::runtime::HostRuntime;
+use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec, RunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::net::TcpListener;
 use uuid::Uuid;
 
 mod support;
-
-const HOST_SECRET: &str = "real-control-e2e-host-secret";
 
 #[derive(Default)]
 struct StreamCapture {
@@ -63,14 +54,31 @@ impl AcpCallbacks for StreamCapture {
     }
 }
 
+async fn run_with_deadline(
+    request: AcpRunRequest,
+    callbacks: Arc<dyn AcpCallbacks>,
+) -> anyhow::Result<AcpRunOutcome> {
+    let remaining = (request.run_spec.run_deadline - Utc::now())
+        .to_std()
+        .unwrap_or_default();
+    tokio::time::timeout(remaining, AcpDriver.run(request, callbacks))
+        .await
+        .map_err(|_| anyhow::anyhow!("live ACP test exceeded its run deadline"))?
+}
+
 fn configured_agents() -> Vec<String> {
-    std::env::var("LEMMA_REAL_AGENT_E2E_AGENTS")
+    let agents: Vec<String> = std::env::var("LEMMA_REAL_AGENT_E2E_AGENTS")
         .unwrap_or_else(|_| "codex,claude-code,opencode".to_owned())
         .split(',')
         .map(str::trim)
         .filter(|agent| !agent.is_empty())
         .map(str::to_owned)
-        .collect()
+        .collect();
+    assert!(
+        !agents.is_empty(),
+        "select at least one live agent to qualify"
+    );
+    agents
 }
 
 fn agent_host_data_directory() -> PathBuf {
@@ -96,45 +104,44 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
             let marker = format!("LEMMA_{}_STREAM_OK", agent.replace('-', "_").to_uppercase());
             let callbacks = std::sync::Arc::new(StreamCapture::default());
             let run_id = Uuid::new_v4();
-            let outcome = AcpDriver
-                .run(
-                    AcpRunRequest {
-                        adapter: manifest.resolve(&agent).unwrap(),
-                        run_spec: RunSpec {
-                            agent_run_id: run_id,
-                            conversation_id: Uuid::new_v4(),
-                            harness_id: Uuid::new_v4(),
-                            profile_revision: "real-harness-e2e".to_owned(),
-                            model_name: None,
-                            config_selections: JsonMap::new(),
-                            system_prompt: "Follow the user's output format exactly.".to_owned(),
-                            prompt: vec![serde_json::json!({
-                                "type": "text",
-                                "text": format!("Reply with exactly: {marker}"),
-                            })],
-                            resume_session_id: None,
-                            context: BTreeMap::new(),
-                            mcp: Value::Null,
-                            run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
-                            system_prompt_delivery: None,
-                        },
-                        scratch_directory: paths
-                            .root
-                            .join("real-e2e")
-                            .join(agent.as_str())
-                            .join(run_id.to_string()),
-                        mcp_server: None,
-                        can_load_session: false,
-                        published_config_options: Vec::new(),
-                        permissions: PermissionGate::new(),
-                        permission_timeout: Duration::ZERO,
-                        cancel: lemma_agent_host::acp::never_cancelled(),
-                        cancel_grace: Duration::from_secs(5),
+            let outcome = run_with_deadline(
+                AcpRunRequest {
+                    adapter: manifest.resolve(&agent).unwrap(),
+                    run_spec: RunSpec {
+                        agent_run_id: run_id,
+                        conversation_id: Uuid::new_v4(),
+                        harness_id: Uuid::new_v4(),
+                        profile_revision: "real-harness-e2e".to_owned(),
+                        model_name: None,
+                        config_selections: JsonMap::new(),
+                        system_prompt: "Follow the user's output format exactly.".to_owned(),
+                        prompt: vec![serde_json::json!({
+                            "type": "text",
+                            "text": format!("Reply with exactly: {marker}"),
+                        })],
+                        resume_session_id: None,
+                        context: BTreeMap::new(),
+                        mcp: Value::Null,
+                        run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
+                        system_prompt_delivery: None,
                     },
-                    callbacks.clone(),
-                )
-                .await
-                .unwrap_or_else(|error| panic!("{agent} ACP run failed: {error:#}"));
+                    scratch_directory: paths
+                        .root
+                        .join("real-e2e")
+                        .join(agent.as_str())
+                        .join(run_id.to_string()),
+                    mcp_server: None,
+                    can_load_session: false,
+                    published_config_options: Vec::new(),
+                    permissions: PermissionGate::new(),
+                    permission_timeout: Duration::ZERO,
+                    cancel: lemma_agent_host::acp::never_cancelled(),
+                    cancel_grace: Duration::from_secs(5),
+                },
+                callbacks.clone(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{agent} ACP run failed: {error:#}"));
 
             assert_eq!(
                 outcome.state,
@@ -166,15 +173,9 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
         }
     }
 
-    // Whichever agent the developer selected, not a hardcoded one:
-    // `LEMMA_REAL_AGENT_E2E_AGENTS` exists so a machine with only some of the
-    // harnesses authenticated can still run this, and pinning Codex here meant
-    // selecting any other agent still failed on Codex's credentials.
-    let agent = configured_agents()
-        .into_iter()
-        .next()
-        .expect("at least one agent must be configured");
-    run_through_paired_agent_host(&paths, &agent).await;
+    for agent in configured_agents() {
+        run_through_paired_agent_host(&paths, &agent).await;
+    }
 }
 
 /// The one working directory a conversation's turns all share.
@@ -202,42 +203,41 @@ async fn one_turn(
 ) -> (String, String) {
     let callbacks = Arc::new(StreamCapture::default());
     let run_id = Uuid::new_v4();
-    let outcome = AcpDriver
-        .run(
-            AcpRunRequest {
-                adapter: manifest.resolve(agent).unwrap(),
-                run_spec: RunSpec {
-                    agent_run_id: run_id,
-                    conversation_id,
-                    harness_id: Uuid::new_v4(),
-                    profile_revision: "real-continuity-e2e".to_owned(),
-                    model_name: None,
-                    config_selections: JsonMap::new(),
-                    system_prompt: "Answer in one short sentence.".to_owned(),
-                    prompt: vec![json!({"type": "text", "text": prompt})],
-                    resume_session_id,
-                    context: BTreeMap::new(),
-                    mcp: Value::Null,
-                    run_deadline: Utc::now() + chrono::Duration::minutes(5),
-                    system_prompt_delivery: None,
-                },
-                // The caller's directory, not one invented here. A provider
-                // is entitled to refuse to load a session into a different cwd
-                // — Claude Code does — and a Lemma conversation keeps one
-                // workspace precisely so this cannot drift.
-                scratch_directory: workspace.to_path_buf(),
-                mcp_server: None,
-                can_load_session: true,
-                published_config_options: Vec::new(),
-                permissions: PermissionGate::new(),
-                permission_timeout: Duration::ZERO,
-                cancel: lemma_agent_host::acp::never_cancelled(),
-                cancel_grace: Duration::from_secs(5),
+    let outcome = run_with_deadline(
+        AcpRunRequest {
+            adapter: manifest.resolve(agent).unwrap(),
+            run_spec: RunSpec {
+                agent_run_id: run_id,
+                conversation_id,
+                harness_id: Uuid::new_v4(),
+                profile_revision: "real-continuity-e2e".to_owned(),
+                model_name: None,
+                config_selections: JsonMap::new(),
+                system_prompt: "Answer in one short sentence.".to_owned(),
+                prompt: vec![json!({"type": "text", "text": prompt})],
+                resume_session_id,
+                context: BTreeMap::new(),
+                mcp: Value::Null,
+                run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                system_prompt_delivery: None,
             },
-            callbacks.clone(),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{agent} ACP run failed: {error:#}"));
+            // The caller's directory, not one invented here. A provider
+            // is entitled to refuse to load a session into a different cwd
+            // — Claude Code does — and a Lemma conversation keeps one
+            // workspace precisely so this cannot drift.
+            scratch_directory: workspace.to_path_buf(),
+            mcp_server: None,
+            can_load_session: true,
+            published_config_options: Vec::new(),
+            permissions: PermissionGate::new(),
+            permission_timeout: Duration::ZERO,
+            cancel: lemma_agent_host::acp::never_cancelled(),
+            cancel_grace: Duration::from_secs(5),
+        },
+        callbacks.clone(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{agent} ACP run failed: {error:#}"));
     assert_eq!(
         outcome.state,
         RunState::Succeeded,
@@ -363,7 +363,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
         .with_cache_root(paths.adapters.clone());
     let scratch = TempDir::new().unwrap();
     let callbacks = Arc::new(StreamCapture::default());
-    let run = AcpDriver.run(
+    let run = run_with_deadline(
         AcpRunRequest {
             adapter: manifest.resolve("codex").unwrap(),
             run_spec: RunSpec {
@@ -452,7 +452,22 @@ async fn paired_real_run(
         })
         .await;
     host.shutdown().await;
+    assert_replay_matches_live(agent, &control);
     (directory, control)
+}
+
+fn assert_replay_matches_live(agent: &str, control: &support::ControlPlane) {
+    let durable_text = control
+        .events()
+        .iter()
+        .filter(|event| event.event_type == EventType::AgentMessageUpsert)
+        .filter_map(|event| event.payload.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    assert_eq!(
+        durable_text,
+        control.assistant_text(),
+        "{agent}: durable replay differs from the live answer"
+    );
 }
 
 #[tokio::test]
@@ -679,241 +694,90 @@ async fn a_real_agents_denied_tool_is_stopped_without_waiting_out_the_timeout() 
     }
 }
 
-#[derive(Clone)]
-struct ControlServerState {
-    host_id: Uuid,
-    user_id: Uuid,
-    run_id: Uuid,
-    selected_agent: String,
-    published: Arc<Mutex<Option<(Uuid, String)>>>,
-    command_sent: Arc<AtomicBool>,
-    events: Arc<Mutex<Vec<Event>>>,
-}
-
-async fn pairing(State(state): State<ControlServerState>, Json(_body): Json<Value>) -> Json<Value> {
-    Json(json!({
-        "host_id": state.host_id,
-        "user_id": state.user_id,
-        "organization_id": null,
-        "host_secret": HOST_SECRET,
-    }))
-}
-
-async fn publish(
-    State(state): State<ControlServerState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
-    require_auth(&headers)?;
-    let snapshots = body["harnesses"].as_array().unwrap();
-    let items = snapshots
-        .iter()
-        .map(|snapshot| {
-            let id = Uuid::new_v4();
-            if snapshot["harness_key"].as_str() == Some(state.selected_agent.as_str()) {
-                *state.published.lock().unwrap() =
-                    Some((id, snapshot["config_revision"].as_str().unwrap().to_owned()));
-            }
-            json!({
-                "id": id,
-                "harness_key": snapshot["harness_key"],
-                "adapter_version": snapshot["adapter_version"],
-                "config_revision": snapshot["config_revision"],
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({"items": items})))
-}
-
-async fn poll(
-    State(state): State<ControlServerState>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, StatusCode> {
-    require_auth(&headers)?;
-    let published = state.published.lock().unwrap().clone();
-    let commands = if let Some((harness_id, revision)) = published
-        && !state.command_sent.swap(true, Ordering::SeqCst)
-    {
-        let payload = serde_json::to_value(RunSpec {
-            agent_run_id: state.run_id,
-            conversation_id: Uuid::new_v4(),
-            harness_id,
-            profile_revision: revision,
-            model_name: None,
-            config_selections: JsonMap::new(),
-            system_prompt: "Follow the user's output format exactly.".to_owned(),
-            prompt: vec![json!({
-                "type": "text",
-                "text": "Reply with exactly: LEMMA_PAIRED_AGENT_HOST_STREAM_OK",
-            })],
-            resume_session_id: None,
-            context: JsonMap::new(),
-            mcp: json!({
-                "server_name": "lemma",
-                "url": "https://unused.invalid/mcp",
-                "authorization": "Bearer unused-real-control-e2e-secret",
-            }),
-            run_deadline: Utc::now() + chrono::Duration::minutes(5),
-            system_prompt_delivery: None,
-        })
-        .unwrap();
-        vec![json!({
-            "command_id": Uuid::new_v4(),
-            "kind": "START_RUN",
-            "created_at": Utc::now(),
-            "expires_at": Utc::now() + chrono::Duration::minutes(2),
-            "run_id": state.run_id,
-            "lease_epoch": 1,
-            "payload": payload,
-        })]
-    } else {
-        Vec::new()
-    };
-    Ok(Json(json!({
-        "protocol_version": 2,
-        "host_status": "ONLINE",
-        "commands": commands,
-        "poll_after_ms": 25,
-    })))
-}
-
-async fn append_events(
-    State(state): State<ControlServerState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
-    require_auth(&headers)?;
-    let batch: EventBatch = serde_json::from_value(body).unwrap();
-    let last = batch.events.last().unwrap();
-    let response = json!({
-        "run_id": last.run_id,
-        "lease_epoch": last.lease_epoch,
-        "acked_through": last.sequence,
-    });
-    state.events.lock().unwrap().extend(batch.events);
-    Ok(Json(response))
-}
-
-fn require_auth(headers: &HeaderMap) -> Result<(), StatusCode> {
-    (headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        == Some(format!("Bearer {HOST_SECRET}").as_str()))
-    .then_some(())
-    .ok_or(StatusCode::UNAUTHORIZED)
-}
-
-#[cfg_attr(
-    windows,
-    expect(unused_variables, reason = "adapter reuse is a unix symlink")
-)]
 async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
-    let state = ControlServerState {
-        host_id: Uuid::new_v4(),
-        user_id: Uuid::new_v4(),
-        run_id: Uuid::new_v4(),
-        selected_agent: agent.to_owned(),
-        published: Arc::new(Mutex::new(None)),
-        command_sent: Arc::new(AtomicBool::new(false)),
-        events: Arc::new(Mutex::new(Vec::new())),
-    };
-    let app = Router::new()
-        .route("/agent-host/pairings/complete", post(pairing))
-        .route("/agent-host/harnesses", put(publish))
-        .route("/agent-host/poll", post(poll))
-        .route("/agent-host/events/append", post(append_events))
-        .with_state(state.clone());
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
     let directory = TempDir::new().unwrap();
-    let paths = HostPaths::under(directory.path());
-    paths.ensure().unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&source_paths.adapters, &paths.adapters).unwrap();
-    let installation_id = Uuid::new_v4().to_string();
-    // Paired the way Desktop pairs: over `app.lemma.localhost`, the hostname the
-    // app serves its own workspace and API on, rather than the raw loopback IP.
-    // Using `127.0.0.1` here is what let this test pass while "Connect this
-    // computer" was impossible in the product — that hostname was refused as a
-    // non-loopback plain-HTTP target by both locald and the host.
-    let target = TargetClient::pair(
-        url::Url::parse(&format!("http://app.lemma.localhost:{}/", address.port())).unwrap(),
-        "real-control-e2e-pairing-code",
-        "Real control E2E",
-        &installation_id,
-        true,
+    let mcp = support::LemmaMcpEndpoint::start(support::McpTransport::StatelessJson).await;
+    let control = support::ControlPlane::start(
+        agent,
+        "Begin your reply with LEMMA_PAIRED_AGENT_HOST_STREAM_OK, then write a detailed \
+         1000-word essay about the history of the bicycle directly in your reply. \
+         Do not use tools. End with LEMMA_STREAM_COMPLETE.",
+        mcp.run_configuration(),
+        support::PermissionAnswer::Deny,
     )
-    .await
-    .unwrap();
-    let config = HostConfig {
-        installation_id,
-        targets: vec![target],
-        max_runs: 1,
-    };
-    config.save(&paths).unwrap();
-
-    let runtime = HostRuntime::new(config, paths.clone()).unwrap();
-    let runtime =
-        runtime.with_mcp_bridge_executable(PathBuf::from(env!("CARGO_BIN_EXE_lemma-agent-host")));
-    let runtime_handle = tokio::spawn(runtime.serve());
-
-    let completed = tokio::time::timeout(Duration::from_secs(150), async {
-        loop {
-            if state
-                .events
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|event| event.event_type == EventType::Terminal)
-            {
-                return;
-            }
-            assert!(
-                !runtime_handle.is_finished(),
-                "Agent Host runtime exited before the run completed"
-            );
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
     .await;
-    if completed.is_err() {
-        let published = state.published.lock().unwrap().clone();
-        let command_sent = state.command_sent.load(Ordering::SeqCst);
-        let event_types = state
-            .events
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|event| event.event_type)
-            .collect::<Vec<_>>();
-        panic!(
-            "paired Agent Host run timed out; published={published:?}, \
-             command_sent={command_sent}, events={event_types:?}"
-        );
-    }
-    runtime_handle.abort();
-    let _ = runtime_handle.await;
-    server.abort();
-
-    let events = state.events.lock().unwrap();
-    let answer = events
+    let host = support::InProcessHost::start(
+        directory.path(),
+        &control,
+        &source_paths.adapters,
+        PathBuf::from(env!("CARGO_BIN_EXE_lemma-agent-host")),
+    )
+    .await;
+    let mut saw_live_text = false;
+    control
+        .wait_for("live assistant text", Duration::from_secs(150), |control| {
+            assert!(!host.is_finished(), "{agent}: host exited during streaming");
+            control
+                .assistant_text()
+                .contains("LEMMA_PAIRED_AGENT_HOST_STREAM_OK")
+                || control.saw_terminal()
+        })
+        .await;
+    let live_events = control.events();
+    if live_events
         .iter()
-        .filter(|event| event.event_type == EventType::AgentMessageChunk)
-        .filter_map(|event| event.payload.get("text").and_then(Value::as_str))
-        .collect::<String>();
+        .any(|event| event.event_type == EventType::AgentMessageChunk)
+        && !live_events
+            .iter()
+            .any(|event| event.event_type == EventType::Terminal)
+    {
+        saw_live_text = true;
+    }
+    control
+        .wait_for(
+            "stream completion",
+            Duration::from_secs(180),
+            support::ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+    let events = control.events();
+    assert_replay_matches_live(agent, &control);
     assert!(
-        answer.contains("LEMMA_PAIRED_AGENT_HOST_STREAM_OK"),
-        "paired Agent Host did not stream the expected answer: {answer:?}"
+        control.rejections().is_empty(),
+        "{agent}: host rejected the run"
+    );
+    let terminals = events
+        .iter()
+        .filter(|event| event.event_type == EventType::Terminal)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals.len(),
+        1,
+        "{agent}: expected exactly one terminal event"
+    );
+    assert_eq!(
+        terminals[0].payload["state"], "SUCCEEDED",
+        "{agent}: {:?}",
+        terminals[0].payload
+    );
+    assert!(
+        saw_live_text,
+        "{agent}: no text reached the control plane before completion"
+    );
+    assert!(
+        control.assistant_text().contains("LEMMA_STREAM_COMPLETE"),
+        "{agent}: stream was truncated"
     );
     assert!(
         events
-            .iter()
-            .any(|event| event.event_type == EventType::Terminal),
-        "paired Agent Host did not durably append a terminal event"
+            .windows(2)
+            .all(|pair| pair[1].sequence == pair[0].sequence + 1),
+        "{agent}: event sequence contains a gap or duplicate"
     );
-    println!("paired-agent-host: LEMMA_PAIRED_AGENT_HOST_STREAM_OK");
+    println!(
+        "{agent}: paired Agent Host delivered text before completion and a complete final answer"
+    );
 }
 
 /// How much output has to have streamed before cancelling is meaningful.
@@ -979,64 +843,54 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
             })
         };
 
-        let outcome = AcpDriver
-            .run(
-                AcpRunRequest {
-                    adapter: manifest.resolve(&agent).unwrap(),
-                    run_spec: RunSpec {
-                        agent_run_id: Uuid::new_v4(),
-                        conversation_id,
-                        harness_id: Uuid::new_v4(),
-                        profile_revision: "real-cancel-e2e".to_owned(),
-                        model_name: None,
-                        config_selections: JsonMap::new(),
-                        system_prompt: "Do exactly what the user asks.".to_owned(),
-                        prompt: vec![json!({
-                            "type": "text",
-                            // Prose, not counting: models shortcut a
-                            // mechanical "list 1..300" with a sentence, and a
-                            // turn that ends in 29 characters cannot be
-                            // interrupted. An essay reliably streams for a
-                            // while, which is the precondition this needs.
-                            "text": "Write a detailed 2000-word essay on the \
-                                     history of the bicycle, directly in your \
-                                     reply. Do not use any tools.",
-                        })],
-                        resume_session_id: None,
-                        context: BTreeMap::new(),
-                        mcp: Value::Null,
-                        run_deadline: Utc::now() + chrono::Duration::minutes(5),
-                        system_prompt_delivery: None,
-                    },
-                    scratch_directory: scratch.clone(),
-                    mcp_server: None,
-                    can_load_session: true,
-                    published_config_options: Vec::new(),
-                    permissions: PermissionGate::new(),
-                    permission_timeout: Duration::ZERO,
-                    cancel: cancel_rx,
-                    cancel_grace: Duration::from_secs(30),
+        let outcome = run_with_deadline(
+            AcpRunRequest {
+                adapter: manifest.resolve(&agent).unwrap(),
+                run_spec: RunSpec {
+                    agent_run_id: Uuid::new_v4(),
+                    conversation_id,
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "real-cancel-e2e".to_owned(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: "Do exactly what the user asks.".to_owned(),
+                    prompt: vec![json!({
+                        "type": "text",
+                        // Prose, not counting: models shortcut a
+                        // mechanical "list 1..300" with a sentence, and a
+                        // turn that ends in 29 characters cannot be
+                        // interrupted. An essay reliably streams for a
+                        // while, which is the precondition this needs.
+                        "text": "Write a detailed 2000-word essay on the \
+                                 history of the bicycle, directly in your \
+                                 reply. Do not use any tools.",
+                    })],
+                    resume_session_id: None,
+                    context: BTreeMap::new(),
+                    mcp: Value::Null,
+                    run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                    system_prompt_delivery: None,
                 },
-                Arc::clone(&callbacks) as Arc<dyn AcpCallbacks>,
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{agent} cancelled run failed: {error:#}"));
+                scratch_directory: scratch.clone(),
+                mcp_server: None,
+                can_load_session: true,
+                published_config_options: Vec::new(),
+                permissions: PermissionGate::new(),
+                permission_timeout: Duration::ZERO,
+                cancel: cancel_rx,
+                cancel_grace: Duration::from_secs(30),
+            },
+            Arc::clone(&callbacks) as Arc<dyn AcpCallbacks>,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{agent} cancelled run failed: {error:#}"));
         watching.await.unwrap();
 
         let answer = streamed_text(&callbacks);
-        // Whether the turn was long enough to interrupt is the provider's
-        // choice, not ours: a model that declines to count, or finishes before
-        // the cancel lands, leaves nothing to have cancelled. Say so and move
-        // on rather than asserting on a run that proves nothing — the
-        // deterministic version of this lives in `cancel_flow_e2e`.
-        if answer.len() < CANCEL_AFTER_CHARS {
-            println!(
-                "{agent}: SKIPPED — the turn ended on its own after {} chars, \
-                 so there was nothing to cancel",
-                answer.len()
-            );
-            continue;
-        }
+        assert!(
+            answer.len() >= CANCEL_AFTER_CHARS,
+            "{agent}: the provider did not produce enough text to exercise cancellation"
+        );
         // The state is ours to get right, whatever the agent reports. ACP
         // requires `cancelled` here and OpenCode says `end_turn`; taking that
         // literally recorded a run the user stopped as SUCCEEDED, with a
@@ -1086,7 +940,10 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                  conversation"
             );
         }
-        let _ = answer;
+        assert!(
+            !answer.trim().is_empty(),
+            "{agent}: the turn after cancellation returned no answer"
+        );
     }
 }
 

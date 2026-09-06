@@ -1211,9 +1211,10 @@ desktop-exe:
 desktop-verify-agents:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@test -n "$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-}" || \
+		(echo "Set LEMMA_REAL_AGENT_HOST_DATA_DIR to a disposable directory with verified adapters; use dedicated provider test accounts."; exit 1)
 	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
 	@cd $(DESKTOP_DIR) && \
-		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" \
 		cargo test -p lemma-agent-host --locked --test real_harness_e2e -- \
 			--ignored --nocapture --test-threads=1
 	@echo "  ✓ ACP chat over Agent Host verified"

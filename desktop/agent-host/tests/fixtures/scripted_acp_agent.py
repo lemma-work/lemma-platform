@@ -27,6 +27,7 @@ traffic and the MCP traffic this agent generated.
 import json
 import os
 import pathlib
+import select
 import subprocess
 import sys
 import time
@@ -358,6 +359,23 @@ def run_cancel_turn():
             return "cancelled"
 
 
+def run_stream_turn():
+    chunk("agent_thought_chunk", "checking the project")
+    chunk("agent_message_chunk", "前 café 👩🏽‍💻\n")
+    if MODE == "stream-crash":
+        sys.exit(23)
+    release = LOG_PATH.with_suffix(".release")
+    deadline = time.monotonic() + 20
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("client did not observe live output before completion")
+        readable, _, _ = select.select([sys.stdin], [], [], 0.02)
+        if readable and read_client_message() is None:
+            return
+    for text in ["second ", "line\n", "完成"]:
+        chunk("agent_message_chunk", text)
+
+
 def main():
     mcp_servers = []
     while True:
@@ -395,6 +413,8 @@ def main():
                 run_parallel_permission_turn(("", ""))
             elif MODE == "cancel":
                 stop_reason = run_cancel_turn()
+            elif MODE in {"stream", "stream-crash", "stream-deadline"}:
+                run_stream_turn()
             else:
                 run_permission_turn()
             result(request_id, {"stopReason": stop_reason})

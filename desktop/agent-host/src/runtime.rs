@@ -1298,7 +1298,7 @@ impl TargetWorker {
                     ])
                     .env(vec![EnvVariable::new("LEMMA_AGENT_HOST_BRIDGE", "1")]),
             );
-            let callbacks: Arc<dyn AcpCallbacks> = Arc::new(JournalCallbacks {
+            let callbacks = Arc::new(JournalCallbacks {
                 journal: journal.clone(),
                 target_id,
                 run_id,
@@ -1323,7 +1323,7 @@ impl TargetWorker {
                 cancel_grace: CANCEL_GRACE,
             };
             let outcome =
-                tokio::time::timeout(remaining, driver.run(request, Arc::clone(&callbacks))).await;
+                tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
             if matches!(outcome, Ok(Ok(_)))
                 && let Err(error) = publish_generated_images(&scratch, callbacks.as_ref())
             {
@@ -1333,6 +1333,10 @@ impl TargetWorker {
                     "could not publish a generated image artifact"
                 );
             }
+            // Terminal events bypass the ACP callback. Seal the final text on
+            // every exit path so a crash or an answer ending in a text chunk
+            // cannot leave its transcript only in the transient live lane.
+            callbacks.flush_stream_segments()?;
             // Deliberately kept. It is the conversation's working directory, and
             // the next turn resumes the session that lives in it; deleting it
             // here is what made every resumption fail.
@@ -1546,6 +1550,23 @@ impl TargetWorker {
 
     fn recover_interrupted_runs(&self) -> anyhow::Result<()> {
         for run in self.journal.recoverable_runs(self.target.target_id)? {
+            let mut segments = StreamSegments::default();
+            self.journal.visit_run_events(
+                self.target.target_id,
+                run.run_id,
+                run.lease_epoch,
+                |event| segments.recover_event(&event),
+            )?;
+            JournalCallbacks {
+                journal: self.journal.clone(),
+                target_id: self.target.target_id,
+                run_id: run.run_id,
+                lease_epoch: run.lease_epoch,
+                provider_seen: AtomicBool::new(true),
+                stream_segments: std::sync::Mutex::new(segments),
+                events_ready: Arc::clone(&self.events_ready),
+            }
+            .flush_stream_segments()?;
             if run.prompt_dispatched {
                 terminal_failure(
                     &self.journal,
@@ -2134,6 +2155,18 @@ struct JournalCallbacks {
 struct StreamSegments {
     message: String,
     thought: String,
+}
+
+impl StreamSegments {
+    fn recover_event(&mut self, event: &crate::protocol::Event) {
+        match event.event_type {
+            EventType::AgentMessageChunk => self.message.push_str(&chunk_text(&event.payload)),
+            EventType::AgentThoughtChunk => self.thought.push_str(&chunk_text(&event.payload)),
+            EventType::AgentMessageUpsert => self.message.clear(),
+            EventType::AgentThoughtUpsert => self.thought.clear(),
+            _ => {}
+        }
+    }
 }
 
 impl JournalCallbacks {
@@ -3885,6 +3918,65 @@ mod stream_upsert_tests {
             .filter_map(|(_, _, payload)| payload.get("text").and_then(Value::as_str))
             .collect::<String>();
         assert_eq!(durable_text, "hello world");
+    }
+
+    #[test]
+    fn recovery_seals_only_text_after_each_kinds_last_upsert() {
+        let (_directory, callbacks, run_id) = fixture();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("already saved"))
+            .unwrap();
+        callbacks
+            .event(
+                EventType::ToolCallUpsert,
+                Some("tool".into()),
+                JsonMap::new(),
+            )
+            .unwrap();
+        callbacks
+            .event(
+                EventType::AgentThoughtChunk,
+                None,
+                payload("unfinished thought"),
+            )
+            .unwrap();
+        callbacks
+            .event(
+                EventType::AgentMessageChunk,
+                None,
+                payload("unfinished answer"),
+            )
+            .unwrap();
+        let last_sequence = journaled_events(&callbacks).last().unwrap().0;
+        callbacks
+            .journal
+            .acknowledge_events(
+                callbacks.target_id,
+                &crate::protocol::EventAck {
+                    run_id,
+                    lease_epoch: 1,
+                    acked_through: last_sequence,
+                },
+            )
+            .unwrap();
+        assert!(journaled_events(&callbacks).is_empty());
+        let mut recovered = StreamSegments::default();
+        callbacks
+            .journal
+            .visit_run_events(callbacks.target_id, run_id, 1, |event| {
+                recovered.recover_event(&event);
+            })
+            .unwrap();
+        assert_eq!(recovered.message, "unfinished answer");
+        assert_eq!(recovered.thought, "unfinished thought");
+        let mut another_lease_events = 0;
+        callbacks
+            .journal
+            .visit_run_events(callbacks.target_id, run_id, 2, |_| {
+                another_lease_events += 1;
+            })
+            .unwrap();
+        assert_eq!(another_lease_events, 0);
     }
 
     #[test]

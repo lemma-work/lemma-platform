@@ -599,6 +599,32 @@ impl Journal {
         Ok(event)
     }
 
+    /// Visit a run's retained events, including acknowledged rows, in order.
+    /// Recovery needs those rows even when the receiver already saw their
+    /// transient chunks; visit incrementally instead of loading the whole log.
+    pub fn visit_run_events(
+        &self,
+        target_id: Uuid,
+        run_id: Uuid,
+        lease_epoch: u32,
+        mut visit: impl FnMut(Event),
+    ) -> Result<(), JournalError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT event_json FROM event_outbox WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3 ORDER BY sequence",
+        )?;
+        let mut rows = statement.query(params![
+            target_id.to_string(),
+            run_id.to_string(),
+            i64::from(lease_epoch)
+        ])?;
+        while let Some(row) = rows.next()? {
+            let encoded: String = row.get(0)?;
+            visit(serde_json::from_str(&encoded)?);
+        }
+        Ok(())
+    }
+
     pub fn pending_events(
         &self,
         target_id: Uuid,

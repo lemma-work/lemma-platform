@@ -56,6 +56,66 @@ async fn control_plane() -> ControlPlane {
     .await
 }
 
+fn event(control: &ControlPlane, sequence: u64, text: &str) -> Value {
+    json!({
+        "run_id": control.run_id, "lease_epoch": 1, "sequence": sequence,
+        "type": "agent_message_chunk", "object_id": null, "payload": {"text": text},
+    })
+}
+
+async fn append(control: &ControlPlane, events: Vec<Value>) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(control.base_url.join("agent-host/events/append").unwrap())
+        .bearer_auth(HOST_SECRET)
+        .json(&json!({"events": events}))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_lost_append_ack_replays_without_replacing_accepted_text() {
+    let control = control_plane().await;
+    control.lose_the_first_append_ack();
+    let first = append(&control, vec![event(&control, 1, "first")]).await;
+    assert_eq!(first.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(control.assistant_text(), "first");
+    let retried = append(
+        &control,
+        vec![
+            event(&control, 1, "replacement"),
+            event(&control, 2, " second"),
+        ],
+    )
+    .await;
+    assert!(retried.status().is_success());
+    assert_eq!(retried.json::<Value>().await.unwrap()["acked_through"], 2);
+    assert_eq!(control.assistant_text(), "first second");
+    assert_eq!(control.events().len(), 2);
+}
+
+#[tokio::test]
+async fn an_event_gap_rejects_the_whole_batch_before_accepting_text() {
+    let control = control_plane().await;
+    let response = append(
+        &control,
+        vec![event(&control, 1, "first"), event(&control, 3, "third")],
+    )
+    .await;
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    assert!(control.events().is_empty());
+    assert!(
+        append(
+            &control,
+            vec![event(&control, 1, "first"), event(&control, 2, "second")]
+        )
+        .await
+        .status()
+        .is_success()
+    );
+    assert_eq!(control.events().len(), 2);
+}
+
 /// A harness keeps one id, however many times it is published.
 ///
 /// `agent_host_harnesses` is unique on `(host_id, harness_key)`, so the backend

@@ -263,19 +263,29 @@ yourself only for a test run; a normal install needs its adapters.
 
 The ignored real-harness test runs the same ACP driver against authenticated
 Codex, Claude Code, and OpenCode installations, then pairs a complete
-`HostRuntime` with an isolated loopback control plane and dispatches one durable
-Codex command through polling, the journal, event append/ack, and terminal
-state reporting. It asserts that expected answers arrive in assistant-message
-stream events rather than thought events:
+`HostRuntime` with an isolated loopback control plane for every selected agent.
+It checks that assistant text arrives before completion, the final answer is
+complete, and the event sequence has one terminal event with no gaps or duplicates.
+Follow-up tests exercise session continuity, missing sessions, cancellation,
+native-tool approval and denial, and Lemma MCP tools. Use a disposable Agent Host
+data directory containing copies of the verified adapters:
 
 ```bash
 LEMMA_REAL_AGENT_HOST_DATA_DIR=/path/to/agent-host-data \
-  cargo test --test real_harness_e2e -- --ignored --nocapture
+  cargo test --test real_harness_e2e -- --ignored --nocapture --test-threads=1
 ```
 
 Set `LEMMA_REAL_AGENT_E2E_AGENTS=codex,opencode` to select a subset. These tests
-are release qualification, not public CI: they require the developer's provider
-accounts and spend real quota.
+are release qualification, not public CI: they require dedicated provider test
+accounts and spend real quota. The paired fixture exercises the real Rust host;
+the backend's HTTP integration tests separately exercise its control-plane implementation.
+
+`streaming_flow_e2e` runs without provider accounts. Its ACP subprocess waits for
+the receiver to observe live Unicode text before finishing. It also tests a lost
+append acknowledgement, preservation of partial text after an agent crash,
+deadline, or host restart, and durable transcript snapshots that match the live
+answer. Restart recovery seals acknowledged chunks from the journal before
+recording the interrupted outcome; it never repeats an already dispatched prompt.
 
 Codex native image generation has a separate opt-in smoke test because it spends
 image-generation quota. It verifies that `$imagegen` produces a real PNG in the
