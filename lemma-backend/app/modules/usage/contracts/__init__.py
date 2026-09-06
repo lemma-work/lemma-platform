@@ -16,6 +16,7 @@ class ModelPricing(NamedTuple):
     output_per_million_usd: float
     unit_usd: float = 0.0
     cached_input_per_million_usd: float | None = None
+    cache_write_per_million_usd: float | None = None
 
 
 class AgentRunUsage(BaseModel):

@@ -39,14 +39,14 @@ class Harness(Protocol):
     # Not `async def`: that would declare a coroutine *returning* an iterator,
     # which is not what either harness is. Both are async generator functions and
     # every caller iterates the return value directly, un-awaited.
-    def run(
+    def run[DepsT: AgentContext](
         self,
         *,
         agent: Agent,
         conversation: Conversation,
         messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
+        ctx: DepsT,
+        options: HarnessOptions[DepsT],
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one agent run and yield normalized events."""

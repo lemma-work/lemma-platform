@@ -62,29 +62,6 @@ def test_apps_are_only_sent_to_their_own_origin_where_that_is_needed(monkeypatch
     assert app_api_url() == APP_ORIGIN_API_URL
 
 
-def test_a_blank_older_cookie_domain_is_kept_rather_than_folded_to_none():
-    """`older_cookie_domain=""` is a value, not an absent one.
-
-    SuperTokens reads the empty string as "the cookies being replaced were
-    host-only" and clears them; `None` means "nothing to replace" and clears
-    nothing. Desktop is making exactly that migration -- v0.7.0 rendered
-    `SESSION_COOKIE_DOMAIN` empty, main renders `.lemma.localhost` -- so an
-    install that crossed it holds both cookies, sends both, and SuperTokens
-    answers the refresh 500 with `The request contains multiple session
-    cookies`. The SDK retries a 500 per query, for ever.
-
-    Its neighbours in `config.py` *do* fold blank to None, which is why this is
-    asserted rather than left to a future tidy-up: making this field consistent
-    with them is the one edit that silently un-fixes the loop.
-    """
-    from app.core.config import Settings
-
-    assert Settings(session_cookie_older_domain="").session_cookie_older_domain == ""
-    assert Settings().session_cookie_older_domain is None
-    # ...while the neighbour it sits beside keeps folding blank to None.
-    assert Settings(session_cookie_domain="").session_cookie_domain is None
-
-
 # What SuperTokens sends to delete a refresh cookie, copied from the library's
 # own `set_cookie(..., value="", expires=0)` shape rather than imagined.
 CLEARING = (

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, Sequence
 from uuid import UUID
 
 from app.modules.usage.domain.entities import UsageRecord, UsageSummary
+from app.modules.usage.domain.query_types import UsageStatsBucket
 
 
 class UsageRepositoryPort(Protocol):
@@ -22,6 +24,8 @@ class UsageRepositoryPort(Protocol):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -40,6 +44,8 @@ class UsageRepositoryPort(Protocol):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
@@ -48,6 +54,7 @@ class UsageRepositoryPort(Protocol):
         status: str | None = None,
     ) -> UsageSummary: ...
 
+    @abstractmethod
     async def get_usage_stats(
         self,
         *,
@@ -59,13 +66,16 @@ class UsageRepositoryPort(Protocol):
         pod_id: UUID | None = None,
         user_id: UUID | None = None,
         agent_id: UUID | None = None,
+        agent_run_id: UUID | None = None,
+        conversation_id: UUID | None = None,
         profile_id: str | None = None,
         profile_scope: str | None = None,
         model_name: str | None = None,
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
-    ) -> Sequence[dict[str, object]]: ...
+    ) -> Sequence[UsageStatsBucket]:
+        """Return time buckets with optional dimension grouping."""
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from app.core.authorization.delegation import agent_display_name
 from app.core.infrastructure.db.transaction_locks import connection_released
 
 from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
+from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -444,6 +445,9 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 sender_display_name=resolved_user.display_name,
                 sender_email=resolved_user.email,
                 sender_phone=resolved_user.phone,
+                conversation_kind=route.conversation_kind,
+                external_channel_id=parsed.external_channel_id,
+                channel_name=configured_channel_name(surface, parsed),
                 event_metadata=parsed.metadata,
             ),
             message_user_id=resolved_user.internal_user_id,

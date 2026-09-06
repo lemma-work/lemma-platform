@@ -15,10 +15,25 @@ class SurfaceSenderProfile(BaseModel):
 
 
 class SurfaceMessageMetadata(BaseModel):
+    """Who said this, and where they said it.
+
+    Stored on the message, not just the conversation, because on a channel the
+    two answers differ: one Lemma conversation is one person's slice of a place
+    many people write in, so "which place" belongs to the conversation and "who
+    wrote this line" belongs to each message.
+    """
+
     surface_platform: str
     sender_display_name: str | None = None
     sender_email: str | None = None
     sender_phone: str | None = None
+    #: ``DM``, ``CHANNEL`` or ``EMAIL`` -- the shape of the thread, which is what
+    #: a reader needs to know before the platform's name means anything. A Slack
+    #: DM and a Slack channel are not the same thing to look at.
+    conversation_kind: str | None = None
+    external_channel_id: str | None = None
+    #: Resolved from the surface's own routes; ``None`` when nobody named it.
+    channel_name: str | None = None
     event_metadata: dict[str, Any] = Field(default_factory=dict)
 
     def as_message_metadata(self) -> dict[str, Any]:
@@ -27,6 +42,9 @@ class SurfaceMessageMetadata(BaseModel):
             "sender_display_name": self.sender_display_name,
             "sender_email": self.sender_email,
             "sender_phone": self.sender_phone,
+            "conversation_kind": self.conversation_kind,
+            "external_channel_id": self.external_channel_id,
+            "channel_name": self.channel_name,
             **self.event_metadata,
         }
 

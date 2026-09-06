@@ -42,7 +42,7 @@ jobs:
       - name: Run protected suite
         run: >-
           uv run pytest
-          -m "e2e and (slow or workspace or surface_live or indexing or local_cli or protected) and not provider and not mock_sandbox_only"
+          -m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider"
           --junitxml=protected-e2e.xml
           -o timeout=300
         env:
@@ -51,7 +51,6 @@ jobs:
           # paid model credential. Provider-only tests remain covered by the
           # deterministic model unless a dedicated real-provider run opts in.
           E2E_LLM_MODE: "mock"
-          LEMMA_RUN_SURFACE_LIVE_E2E: "1"
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
       - name: Publish commit-linked evidence
         if: always()

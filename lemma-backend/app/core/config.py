@@ -212,16 +212,6 @@ class Settings(BaseSettings):
             "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
         ),
     )
-    schedule_poll_interval_seconds: float = Field(
-        default=5.0,
-        description=(
-            "How often each worker replica claims due schedules and timers. "
-            "This is the worst-case lateness for a timer when nothing is backed "
-            "up, so it is seconds rather than the minute a cron would give. "
-            "Every replica polls; the claim is what stops them duplicating "
-            "work. Env: ``SCHEDULE_POLL_INTERVAL_SECONDS``."
-        ),
-    )
     offload_inference_limit: int = Field(
         default=2,
         description=(
@@ -364,28 +354,6 @@ class Settings(BaseSettings):
         default=220 * 1024 * 1024,
         description="Global ASGI request-body ceiling, enforced while receiving bytes.",
     )
-    auth_jwks_unknown_kid_ttl_seconds: float = Field(
-        default=60.0,
-        description=(
-            "How long a JWKS key id that was looked up and not found is refused "
-            "without going back to the network. SuperTokens reads `kid` from the "
-            "token header BEFORE verifying the signature and has no negative "
-            "cache, so without this an unauthenticated client sending forged "
-            "tokens with random `kid` values forces one synchronous HTTP round "
-            "trip per request, on the event loop, under a lock that excludes "
-            "every other verification. Set to 0 to disable the guard. Env: "
-            "``AUTH_JWKS_UNKNOWN_KID_TTL_SECONDS``."
-        ),
-    )
-    auth_jwks_unknown_kid_cache_size: int = Field(
-        default=1024,
-        description=(
-            "Maximum key ids remembered as not-found. The sender chooses the "
-            "ids, so the map has to be bounded or the guard just moves the "
-            "damage from the event loop to memory. Env: "
-            "``AUTH_JWKS_UNKNOWN_KID_CACHE_SIZE``."
-        ),
-    )
     redis_read_timeout_seconds: float = Field(
         default=5.0,
         description=(
@@ -448,29 +416,12 @@ class Settings(BaseSettings):
             "handshake entirely."
         ),
     )
-    desktop_auth_create_limit: int = Field(
-        default=100,
-        ge=0,
-        description=(
-            "Maximum desktop auth handoff requests a client IP may create per "
-            "rate-limit window. Set to 0 to disable the application-level cap."
-        ),
-    )
-    desktop_auth_create_window_seconds: int = Field(
-        default=60,
-        ge=1,
-        description="Desktop auth handoff creation rate-limit window in seconds.",
-    )
     lemma_local_ai_ready: Optional[bool] = Field(
         default=None,
         description=(
             "Safe local Desktop readiness flag. None outside managed-local installs; "
             "never contains provider credentials."
         ),
-    )
-    lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
-        default="openai_compat",
-        description="Server-provided Lemma system model profile provider type.",
     )
     lemma_openai_api_key: Optional[SecretStr] = Field(
         default=None,
@@ -484,74 +435,12 @@ class Settings(BaseSettings):
             "server, a gateway) via LEMMA_OPENAI_BASE_URL."
         ),
     )
-    lemma_openai_default_model: str = Field(
-        default="",
-        description=(
-            "Default model name for the OpenAI-compatible system model profile. "
-            "No built-in default: when LEMMA_OPENAI_API_KEY is set the model(s) "
-            "must be provided via LEMMA_OPENAI_MODEL_NAMES / "
-            "LEMMA_OPENAI_DEFAULT_MODEL, otherwise the profile build fails loudly."
-        ),
-    )
-    lemma_openai_model_names: str = Field(
-        default="",
-        description=(
-            "Comma-separated model names for the OpenAI-compatible system model "
-            "profile. Required (via env) when LEMMA_OPENAI_API_KEY is set; there "
-            "is no built-in model default."
-        ),
-    )
-    lemma_openai_vision_model_names: str = Field(
-        default="",
-        description=(
-            "Comma-separated subset of LEMMA_OPENAI_MODEL_NAMES whose models accept "
-            "image input. Gates the image-returning tools (view_image): a text-only "
-            "model breaks when image content enters its history, so those tools are "
-            "withheld unless a model is listed here. The standard OpenAI /models "
-            "endpoint does not report modalities, so vision must be declared "
-            "explicitly here; leave empty if no configured model supports vision. "
-            "(Provider-discovered profiles can additionally auto-detect image input "
-            "when the provider advertises it.)"
-        ),
-    )
-    lemma_anthropic_api_key: Optional[SecretStr] = Field(
-        default=None,
-        description="API key for the server-provided Anthropic-compatible Lemma model profile.",
-    )
-    lemma_anthropic_base_url: str = Field(
-        default="https://api.anthropic.com",
-        description="Base URL for the server-provided Anthropic-compatible Lemma model profile.",
-    )
-    lemma_anthropic_default_model: str = Field(
-        default="claude-sonnet-4-5",
-        description="Default public model name for the server-provided Anthropic-compatible Lemma profile.",
-    )
-    lemma_anthropic_model_names: str = Field(
-        default="claude-sonnet-4-5,claude-haiku-4-5",
-        description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
-    )
     web_search_provider: Literal["auto", "duckduckgo", "searxng", "brave"] = Field(
         default="auto",
         description=(
             "Web search backend. Use duckduckgo for no-key local search, searxng "
             "for a self-hosted instance, brave for Brave Search, or auto."
         ),
-    )
-    usage_org_monthly_limit_usd: float | None = Field(
-        default=None,
-        description=(
-            "Deployment-wide monthly system-spend limit per organization, in "
-            "USD. None means unlimited; work that would exceed it is refused "
-            "with USAGE_LIMIT_EXCEEDED. See PS-OPS-012."
-        ),
-    )
-    usage_user_weekly_limit_usd: float | None = Field(
-        default=None,
-        description="Deployment-wide weekly system-spend limit per user, in USD.",
-    )
-    usage_user_monthly_limit_usd: float | None = Field(
-        default=None,
-        description="Deployment-wide monthly system-spend limit per user, in USD.",
     )
     usage_org_limit_overrides_json: str = Field(
         default="",
@@ -570,31 +459,11 @@ class Settings(BaseSettings):
         default=None,
         description="Brave Search API key used when WEB_SEARCH_PROVIDER=brave.",
     )
-    datastore_database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
-        description="Database URL for datastore data storage (each datastore uses schema=datastore_id)",
-    )
-    # datastore query/document-processing/kreuzberg/pdf/signed-url config moved to
-    # app/modules/datastore/config.py (datastore_database_url stays here — infra).
-    user_cache_ttl_seconds: int = Field(
-        default=1800,
-        description="TTL for cached identity users loaded by id",
-    )
     authorization_role_cache_ttl_seconds: int = Field(
         default=300,
         description=(
             "TTL in seconds for cached authorization role snapshots. "
             "Set to 0 to disable the in-process cache."
-        ),
-    )
-    organization_home_cache_ttl_seconds: int = Field(
-        default=30,
-        description=(
-            "TTL in seconds for the cached organization landing page (pods with "
-            "their apps, agents and the caller's roles). Short because it is a "
-            "read-heavy view of slow-moving content; the roles it carries are "
-            "for display, and every permission check inside a pod resolves them "
-            "live. Set to 0 to always rebuild from the database."
         ),
     )
     auth_state_cache_ttl_seconds: int = Field(
@@ -633,26 +502,10 @@ class Settings(BaseSettings):
     google_client_secret: Optional[SecretStr] = Field(
         default=None, description="Google OAuth Client Secret"
     )
-    microsoft_client_id: Optional[str] = Field(
-        default=None, description="Microsoft OAuth Client ID"
-    )
-    microsoft_client_secret: Optional[SecretStr] = Field(
-        default=None, description="Microsoft OAuth Client Secret"
-    )
 
     # WhatsApp Business API Settings
 
     # Telegram Bot Settings
-
-    microsoft_tenant_id: Optional[str] = Field(
-        default=None,
-        description=(
-            "Microsoft Entra tenant ID. Defaults to 'common' when unset to allow "
-            "both personal and organizational accounts."
-        ),
-    )
-    gcp_project_id: Optional[str] = Field(default=None, description="GCP project ID")
-    gcp_location: Optional[str] = Field(default=None, description="GCP location")
 
     # Secret encryption + signing ("KMS" facility). One system-wide key facility
     # (app/core/crypto) encrypts secrets at rest and signs short-lived tokens.
@@ -771,10 +624,6 @@ class Settings(BaseSettings):
         default=True,
         description="Reject domains in the bundled OSS disposable-email list",
     )
-    auth_disposable_email_allowlist: list[str] = Field(
-        default_factory=list,
-        description="Domains that override the bundled disposable-email list",
-    )
     auth_abuse_protection_enabled: bool = Field(
         default=True,
         description="Enable Redis-backed limits on SuperTokens and Telegram auth routes",
@@ -782,59 +631,6 @@ class Settings(BaseSettings):
     auth_altcha_enabled: bool = Field(
         default=False,
         description="Require self-hosted ALTCHA proof-of-work on email-generating auth APIs",
-    )
-    auth_altcha_hmac_key: Optional[SecretStr] = Field(
-        default=None,
-        description="HMAC key used to sign self-hosted ALTCHA challenges",
-    )
-    auth_altcha_max_number: int = Field(
-        default=100_000,
-        ge=10_000,
-        le=2_000_000,
-        description="Maximum proof-of-work search space for ALTCHA challenges",
-    )
-    auth_whatsapp_mobile_verification_enabled: bool = Field(
-        default=False,
-        description=(
-            "Allow signed messages sent to Lemma's global WhatsApp number to "
-            "verify an authenticated user's mobile number"
-        ),
-    )
-    auth_trusted_proxy_ips: list[str] = Field(
-        default_factory=list,
-        description="Immediate proxy IPs allowed to supply Forwarded/X-Forwarded-For",
-    )
-    auth_bounce_webhook_secret: Optional[SecretStr] = Field(
-        default=None,
-        description="HMAC secret for normalized hard-bounce webhook events",
-    )
-    telegram_oidc_client_id: Optional[str] = Field(
-        default=None,
-        description="Telegram Web Login client ID issued by BotFather",
-    )
-    telegram_oidc_client_secret: Optional[SecretStr] = Field(
-        default=None,
-        description="Telegram Web Login client secret issued by BotFather",
-    )
-    telegram_oidc_redirect_uri: Optional[str] = Field(
-        default=None,
-        description="Registered Telegram OIDC callback URL",
-    )
-    telegram_oidc_issuer: str = Field(
-        default="https://oauth.telegram.org",
-        description="Expected Telegram OIDC issuer",
-    )
-    telegram_oidc_authorization_endpoint: str = Field(
-        default="https://oauth.telegram.org/auth",
-        description="Telegram OIDC authorization endpoint",
-    )
-    telegram_oidc_token_endpoint: str = Field(
-        default="https://oauth.telegram.org/token",
-        description="Telegram OIDC token endpoint",
-    )
-    telegram_oidc_jwks_uri: str = Field(
-        default="https://oauth.telegram.org/.well-known/jwks.json",
-        description="Telegram OIDC JSON Web Key Set endpoint",
     )
 
     # Application Settings
@@ -896,10 +692,6 @@ class Settings(BaseSettings):
         default="http://localhost:4173",
         description="Central auth frontend origin used by the SuperTokens UI",
     )
-    auth_website_base_path: str = Field(
-        default="/auth",
-        description="Path where the centralized auth UI is rendered",
-    )
     api_url: str = Field(
         default="http://localhost:8711", description="API URL for email links"
     )
@@ -919,14 +711,6 @@ class Settings(BaseSettings):
     )
     supertokens_core_url: str = Field(
         default="http://localhost:3567", description="Supertokens core URL"
-    )
-    supertokens_api_base_path: str = Field(
-        default="/auth",
-        description="SuperTokens API base path relative to the SuperTokens gateway",
-    )
-    supertokens_api_gateway_path: str = Field(
-        default="/st",
-        description="SuperTokens gateway path relative to api_url",
     )
     # Kreuzberg + PDF rendering + datastore file-URL config moved to
     # app/modules/datastore/config.py
@@ -1002,35 +786,12 @@ class Settings(BaseSettings):
         default=None,
         description="Optional regex for allowing dynamic frontend origins in CORS",
     )
-    session_cookie_domain: Optional[str] = Field(
-        default=None,
-        description="Optional cookie domain for sharing auth sessions across subdomains",
-    )
-    session_cookie_older_domain: Optional[str] = Field(
-        default=None,
-        description=(
-            "The cookie domain this deployment is migrating away from. Set it "
-            "for one release after changing session_cookie_domain so the old "
-            "cookies are cleared instead of colliding with the new ones."
-        ),
-    )
-    session_cookie_secure: Optional[bool] = Field(
-        default=None,
-        description="Override the secure flag for auth session cookies",
-    )
-    session_cookie_same_site: Optional[Literal["lax", "none", "strict"]] = Field(
-        default=None,
-        description="Override SameSite for auth session cookies",
-    )
 
-    # Deliberately NOT including `session_cookie_older_domain`: an empty string
-    # is a meaningful value there. SuperTokens reads `older_cookie_domain=""`
-    # as "the previous cookies were host-only, clear those", which is exactly
-    # the migration desktop is making (v0.7.0 rendered SESSION_COOKIE_DOMAIN=""
-    # and main renders `.lemma.localhost`). Folding blank to None would turn the
-    # one setting that fixes that install into no setting at all.
+    # A blank env var means "unset" for these two, which is how a renderer that
+    # emits every key writes "no override". The cookie fields that used to be
+    # here went to `IdentitySettings` with this rule, and with the reason one of
+    # them is deliberately exempt from it.
     @field_validator(
-        "session_cookie_domain",
         "cli_api_url",
         "cli_auth_frontend_url",
         mode="before",
@@ -1040,17 +801,6 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
-
-    @field_validator("auth_website_base_path", mode="before")
-    @classmethod
-    def _normalise_auth_website_base_path(cls, value: object) -> str:
-        candidate = str(value or "/auth").strip()
-        if "://" in candidate or "?" in candidate or "#" in candidate:
-            raise ValueError("AUTH_WEBSITE_BASE_PATH must be a relative URL path")
-        segments = [segment for segment in candidate.split("/") if segment]
-        if any(segment in {".", ".."} for segment in segments):
-            raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
-        return "/" + "/".join(segments) if segments else "/"
 
     @model_validator(mode="after")
     def _refuse_debug_outside_local(self) -> "Settings":
@@ -1118,14 +868,6 @@ class Settings(BaseSettings):
             "this would widen the refresh cookie for nothing."
         ),
     )
-    app_branding_enabled: bool = Field(
-        default=True,
-        description=(
-            "Show the host-owned 'Remix on Lemma' attribution on public app "
-            "entrypoints. Enabled by default in OSS and cloud; cloud billing may "
-            "remove it for entitled organizations."
-        ),
-    )
     browser_sdk_path: Optional[str] = Field(
         default=None,
         description=(
@@ -1166,55 +908,6 @@ class Settings(BaseSettings):
         description=(
             "TEST HOOK ONLY. Selects the real sandbox provider used by E2E. "
             "Docker is the default; E2B is credential-gated."
-        ),
-    )
-    e2e_disable_worker_file_autoindex: bool = Field(
-        default=False,
-        description=(
-            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
-            "datastore files (the upload->event->process_datastore_file_task path "
-            "is skipped). e2e indexes explicitly in-process via the index_file "
-            "helper; auto-indexing every upload would otherwise overwhelm the "
-            "single shared Kreuzberg under parallel load. Production leaves False."
-        ),
-    )
-    workflow_wait_retention_days: int = Field(
-        default=30,
-        ge=1,
-        description=(
-            "How long a finished machine wait (FUNCTION/AGENT/TIME) is kept. "
-            "HUMAN waits are excluded from the sweep entirely at any age -- "
-            "they record who approved what, which is not scaffolding."
-        ),
-    )
-    workflow_wait_retention_batch_size: int = Field(default=1_000, ge=1, le=10_000)
-    workflow_wait_retention_budget_seconds: float = Field(
-        default=45.0,
-        ge=0.0,
-        description=(
-            "Wall-clock budget for one workflow-wait sweep. Zero disables it."
-        ),
-    )
-    workspace_callback_api_url: Optional[str] = Field(
-        default=None,
-        description=(
-            "URL workspace sandboxes use to reach this API (e.g. http://backend:8000 "
-            "when sandboxes share a container network). No hostname inference "
-            "or rewriting is performed when absent."
-        ),
-    )
-    workspace_callback_auth_url: Optional[str] = Field(
-        default=None,
-        description=(
-            "Explicit auth frontend URL reachable from workspace sandboxes; "
-            "no hostname rewriting is performed when absent."
-        ),
-    )
-    workspace_callback_frontend_url: Optional[str] = Field(
-        default=None,
-        description=(
-            "Explicit frontend origin reachable from workspace sandboxes; "
-            "no hostname rewriting is performed when absent."
         ),
     )
     # Composio + connector runtime config moved to app/modules/connectors/config.py
@@ -1377,15 +1070,6 @@ class Settings(BaseSettings):
             "contract's posture."
         ),
     )
-    lemma_llm_caching_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
-            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
-            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
-            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
-        ),
-    )
     embedding_provider: Literal["auto", "local", "openai_compat"] = Field(
         default="auto",
         description=(
@@ -1455,29 +1139,11 @@ class Settings(BaseSettings):
             "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
         ),
     )
-    local_embedding_preload: bool = Field(
-        default=True,
-        description=(
-            "Compatibility switch for local embedding startup. False forces lazy "
-            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
-        ),
-    )
-    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
-        default="blocking",
-        description=(
-            "How local embeddings initialize. 'blocking' preserves server "
-            "readiness semantics for hosted/developer deployments, 'background' "
-            "warms the model without blocking core API readiness, and 'lazy' "
-            "waits for the first embedding operation."
-        ),
-    )
-    local_embedding_preload_timeout_seconds: float = Field(
-        default=900.0,
-        description=(
-            "Maximum worker-startup time allowed for local model preload, including "
-            "a first-run model download."
-        ),
-    )
+    # Stays in core, alone among the workflow settings. `mod:agent_surfaces`
+    # reads it to size a human-wait ceiling, and `agent_surfaces -> workflow`
+    # is a forbidden import -- so moving it to `WorkflowSettings` would have
+    # bought one module's ownership with a dependency the architecture gate
+    # refuses. Shared setting, shared home.
     workflow_wait_max_age_seconds: float = Field(
         default=6 * 60 * 60.0,
         description=(
@@ -1503,30 +1169,6 @@ class Settings(BaseSettings):
         description=(
             "Embedding model used when EMBEDDING_PROVIDER=openai_compat. "
             "Served via LEMMA_OPENAI_BASE_URL + LEMMA_OPENAI_API_KEY."
-        ),
-    )
-    reranker_mode: Literal["off", "local", "openai_compat"] = Field(
-        default="off",
-        description=(
-            "Optional second-stage reranker over hybrid retrieval. 'off' is a "
-            "no-op (first-stage order kept); 'local' uses a CPU cross-encoder; "
-            "'openai_compat' uses the LEMMA_OPENAI_BASE_URL /rerank endpoint "
-            "(LEMMA_OPENAI_API_KEY required)."
-        ),
-    )
-    local_reranker_model: str = Field(
-        default="BAAI/bge-reranker-v2-m3",
-        description="CrossEncoder model used when reranker_mode='local' (Apache-2.0, CPU).",
-    )
-    openai_compat_reranker_model: str = Field(
-        default="qwen3-reranker-8b",
-        description="Rerank model used when reranker_mode='openai_compat'.",
-    )
-    reranker_retrieve_n: int = Field(
-        default=50,
-        description=(
-            "First-stage candidate pool size to rerank down from when reranking "
-            "is active (retrieve N, rerank to the requested limit)."
         ),
     )
 
@@ -1604,15 +1246,6 @@ class Settings(BaseSettings):
             ]
         )
 
-    def is_microsoft_oauth_configured(self) -> bool:
-        """Check if Microsoft OAuth is properly configured."""
-        return all(
-            [
-                self.microsoft_client_id,
-                self.microsoft_client_secret,
-            ]
-        )
-
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""
         explicit_smtp = all(
@@ -1624,14 +1257,6 @@ class Settings(BaseSettings):
             ]
         )
         return bool(explicit_smtp or reveal_secret(self.resend_api_key))
-
-    def is_telegram_oidc_configured(self) -> bool:
-        """Return whether the global Telegram Web Login client is usable."""
-        return bool(
-            self.telegram_oidc_client_id
-            and reveal_secret(self.telegram_oidc_client_secret)
-            and self.telegram_oidc_redirect_uri
-        )
 
     def resolve_browser_sdk_path(self) -> Optional[Path]:
         """Locate the built browser SDK bundle served to no-build apps.

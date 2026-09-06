@@ -40,8 +40,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.identity.config import identity_settings
 
 logger = get_logger(__name__)
 
@@ -70,7 +70,7 @@ class UnknownJwksKeyError(Exception):
 
 
 def _guarded_get_latest_keys(config: Any, kid: str | None = None) -> Any:
-    ttl = settings.auth_jwks_unknown_kid_ttl_seconds
+    ttl = identity_settings.auth_jwks_unknown_kid_ttl_seconds
     now = time.monotonic()
 
     if kid is not None and ttl > 0:
@@ -104,7 +104,7 @@ def _guarded_get_latest_keys(config: Any, kid: str | None = None) -> Any:
             # would just move the damage from the loop to memory. Past the cap
             # we stop remembering rather than stop serving -- the fetch is what
             # the cap protects, and forgetting only costs an extra fetch later.
-            if len(_unknown_kids) >= settings.auth_jwks_unknown_kid_cache_size:
+            if len(_unknown_kids) >= identity_settings.auth_jwks_unknown_kid_cache_size:
                 _unknown_kids.clear()
                 logger.warning("identity.jwks_guard.unknown_kid_cache_full.degraded")
             _unknown_kids[kid] = now + ttl

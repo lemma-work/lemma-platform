@@ -40,7 +40,6 @@ from app.modules.agent.services.conversation_title_service import (
     title_matches_user_script,
 )
 from app.modules.agent.services.realtime import title_updated_payload
-from app.modules.usage.domain.entities import UsageReservation
 
 
 # --- collaborators -------------------------------------------------------
@@ -527,16 +526,6 @@ def _generator(
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
-    async def _reserve(*, organization_id, user_id, runtime_profile):
-        del runtime_profile
-        return UsageReservation(
-            organization_id=organization_id, user_id=user_id, amount_usd=0.01
-        )
-
-    async def _record(*, ctx, runtime_profile, result, status, reservation, metadata):
-        capture["usage"].append(status)  # type: ignore[union-attr]
-        capture["usage_source_type"] = ctx.source_type
-
     profiles = _FakeProfileService()
     capture["profiles"] = profiles
     return (
@@ -544,8 +533,6 @@ def _generator(
             runtime_profiles=lambda: profiles,
             model_for_profile=lambda **_: object(),
             llm_agent=_FakeLLMAgent,
-            reserve_usage=_reserve,
-            record_usage=_record,
         ),
         capture,
     )
@@ -570,8 +557,6 @@ async def test_generator_sanitizes_what_the_model_returned() -> None:
     title = await _ask(generator, user_text="Plan a trip to Japan")
 
     assert title == "Japan Spring Trip Plan"  # quotes + trailing period stripped
-    assert capture["usage"] == ["COMPLETED"]
-    assert capture["usage_source_type"] == "conversation_title"
 
 
 @pytest.mark.asyncio
@@ -588,7 +573,7 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generator_meters_a_failed_call_and_re_raises() -> None:
+async def test_generator_propagates_provider_failure() -> None:
     """A provider failure is still usage, and still has to reach the caller:
     the fallback decision is the service's to make, not the generator's."""
     generator, capture = _generator(raise_on_run=True)
@@ -596,7 +581,7 @@ async def test_generator_meters_a_failed_call_and_re_raises() -> None:
     with pytest.raises(RuntimeError):
         await _ask(generator, user_text="Plan a trip to Japan")
 
-    assert capture["usage"] == ["FAILED"]
+    assert capture["run_calls"] == 1
 
 
 @pytest.mark.asyncio

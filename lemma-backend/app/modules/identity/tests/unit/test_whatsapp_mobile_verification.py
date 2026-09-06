@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.modules.agent_surfaces.contracts.whatsapp import GlobalWhatsAppDeliveryError
-from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.identity.services.whatsapp_mobile_verification import (
     WhatsAppMobileVerificationService,
     parse_reserved_verification_message,
 )
+from app.modules.identity.config import identity_settings
 
 
 def _payload(
@@ -109,10 +109,14 @@ async def test_whatsapp_verification_configuration_fails_closed(monkeypatch) -> 
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     service = WhatsAppMobileVerificationService("redis://unused")
 
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", False)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", False
+    )
     assert (await service.config()).available is False
 
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", False)
     assert (await service.config()).available is False
 
@@ -126,7 +130,9 @@ async def test_whatsapp_verification_configuration_fails_closed(monkeypatch) -> 
 async def test_enable_flag_without_global_surface_config_stays_unavailable(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", None)
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", None)
     monkeypatch.setattr(surface_settings, "whatsapp_app_secret", None)
