@@ -58,7 +58,9 @@ def access_token_from(payload: object) -> str | None:
     if not isinstance(payload, dict):
         return None
     token = payload.get("access_token")
-    return token if isinstance(token, str) else None
+    # An empty string is not a token, and returning it would make the docstring
+    # above false for a caller that checks the sentinel rather than truthiness.
+    return token if isinstance(token, str) and token else None
 
 
 def _get_consent_cache() -> RedisJsonCache:

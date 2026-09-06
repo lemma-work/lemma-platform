@@ -54,7 +54,9 @@ def test_a_body_that_is_not_an_object_has_no_token(payload: Any) -> None:
     ],
 )
 def test_an_object_without_a_usable_token_has_no_token(payload: Any) -> None:
-    assert not access_token_from(payload)
+    # `is None`, not falsiness: the sentinel is the documented contract, and
+    # asserting truthiness let an empty string pass as if it were one.
+    assert access_token_from(payload) is None
 
 
 @pytest.mark.parametrize(
