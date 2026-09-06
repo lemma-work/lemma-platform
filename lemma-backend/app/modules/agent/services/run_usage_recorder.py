@@ -6,28 +6,47 @@ one implementation instead of duplicating reserve/record/release plumbing.
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.usage.contracts import UsageReservation
-from app.modules.usage.contracts.execution import UsageService, build_usage_service
+from app.modules.usage.contracts import AgentRunUsage, UsageReservation
+from app.modules.usage.contracts.execution import (
+    UsageExecutionContext,
+    UsageService,
+    build_usage_service,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.usage.contracts.metering import check_run_budget, finalize_metered_run
 
 
 class RunUsageRecorder:
     """Thin façade over `UsageService` for the agent run lifecycle."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
-    def _service(self, uow) -> UsageService:
+    def _service(self, uow: SqlAlchemyUnitOfWork) -> UsageService:
         return build_usage_service(uow)
 
     async def reserve(
         self,
         *,
-        organization_id,
-        user_id,
+        organization_id: UUID | None,
+        user_id: UUID,
         runtime_profile: dict[str, object | None],
     ) -> UsageReservation | None:
+        if runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            await check_run_budget(
+                factory=self.uow_factory,
+                organization_id=organization_id,
+                user_id=user_id,
+                profile_scope=str(runtime_profile.get("scope") or "ORGANIZATION"),
+            )
+            return None
         profile_id = runtime_profile.get("profile_id")
         profile_scope = runtime_profile.get("scope")
         model_name = runtime_profile.get("model_name")
@@ -37,6 +56,11 @@ class RunUsageRecorder:
             model_name = str(runtime_profile.get("provider_model_name") or "default")
         with run_phase("usage_reserve"):
             async with self.uow_factory() as uow:
+                await self._service(uow).require_remote_budget_support(
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    profile_scope=profile_scope,
+                )
                 reservation = await self._service(uow).reserve_for_profile(
                     organization_id=organization_id,
                     user_id=user_id,
@@ -46,6 +70,19 @@ class RunUsageRecorder:
                 )
                 await uow.commit()
                 return reservation
+
+    async def finalize_metered(
+        self,
+        *,
+        agent_run_id: UUID,
+        runtime_profile: dict[str, object | None] | None,
+        status: str,
+    ) -> None:
+        if runtime_profile and runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            await finalize_metered_run(agent_run_id, status, factory=self.uow_factory)
 
     async def release(self, reservation: UsageReservation | None) -> None:
         if reservation is None:
@@ -57,12 +94,17 @@ class RunUsageRecorder:
     async def record(
         self,
         *,
-        ctx,
+        ctx: UsageExecutionContext,
         runtime_profile: dict[str, object | None] | None,
-        usage_data,
+        usage_data: AgentRunUsage,
         status: str,
         reservation: UsageReservation | None,
     ) -> None:
+        if runtime_profile and runtime_profile.get("protocol") in {
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }:
+            return
         async with self.uow_factory() as uow:
             await self._service(uow).record_agent_run_usage(
                 ctx=ctx,

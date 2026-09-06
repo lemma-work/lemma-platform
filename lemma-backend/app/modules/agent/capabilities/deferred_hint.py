@@ -10,6 +10,8 @@ the full schemas, so the context cost is tiny and the cached prefix stays stable
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pydantic_ai.capabilities import AbstractCapability
 
 from app.modules.agent.tools.registry import (
@@ -79,7 +81,7 @@ def _tool_summaries(toolset: object) -> list[tuple[str, str]]:
     return summaries
 
 
-def build_deferred_tools_hint(extra_toolsets: list[object]) -> str | None:
+def build_deferred_tools_hint(extra_toolsets: Sequence[object]) -> str | None:
     """Build the instruction block listing the deferred tool groups, or None.
 
     Names alone told the model a tool existed but not when to reach for it —
@@ -116,7 +118,8 @@ class DeferredToolsHintCapability(AbstractCapability[object]):
     def __init__(self, hint: str) -> None:
         self._hint = hint
 
-    def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
+    @classmethod
+    def get_serialization_name(cls) -> str | None:  # pragma: no cover - metadata
         return "deferred_tools_hint"
 
     def get_instructions(self) -> str:

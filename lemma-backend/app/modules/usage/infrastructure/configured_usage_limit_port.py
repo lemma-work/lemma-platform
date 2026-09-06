@@ -32,6 +32,7 @@ from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.identity.contracts.organizations import organization_slug
 from app.modules.usage.domain.ports import UsageLimitPort, UsageLimitValues
+from app.modules.usage.config import usage_settings
 
 logger = get_logger(__name__)
 
@@ -134,7 +135,7 @@ class ConfiguredUsageLimitPort:
         organization_id: UUID | None,
         user_id: UUID,
     ) -> UsageLimitValues | None:
-        org_monthly = settings.usage_org_monthly_limit_usd
+        org_monthly = usage_settings.usage_org_monthly_limit_usd
 
         rules = _parse_overrides(settings.usage_org_limit_overrides_json)
         if organization_id is not None and rules:
@@ -146,8 +147,8 @@ class ConfiguredUsageLimitPort:
 
         values = UsageLimitValues(
             org_monthly_limit_usd=org_monthly,
-            user_weekly_limit_usd=settings.usage_user_weekly_limit_usd,
-            user_monthly_limit_usd=settings.usage_user_monthly_limit_usd,
+            user_weekly_limit_usd=usage_settings.usage_user_weekly_limit_usd,
+            user_monthly_limit_usd=usage_settings.usage_user_monthly_limit_usd,
         )
         has_any = (
             values.org_monthly_limit_usd is not None
@@ -160,9 +161,9 @@ class ConfiguredUsageLimitPort:
 def configured_usage_limit_port(uow: object) -> UsageLimitPort | None:
     """The settings-backed port when any limit is configured, else ``None``."""
     has_any = (
-        settings.usage_org_monthly_limit_usd is not None
-        or settings.usage_user_weekly_limit_usd is not None
-        or settings.usage_user_monthly_limit_usd is not None
+        usage_settings.usage_org_monthly_limit_usd is not None
+        or usage_settings.usage_user_weekly_limit_usd is not None
+        or usage_settings.usage_user_monthly_limit_usd is not None
         or bool(settings.usage_org_limit_overrides_json.strip())
     )
     if not has_any:

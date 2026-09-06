@@ -20,13 +20,14 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
+from app.modules.identity.config import identity_settings
 
 _home_cache: ResilientJsonCache | None = None
 
 
 def _get_cache() -> ResilientJsonCache | None:
     global _home_cache
-    ttl = settings.organization_home_cache_ttl_seconds
+    ttl = identity_settings.organization_home_cache_ttl_seconds
     if ttl <= 0:
         return None
     if _home_cache is None or _home_cache.ttl_seconds != ttl:

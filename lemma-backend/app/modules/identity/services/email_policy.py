@@ -17,6 +17,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.models.user_models import User
 from app.core.concurrency.offload import run_blocking
+from app.modules.identity.config import identity_settings
 
 
 _DISPOSABLE_FILE = (
@@ -94,7 +95,8 @@ async def validate_auth_email(email: str) -> str:
     normalized = normalize_identity_email(syntax_result.normalized)
     domain = normalized.rsplit("@", 1)[1]
     allowlist = {
-        item.strip().lower() for item in settings.auth_disposable_email_allowlist
+        item.strip().lower()
+        for item in identity_settings.auth_disposable_email_allowlist
     }
     if (
         settings.auth_disposable_email_domains_enabled

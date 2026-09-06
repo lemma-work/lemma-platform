@@ -7,6 +7,9 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
+from pydantic_ai.toolsets import AbstractToolset
+from app.modules.agent.tools.context import ConversationContext
+
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -41,7 +44,7 @@ async def load_agent_grant_summary(
 class RunToolAssembler:
     """Builds the ordered toolset list for an agent run / tool call."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
     async def assemble(
@@ -52,7 +55,7 @@ class RunToolAssembler:
         include_final_answer: bool = False,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
-    ) -> list[object]:
+    ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
 
         ``grants`` lets a caller that already loaded the agent's grant summary
@@ -78,7 +81,7 @@ class RunToolAssembler:
         agent: Agent | None,
         conversation: Conversation | None,
         include_final_answer: bool,
-    ) -> list[object]:
+    ) -> list[AbstractToolset[ConversationContext]]:
         """The `final_answer` tool, on the runs that reach it as a tool.
 
         Remote (Agent Host) runs only. The in-process LEMMA harness gets
@@ -111,13 +114,15 @@ class RunToolAssembler:
         include_final_answer: bool,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
-    ) -> list[object]:
+    ) -> list[AbstractToolset[ConversationContext]]:
         if grants is None and agent is not None and callable(self.uow_factory):
             grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
         toolset_names, allow_subagents = resolve_toolset_names(
             agent, conversation, grants=grants
         )
-        toolsets: list[object] = list(resolve_agent_toolsets(toolset_names))
+        toolsets: list[AbstractToolset[ConversationContext]] = list(
+            resolve_agent_toolsets(toolset_names)
+        )
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation
         # here. Included in the assembled list so BOTH the in-process LEMMA harness

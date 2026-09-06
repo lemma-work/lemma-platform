@@ -53,6 +53,16 @@ class AppsSettings(BaseSettings):
         ),
     )
 
+    # Moved from `app/core/config.py`: read only by this module's asset resolver.
+    app_branding_enabled: bool = Field(
+        default=True,
+        description=(
+            "Show the host-owned 'Remix on Lemma' attribution on public app "
+            "entrypoints. Enabled by default in OSS and cloud; cloud billing may "
+            "remove it for entitled organizations."
+        ),
+    )
+
     @model_validator(mode="after")
     def validate_retention_bounds(self) -> Self:
         if self.app_release_max_keep < self.app_release_keep_last:

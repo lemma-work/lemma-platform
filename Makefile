@@ -1888,7 +1888,7 @@ quality:
 	@echo "→ Test census (no suite has quietly stopped running)…"
 	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"
-	@python3 scripts/plan_e2e_shards.py --verify
+	@cd $(BACKEND_DIR) && uv run python ../scripts/plan_e2e_shards.py --verify
 	@echo "→ Product scenario traceability…"
 	@python3 scripts/check_scenario_coverage.py
 	@echo "✓ quality gates pass"
