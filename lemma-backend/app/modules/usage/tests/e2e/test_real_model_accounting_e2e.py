@@ -10,7 +10,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage
 from sqlalchemy import select
 
-from app.core.config import settings
+from app.modules.usage.config import usage_settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.contracts.model_runtime import resolve_system_runtime
@@ -76,7 +76,7 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
     monkeypatch: pytest.MonkeyPatch,
     streaming: bool,
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 5.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 5.0)
     user_id = uuid4()
     runtime = await resolve_system_runtime(
         user_id=user_id, usage_limits=UsageLimits(request_limit=1)
@@ -107,7 +107,9 @@ async def test_real_agent_receipt_matches_provider_tokens_and_frozen_rates(
         assert usage.requests == 1
         assert usage.input_tokens > 0
         if not streaming:
-            monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.000000001)
+            monkeypatch.setattr(
+                usage_settings, "usage_user_weekly_limit_usd", 0.000000001
+            )
             with pytest.raises(UsageLimitExceededError):
                 await agent.run(
                     "Reply with the single word OK.", usage_limits=runtime.usage_limits

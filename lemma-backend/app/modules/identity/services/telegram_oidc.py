@@ -30,6 +30,13 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
 from app.modules.identity.domain.events import UserMobileChangedEvent
+from app.modules.identity.config import (
+    TELEGRAM_OIDC_AUTHORIZATION_ENDPOINT,
+    TELEGRAM_OIDC_ISSUER,
+    TELEGRAM_OIDC_JWKS_URI,
+    TELEGRAM_OIDC_TOKEN_ENDPOINT,
+    identity_settings,
+)
 
 
 TelegramPurpose = Literal["signin", "verify_mobile"]
@@ -98,7 +105,7 @@ class TelegramOIDCService:
         return_to: str | None,
         user_id: UUID | None,
     ) -> str:
-        if not settings.is_telegram_oidc_configured():
+        if not identity_settings.is_telegram_oidc_configured():
             raise TelegramOIDCError("Telegram login is not configured")
         if purpose == "verify_mobile" and user_id is None:
             raise TelegramOIDCError("A verified Lemma session is required")
@@ -131,8 +138,8 @@ class TelegramOIDCService:
             ) from exc
         query = urlencode(
             {
-                "client_id": settings.telegram_oidc_client_id,
-                "redirect_uri": settings.telegram_oidc_redirect_uri,
+                "client_id": identity_settings.telegram_oidc_client_id,
+                "redirect_uri": identity_settings.telegram_oidc_redirect_uri,
                 "response_type": "code",
                 "scope": "openid profile phone",
                 "state": state,
@@ -141,7 +148,7 @@ class TelegramOIDCService:
                 "code_challenge_method": "S256",
             }
         )
-        return f"{settings.telegram_oidc_authorization_endpoint}?{query}"
+        return f"{TELEGRAM_OIDC_AUTHORIZATION_ENDPOINT}?{query}"
 
     async def consume(self, state: str) -> TelegramTransaction:
         try:
@@ -161,9 +168,9 @@ class TelegramOIDCService:
 
     @staticmethod
     def _configured_credentials() -> tuple[str, str, str]:
-        client_id = settings.telegram_oidc_client_id
-        client_secret = reveal_secret(settings.telegram_oidc_client_secret)
-        redirect_uri = settings.telegram_oidc_redirect_uri
+        client_id = identity_settings.telegram_oidc_client_id
+        client_secret = reveal_secret(identity_settings.telegram_oidc_client_secret)
+        redirect_uri = identity_settings.telegram_oidc_redirect_uri
         if not client_id or not client_secret or not redirect_uri:
             raise TelegramOIDCError("Telegram login is not configured")
         return client_id, client_secret, redirect_uri
@@ -179,7 +186,7 @@ class TelegramOIDCService:
         redirect_uri: str,
     ) -> str:
         response = await client.post(
-            settings.telegram_oidc_token_endpoint,
+            TELEGRAM_OIDC_TOKEN_ENDPOINT,
             auth=(client_id, client_secret),
             data={
                 "grant_type": "authorization_code",
@@ -204,7 +211,7 @@ class TelegramOIDCService:
         if cached:
             return cast(dict[str, Any], json.loads(cached))
 
-        response = await client.get(settings.telegram_oidc_jwks_uri)
+        response = await client.get(TELEGRAM_OIDC_JWKS_URI)
         if response.status_code != 200:
             raise TelegramOIDCError("Telegram verification keys are unavailable")
         jwks = cast(dict[str, Any], response.json())
@@ -237,7 +244,7 @@ class TelegramOIDCService:
                     cast(Any, signing_key),
                     algorithms=["RS256"],
                     audience=client_id,
-                    issuer=settings.telegram_oidc_issuer,
+                    issuer=TELEGRAM_OIDC_ISSUER,
                     options={"require": ["exp", "iat", "iss", "aud", "sub", "nonce"]},
                 ),
             )

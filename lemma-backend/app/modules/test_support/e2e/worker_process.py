@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 import redis.asyncio as redis
 
+from app.modules.datastore.config import datastore_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import system_lemma_env_overlay
 
 _DEFAULT_READINESS_MARKERS = (
@@ -81,7 +82,7 @@ async def production_worker_process(
         "PYTHONPATH": ".",
         "PYTHONUNBUFFERED": "1",
         "DATABASE_URL": e2e_settings.database_url,
-        "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
+        "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
         "REDIS_URL": e2e_settings.redis_url,
         "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
         "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,

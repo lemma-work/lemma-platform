@@ -13,6 +13,7 @@ from supertokens_python.recipe.session.asyncio import (
 )
 
 from app.core.config import settings
+from app.modules.identity.config import identity_settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
@@ -200,7 +201,9 @@ async def create_altcha_challenge(
     response_model=TelegramConfigResponse,
 )
 async def telegram_config() -> TelegramConfigResponse:
-    return TelegramConfigResponse(enabled=settings.is_telegram_oidc_configured())
+    return TelegramConfigResponse(
+        enabled=identity_settings.is_telegram_oidc_configured()
+    )
 
 
 async def _verified_auth_user(request: Request) -> User:

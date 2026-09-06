@@ -5,14 +5,13 @@
     "approval_worker": 1,
     "connection_scope": 15,
     "desktop_e2e": 8,
-    "e2e": 2216,
-    "fast_workspace": 6,
+    "e2e": 1143,
+    "fast_workspace": 5,
     "human": 1,
     "indexing": 31,
     "integration": 132,
-    "local_guest": 19,
+    "local_guest": 18,
     "local_host": 11,
-    "mock_sandbox_only": 2,
     "provider": 87,
     "real_llm": 18,
     "real_sandbox": 13,
@@ -21,8 +20,8 @@
     "slow": 26,
     "surface_live": 5,
     "unit": 1394,
-    "worker": 173,
-    "workspace": 202
+    "worker": 139,
+    "workspace": 111
   },
   "empty_markers": [
     "local_cli",

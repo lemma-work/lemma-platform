@@ -20,6 +20,7 @@ import pytest_asyncio
 import httpx
 import uvicorn
 
+from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.modules.workspace.providers.e2b_common import (
@@ -603,7 +604,7 @@ async def configure_workspace_api_url(
         close_workspace_tool_runtimes,
     )
 
-    original_callback_url = settings.workspace_callback_api_url
+    original_callback_url = workspace_settings.workspace_callback_api_url
     original_callback_url_env = os.environ.get("WORKSPACE_CALLBACK_API_URL")
     original_function_gateway_url = function_settings.function_runtime_gateway_url
     original_function_gateway_url_env = os.environ.get("FUNCTION_RUNTIME_GATEWAY_URL")
@@ -636,7 +637,7 @@ async def configure_workspace_api_url(
             if public_callback_url is not None
             else backend_server["docker_base_url"]
         )
-        settings.workspace_callback_api_url = workspace_callback_url
+        workspace_settings.workspace_callback_api_url = workspace_callback_url
         function_settings.function_runtime_gateway_url = workspace_callback_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = workspace_callback_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = workspace_callback_url
@@ -644,11 +645,11 @@ async def configure_workspace_api_url(
             yield {
                 **backend_server,
                 **local_sandbox_server,
-                "workspace_callback_url": settings.workspace_callback_api_url,
+                "workspace_callback_url": workspace_settings.workspace_callback_api_url,
             }
         finally:
             await close_workspace_tool_runtimes()
-            settings.workspace_callback_api_url = original_callback_url
+            workspace_settings.workspace_callback_api_url = original_callback_url
             function_settings.function_runtime_gateway_url = (
                 original_function_gateway_url
             )
@@ -718,7 +719,7 @@ async def full_stack(
         **coverage_env,
         "PYTHONPATH": ".",
         "DATABASE_URL": settings.database_url,
-        "DATASTORE_DATABASE_URL": settings.datastore_database_url,
+        "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
         "REDIS_URL": redis_url,
         "SUPERTOKENS_CORE_URL": settings.supertokens_core_url,
         "ENVIRONMENT": "testing",

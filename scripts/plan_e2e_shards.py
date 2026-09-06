@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +53,18 @@ SANDBOX_MARKERS = (
     "e2e and not slow and not provider and not local_cli "
     "and not indexing and not protected"
 )
+# The indexing lane. Both filters above end `not indexing`, which left the
+# real-extraction tests selected by no shard at all -- and by no other job
+# either, despite `test-e2e-indexing` in the Makefile describing "their own CI
+# job so indexing/authz coverage isn't lost". That job did not exist. Twenty-six
+# e2e tests, including the datastore's authorization and folder-grant cascades,
+# ran on no pull request for as long as that was true; the weekly protected cron
+# was the only thing selecting them.
+#
+# Its own shard rather than folded into `datastore`, for the reason they were
+# split out to begin with: these boot the RAM-heavy Kreuzberg extraction
+# container, and every other test in a shard with them waits for it.
+INDEXING_MARKERS = "e2e and indexing and not provider and not local_cli"
 
 # Groups that cannot be bin-packed, and why. Each runs as its own shard with a
 # pinned worker count; the packer never puts anything else in them.
@@ -101,6 +114,32 @@ PINNED = [
         "needs_sandbox_images": True,
         "why": "provisions a real Docker workspace, same CPU contention as sandbox",
         "bins": 1,
+    },
+    {
+        "name": "indexing",
+        # Every directory holding a test that asks for `kreuzberg_url`, which is
+        # what `conftest.py` keys the `indexing` marker off.
+        "dirs": [
+            "app/modules/datastore/tests/e2e",
+            "app/modules/pod/tests/e2e",
+        ],
+        "workers": 2,
+        "markers": INDEXING_MARKERS,
+        "needs_sandbox_images": False,
+        "why": "boots the RAM-heavy Kreuzberg extraction container",
+        "bins": 1,
+        # An *overlay*: unlike every other pinned group, it does not take its
+        # directories away from the packer. Those two directories hold 233 fast
+        # tests as well as the 26 indexing ones, and a group that claims a
+        # directory claims all of it -- the first cut of this shard was written
+        # that way and removed all 233 from every lane while looking like it
+        # added a lane. What makes the overlay safe is that the filters
+        # partition rather than overlap: FAST_MARKERS and SANDBOX_MARKERS both
+        # end `not indexing`, INDEXING_MARKERS selects only `indexing`, so no
+        # test is selected twice. `--verify` is what holds that: it asks each
+        # lane's real filter about each collected test, rather than trusting
+        # the argument made in this comment.
+        "overlay": True,
     },
     {
         "name": "agent",
@@ -532,54 +571,202 @@ def _collectors(path: str, shards: list[dict]) -> list[str]:
     return hits
 
 
+# The two lanes that are not shards. Both are kept byte-identical to the
+# workflow step that owns them, and `test_the_two_non_shard_lanes_match_their_workflows`
+# is what holds that -- the same discipline FAST_MARKERS is under, for the same
+# reason: this file decides whether a test counts as covered, so a stale copy
+# here would report coverage that CI does not provide.
+PROTECTED_MARKERS = (
+    "e2e and (slow or workspace or indexing or local_cli "
+    "or protected) and not provider"
+)
+SMOKE_PATH = "app/modules/agent_surfaces/tests/e2e/test_surface_live_smoke_e2e.py"
+SMOKE_MARKERS = "surface_live"
+
+# Collected in the subprocess below and read back here. `pytest_collection_finish`
+# rather than `pytest_collection_modifyitems`, so it cannot race the root
+# conftest's own hook -- the markers that matter most (`e2e`, `workspace`,
+# `indexing`) are attached there, from fixtures, and no decorator spells them
+# out.
+_MARKER_DUMP_PLUGIN = '''
+import json
+import os
+
+
+def pytest_collection_finish(session):
+    with open(os.environ["LEMMA_LANE_DUMP"], "w") as handle:
+        json.dump(
+            {
+                item.nodeid: sorted({mark.name for mark in item.iter_markers()})
+                for item in session.items
+            },
+            handle,
+        )
+'''
+
+
+def _collect_markers(backend: Path) -> dict[str, list[str]]:
+    """Every test pytest can see, with the markers pytest actually gives it.
+
+    A real collection rather than an AST walk. Markers arrive from three places
+    -- decorators, module `pytestmark`, and the root conftest's fixture-driven
+    `add_marker` -- and only the last one knows that a test asking for
+    `kreuzberg_url` is an `indexing` test. A static model would be a stand-in
+    that agrees with pytest right up until it matters.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin_dir = Path(tmp)
+        (plugin_dir / "lemma_lane_dump.py").write_text(_MARKER_DUMP_PLUGIN)
+        dump = plugin_dir / "markers.json"
+        environ = dict(os.environ)
+        environ["PYTHONPATH"] = os.pathsep.join(
+            filter(None, [str(plugin_dir), environ.get("PYTHONPATH", "")])
+        )
+        environ["LEMMA_LANE_DUMP"] = str(dump)
+        result = subprocess.run(
+            ["uv", "run", "pytest", "app", "--collect-only", "-qq",
+             "-p", "no:cacheprovider", "-p", "lemma_lane_dump"],
+            cwd=backend, env=environ, capture_output=True, text=True,
+        )
+        # Both conditions, and the return code is the one that matters. A
+        # collection that hits an import error still reaches
+        # `pytest_collection_finish` and still writes a file -- just a short
+        # one. Trusting it would report every test in the unimported module as
+        # running in no lane, or worse, quietly stop checking them.
+        if not dump.exists() or result.returncode != 0:
+            print("::error::could not collect the test suite to check lanes")
+            print(result.stdout[-4000:] or result.stderr[-4000:])
+            raise SystemExit(1)
+        return json.loads(dump.read_text())
+
+
+def _compile_lanes(shards: list[dict]) -> dict[str, object]:
+    """Each lane's marker filter, parsed by pytest's own expression parser.
+
+    Imported here rather than at module scope on purpose: `scripts/` is run
+    with whatever bare `python` a runner offers -- `check_script_portability.py`
+    exists to keep that working -- and only `--verify` needs pytest installed.
+    A module-level import would have made `--run-id` unusable outside the
+    backend's venv, which is where the regeneration command in this file's own
+    comments is meant to be run.
+    """
+    from _pytest.mark.expression import Expression
+
+    lanes = {shard["name"]: Expression.compile(shard["markers"]) for shard in shards}
+    lanes["protected"] = Expression.compile(PROTECTED_MARKERS)
+    lanes["surface-live-smoke"] = Expression.compile(SMOKE_MARKERS)
+    return lanes
+
+
+def _lanes_for(
+    nodeid: str, marks: set[str], shards: list[dict], compiled: dict[str, object]
+) -> list[str]:
+    """Every lane that both collects this test's file and selects its markers."""
+    path = nodeid.split("::", 1)[0]
+    collectors = _collectors(path, shards)
+    lanes = [
+        shard["name"]
+        for shard in shards
+        if shard["name"] in collectors
+        and compiled[shard["name"]].evaluate(marks.__contains__)
+    ]
+    if compiled["protected"].evaluate(marks.__contains__):
+        lanes.append("protected")
+    if path == SMOKE_PATH and compiled["surface-live-smoke"].evaluate(
+        marks.__contains__
+    ):
+        lanes.append("surface-live-smoke")
+    return lanes
+
+
 def verify() -> int:
-    """Assert every e2e test file on disk lands in exactly one shard.
+    """Assert every e2e test runs in exactly one lane.
 
-    This is the one mistake in the layout that is invisible: a shard that
-    silently collects nothing still reports success, so a new module's e2e
-    tests can stop running without anything going red. Static and sub-second,
-    so it belongs in `make quality` rather than in a job.
+    This used to say "every e2e test *file* lands in exactly one shard", which
+    was a proxy for the claim that actually matters and has now diverged from
+    it in both directions. A file can legitimately be collected by two shards
+    -- the `indexing` overlay shares its directories with the packed lanes and
+    separates from them by marker -- and a file collected by exactly one shard
+    can still have tests that shard deselects, which is how two workflow tests
+    ran nowhere for eight weeks while every gate stayed green.
 
-    Files, not just directories, because the layout can now split a directory
-    across shards -- so "this directory is collected" stopped being the same
-    claim as "these tests run". The directory check stays too: a directory that
-    no shard collects is the same bug with a much clearer error message, and
-    reporting it once beats reporting it once per file inside it.
+    So the check is now the claim: collect the suite once, ask each lane's real
+    marker filter about each test, and require exactly one PR lane per test --
+    or the protected lane, or the labelled smoke job. `provider` tests are the
+    one accepted gap: they need live third-party credentials, no lane can
+    supply them, and saying so here is better than a proxy that never noticed.
+
+    Collection costs about ten seconds, which is why this is worth naming: the
+    cheap version of this check was the reason nobody knew.
     """
     if not OUTPUT.exists():
         print(f"::error::{OUTPUT.relative_to(REPO_ROOT)} is missing")
         return 1
     shards = json.loads(OUTPUT.read_text())["shards"]
     backend = REPO_ROOT / "lemma-backend"
-    directories = sorted(
-        str(path.relative_to(backend))
-        for path in backend.glob("app/**/tests/e2e")
-        if path.is_dir()
-    )
+
+    # The fast structural check first: a directory nothing collects is the same
+    # bug with a far clearer message than a hundred per-test failures.
     on_disk = sorted(
         str(path.relative_to(backend))
         for path in backend.glob("app/**/tests/e2e/**/test_*.py")
     )
-    problems = []
-    for directory in directories:
-        # A directory is "collected" if anything under it is. With a split
-        # directory the root itself may be named by no shard while every file
-        # inside it is, which is correct rather than a problem.
-        if not any(_collectors(path, shards)
-                   for path in on_disk if path.startswith(directory + "/")):
-            problems.append((directory, []))
-    for path in on_disk:
-        hits = _collectors(path, shards)
-        if len(hits) != 1:
-            problems.append((path, hits))
-    for path, hits in problems:
-        where = ", ".join(hits) if hits else "no shard"
-        print(f"::error::{path} is collected by {where}; expected exactly one")
-    if problems:
-        print("\nRegenerate with: python scripts/plan_e2e_shards.py --run-id <green run>")
+    stranded = sorted(
+        str(directory.relative_to(backend))
+        for directory in backend.glob("app/**/tests/e2e")
+        if directory.is_dir()
+        and not any(
+            _collectors(path, shards)
+            for path in on_disk
+            if path.startswith(str(directory.relative_to(backend)) + "/")
+        )
+    )
+    for directory in stranded:
+        print(f"::error::{directory} is collected by no shard")
+    if stranded:
+        print("\nRegenerate with: "
+              "uv run python scripts/plan_e2e_shards.py --run-id <green run>")
         return 1
-    print(f"{len(on_disk)} e2e test files in {len(directories)} directories, "
-          f"each in exactly one of {len(shards)} shards")
+
+    collected = _collect_markers(backend)
+    compiled = _compile_lanes(shards)
+    pr_lane_names = {shard["name"] for shard in shards}
+    nowhere: list[str] = []
+    twice: list[tuple[str, list[str]]] = []
+    covered = 0
+    provider_only = 0
+    for nodeid, marks in sorted(collected.items()):
+        marks = set(marks)
+        if "e2e" not in marks:
+            continue
+        lanes = _lanes_for(nodeid, marks, shards, compiled)
+        pr_lanes = [lane for lane in lanes if lane in pr_lane_names]
+        if len(pr_lanes) > 1:
+            twice.append((nodeid, pr_lanes))
+        elif lanes:
+            covered += 1
+        elif "provider" in marks:
+            provider_only += 1
+        else:
+            nowhere.append(nodeid)
+
+    for nodeid in nowhere:
+        print(f"::error::{nodeid} is selected by no lane")
+    for nodeid, lanes in twice:
+        print(f"::error::{nodeid} is selected by {', '.join(lanes)}; expected one")
+    if nowhere or twice:
+        print(
+            "\nA test runs in a PR shard, in the protected lane, or in the "
+            "labelled smoke job. If its markers put it outside all three, that "
+            "is the bug -- adding a marker to a filter to hide it is how the "
+            "last two got lost."
+        )
+        return 1
+    print(
+        f"{covered} e2e tests each run in exactly one of {len(shards)} PR "
+        f"shards, the protected lane, or the smoke job; {provider_only} "
+        f"`provider` tests need live credentials and run in none."
+    )
     return 0
 
 
@@ -624,7 +811,15 @@ def main() -> int:
     # what keeps a newly added test file from landing in no shard at all.
     planned: list[tuple[str, list[str], list[str], dict]] = []
 
-    pinned_dirs = {d for group in PINNED for d in group["dirs"]}
+    # Overlay groups are deliberately absent: they select a marker the packed
+    # lanes exclude, so their directories stay in the pool and the fast tests
+    # living beside them keep their shard.
+    pinned_dirs = {
+        d
+        for group in PINNED
+        if not group.get("overlay")
+        for d in group["dirs"]
+    }
     for group in PINNED:
         dirs = sorted(group["dirs"])
         count = group.get("bins", 1)
@@ -639,7 +834,23 @@ def main() -> int:
             name = group["name"] if index == 0 else f"{group['name']}-{index + 1}"
             planned.append((name, bin_, dirs if index == 0 else [], group))
 
-    packable_dirs = sorted(d for d in seconds if d not in pinned_dirs)
+    # Every e2e directory on disk, not just the ones the measured run reported.
+    # A directory with no measured time is exactly the one the packer must still
+    # place: it has no time because nothing in it *ran*, and if the packer skips
+    # it the catch-all sweeps it up by default -- with no say in which modules it
+    # lands beside. That is how workflow's e2e tests ended up sharing the
+    # catch-all with datastore's session worker the moment they became
+    # selectable, a pairing `production_worker_process`'s `flushdb` makes
+    # intermittently red. Unmeasured directories weigh 0, so they cost the
+    # balance nothing and are placed purely by the conflict rules.
+    on_disk_dirs = {
+        str(path.relative_to(backend))
+        for path in backend.glob("app/**/tests/e2e")
+        if path.is_dir()
+    }
+    packable_dirs = sorted(
+        d for d in set(seconds) | on_disk_dirs if d not in pinned_dirs
+    )
     bins = _plan_bins(packable_dirs, measured, PACKED_SHARDS, conflicts[FAST_MARKERS])
     # The catch-all goes to the lightest bin, since collecting the whole tree
     # to filter it costs a little on top of the tests it actually runs.
@@ -662,15 +873,25 @@ def main() -> int:
         # file added there would have been collected by the catch-all -- under
         # FAST_MARKERS, which says `not workspace`, so it would have been
         # deselected and silently never run.
-        claimed = {
+        #
+        # An overlay group claims nothing and is owed nothing. It shares its
+        # directories with the packed shards on purpose and separates from them
+        # by marker, so subtracting what they hold would subtract the very
+        # directories it exists to collect.
+        # ...and symmetrically, nothing is given away *to* an overlay. It holds
+        # whole directories that the packed lanes own at file granularity, so
+        # letting it into this set made the catch-all ignore all of
+        # `pod/tests/e2e` on its behalf while `surfaces` owned only ten files
+        # out of it -- the other five files then ran in no shard at all.
+        claimed = set() if (group or {}).get("overlay") else {
             path
-            for other_name, other_members, _, _ in planned
-            if other_name != name
+            for other_name, other_members, _, other_group in planned
+            if other_name != name and not (other_group or {}).get("overlay")
             for path in other_members
         } | {
             directory
             for other in PINNED
-            if other is not group
+            if other is not group and not other.get("overlay")
             for directory in other["dirs"]
         }
         # Reduced to its topmost entries: ignoring a directory already ignores
@@ -713,6 +934,23 @@ def main() -> int:
             shard["why_serial"] = group["why"]
         else:
             shard["catch_all"] = bool(roots)
+        if group and group.get("overlay"):
+            # `covered` is derived from the args alone, which is right for every
+            # other shard because its filter and its paths agree about roughly
+            # the same tests. An overlay's do not: it shares its directories
+            # with the packed lanes and takes only the slice its marker selects.
+            # Left alone, this shard claimed 402.7s and 233 tests -- the cost of
+            # the *fast* tests living beside the 26 it actually runs, a number
+            # belonging to another shard entirely.
+            #
+            # Nor can the real number be read off the measured run: every lane
+            # in it said `not indexing`, so these tests have no measured time by
+            # construction. Zero and flagged, rather than confidently wrong; the
+            # first green run that includes this shard supplies the truth.
+            shard["overlay"] = True
+            shard["serial_seconds"] = 0.0
+            shard["tests"] = 0
+            shard["estimated_seconds"] = FIXED_SECONDS[needs_images]
         shards.append(shard)
 
     payload = {

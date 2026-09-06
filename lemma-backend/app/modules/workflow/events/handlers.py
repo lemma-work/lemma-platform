@@ -46,6 +46,7 @@ from app.modules.workflow.infrastructure.repositories import (
 from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 from app.core.log.log import get_logger
+from app.modules.workflow.config import workflow_settings
 
 logger = get_logger(__name__)
 
@@ -213,16 +214,15 @@ async def prune_workflow_run_waits() -> None:
 
     Offset off the hour to stay clear of the other delete-heavy sweeps.
     """
-    from app.core.config import settings
     from app.modules.workflow.infrastructure.repositories.wait_retention import (
         prune_terminal_machine_waits,
     )
 
     deleted = await prune_terminal_machine_waits(
         async_session_maker,
-        retention_days=settings.workflow_wait_retention_days,
-        batch_size=settings.workflow_wait_retention_batch_size,
-        budget_seconds=settings.workflow_wait_retention_budget_seconds,
+        retention_days=workflow_settings.workflow_wait_retention_days,
+        batch_size=workflow_settings.workflow_wait_retention_batch_size,
+        budget_seconds=workflow_settings.workflow_wait_retention_budget_seconds,
     )
     if deleted:
         logger.debug(

@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
 from app.core.observability.connection_scope import attach_connection_scope_monitor
 
@@ -102,7 +103,7 @@ def _build_datastore_connect_args() -> dict:
 def get_datastore_engine():
     global _engine
     if _engine is None:
-        url = settings.datastore_database_url or settings.database_url
+        url = datastore_settings.datastore_database_url or settings.database_url
         engine_kwargs = {}
         # In both branches, because it is a property of what this engine runs
         # rather than of where it runs. Testing pools with NullPool, so a stale

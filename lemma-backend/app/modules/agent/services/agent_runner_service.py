@@ -15,7 +15,6 @@ from pydantic_ai import UsageLimits
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import (
@@ -272,7 +271,7 @@ class AgentRunnerService:
                             RuntimeProfileProtocol.OPENAI_COMPATIBLE,
                             RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
                         )
-                        and settings.lemma_llm_caching_enabled
+                        and agent_settings.lemma_llm_caching_enabled
                     ),
                     protocol=resolved_runtime.profile.protocol,
                 )

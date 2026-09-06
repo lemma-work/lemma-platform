@@ -22,7 +22,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
-from app.core.config import settings
+from app.modules.usage.config import usage_settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.usage.domain.errors import UsageLimitExceededError, UsageReportingError
@@ -38,7 +38,7 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 def bounded_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     name = f"dispatch-bound-{uuid4()}"
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     UsageService.register_model_pricing({name: ModelPricing(1000, 0)})
     try:
         yield name
@@ -50,7 +50,7 @@ def bounded_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 async def test_limited_request_requires_trusted_rates_before_provider_io(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch, model_name: str
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     dispatched = False
 
     async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -272,7 +272,7 @@ async def test_confirmed_overage_counts_toward_subsequent_admission(
     bounded_model_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     dispatched = 0
 
     async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

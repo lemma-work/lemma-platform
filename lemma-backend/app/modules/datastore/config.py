@@ -474,5 +474,76 @@ class DatastoreSettings(BaseSettings):
             return self.document_processor
         return "kreuzberg" if (self.kreuzberg_url or "").strip() else "xberg"
 
+    # Moved out of `app/core/config.py`, which was 1,756 lines and 220 fields.
+    # Every production reader of these is in `mod:datastore`; the few elsewhere
+    # are e2e fixtures and the worker subprocess's environment, repointed with
+    # them. The env var names do not change -- no settings class sets
+    # `env_prefix`, so pydantic derives the name from the field identically on
+    # whichever class holds it.
+    datastore_database_url: str = Field(
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
+        description="Database URL for datastore data storage (each datastore uses schema=datastore_id)",
+    )
+    local_embedding_preload: bool = Field(
+        default=True,
+        description=(
+            "Compatibility switch for local embedding startup. False forces lazy "
+            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
+        ),
+    )
+    local_embedding_preload_timeout_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Maximum worker-startup time allowed for local model preload, including "
+            "a first-run model download."
+        ),
+    )
+    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
+        default="blocking",
+        description=(
+            "How local embeddings initialize. 'blocking' preserves server "
+            "readiness semantics for hosted/developer deployments, 'background' "
+            "warms the model without blocking core API readiness, and 'lazy' "
+            "waits for the first embedding operation."
+        ),
+    )
+    openai_compat_reranker_model: str = Field(
+        default="qwen3-reranker-8b",
+        description="Rerank model used when reranker_mode='openai_compat'.",
+    )
+    reranker_mode: Literal["off", "local", "openai_compat"] = Field(
+        default="off",
+        description=(
+            "Optional second-stage reranker over hybrid retrieval. 'off' is a "
+            "no-op (first-stage order kept); 'local' uses a CPU cross-encoder; "
+            "'openai_compat' uses the LEMMA_OPENAI_BASE_URL /rerank endpoint "
+            "(LEMMA_OPENAI_API_KEY required)."
+        ),
+    )
+    reranker_retrieve_n: int = Field(
+        default=50,
+        description=(
+            "First-stage candidate pool size to rerank down from when reranking "
+            "is active (retrieve N, rerank to the requested limit)."
+        ),
+    )
+    local_reranker_model: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="CrossEncoder model used when reranker_mode='local' (Apache-2.0, CPU).",
+    )
+
+    # Moved from `app/core/config.py`: a test hook for this module's indexing
+    # path, and nothing else reads it.
+    e2e_disable_worker_file_autoindex: bool = Field(
+        default=False,
+        description=(
+            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
+            "datastore files (the upload->event->process_datastore_file_task path "
+            "is skipped). e2e indexes explicitly in-process via the index_file "
+            "helper; auto-indexing every upload would otherwise overwhelm the "
+            "single shared Kreuzberg under parallel load. Production leaves False."
+        ),
+    )
+
 
 datastore_settings = DatastoreSettings()

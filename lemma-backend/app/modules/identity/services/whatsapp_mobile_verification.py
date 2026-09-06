@@ -40,6 +40,7 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
+from app.modules.identity.config import identity_settings
 
 logger = get_logger(__name__)
 
@@ -137,7 +138,7 @@ class _ClaimedVerification:
 def is_whatsapp_verification_configured() -> bool:
     whatsapp = global_whatsapp_configuration()
     return bool(
-        settings.auth_whatsapp_mobile_verification_enabled
+        identity_settings.auth_whatsapp_mobile_verification_enabled
         and whatsapp.access_token
         and whatsapp.phone_number_id
         and whatsapp.app_secret
