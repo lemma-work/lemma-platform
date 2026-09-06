@@ -1987,6 +1987,8 @@ quality-frontend:
 		echo "    or run 'make quality' if your change is Python-only."; \
 		exit 1; \
 	fi
+	@echo "→ TypeScript SDK test types…"
+	@cd $(TS_DIR) && npx tsc --noEmit -p tsconfig.test.json
 	@echo "→ Frontend lint, types, design audit, education anchors…"
 	@cd $(FRONTEND_DIR) && npm run --silent check
 

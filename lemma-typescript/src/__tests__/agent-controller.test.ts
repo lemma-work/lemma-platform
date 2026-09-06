@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LemmaClient } from "../client.js";
+import { ConversationStatus } from "../openapi_client/index.js";
 import { AgentController, selectAgentOutputs } from "../core/agent/index.js";
 
 /** Build a ReadableStream of SSE frames from a list of event payloads. */
@@ -95,7 +96,7 @@ describe("AgentController", () => {
     const stream = new ReadableStream<Uint8Array>({ start(value) { channel = value; } });
     vi.spyOn(client.conversations, "sendMessageStream").mockResolvedValue(stream);
     vi.spyOn(client.conversations, "stopRun").mockImplementation(async (id) => ({
-      ...await client.conversations.get(id), status: "STOP_REQUESTED",
+      ...await client.conversations.get(id), status: ConversationStatus.STOP_REQUESTED,
     }));
     const controller = new AgentController({ client, scope: { podId: "pod-1" } });
     await controller.createConversation();
