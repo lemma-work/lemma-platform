@@ -131,7 +131,15 @@ class WhatsAppMobileVerificationConfigResponse(BaseModel):
 
 
 class WhatsAppMobileVerificationStartRequest(BaseModel):
-    mobile_number: str = Field(min_length=8, max_length=32)
+    """The number is optional: omitting it says "bind whichever phone answers".
+
+    Profile settings has one to declare, because the form asked for it. The
+    surface connect journey does not, and asking there would be the only place
+    in the product that makes someone type a number a platform is about to tell
+    us anyway.
+    """
+
+    mobile_number: str | None = Field(default=None, min_length=8, max_length=32)
 
 
 class WhatsAppMobileVerificationStartResponse(BaseModel):
@@ -244,20 +252,24 @@ async def start_whatsapp_mobile_verification(
     data: WhatsAppMobileVerificationStartRequest,
 ) -> WhatsAppMobileVerificationStartResponse:
     user = await _verified_auth_user(request)
-    try:
-        normalized_phone = normalize_mobile_e164(data.mobile_number)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    async with async_session_maker() as db_session:
-        owner = await get_other_mobile_number_owner_id(
-            db_session,
-            digits=normalized_phone.removeprefix("+"),
-            user_id=user.id,
-        )
-    if owner is not None:
-        raise HTTPException(
-            status_code=409, detail="This mobile number is already in use"
-        )
+    # Only a declared number can be checked for an owner up front. An undeclared
+    # one is checked where it becomes known instead -- `_persist_claim` runs the
+    # same lookup under the claim lock before it writes.
+    if data.mobile_number is not None:
+        try:
+            normalized_phone = normalize_mobile_e164(data.mobile_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        async with async_session_maker() as db_session:
+            owner = await get_other_mobile_number_owner_id(
+                db_session,
+                digits=normalized_phone.removeprefix("+"),
+                user_id=user.id,
+            )
+        if owner is not None:
+            raise HTTPException(
+                status_code=409, detail="This mobile number is already in use"
+            )
 
     service = get_whatsapp_mobile_verification_service()
     try:

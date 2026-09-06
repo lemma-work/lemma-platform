@@ -68,7 +68,10 @@ local transaction_key = ARGV[1] .. transaction_id
 if redis.call('EXISTS', transaction_key) == 0 then return {'missing'} end
 local expected_phone = redis.call('HGET', transaction_key, 'phone')
 local user_id = redis.call('HGET', transaction_key, 'user_id')
-if expected_phone ~= ARGV[2] then return {'sender_mismatch'} end
+-- An empty 'phone' is a transaction that never declared one. There is nothing
+-- to match the sender against, because the sender *is* the answer: Meta signed
+-- the webhook that carried their wa_id, so the number arrives proven either way.
+if expected_phone ~= '' and expected_phone ~= ARGV[2] then return {'sender_mismatch'} end
 local status = redis.call('HGET', transaction_key, 'status')
 local processing_message = redis.call('HGET', transaction_key, 'message_id')
 if status == 'verified' then
@@ -76,7 +79,9 @@ if status == 'verified' then
   return {'replayed'}
 end
 if redis.call('GET', ARGV[3] .. user_id) ~= transaction_id then return {'superseded'} end
-if redis.call('GET', ARGV[4] .. ARGV[5]) ~= transaction_id then return {'superseded'} end
+-- The per-number reservation only exists when a number was declared, so an
+-- undeclared transaction has no key here to be superseded by.
+if expected_phone ~= '' and redis.call('GET', ARGV[4] .. ARGV[5]) ~= transaction_id then return {'superseded'} end
 if status == 'processing' and processing_message ~= ARGV[6] then return {'replayed'} end
 redis.call('HSET', transaction_key, 'status', 'processing', 'message_id', ARGV[6])
 return {'claimed', transaction_id, user_id, expected_phone}
@@ -88,7 +93,8 @@ local user_id = redis.call('HGET', KEYS[1], 'user_id')
 local phone_hash = redis.call('HGET', KEYS[1], 'phone_hash')
 redis.call('HSET', KEYS[1], 'status', 'verified')
 redis.call('EXPIRE', KEYS[1], ARGV[3])
-redis.call('DEL', ARGV[1] .. user_id, ARGV[2] .. phone_hash)
+redis.call('DEL', ARGV[1] .. user_id)
+if phone_hash ~= '' then redis.call('DEL', ARGV[2] .. phone_hash) end
 return {'verified'}
 """
 
@@ -290,17 +296,32 @@ class WhatsAppMobileVerificationService:
             raise WhatsAppVerificationRateLimited(retry_after)
 
     async def start(
-        self, *, user_id: UUID, mobile_number: str, client_key: str
+        self, *, user_id: UUID, mobile_number: str | None = None, client_key: str
     ) -> WhatsAppVerificationTransaction:
+        """Mint a code, with or without a number to hold it to.
+
+        Declaring the number is the older half of this. It buys one thing: a
+        leaked code cannot bind somebody else's phone to this account, because
+        the claim is refused unless the sender matches what was declared. Where
+        the number is already known -- profile settings, where someone typed it
+        into the form -- that check is free, so it stays.
+
+        Where it is not known, asking for it is the whole friction: Telegram
+        never asks, because its OIDC claim carries a verified `phone_number`
+        (`telegram_oidc.verify_mobile`), and WhatsApp is no different in what it
+        knows -- Meta signs the webhook, and the sender's wa_id is in it. So an
+        undeclared transaction binds whichever number sends the code, which is
+        the same number the declared flow would have written anyway.
+        """
         config = await self.config()
         if not config.available or not config.display_number:
             raise WhatsAppVerificationUnavailable(
                 "WhatsApp mobile verification is not configured"
             )
-        phone = normalize_mobile_e164(mobile_number)
+        phone = normalize_mobile_e164(mobile_number) if mobile_number else ""
         await self._enforce_start_limit(f"{user_id}:{client_key}")
 
-        phone_hash = self._digest(phone)
+        phone_hash = self._digest(phone) if phone else ""
         transaction_id = secrets.token_urlsafe(24)
         code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(10))
         message = f"{_MESSAGE_PREFIX}{code}"
@@ -324,7 +345,10 @@ class WhatsAppMobileVerificationService:
             pipe.expire(key, self._ttl_seconds)
             pipe.set(self._code_key(code), transaction_id, ex=self._ttl_seconds)
             pipe.set(self._user_key(user_id), transaction_id, ex=self._ttl_seconds)
-            pipe.set(self._phone_key(phone_hash), transaction_id, ex=self._ttl_seconds)
+            if phone_hash:
+                pipe.set(
+                    self._phone_key(phone_hash), transaction_id, ex=self._ttl_seconds
+                )
             await pipe.execute()
 
         logger.info(
