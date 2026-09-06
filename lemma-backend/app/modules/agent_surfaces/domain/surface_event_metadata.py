@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from app.modules.agent_surfaces.platforms.email_models import (
     EmailFileAttachment,
@@ -109,7 +109,7 @@ def build_surface_event_metadata(
     normalized = str(platform).upper()
     try:
         metadata = _METADATA_ADAPTER.validate_python({**raw, "platform": normalized})
-    except Exception:
+    except ValidationError:
         return None
     metadata.attachments = [
         attachment

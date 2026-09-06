@@ -21,6 +21,7 @@ import argparse
 import ast
 import json
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +171,34 @@ class _UntypedEscapes(ast.NodeVisitor):
     visit_AsyncFunctionDef = _visit_function
 
 
+def _own_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """Every node belonging to `node` itself, not to a function nested in it.
+
+    `ast.walk` descends into nested `def`s and classes, so a handler inside a
+    closure was counted once for the closure and again for each function
+    enclosing it -- six double-counts in `agent_surfaces` alone, which is why
+    95 real handlers there reported as 100. Complexity had the same bug from
+    the same walk: an inner function's branches inflated its parent's score.
+    """
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        yield child
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        stack.extend(ast.iter_child_nodes(child))
+
+
+def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
+    """`except:`, `except Exception:` or `except BaseException:`."""
+    if handler.type is None:
+        return True
+    return isinstance(handler.type, ast.Name) and handler.type.id in {
+        "Exception",
+        "BaseException",
+    }
+
+
 class _FunctionMetrics(ast.NodeVisitor):
     def __init__(self, relative_path: str) -> None:
         self.relative_path = relative_path
@@ -181,7 +210,7 @@ class _FunctionMetrics(ast.NodeVisitor):
         self.scope.append(node.name)
         key = f"{self.relative_path}:{'.'.join(self.scope)}"
         score = 1
-        for child in ast.walk(node):
+        for child in _own_nodes(node):
             if isinstance(
                 child,
                 (
@@ -201,15 +230,8 @@ class _FunctionMetrics(ast.NodeVisitor):
         if score > MAX_COMPLEXITY:
             self.complex[key] = score
 
-        for child in ast.walk(node):
-            if not isinstance(child, ast.ExceptHandler):
-                continue
-            if child.type is None:
-                self.broad_catches[key] += 1
-            elif isinstance(child.type, ast.Name) and child.type.id in {
-                "Exception",
-                "BaseException",
-            }:
+        for child in _own_nodes(node):
+            if isinstance(child, ast.ExceptHandler) and _is_broad_handler(child):
                 self.broad_catches[key] += 1
 
         self.generic_visit(node)
@@ -217,6 +239,16 @@ class _FunctionMetrics(ast.NodeVisitor):
 
     visit_FunctionDef = _visit_function
     visit_AsyncFunctionDef = _visit_function
+
+    def visit_Module(self, node: ast.Module) -> None:
+        # A handler at module scope belongs to no function key, so it was
+        # counted nowhere at all -- an optional-dependency `except Exception:`
+        # around an import was invisible to this gate entirely.
+        key = f"{self.relative_path}:<module>"
+        for child in _own_nodes(node):
+            if isinstance(child, ast.ExceptHandler) and _is_broad_handler(child):
+                self.broad_catches[key] += 1
+        self.generic_visit(node)
 
 
 def snapshot() -> dict[str, Any]:

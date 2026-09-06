@@ -6,6 +6,7 @@ from html import escape
 from typing import Any
 
 import httpx
+from redis.exceptions import RedisError
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
@@ -96,7 +97,7 @@ class TelegramPlatformService:
         cache = _get_bot_info_cache()
         try:
             cached = await cache.get_json(token)
-        except Exception:
+        except RedisError, OSError, TimeoutError, ValueError:
             cached = None
         if cached:
             return cached
@@ -106,7 +107,9 @@ class TelegramPlatformService:
             if info:
                 try:
                     await cache.set_json(token, info)
-                except Exception:
+                except RedisError, OSError, TimeoutError, TypeError:
+                    # Caching `getMe` saves a round-trip, nothing more; `info`
+                    # is returned below whether or not the write lands.
                     pass
                 return info
         except Exception:
