@@ -10,6 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.app as appmod
+
+# The probes moved out of `app.app` into their own router; the names they use
+# are patched where they now live.
+import app.health as healthmod
 from app.core.observability import loop_watchdog
 
 pytestmark = pytest.mark.unit
@@ -52,10 +56,10 @@ def healthy_by_default(monkeypatch):
     component it never had. A test about the worker says which keys are there.
     """
     monkeypatch.setattr(
-        appmod, "supertokens_core_reachable", AsyncMock(return_value=True)
+        healthmod, "supertokens_core_reachable", AsyncMock(return_value=True)
     )
     monkeypatch.setattr(
-        appmod, "schema_migration_state", AsyncMock(return_value="current")
+        healthmod, "schema_migration_state", AsyncMock(return_value="current")
     )
     _worker_redis(monkeypatch)
 
@@ -108,7 +112,7 @@ class _FakeEngineDown:
 
 def test_ready_returns_200_when_dependencies_ok(client, monkeypatch):
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 200
     body = r.json()
@@ -138,11 +142,11 @@ def test_ready_is_not_ready_when_the_embedded_worker_has_stopped(
     desktop read it.
     """
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
 
     heartbeat = tmp_path / "worker_heartbeat"
     heartbeat.write_text(str(time.time() - 3600), encoding="utf-8")
-    monkeypatch.setattr(appmod.settings, "worker_heartbeat_path", str(heartbeat))
+    monkeypatch.setattr(healthmod.settings, "worker_heartbeat_path", str(heartbeat))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", True, raising=False)
 
     r = client.get("/health/ready")
@@ -169,11 +173,11 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
     first heartbeat yet -- which is every start before the first tick.
     """
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
 
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     monkeypatch.setattr(
-        appmod.settings, "worker_heartbeat_path", str(tmp_path / "never-written")
+        healthmod.settings, "worker_heartbeat_path", str(tmp_path / "never-written")
     )
     # Said rather than inherited: this test is about the worker, so the Redis
     # that has never seen one is its arrangement, not the file's background.
@@ -192,7 +196,7 @@ def test_ready_ignores_the_worker_where_this_process_runs_none(
 
 def test_ready_echoes_runtime_instance_id(client, monkeypatch):
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.settings, "lemma_runtime_instance_id", "launch-123")
 
     r = client.get("/health/ready")
@@ -294,7 +298,7 @@ def test_capability_health_withholds_security_posture_off_a_local_machine(
 
 def test_ready_returns_503_when_db_down(client, monkeypatch):
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineDown)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     r = client.get("/health/ready")
     assert r.status_code == 503
     body = r.json()
@@ -305,7 +309,9 @@ def test_ready_returns_503_when_db_down(client, monkeypatch):
 
 def test_ready_returns_503_when_redis_down(client, monkeypatch):
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        healthmod.channel_service, "ping", AsyncMock(return_value=False)
+    )
     r = client.get("/health/ready")
     assert r.status_code == 503
     body = r.json()
@@ -326,7 +332,7 @@ def test_ready_is_not_ready_when_a_separate_worker_process_has_stopped(
     from app.core.observability.worker_liveness import WORKER_SEEN_KEY
 
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     # A worker was here; nothing is answering now.
     _worker_redis(monkeypatch, WORKER_SEEN_KEY)
@@ -347,7 +353,7 @@ def test_ready_is_ready_when_a_separate_worker_process_is_ticking(client, monkey
     )
 
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(appmod.app.state, "embedded_worker", False, raising=False)
     _worker_redis(monkeypatch, WORKER_ALIVE_KEY, WORKER_SEEN_KEY)
 
@@ -368,7 +374,9 @@ def test_capability_health_says_when_no_sandbox_can_be_provisioned(client, monke
     capability to check beforehand.
     """
     monkeypatch.setattr(
-        appmod, "sandbox_capability", lambda: {"status": "needs_setup", "detail": "x"}
+        healthmod,
+        "sandbox_capability",
+        lambda: {"status": "needs_setup", "detail": "x"},
     )
 
     capabilities = client.get("/health/capabilities").json()["capabilities"]
@@ -414,7 +422,7 @@ def test_a_dependency_that_is_down_says_why_once(client, monkeypatch, caplog):
     import logging
 
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineDown)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
 
     with caplog.at_level(logging.DEBUG):
         assert client.get("/health/ready").status_code == 503
@@ -451,9 +459,9 @@ def test_ready_is_not_ready_when_the_supertokens_core_is_down(client, monkeypatc
     in.
     """
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        appmod, "supertokens_core_reachable", AsyncMock(return_value=False)
+        healthmod, "supertokens_core_reachable", AsyncMock(return_value=False)
     )
 
     r = client.get("/health/ready")
@@ -472,9 +480,9 @@ def test_ready_is_not_ready_against_a_schema_older_than_the_code(client, monkeyp
     requests on missing columns -- errors that read as application bugs.
     """
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        appmod, "schema_migration_state", AsyncMock(return_value="pending")
+        healthmod, "schema_migration_state", AsyncMock(return_value="pending")
     )
 
     r = client.get("/health/ready")
@@ -492,9 +500,9 @@ def test_ready_does_not_hold_a_process_out_over_a_schema_it_could_not_read(
     unreadable `alembic_version` must not be a second, permanent refusal.
     """
     monkeypatch.setattr(_SESSION_ENGINE, _FakeEngineOk)
-    monkeypatch.setattr(appmod.channel_service, "ping", AsyncMock(return_value=True))
+    monkeypatch.setattr(healthmod.channel_service, "ping", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        appmod, "schema_migration_state", AsyncMock(return_value="unknown")
+        healthmod, "schema_migration_state", AsyncMock(return_value="unknown")
     )
 
     r = client.get("/health/ready")

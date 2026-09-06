@@ -22,7 +22,8 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
-from app.core.authorization.service import AuthorizationDataService, Authorizer
+from app.core.authorization.authorizer import Authorizer
+from app.core.authorization.service import AuthorizationDataService
 from app.core.authorization.sql_actions import read_action_for_resource
 from app.modules.pod.api.schemas.pod_schemas import ResourcePreviewResponse
 

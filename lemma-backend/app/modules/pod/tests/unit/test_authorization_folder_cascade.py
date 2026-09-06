@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.core.authorization.context import PrincipalRef, ResourceRef, ResourceType
-from app.core.authorization.service import Authorizer
+from app.core.authorization.authorizer import Authorizer
 from app.core.authorization.sql_actions import _grant_exists_for_action
 from app.modules.datastore.infrastructure.models.datastore_models import DatastoreFile
 

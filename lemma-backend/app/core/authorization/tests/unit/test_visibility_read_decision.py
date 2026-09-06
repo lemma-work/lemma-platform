@@ -17,7 +17,7 @@ from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
 )
-from app.core.authorization.service import Authorizer
+from app.core.authorization.authorizer import Authorizer
 
 POD_ID = uuid4()
 ORG_ID = uuid4()

@@ -55,7 +55,7 @@ from app.core.authorization.context import (
 from app.core.authorization.permissions import equivalent_permission_ids
 
 if TYPE_CHECKING:  # type-only — ``service`` imports this module, so at runtime
-    from app.core.authorization.service import Authorizer  # this would cycle
+    from app.core.authorization.authorizer import Authorizer  # this would cycle
 
 
 async def authorize_delegated_workload(
@@ -145,7 +145,7 @@ async def authorize_delegated_workload(
         # Imported here rather than at module scope, because ``service``
         # imports this module and the two would cycle. Only the ungranted path
         # pays the lookup, and it is the one the destructive gate shares.
-        from app.core.authorization.service import _session_approval
+        from app.core.authorization.authorizer import _session_approval
 
         if await _session_approval(
             ctx,
