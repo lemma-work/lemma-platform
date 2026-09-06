@@ -67,8 +67,13 @@ Installation:
 6. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
    raw-disk chunks.
 7. Validate host/guest release markers and write artifact identity.
-8. Sync the completed stage and parent directory, then atomically rename.
-9. Keep valid downloads across retry; delete archives only after activation.
+8. Sync the completed stage and parent directory, then atomically rename into
+   a directory identified by the release and artifact digests. A same-version
+   rebuild or repair gets its own directory; existing runtime trees stay in place.
+9. Keep valid downloads across retry; delete archives only after staging succeeds.
+10. Stop the previous runtime only after the candidate has been fully staged,
+    then save the candidate binding. Retain previous releases; staging does not
+    establish database compatibility or health and never authorizes pruning.
 
 No file inside the archive is individually fsynced.
 
@@ -88,9 +93,9 @@ ownership preserved, shrinks it to minimum contents, adds 128 MiB headroom,
 and verifies the final logical size. ZIP extraction preserves sparse zero
 regions.
 
-Windows imports the versioned root as Lemma’s private WSL distribution and
-keeps persistent application state separate from replaceable release
-artifacts.
+Windows imports the versioned root as Lemma’s private WSL distribution.
+Persistent guest data currently lives inside that distribution. Replacing an
+existing guest release is blocked until a data-preserving migration is available.
 
 ## 4. Lifecycle protocol
 
@@ -368,6 +373,10 @@ Desktop injects a local context before application scripts. Local mode:
 Hosted mode retains browser handoff and production auth policy.
 
 Operator configuration is schema validated. Secrets are stored in the OS vault.
+The desktop shell serializes its own configuration writes, replaces the file
+atomically, and refuses to overwrite malformed saved configuration. Window and
+navigation updates cannot erase a concurrently saved runtime binding. Recovery
+remains available when this file is damaged.
 The native settings page keeps saved configuration, drafts, and live health
 separate. Snapshot refreshes preserve dirty sections. Each save sends one
 section with its expected revision; the daemon serializes writes and rejects a

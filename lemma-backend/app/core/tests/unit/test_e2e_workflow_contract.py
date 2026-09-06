@@ -402,7 +402,6 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
 #: name available. `identity` and `pod` had no such excuse and are gone.
 RESERVED_UNUSED_MARKERS = {
     "protected": "reserved for backend-protected-e2e.yml; nothing carries it yet",
-    "local_cli": "reserved for tests needing a local Codex/OpenCode/Claude binary",
 }
 
 

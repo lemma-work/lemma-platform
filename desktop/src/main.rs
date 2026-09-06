@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+mod config_store;
 mod confirmation;
 mod ipc_read;
 mod recovery;
@@ -744,76 +745,8 @@ fn generation_matches(client: &reqwest::blocking::Client, url: &str, generation:
 }
 
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let mut config = read_config();
-    update(&mut config);
-    let directory = app_support_dir();
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("could not create desktop config directory: {error}"))?;
-    let serialized = serde_json::to_vec_pretty(&config)
-        .map_err(|error| format!("could not encode desktop config: {error}"))?;
-    let destination = config_path();
-    let temporary = destination.with_extension(format!("json.next-{}", std::process::id()));
-    let _ = std::fs::remove_file(&temporary);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| format!("could not stage desktop config: {error}"))?;
-    file.write_all(&serialized)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("could not persist desktop config: {error}"))?;
-    replace_config_file(&temporary, &destination)
-        .map_err(|error| format!("could not activate desktop config: {error}"))?;
-    #[cfg(unix)]
-    {
-        if let Ok(directory) = std::fs::File::open(directory) {
-            let _ = directory.sync_all();
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn replace_config_file(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-fn replace_config_file(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    config_store::update(&config_path(), update)
+        .map_err(|error| format!("could not save desktop configuration: {error}"))
 }
 
 fn connection_mode() -> String {
@@ -1201,9 +1134,10 @@ fn runtime_info_snapshot() -> RuntimeInfo {
         // Retain the prior immutable pack, but never offer an unsafe downgrade.
         rollback_available: false,
         repair_available: downloaded_active
-            && configured
-                .as_ref()
-                .is_some_and(|runtime| runtime.release == env!("CARGO_PKG_VERSION")),
+            && config
+                .pointer("/installedRuntime/release")
+                .and_then(Value::as_str)
+                == Some(env!("CARGO_PKG_VERSION")),
     }
 }
 
@@ -1399,8 +1333,12 @@ fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
+    prepare_runtime_artifacts(app, false)
+}
+
+fn prepare_runtime_artifacts(app: &AppHandle, reinstall: bool) -> Result<(), String> {
     require_no_recovery(&app.state::<Shell>())?;
-    match ensure_runtime_artifacts_inner(app) {
+    match ensure_runtime_artifacts_inner(app, reinstall) {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = actionable_runtime_install_error(&error);
@@ -1412,7 +1350,7 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
+fn ensure_runtime_artifacts_inner(app: &AppHandle, reinstall: bool) -> Result<(), String> {
     if runtime_root().join("desktop/locald/Cargo.toml").is_file() {
         return Ok(());
     }
@@ -1443,7 +1381,9 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
     // semantic release is unchanged. This lets signed test builds replace a
     // same-version runtime pack without silently retaining stale components.
     if let Some(runtime) = configured_runtime(&config, "installedRuntime").filter(|runtime| {
-        runtime.release == env!("CARGO_PKG_VERSION") && runtime.has_recorded_artifact_identity()
+        !reinstall
+            && runtime.release == env!("CARGO_PKG_VERSION")
+            && runtime.has_recorded_artifact_identity()
     }) {
         let Some(manifest) = bundled_manifest.as_ref() else {
             return Ok(());
@@ -1469,7 +1409,7 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
             env!("CARGO_PKG_VERSION")
         ));
     }
-    if let Some(runtime) = configured_runtime(&config, "installedRuntime") {
+    if let Some(runtime) = configured_runtime(&config, "installedRuntime").filter(|_| !reinstall) {
         let matches = artifact_install::runtime_matches_manifest(
             &runtime,
             &manifest,
@@ -1481,9 +1421,6 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         }
     }
     let install_operation_id = operation_id("runtime-install");
-    stop_locald_for_runtime_maintenance(app).map_err(|error| {
-        format!("could not stop the previous local runtime before update: {error}")
-    })?;
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
@@ -1501,7 +1438,12 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         None,
     );
     let install_started = std::time::Instant::now();
-    let installed = artifact_install::install_from_manifest(
+    let install = if reinstall {
+        artifact_install::reinstall_from_manifest
+    } else {
+        artifact_install::install_from_manifest
+    };
+    let installed = install(
         &manifest,
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
@@ -1545,6 +1487,9 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         },
     )
     .map_err(|error| format!("could not install the local runtime: {error}"))?;
+    stop_locald_for_runtime_maintenance(app).map_err(|error| {
+        format!("could not stop the previous local runtime before activation: {error}")
+    })?;
     activate_installed_runtime(&installed)?;
     emit_runtime_install_progress(
         app,
@@ -1638,9 +1583,7 @@ fn activate_installed_runtime(
             .get("installedRuntime")
             .cloned()
             .unwrap_or(Value::Null);
-        if runtime_from_config_value(&current).is_some()
-            && current.get("release") != next.get("release")
-        {
+        if runtime_from_config_value(&current).is_some() && current != next {
             config["previousRuntime"] = current;
         }
         config["installedRuntime"] = next;
@@ -4056,56 +3999,33 @@ fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
     }
-    let original_config = read_config();
-    let current = configured_runtime(&original_config, "installedRuntime")
-        .ok_or("there is no verified downloaded runtime to repair")?;
-    if current.release != env!("CARGO_PKG_VERSION") {
+    let shell: State<Shell> = app.state();
+    let _install_guard = shell.runtime_install.lock().unwrap();
+    require_no_recovery(&shell)?;
+    let config = read_config();
+    if config
+        .pointer("/installedRuntime/release")
+        .and_then(Value::as_str)
+        != Some(env!("CARGO_PKG_VERSION"))
+    {
         return Err(
             "this retained runtime cannot be repaired with the current signed manifest".into(),
         );
     }
-    let original_root = current
-        .host_pack_root
-        .parent()
-        .ok_or("installed runtime has no release root")?
-        .to_path_buf();
-    stop_locald_for_runtime_maintenance(&app)?;
     emit_runtime_install_progress(
         &app,
         "repair",
         "runtime",
-        "Isolating the damaged runtime",
+        "Preparing a verified replacement runtime",
         1,
         None,
         None,
         None,
         None,
     );
-    let quarantined = artifact_install::quarantine_runtime(&current)
-        .map_err(|error| format!("could not isolate the installed runtime: {error}"))?;
-
-    let repair = ensure_runtime_artifacts(&app)
-        .and_then(|_| start_after_runtime_maintenance(&app, "shell-start-after-runtime-repair"));
-    if let Err(error) = repair {
-        if original_root.exists() {
-            let replacement =
-                artifact_install::installed_runtime(&original_root, env!("CARGO_PKG_VERSION"));
-            if replacement.is_complete() {
-                let _ = artifact_install::quarantine_runtime(&replacement);
-            } else {
-                let failed = original_root
-                    .with_file_name(format!(".runtime-repair-failed-{}", std::process::id()));
-                let _ = std::fs::rename(&original_root, failed);
-            }
-        }
-        let _ = std::fs::rename(&quarantined, &original_root);
-        let _ = write_config(|config| *config = original_config);
-        let _ = start_after_runtime_maintenance(&app, "shell-start-after-repair-rollback");
-        return Err(format!(
-            "runtime repair failed and the prior verified release was restored: {error}"
-        ));
-    }
-    Ok(())
+    prepare_runtime_artifacts(&app, true)?;
+    drop(_install_guard);
+    start_after_runtime_maintenance(&app, "shell-start-after-runtime-repair")
 }
 
 #[tauri::command]
@@ -10541,7 +10461,7 @@ mod tests {
         std::fs::write(&destination, br#"{"revision":1}"#).unwrap();
         std::fs::write(&source, br#"{"revision":2}"#).unwrap();
 
-        replace_config_file(&source, &destination).unwrap();
+        config_store::replace(&source, &destination).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(&destination).unwrap(),

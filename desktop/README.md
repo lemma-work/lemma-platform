@@ -51,6 +51,13 @@ expanded size, archive format, platform target, and release identity. Archives
 are resumable, verified while transferring, extracted into disposable staging,
 validated, and atomically activated.
 
+Candidates are staged beside existing releases before local services stop.
+Artifact digests distinguish builds that share a version number. Repair forces
+a fresh verified extraction without moving or deleting the prior tree; it also
+works when cached runtime marker files are missing. Staging never prunes older
+releases. Retention and installed-app upgrade qualification are separate from
+archive verification.
+
 The PR test DMG embeds the two compressed archives and rewrites only their
 manifest sources to trusted resource names. It must not contain expanded
 `local-runtime` or `managed-runtime` directories.
@@ -559,7 +566,7 @@ Key files:
 desktop-config.json
 runtime/install.log
 runtime/launch.log
-runtime/releases/<version>/
+runtime/releases/<version>-<artifact-identity>/
 locald/network.json
 locald/installation.id
 locald/processes.json

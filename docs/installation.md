@@ -337,7 +337,9 @@ Managed state lives under:
 
 Important subpaths include:
 
-- `runtime/releases/<version>` — immutable installed host/guest release;
+- `runtime/releases/<version>-<artifact-identity>` — immutable installed
+  host/guest candidates and retained releases; older installations also use
+  version-only directory names;
 - `locald/network.json` — resolved loopback ports;
 - `locald/processes.json` — exact owned-process ledger;
 - `locald/runtime/macos/data.raw` — sparse macOS persistent data disk;
