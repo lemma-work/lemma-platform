@@ -225,6 +225,9 @@ impl ManagedRuntime {
                         "runtime bridge exceeded its output limit",
                     ),
                     lemma_desktop_process::SetupProcessError::Io(error) => error,
+                    lemma_desktop_process::SetupProcessError::Cancelled => {
+                        io::Error::new(io::ErrorKind::Interrupted, "runtime command was cancelled")
+                    }
                 })?;
         if output.stdout.is_empty() {
             let detail = first_diagnostic(&output.stderr, "private guest did not respond");

@@ -83,6 +83,12 @@ descendants are also stopped when the parent exits successfully. These are
 setup cleanup boundaries, not filesystem or network isolation. Failed adapter
 downloads do not activate the staged cache, and setup can be retried.
 
+Background installation shares readiness state with the serving host. Each
+adapter failure triggers rediscovery, including an unwritable or malformed
+cache directory, so a failed download does not remain labelled installing.
+Graceful host shutdown cancels pending installs, stops their subprocess trees,
+and joins the installer workers before exiting.
+
 The release lock records exact npm adapter versions and their registry SRI
 digests. The current bootstrap uses npm's own integrity verification for those
 exact packages; a fully offline, Lemma-signed adapter pack remains a GA release

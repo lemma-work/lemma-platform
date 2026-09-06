@@ -9,7 +9,7 @@ description = "Bounded process supervision for Lemma Desktop setup and recovery"
 [dependencies]
 process-wrap = { version = "=9.1.0", default-features = false, features = ["tokio1", "process-group", "job-object", "creation-flags", "kill-on-drop"] }
 thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_System_Threading"] }

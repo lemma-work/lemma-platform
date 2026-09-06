@@ -902,37 +902,62 @@ mod tests {
 
     /// A sidecar the last daemon did not live to stop is stopped by this one.
     ///
-    /// This is the bug in full: the Agent Host outlived its daemon, was
-    /// reparented to init, and kept the exclusive lock on its data directory.
-    /// Every launch afterwards could only log `another Agent Host is already
-    /// serving` and retry -- one installation had 3,295 lines of it -- while
-    /// the app said "Fetch is aborted" and no local agent ever answered again.
-    ///
-    /// A real process, because the whole mechanism is about a real pid: the
-    /// record is written the way a spawn writes it, and reclaiming has to leave
-    /// the process dead and the record gone.
+    /// A surviving host retains its data-directory lock and prevents future
+    /// hosts from serving. Exercise real process identity and termination;
+    /// cleanup must also run if an assertion fails.
     #[cfg(unix)]
     #[test]
     fn a_sidecar_that_outlived_its_daemon_is_reclaimed_before_the_next_spawn() {
+        use std::os::unix::process::CommandExt;
         use std::os::unix::process::ExitStatusExt;
 
         let home = tempdir().unwrap();
         let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
         std::fs::create_dir_all(&supervisor.data_dir).unwrap();
 
-        let mut leftover = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        supervisor.record_running(&mut leftover);
+        let mut leftover = Reaped(Some(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        ));
+        supervisor.record_running(leftover.get());
         assert!(
             supervisor.record_path.is_file(),
             "a running sidecar has to be written down, or nothing can reclaim it",
         );
 
-        // Reaped in parallel: `terminate_verified_process` waits for the pid to
-        // stop existing, and a child nobody reaps is a zombie that still
-        // answers `kill(pid, 0)`. A real leftover is init's to reap.
-        let reaper = std::thread::spawn(move || leftover.wait().unwrap());
-        supervisor.reclaim_leftover();
-        let status = reaper.join().unwrap();
+        let recorded: AgentHostRecord =
+            serde_json::from_slice(&std::fs::read(&supervisor.record_path).unwrap()).unwrap();
+        let observed = crate::host_process::process_identity(leftover.get().id()).unwrap();
+        assert_eq!(
+            recorded.executable, observed.executable,
+            "recorded executable changed before reclaim"
+        );
+        assert_eq!(
+            recorded.start_identity, observed.start_identity,
+            "recorded process start changed before reclaim"
+        );
+
+        // Reap concurrently because a zombie still answers kill(pid, 0).
+        // A failed reclaim must fail promptly rather than waiting for sleep.
+        let status = std::thread::scope(|scope| {
+            let reclaim = scope.spawn(|| supervisor.reclaim_leftover());
+            let deadline = Instant::now() + Duration::from_secs(7);
+            let status = loop {
+                if let Some(status) = leftover.get().try_wait().unwrap() {
+                    break Some(status);
+                }
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            reclaim.join().unwrap();
+            status
+        })
+        .expect("verified leftover was not terminated within the reclaim deadline");
 
         assert!(
             status.signal().is_some(),

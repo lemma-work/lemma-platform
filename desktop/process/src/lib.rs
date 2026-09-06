@@ -12,12 +12,43 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SetupProcessError {
+    #[error("command was cancelled")]
+    Cancelled,
     #[error("command exceeded its time limit")]
     TimedOut,
     #[error("command exceeded its output limit")]
     OutputLimit,
     #[error("command failed: {0}")]
     Io(#[from] io::Error),
+}
+
+#[derive(Clone)]
+pub struct Cancellation(tokio::sync::watch::Sender<bool>);
+
+impl Default for Cancellation {
+    fn default() -> Self {
+        Self(tokio::sync::watch::channel(false).0)
+    }
+}
+
+impl Cancellation {
+    pub fn cancel(&self) {
+        self.0.send_replace(true);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    async fn cancelled(&self) {
+        let mut receiver = self.0.subscribe();
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
+                break;
+            }
+        }
+    }
 }
 
 struct OwnedProcess(Box<dyn ChildWrapper>);
@@ -34,7 +65,22 @@ pub fn run(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
-    run_with_optional_input(command, None, timeout, output_limit)
+    run_with_optional_input(
+        command,
+        None,
+        timeout,
+        output_limit,
+        Cancellation::default(),
+    )
+}
+
+pub fn run_cancellable(
+    command: Command,
+    timeout: Duration,
+    output_limit: usize,
+    cancellation: Cancellation,
+) -> Result<Output, SetupProcessError> {
+    run_with_optional_input(command, None, timeout, output_limit, cancellation)
 }
 
 pub fn run_with_input(
@@ -43,7 +89,13 @@ pub fn run_with_input(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
-    run_with_optional_input(command, Some(input), timeout, output_limit)
+    run_with_optional_input(
+        command,
+        Some(input),
+        timeout,
+        output_limit,
+        Cancellation::default(),
+    )
 }
 
 fn run_with_optional_input(
@@ -51,6 +103,7 @@ fn run_with_optional_input(
     input: Option<Vec<u8>>,
     timeout: Duration,
     output_limit: usize,
+    cancellation: Cancellation,
 ) -> Result<Output, SetupProcessError> {
     // Discovery is synchronous and is also invoked by async host operations.
     // A dedicated runtime avoids nesting block_on inside their Tokio runtime.
@@ -60,7 +113,13 @@ fn run_with_optional_input(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(run_async_with_input(command, input, timeout, output_limit))
+                .block_on(run_async_with_input(
+                    command,
+                    input,
+                    timeout,
+                    output_limit,
+                    cancellation,
+                ))
         })?
         .join()
         .map_err(|_| io::Error::other("setup supervisor panicked"))?
@@ -72,7 +131,14 @@ async fn run_async(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
-    run_async_with_input(command, None, timeout, output_limit).await
+    run_async_with_input(
+        command,
+        None,
+        timeout,
+        output_limit,
+        Cancellation::default(),
+    )
+    .await
 }
 
 async fn run_async_with_input(
@@ -80,7 +146,11 @@ async fn run_async_with_input(
     input: Option<Vec<u8>>,
     timeout: Duration,
     output_limit: usize,
+    cancellation: Cancellation,
 ) -> Result<Output, SetupProcessError> {
+    if cancellation.is_cancelled() {
+        return Err(SetupProcessError::Cancelled);
+    }
     let mut command = tokio::process::Command::from(command);
     command
         .stdin(if input.is_some() {
@@ -115,7 +185,7 @@ async fn run_async_with_input(
         .take()
         .ok_or_else(|| io::Error::other("missing stderr"))?;
     let stdin = child.0.stdin().take();
-    let result = tokio::time::timeout(timeout, async {
+    let operation = tokio::time::timeout(timeout, async {
         let (status, stdout, stderr, input_result) = tokio::try_join!(
             async {
                 // A Windows job wait includes descendants. Wait for the leader
@@ -149,9 +219,12 @@ async fn run_async_with_input(
             stdout,
             stderr,
         })
-    })
-    .await
-    .unwrap_or(Err(SetupProcessError::TimedOut));
+    });
+    let result = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => Err(SetupProcessError::Cancelled),
+        result = operation => result.unwrap_or(Err(SetupProcessError::TimedOut)),
+    };
 
     let _ = child.0.start_kill();
     // Await termination on error as well as success; dropping Tokio's child
@@ -182,6 +255,47 @@ async fn read_bounded(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn cancellation_before_start_never_launches_the_command() {
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let root = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            run_cancellable(
+                Command::new(root.path().join("does-not-exist")),
+                Duration::from_secs(5),
+                4096,
+                cancellation
+            ),
+            Err(SetupProcessError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn cancellation_reaps_an_active_installation_and_its_descendants() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = fixture_command("tree-timeout");
+        command.env("LEMMA_SETUP_TEST_DIRECTORY", root.path());
+        let cancellation = Cancellation::default();
+        let owned_cancellation = cancellation.clone();
+        let worker = std::thread::spawn(move || {
+            run_cancellable(command, Duration::from_secs(10), 4096, owned_cancellation)
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !root.path().join("started").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cancellation.cancel();
+        let result = worker.join().unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        assert!(root.path().join("started").exists());
+        assert!(
+            matches!(result, Err(SetupProcessError::Cancelled)),
+            "{result:?}"
+        );
+        assert!(!root.path().join("finished").exists());
+    }
 
     fn fixture_command(mode: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());
