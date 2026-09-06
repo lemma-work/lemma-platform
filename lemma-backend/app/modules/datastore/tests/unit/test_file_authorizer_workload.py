@@ -17,7 +17,7 @@ from app.core.authorization.context import (
     Context,
     ResourceVisibility,
 )
-from app.core.authorization.service import Authorizer
+from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import DomainError
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,

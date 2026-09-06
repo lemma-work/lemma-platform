@@ -16,6 +16,7 @@ from app.core.api.exception_handlers import register_exception_handlers
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger, setup_logging
 import app.app as app_module
+import app.middleware as middleware_module
 
 pytestmark = pytest.mark.unit
 
@@ -32,9 +33,12 @@ def log_buf():
     setup_logging(
         "development", service_name="lemma-test", json_logs=True, log_level="DEBUG"
     )
-    # The module was imported under the default INFO filter; rebind its observer
-    # so DEBUG-only normal completions are visible in this test.
+    # Both modules were imported under the default INFO filter; rebind their
+    # observers so DEBUG-only normal completions are visible in this test. The
+    # request observer moved to `app.middleware` and carries its own logger, so
+    # rebinding `app.app`'s alone stopped reaching it.
     app_module.logger = get_logger("app.app")
+    middleware_module.logger = get_logger("app.middleware")
     buf = io.StringIO()
     handler = _pf_handler()
     original = handler.stream
@@ -50,7 +54,7 @@ def _events(buf):
 def _app() -> FastAPI:
     test_app = FastAPI()
     register_exception_handlers(test_app)
-    test_app.add_middleware(app_module.RequestObserverMiddleware)
+    test_app.add_middleware(middleware_module.RequestObserverMiddleware)
 
     class _Body(BaseModel):
         n: int

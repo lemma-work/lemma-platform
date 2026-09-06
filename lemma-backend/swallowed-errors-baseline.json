@@ -3,7 +3,7 @@
   "violations": {
     "app/core/analytics/app_session.py::_record_app_session::debug-only-broad-catch::analytics.app_session.cache_unavailable": 1,
     "app/core/analytics/app_session.py::maybe_record_app_session::debug-only-broad-catch::analytics.app_session.record_failed": 1,
-    "app/core/authorization/service.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
+    "app/core/authorization/authorizer.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
     "app/core/infrastructure/events/message_bus.py::FastStreamRedisMessageBus._safe_publish_maxlen::silent-broad-catch::Exception -> return": 1,
     "app/core/infrastructure/events/outbox_wake.py::OutboxWakeListener.run::silent-broad-catch::Exception -> pass": 1,
     "app/core/pubsub/subscriber.py::RedisStreamReader.current_last_id::silent-broad-catch::Exception -> return": 1,
