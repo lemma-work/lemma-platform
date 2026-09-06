@@ -41,12 +41,9 @@ import { selectWorkspaceTarget } from "@/components/agents/this-computer-status"
 import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
 import { getLemmaApiBaseUrl } from "@/lib/sdk/lemma-client";
 import {
-    configureAiProvider,
     useDesktopBridge,
-    discoverProviderModels,
     openLocalSettings,
     useLocalAiStatus,
-    type AiProfileDraft,
 } from "@/lib/desktop/local-capabilities";
 import {
     useAgentHostHarnesses,
@@ -70,6 +67,8 @@ import {
     harnessRowStates,
 } from "@/components/agents/harness-discovery-rows";
 import { agentHostBridge } from "@/lib/desktop/agent-host-bridge";
+import { useLocalProviderSetup, type ProviderPreset as Preset } from "@/lib/desktop/provider-setup";
+import { isReadyLocalAgent } from "@/lib/desktop/local-agent-default";
 import { RuntimeProfileKind } from "lemma-sdk";
 import { SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
 import type { SetupStep } from "./account-onboarding-helpers";
@@ -168,14 +167,7 @@ function BridgeUnavailableNote() {
 // What answers in chats
 // ---------------------------------------------------------------------------
 
-type Preset = {
-    id: string;
-    title: string;
-    hint: string;
-    protocol: AiProfileDraft["protocol"];
-    baseUrl: string;
-    needsKey: boolean;
-};
+
 
 // Local runners first: someone running Lemma on their own Mac most likely has
 // one of these serving already, and neither needs a key or an account.
@@ -255,12 +247,8 @@ export function LocalIntelligenceStep({
     const restore = useRestoreAgentRuntime();
     const { status: aiStatus } = useLocalAiStatus(true);
 
-    const [preset, setPreset] = useState<Preset | null>(null);
-    const [apiKey, setApiKey] = useState("");
-    const [models, setModels] = useState<string[]>([]);
-    const [model, setModel] = useState("");
-    const [listing, setListing] = useState(false);
-    const [applying, setApplying] = useState(false);
+    const { preset, selectPreset, apiKey, setApiKey, models, model, setModel,
+        listing, applying, error: providerError, listModels, apply } = useLocalProviderSetup();
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
 
     const detected = useMemo(() => harnesses.data?.items ?? [], [harnesses.data?.items]);
@@ -333,53 +321,12 @@ export function LocalIntelligenceStep({
         return saved;
     }, [managed.data?.items]);
 
-    const hasAgent = [...savedByHarnessId.values()].some((saved) => !saved.archived);
+    const hostOnline = host?.status === "ONLINE";
+    const hasAgent = hostOnline && (managed.data?.items ?? []).some((profile) =>
+        isReadyLocalAgent(profile)
+        && detected.some((harness) => harness.id === profile.harness_id && harness.health === "READY"),
+    );
     const configured = hasAgent || aiStatus === "ready";
-
-    const draft = (): AiProfileDraft | null =>
-        preset
-            ? {
-                  protocol: preset.protocol,
-                  base_url: preset.baseUrl,
-                  default_model: model,
-                  models,
-                  vision_models: [],
-                  allow_private_network: false,
-              }
-            : null;
-
-    const listModels = async () => {
-        const candidate = draft();
-        if (!candidate) return;
-        setListing(true);
-        try {
-            const found = await discoverProviderModels({ ...candidate, default_model: "", models: [] }, apiKey);
-            if (!found.length) {
-                toast.error("That provider answered, but reported no models.");
-                return;
-            }
-            setModels(found);
-            setModel((current) => (found.includes(current) ? current : found[0]));
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : String(error));
-        } finally {
-            setListing(false);
-        }
-    };
-
-    const apply = async () => {
-        const candidate = draft();
-        if (!candidate || !model) return;
-        setApplying(true);
-        try {
-            await configureAiProvider(candidate, apiKey);
-            toast.success(`${preset?.title} is ready.`);
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : String(error));
-        } finally {
-            setApplying(false);
-        }
-    };
 
     return (
         <SetupSplitPanel
@@ -460,6 +407,7 @@ export function LocalIntelligenceStep({
                             <HarnessRow
                                 key={row.harness.id}
                                 harness={row.harness}
+                                hostOnline={hostOnline}
                                 savedProfile={saved ? { name: saved.name, archived: saved.archived } : null}
                                 onRecheck={recheck}
                                 className="border border-[var(--border-subtle)]"
@@ -537,13 +485,8 @@ export function LocalIntelligenceStep({
                                 key={candidate.id}
                                 type="button"
                                 data-active={preset?.id === candidate.id}
-                                onClick={() => {
-                                    setPreset(candidate);
-                                    // The models belonged to the last endpoint.
-                                    setModels([]);
-                                    setModel("");
-                                    setApiKey("");
-                                }}
+                                disabled={applying}
+                                onClick={() => selectPreset(candidate)}
                                 className={[
                                     "setup-path-choice flex min-w-[7.5rem] flex-col gap-0.5 px-3 py-2 text-left",
                                     preset?.id === candidate.id ? "is-active" : "",
@@ -555,6 +498,7 @@ export function LocalIntelligenceStep({
                         ))}
                     </div>
 
+                    {providerError ? <p role="alert" className="text-sm text-[var(--state-error)]">{providerError}</p> : null}
                     {preset ? (
                         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-4">
                             <p className="text-xs text-[var(--text-tertiary)]">{preset.baseUrl}</p>
@@ -563,6 +507,7 @@ export function LocalIntelligenceStep({
                                     type="password"
                                     autoComplete="new-password"
                                     value={apiKey}
+                                    disabled={applying}
                                     onChange={(event) => setApiKey(event.target.value)}
                                     placeholder="API key"
                                     aria-label={`${preset.title} API key`}
@@ -574,7 +519,7 @@ export function LocalIntelligenceStep({
                                     <span className="block text-xs font-medium text-[var(--text-tertiary)]">
                                         Default model
                                     </span>
-                                    <Select value={model} onValueChange={setModel}>
+                                    <Select value={model} onValueChange={setModel} disabled={applying}>
                                         <SelectTrigger aria-label="Default model">
                                             <SelectValue placeholder="Pick a model" />
                                         </SelectTrigger>
@@ -596,7 +541,7 @@ export function LocalIntelligenceStep({
                                     size="sm"
                                     loading={listing}
                                     loadingLabel="Connecting"
-                                    disabled={!hasBridge || (preset.needsKey && !apiKey.trim())}
+                                    disabled={!hasBridge || applying || (preset.needsKey && !apiKey.trim())}
                                     onClick={() => void listModels()}
                                 >
                                     {models.length ? "List models again" : "Connect and list models"}
@@ -608,7 +553,7 @@ export function LocalIntelligenceStep({
                                         loading={applying}
                                         loadingLabel="Applying — Lemma restarts"
                                         disabled={!model}
-                                        onClick={() => void apply()}
+                                        onClick={() => void apply().then((applied) => { if (applied) toast.success(`${preset.title} is ready.`); })}
                                     >
                                         Use {model}
                                     </Button>

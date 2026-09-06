@@ -43,6 +43,40 @@ pub fn reset_install(paths: LocalPaths) -> io::Result<()> {
 /// scraping stdout -- the summary is a contract the shell reads, and getting a
 /// field wrong is silent.
 fn perform_reset(paths: LocalPaths) -> io::Result<serde_json::Value> {
+    perform_reset_with(paths, &SystemReset)
+}
+
+trait ResetEnvironment {
+    fn reclaim_vm(&self, paths: &LocalPaths) -> io::Result<()>;
+    fn purge_credentials(&self, install_id: &str) -> Vec<String>;
+}
+
+struct SystemReset;
+
+impl ResetEnvironment for SystemReset {
+    fn reclaim_vm(&self, paths: &LocalPaths) -> io::Result<()> {
+        use interprocess::local_socket::prelude::*;
+        if LocalSocketStream::connect(paths.socket_name()?).is_ok() {
+            return Err(io::Error::other("the installation's background service is still running; quit it or restart this computer before cleanup"));
+        }
+        crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
+        reclaim_running_vm(paths)
+    }
+
+    fn purge_credentials(&self, install_id: &str) -> Vec<String> {
+        purge_secrets(install_id)
+    }
+}
+
+fn perform_reset_with(
+    paths: LocalPaths,
+    environment: &impl ResetEnvironment,
+) -> io::Result<serde_json::Value> {
+    for path in [&paths.root, &paths.root.join("operator-config.json")] {
+        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(io::Error::other("local state is redirected by a symbolic link; restore its original location before cleanup"));
+        }
+    }
     let mut summary = json!({
         "root": paths.root.display().to_string(),
         "vm_reclaim_attempted": false,
@@ -66,7 +100,10 @@ fn perform_reset(paths: LocalPaths) -> io::Result<serde_json::Value> {
     // neighbouring `secrets_swept` is careful about exactly this distinction,
     // and this field was not -- a summary that says `true` where it means "no
     // error" is worse than no field, because somebody reads it as evidence.
-    summary["vm_reclaim_attempted"] = json!(reclaim_running_vm(&paths).is_ok());
+    environment.reclaim_vm(&paths).map_err(|error| io::Error::other(format!(
+        "Could not stop this installation's runtime: {error}. Its cleanup records have been kept. Close Lemma processes for this installation and retry."
+    )))?;
+    summary["vm_reclaim_attempted"] = json!(true);
 
     // 2. The keychain, BEFORE the file that names it.
     //
@@ -79,7 +116,13 @@ fn perform_reset(paths: LocalPaths) -> io::Result<serde_json::Value> {
     let config_path = paths.root.join("operator-config.json");
     if let Some(install_id) = recover_install_id(&config_path) {
         summary["install_id_recovered"] = json!(true);
-        let failures = purge_secrets(&install_id);
+        let failures = environment.purge_credentials(&install_id);
+        if !failures.is_empty() {
+            return Err(io::Error::other(format!(
+                "Could not remove stored credentials: {}. The installation identity has been kept so cleanup can be retried after unlocking the operating-system credential store.",
+                failures.join("; ")
+            )));
+        }
         summary["secrets_swept"] = json!(true);
         summary["secret_failures"] = json!(failures);
     }
@@ -115,7 +158,7 @@ fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
         bridge_executable: Path::new("lemma-runtime").to_path_buf(),
         vz_executable: Path::new("lemma-vz").to_path_buf(),
     })?;
-    runtime.reclaim_owned_macos_vm()
+    runtime.reclaim_owned_macos_vm_for_reset()
 }
 
 /// Windows: unregister the private distribution, which is where the data is.
@@ -132,14 +175,16 @@ fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
 /// called it from here.
 #[cfg(windows)]
 fn reclaim_running_vm(paths: &LocalPaths) -> io::Result<()> {
-    use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig, DEFAULT_WSL_DISTRIBUTION};
+    use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig};
 
     let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
-        wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_owned(),
+        wsl_distribution: crate::managed_runtime::wsl_distribution_for(&paths.root),
         local_root: paths.root.clone(),
         artifact_root: paths.root.join("runtime"),
         bridge_executable: Path::new("lemma-runtime").to_path_buf(),
-        wsl_executable: Path::new("wsl.exe").to_path_buf(),
+        wsl_executable: std::env::var_os("LEMMA_LOCALD_WSL_BIN")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new("wsl.exe").to_path_buf()),
     })?;
     runtime.unregister_windows_guest()
 }
@@ -154,6 +199,86 @@ fn reclaim_running_vm(_paths: &LocalPaths) -> io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[derive(Default)]
+    struct ResetFixture {
+        vm_failure: bool,
+        credential_failure: bool,
+    }
+
+    impl ResetEnvironment for ResetFixture {
+        fn reclaim_vm(&self, _paths: &LocalPaths) -> io::Result<()> {
+            if self.vm_failure {
+                Err(io::Error::other("VM is still running"))
+            } else {
+                Ok(())
+            }
+        }
+        fn purge_credentials(&self, _install_id: &str) -> Vec<String> {
+            if self.credential_failure {
+                vec!["vault locked".into()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn failed_vm_cleanup_keeps_the_installation_available_for_retry() {
+        let root = tempdir().unwrap();
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        std::fs::write(paths.root.join("data.raw"), b"recoverable data").unwrap();
+        let result = perform_reset_with(
+            paths.clone(),
+            &ResetFixture {
+                vm_failure: true,
+                credential_failure: false,
+            },
+        );
+        assert!(
+            result.is_err(),
+            "cleanup must not claim success: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(paths.root.join("data.raw")).unwrap(),
+            b"recoverable data"
+        );
+    }
+
+    #[test]
+    fn failed_vault_cleanup_keeps_the_identity_needed_to_retry() {
+        let root = tempdir().unwrap();
+        let paths = LocalPaths::new(root.path().join("locald"));
+        paths.ensure().unwrap();
+        let config = paths.root.join("operator-config.json");
+        std::fs::write(
+            &config,
+            r#"{"install_id":"0123456789abcdef0123456789abcdef"}"#,
+        )
+        .unwrap();
+        let result = perform_reset_with(
+            paths.clone(),
+            &ResetFixture {
+                vm_failure: false,
+                credential_failure: true,
+            },
+        );
+        assert!(
+            result.is_err(),
+            "failed vault cleanup must be actionable: {result:?}"
+        );
+        assert!(recover_install_id(&config).is_some());
+        perform_reset_with(
+            paths.clone(),
+            &ResetFixture {
+                vm_failure: false,
+                credential_failure: false,
+            },
+        )
+        .unwrap();
+        assert!(!paths.root.exists());
+    }
 
     /// A reset removes the state directory, data disk included, and says so.
     ///
@@ -170,7 +295,7 @@ mod tests {
         std::fs::create_dir_all(paths.root.join("runtime/macos")).unwrap();
         std::fs::write(paths.root.join("runtime/macos/data.raw"), b"database").unwrap();
 
-        let summary = perform_reset(paths.clone()).unwrap();
+        let summary = perform_reset_with(paths.clone(), &ResetFixture::default()).unwrap();
 
         assert!(!paths.root.exists(), "nothing of the installation survives");
         assert_eq!(
@@ -190,7 +315,7 @@ mod tests {
         let paths = LocalPaths::new(root.path().join("locald"));
         paths.ensure().unwrap();
 
-        let summary = perform_reset(paths).unwrap();
+        let summary = perform_reset_with(paths, &ResetFixture::default()).unwrap();
 
         assert_eq!(
             summary["install_id_recovered"], false,
@@ -209,7 +334,7 @@ mod tests {
     fn resetting_an_installation_that_is_already_gone_succeeds() {
         let root = tempdir().unwrap();
         let paths = LocalPaths::new(root.path().join("never-ran"));
-        reset_install(paths).unwrap();
+        perform_reset_with(paths, &ResetFixture::default()).unwrap();
     }
 
     /// The identity is read before the file naming it is destroyed.
@@ -237,7 +362,27 @@ mod tests {
             Some(install_id)
         );
 
-        reset_install(paths.clone()).unwrap();
+        struct IdentitySweep(std::path::PathBuf, std::sync::Mutex<Vec<String>>);
+        impl ResetEnvironment for IdentitySweep {
+            fn reclaim_vm(&self, _: &LocalPaths) -> io::Result<()> {
+                Ok(())
+            }
+            fn purge_credentials(&self, install_id: &str) -> Vec<String> {
+                assert!(
+                    self.0.is_file(),
+                    "identity must survive until the vault sweep succeeds"
+                );
+                self.1.lock().unwrap().push(install_id.to_owned());
+                Vec::new()
+            }
+        }
+        let environment = IdentitySweep(
+            paths.root.join("operator-config.json"),
+            std::sync::Mutex::new(Vec::new()),
+        );
+        let summary = perform_reset_with(paths.clone(), &environment).unwrap();
+        assert_eq!(*environment.1.lock().unwrap(), vec![install_id]);
+        assert_eq!(summary["secrets_swept"], true);
         assert!(!paths.root.exists());
     }
 }

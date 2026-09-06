@@ -2445,14 +2445,38 @@ fn wait_for_setup_dependency(
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!(
-                    "migrations could not reach PostgreSQL at {address} before setup; last error: {}",
-                    error
-                ),
+                setup_dependency_error(address, &error),
             ));
         }
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn setup_dependency_error(address: SocketAddr, error: &io::Error) -> String {
+    #[cfg(target_os = "macos")]
+    if !address.ip().is_loopback()
+        && matches!(
+            error.raw_os_error(),
+            Some(libc::EHOSTUNREACH | libc::ENETUNREACH | libc::EACCES | libc::EPERM)
+        )
+    {
+        // EHOSTUNREACH can mean either a missing route or macOS privacy denial.
+        // Terminal probes are exempt from local network privacy and cannot
+        // establish whether the app has permission.
+        return format!(
+            "Lemma cannot connect to its local services. In System Settings > Privacy & Security > \
+             Local Network, check that Lemma is allowed, then return here and choose Try again. \
+             macOS requires this access to reach Lemma's private virtual machine on this Mac. \
+             If access is already allowed, restart Lemma and check any VPN or firewall rules. \
+             Your local data is preserved; a factory reset is not needed for this connection error. \
+             Connection details: PostgreSQL at {address}: {error}"
+        );
+    }
+    format!(
+        "Lemma could not reach its local database before setup. Try again; if this continues, \
+         restart Lemma and view the runtime log. Your local data is preserved. \
+         Connection details: PostgreSQL at {address}: {error}"
+    )
 }
 
 fn database_socket_address(url: &str) -> Option<SocketAddr> {
@@ -2976,6 +3000,46 @@ mod tests {
             database_socket_address("postgresql://private-guest/lemma"),
             None
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unreachable_guest_explains_privacy_recovery_without_claiming_denial() {
+        for code in [
+            libc::EHOSTUNREACH,
+            libc::ENETUNREACH,
+            libc::EACCES,
+            libc::EPERM,
+        ] {
+            let message = setup_dependency_error(
+                "192.168.64.10:5432".parse().unwrap(),
+                &io::Error::from_raw_os_error(code),
+            );
+            assert!(message.contains("System Settings > Privacy & Security > Local Network"));
+            assert!(message.contains("Try again"));
+            assert!(message.contains("If access is already allowed"));
+            assert!(message.contains("factory reset is not needed"));
+            assert!(message.contains("192.168.64.10:5432"));
+        }
+    }
+
+    #[test]
+    fn database_refusal_and_loopback_errors_do_not_misdiagnose_privacy() {
+        for (endpoint, error) in [
+            (
+                "192.168.64.10:5432",
+                io::Error::from(io::ErrorKind::ConnectionRefused),
+            ),
+            (
+                "127.0.0.1:5432",
+                io::Error::from(io::ErrorKind::PermissionDenied),
+            ),
+        ] {
+            let message = setup_dependency_error(endpoint.parse().unwrap(), &error);
+            assert!(!message.contains("Local Network"));
+            assert!(message.contains("Try again"));
+            assert!(message.contains("Your local data is preserved"));
+        }
     }
 
     #[cfg(unix)]

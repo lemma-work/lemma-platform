@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lemma · Confirmation</title>
+<style>
+:root { color-scheme: light dark; font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: light-dark(#252426,#eeeae5); background: light-dark(#e8e5e0,#171717); }
+body { margin: 0; }
+dialog { box-sizing: border-box; width: min(560px,calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 32px; border: 1px solid light-dark(#d5d0c9,#49433e); border-radius: 18px; background: light-dark(#fffdf9,#242321); color: inherit; box-shadow: 0 24px 80px #0004; overflow: auto; }
+dialog::backdrop { background: #0003; }
+.eyebrow { color: light-dark(#70675e,#b9ada2); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+h1 { font-size: 25px; line-height: 1.25; margin: 12px 0 18px; letter-spacing: -.025em; }
+#message { white-space: pre-wrap; margin: 0; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 28px; }
+button { font: inherit; padding: 9px 16px; border: 1px solid light-dark(#c5beb5,#65594f); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+#confirm { background: light-dark(#613fcc,#ab93ff); color: light-dark(#fff,#1b1039); border-color: transparent; }
+button:focus-visible { outline: 3px solid light-dark(#7150d2,#c8b6ff); outline-offset: 3px; }
+button:disabled { opacity: .5; cursor: wait; }
+#error { color: light-dark(#b12f1d,#ffab99); }
+</style>
+</head>
+<body>
+<dialog aria-labelledby="title" aria-describedby="message">
+<div class="eyebrow">Lemma Desktop</div><h1 id="title"></h1><p id="message"></p>
+<p id="error" role="alert" hidden></p>
+<div class="actions"><button id="cancel" autofocus>Cancel</button><button id="confirm"></button></div>
+</dialog>
+<script src="confirmation.js"></script>
+</body>
+</html>

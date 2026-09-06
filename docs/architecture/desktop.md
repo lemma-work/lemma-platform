@@ -67,8 +67,13 @@ Installation:
 6. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
    raw-disk chunks.
 7. Validate host/guest release markers and write artifact identity.
-8. Sync the completed stage and parent directory, then atomically rename.
-9. Keep valid downloads across retry; delete archives only after activation.
+8. Sync the completed stage and parent directory, then atomically rename into
+   a directory identified by the release and artifact digests. A same-version
+   rebuild or repair gets its own directory; existing runtime trees stay in place.
+9. Keep valid downloads across retry; delete archives only after staging succeeds.
+10. Stop the previous runtime only after the candidate has been fully staged,
+    then save the candidate binding. Retain previous releases; staging does not
+    establish database compatibility or health and never authorizes pruning.
 
 No file inside the archive is individually fsynced.
 
@@ -88,9 +93,9 @@ ownership preserved, shrinks it to minimum contents, adds 128 MiB headroom,
 and verifies the final logical size. ZIP extraction preserves sparse zero
 regions.
 
-Windows imports the versioned root as Lemma’s private WSL distribution and
-keeps persistent application state separate from replaceable release
-artifacts.
+Windows imports the versioned root as Lemma’s private WSL distribution.
+Persistent guest data currently lives inside that distribution. Replacing an
+existing guest release is blocked until a data-preserving migration is available.
 
 ## 4. Lifecycle protocol
 
@@ -136,6 +141,28 @@ with status and a redacted tail. Crash recovery retains the current runtime
 generation; a new user start creates a new one. After stable Ready, transient
 recovery stays in the workspace. A sustained terminal failure opens recovery
 after a grace interval.
+
+Recovery is available from the welcome screen, desktop settings, and the tray,
+including cloud mode and daemon failures. Restart into Recovery pauses automatic
+service startup and runtime downloads. Force cleanup requires an app-owned
+confirmation with Cancel focused. It deletes this installation's local data,
+credentials, runtime downloads, Agent Host pairings and managed working folders;
+external project folders and cloud data are retained. It is separate from updates
+and makes no automatic backup. Failed runtime or credential cleanup preserves
+its recovery records for a retry. The standalone daemon reset command requires
+`--confirm=erase-local-lemma` and refuses an active control endpoint even if its
+authentication token is corrupt.
+
+Confirmations and menu errors use a bundled app overlay, with a single pending
+operation and a dedicated IPC capability. Escape, Enter on the default Cancel,
+and window close cancel the operation; old responses cannot authorize a later
+operation. Closing the main window keeps services and the tray running. Quit
+stops work on a worker with a bounded exit deadline; the final event-loop exit
+handler never waits on daemon I/O or process cleanup. A daemon handshake has both
+a deadline and an allocation limit, including Windows named pipes.
+The exit watchdog must exceed the combined sharing, handshake, graceful stop,
+and verified VM/process fallback deadlines. A shorter watchdog can terminate
+the cleanup worker itself and leave this installation's processes running.
 
 ## 5. Host process contract
 
@@ -245,12 +272,45 @@ The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
 dependencies. Navigation is Overview; AI provider; Sharing,
 Integrations/Channels; Runtime, Updates/Diagnostics.
 
-Local settings exists only in local mode, so it is deliberately not the
-canonical home for anything a cloud workspace also needs. The Agent Host is the
-case in point: its Runtime panel shows status, restart, and the log - what is
-useful when the workspace itself will not load - while connecting, choosing
-agents, and turning it off live in the workspace page, which a hosted user can
-also reach. See [Agent Host in the desktop app](agent-host.md).
+Desktop settings is available in both cloud and local modes through the app
+menu and tray. This computer shows Agent Host status, restart, and logs, plus
+a link back to agent setup in the workspace. Local installation sections are
+enabled in local mode. Connecting and choosing agents still live in the
+workspace page, which both modes can reach. See
+[Agent Host in the desktop app](agent-host.md).
+
+Settings content paints immediately without a page-entry fade. A child webview
+can suspend animation frames while its parent changes; starting the page at
+zero opacity can leave usable controls in the accessibility tree while the
+window looks blank. Native qualification checks both the visible page and its
+accessibility tree, including opening settings before deployment setup.
+
+Native credential reads have a bounded caller deadline and admit at most one
+outstanding OS read. If Keychain or Credential Manager stops answering, setup
+reports an error while retaining stored credentials and application data.
+Retry does not accumulate blocked native calls. A read that completes after
+its caller times out cannot populate the cache; a concurrent replacement or
+removal also takes precedence over an older read. Writes are not abandoned on
+a read deadline, because their eventual outcome must remain known.
+
+The first screen describes both deployment choices before sign-in: Lemma Cloud
+stores workspace data online and can use this computer's agents; Local Lemma
+stores application data and runs services on this computer. Both can send
+requested data to configured providers and connectors. Local setup requires a
+separate install action; returning to the choices performs no installation.
+The shell owns automatic startup on launch and mode changes. Loading or
+reloading the splash only observes state, so it cannot race a second start
+against the shell. Start and Retry remain explicit user actions.
+
+On macOS, host services connect to the private VM through its local IP address.
+The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
+explains this permission before installation. A blocked or unreachable guest
+connection offers Local Network settings guidance and a retry without deleting
+data; that socket error alone does not establish that permission was denied.
+Terminal connectivity does not prove app connectivity because macOS attributes
+helper access to its responsible app. Candidate qualification must exercise the
+installed app with its release signing identity and both allowed and denied
+access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
 ## 7.2 Sharing and canonical origin
 
@@ -349,12 +409,62 @@ Desktop injects a local context before application scripts. Local mode:
 Hosted mode retains browser handoff and production auth policy.
 
 Operator configuration is schema validated. Secrets are stored in the OS vault.
-Apply writes a candidate, probes the provider, restarts only the backend,
-health-checks it, and commits; failure restores prior config and secrets.
+The desktop shell serializes its own configuration writes, replaces the file
+atomically, and refuses to overwrite malformed saved configuration. Window and
+navigation updates cannot erase a concurrently saved runtime binding. Recovery
+remains available when this file is damaged.
+The native settings page keeps saved configuration, drafts, and live health
+separate. Snapshot refreshes preserve dirty sections. Each save sends one
+section with its expected revision; the daemon serializes writes and rejects a
+stale revision with `config-conflict`. The legacy whole-config command also
+checks its revision. Credentials use explicit `keep`, `replace`, and `remove`
+actions. Reusing a saved AI key requires the same protocol and provider URL;
+changing the destination requires a replacement or explicit removal.
+
+Apply validates the provider, persists configuration, and restarts only the
+backend when it is running. Failed activation restores the prior configuration
+and secrets. `locald/config-operations.json` records operation IDs and outcomes
+without credential values. A snapshot exposes these outcomes so settings can
+recover after missing an event. A daemon restart marks unfinished writes
+interrupted; it does not replay them or claim that activation succeeded.
+Review the saved configuration before retrying an interrupted save. Unreadable
+operation history disables settings writes while keeping other services usable.
+
+The section payload for `config.apply` is:
+
+```json
+{
+  "expected_revision": 3,
+  "section": {
+    "name": "integrations",
+    "value": {
+      "composio_enabled": false,
+      "google_client_id": "",
+      "microsoft_client_id": "",
+      "github_client_id": "",
+      "slack_client_id": ""
+    }
+  },
+  "secrets": {"integrations.deepgram_api_key": {"action": "remove"}}
+}
+```
+
+`value` is the selected section's full schema; it never includes other sections.
+Valid names are `ai`, `integrations`, and `surfaces`. Credential names must
+belong to that section. Replacement requires a nonempty `value` alongside
+`action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM
 Studio prefill a loopback OpenAI-compatible endpoint that the user already
 runs, so Lemma never owns, downloads, or supervises a model process.
+
+Onboarding binds model discovery to the selected provider and credential draft.
+Switching either invalidates the pending result and its model choices. A failed
+apply preserves the draft with an inline error; an admitted apply freezes its
+fields until completion. A saved coding agent counts as ready only while its
+profile is active and the host reports it available. First-pod default selection
+skips unavailable agents, and the setup banner links saved-agent failures to
+Models rather than asking for an unrelated installation provider.
 
 The backend exposes safe capability health. The frontend local banner calls
 the validated native `open_control_center` command with `ai`; accepted

@@ -981,10 +981,8 @@ export class AgentController {
       const scope = normalizeScope(this.client, this.scopeDefaults);
       const scopedClient = applyPodScope(this.client, scope.podId);
 
-      await scopedClient.conversations.stopRun(id, { pod_id: scope.podId ?? undefined });
-      this.setConversationStatus("WAITING");
-      this.clearStreamingText();
-      this.clearStreamingThinking();
+      const stopped = await scopedClient.conversations.stopRun(id, { pod_id: scope.podId ?? undefined });
+      this.setConversationStatus(normalizeConversationStatus(stopped.status) ?? "STOP_REQUESTED");
     } catch (stopError) {
       const normalized = normalizeError(stopError, "Failed to stop conversation.");
       this.patch({ error: normalized });

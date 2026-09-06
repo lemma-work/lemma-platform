@@ -48,11 +48,9 @@ class _HeldToolCall:
     def arguments_settled(self) -> bool:
         """Whether this call is ready to go on the durable record.
 
-        Reports *empty* arguments and reports *no* arguments are different
-        claims. An adapter that names the keys and leaves them empty is saying
-        "not written yet". An adapter that omits them is saying nothing about
-        arguments at all, and waiting for a refinement it will never send would
-        hold the call until the turn ended.
+        Pending calls may omit arguments entirely before asking permission.
+        That omission cannot seal an empty input before the permission request
+        supplies it. Calls that never supply arguments are released on close.
 
         A call that really was invoked with nothing is the one case this reads
         wrongly, and it costs only lateness: :meth:`ToolCallLedger.release`
@@ -60,7 +58,10 @@ class _HeldToolCall:
         """
         arguments = raw_tool_args(self.payload)
         if arguments is None:
-            return True
+            return str(self.payload.get("status") or "").upper() not in {
+                "PENDING",
+                "IN_PROGRESS",
+            }
         return not _is_empty(arguments)
 
     def absorb(self, payload: JsonObject, metadata: JsonObject) -> None:

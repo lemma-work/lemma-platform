@@ -51,6 +51,13 @@ expanded size, archive format, platform target, and release identity. Archives
 are resumable, verified while transferring, extracted into disposable staging,
 validated, and atomically activated.
 
+Candidates are staged beside existing releases before local services stop.
+Artifact digests distinguish builds that share a version number. Repair forces
+a fresh verified extraction without moving or deleting the prior tree; it also
+works when cached runtime marker files are missing. Staging never prunes older
+releases. Retention and installed-app upgrade qualification are separate from
+archive verification.
+
 The PR test DMG embeds the two compressed archives and rewrites only their
 manifest sources to trusted resource names. It must not contain expanded
 `local-runtime` or `managed-runtime` directories.
@@ -68,7 +75,14 @@ offline release artifacts are intentionally removed.
 
 ## Build and test locally
 
-Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
+The settings tests run the shipped HTML and JavaScript with mocked desktop
+IPC in a disposable Chromium profile. `make desktop-test-browser` installs its
+pinned test dependencies and browser. To use an installed Chrome for the same
+tests, run `LEMMA_TEST_BROWSER_CHANNEL=chrome make desktop-test-browser`.
+These tests do not access the installed Lemma application or its data, and do
+not replace packaged macOS/Windows installation and upgrade qualification.
+
+Prerequisites for maintainers are Rust, the Node.js version in `.nvmrc`, Swift/Xcode on macOS,
 Python/uv, and the repository’s normal build toolchain.
 
 ### Before you push
@@ -80,7 +94,8 @@ make desktop-check
 ```
 
 It is `desktop-fmt`, `desktop-concepts-check`, `desktop-lint`, `desktop-test`,
-and `desktop-check-windows`. Run it rather than the individual targets. It is
+`desktop-check-windows`, and `desktop-test-browser`. Run it rather than the
+individual targets. It is
 not a promise that CI will be green — bundling, codesigning, and the app crate's
 Windows paths have no local equivalent (see below) — but everything it does
 cover fails here in seconds instead of there in minutes. The
@@ -171,11 +186,11 @@ pwsh desktop\scripts\desktop.ps1 test
 pwsh desktop\scripts\desktop.ps1 exe
 ```
 
-There is deliberately no `dev` verb: running the app from source is macOS only
-for now. `desktop/local-runtime/manager` names its WSL distribution with a
-global constant, so a dev run in a throwaway state root would adopt and mutate
-the distribution a real install owns. On Windows, build and install the
-installer instead.
+The source-development launcher currently supports macOS. Windows startup and
+confirmed cleanup derive the same installation-specific WSL distribution name;
+only the default installation retains the legacy name. Windows packaged-app
+qualification must still use a disposable user/installation and verify that its
+distribution and data are separate before exercising recovery.
 
 ### Reproducing a flake under CPU load
 
@@ -489,8 +504,10 @@ and unrelated listeners occupying persisted ports.
 
 ### Recovery and update scenarios
 
-None of these are reachable from a fake engine, so they belong here rather than
-in the Rust suite. Each one is a path that used to have no way out.
+Run these against disposable native installations as well as the Rust and
+browser regressions. Never corrupt or reset an installation containing real
+accounts, credentials, or project work. Passing fixture tests does not qualify
+a shipped artifact.
 
 19. **Incompatible data.** Install a build pinned to an older Postgres major,
     create a pod with data, then install one pinned to a newer major and press
@@ -508,11 +525,16 @@ in the Rust suite. Each one is a path that used to have no way out.
     running. `ps` must show no `lemma-vz` at the moment the disk is discarded,
     and the app must come back to a clean workspace.
 22. **Start over from a wedged installation.** Truncate `locald/control.token`
-    *and* corrupt `operator-config.json`, launch, and confirm the splash names
-    the actual reason. After **Start over**:
-    `security find-generic-password -s work.lemma.local` finds nothing, the
-    locald root and `runtime/releases` are gone, `runtime/install.log`
-    **survives**, and the next launch shows the chooser.
+    *and* corrupt `operator-config.json` in a disposable installation. Open
+    **Recovery** from the welcome screen or tray. **Restart into Recovery**
+    must pause services and downloads. **Force cleanup and reinstall** must
+    open Lemma's in-app confirmation with Cancel focused. Enter, Escape, and
+    closing the window must preserve all fixture data. After explicitly
+    choosing **Erase Local Lemma**, the locald root, downloaded releases,
+    Agent Host pairings and managed folders are gone; external project canaries
+    and the runtime installation log survive, and the chooser returns. Test
+    credential removal with a dedicated test identity only. A live endpoint or
+    failed credential/VM cleanup must report failure and retain retry records.
 23. **Start over with an orphaned VM.** `kill -9` the locald pid, leaving
     `lemma-vz` alive, then start over. The helper must be gone afterwards — it
     is reclaimed by verified identity, not by name.
@@ -544,7 +566,7 @@ Key files:
 desktop-config.json
 runtime/install.log
 runtime/launch.log
-runtime/releases/<version>/
+runtime/releases/<version>-<artifact-identity>/
 locald/network.json
 locald/installation.id
 locald/processes.json

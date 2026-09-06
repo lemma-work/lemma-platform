@@ -108,6 +108,19 @@ switch ($Verb) {
         try {
             cargo test @CargoScope --locked
             Invoke-Checked 'cargo test'
+            node --test ui-tests/tests/*.test.mjs
+            Invoke-Checked 'settings behavior tests'
+            Push-Location ui-tests
+            try {
+                npm ci --ignore-scripts --no-audit --no-fund
+                Invoke-Checked 'settings browser dependencies'
+                if (-not $env:LEMMA_TEST_BROWSER_CHANNEL) {
+                    npx --no-install playwright install chromium
+                    Invoke-Checked 'settings test browser'
+                }
+                npm run test:browser
+                Invoke-Checked 'settings browser tests'
+            } finally { Pop-Location }
         } finally { Pop-Location }
         Ok 'desktop workspace tests pass'
     }

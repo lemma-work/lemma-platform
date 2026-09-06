@@ -21,22 +21,19 @@ pub mod service;
 /// -- npm, and the agent CLIs themselves -- are console programs. Each would
 /// otherwise open a console window in the user's face.
 ///
-/// A no-op everywhere else, so call sites stay platform-neutral.
+/// Used by the Windows service installer. Setup commands preserve this flag
+/// through their process ownership wrapper instead.
+#[cfg(windows)]
 pub(crate) trait NoConsoleWindow {
     fn no_console_window(&mut self) -> &mut Self;
 }
 
+#[cfg(windows)]
 impl NoConsoleWindow for std::process::Command {
-    #[cfg(windows)]
     fn no_console_window(&mut self) -> &mut Self {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         self.creation_flags(CREATE_NO_WINDOW)
-    }
-
-    #[cfg(not(windows))]
-    fn no_console_window(&mut self) -> &mut Self {
-        self
     }
 }
 

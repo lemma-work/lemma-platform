@@ -7,7 +7,9 @@ import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
 import { openLocalSettings, useLocalAiStatus } from "@/lib/desktop/local-capabilities";
 import { useThisComputer } from "@/lib/desktop/this-computer";
 import { useManagedAgentRuntimes } from "@/lib/hooks/use-agent-runtime";
-import { RuntimeProfileKind } from "lemma-sdk";
+import { RuntimeProfileKind, RuntimeProfileStatus } from "lemma-sdk";
+import { isReadyLocalAgent } from "@/lib/desktop/local-agent-default";
+import Link from "next/link";
 
 /**
  * "Configure an AI provider", but only when that is actually true.
@@ -38,23 +40,28 @@ export function LocalAiSetupBanner() {
     const { status } = useLocalAiStatus(local);
     const managed = useManagedAgentRuntimes(local ? currentOrg?.id : null);
 
-    if (!local || status !== "needs_setup") return null;
+    if (!local || status !== "needs_setup" || managed.isPending) return null;
 
-    // A saved coding agent answers chats on its own credentials, so it settles
-    // the question the banner is asking even though the operator config is
-    // still empty.
-    const hasCodingAgent = (managed.data?.items ?? []).some(
-        (profile) => profile.kind === RuntimeProfileKind.HARNESS,
+    const profiles = managed.data?.items ?? [];
+    if (profiles.some(isReadyLocalAgent)) return null;
+    const hasCodingAgent = profiles.some(
+        (profile) => profile.kind === RuntimeProfileKind.HARNESS && profile.status !== RuntimeProfileStatus.DISABLED,
     );
-    if (hasCodingAgent) return null;
 
     return (
         <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
             <span>
-                <strong>No model is set up yet.</strong>{" "}
-                Connect a coding agent on {computerNoun} or an API provider, and agents start working.
+                {hasCodingAgent ? (
+                    <><strong>Your coding agents aren&apos;t ready.</strong>{" "}
+                        Open Models to check their computer, sign-in, and setup status.</>
+                ) : (
+                    <><strong>No model is set up yet.</strong>{" "}
+                        Connect a coding agent on {computerNoun} or an API provider to start chatting.</>
+                )}
             </span>
-            <Button
+            {hasCodingAgent && currentOrg ? <Button asChild variant="secondary" size="sm" className="shrink-0">
+                <Link href={`/organizations/${currentOrg.id}/settings/agent-runtimes`}>Open Models</Link>
+            </Button> : <Button
                 variant="secondary"
                 type="button"
                 size="sm"
@@ -62,7 +69,7 @@ export function LocalAiSetupBanner() {
                 onClick={() => void openLocalSettings("ai")}
             >
                 Set up
-            </Button>
+            </Button>}
         </aside>
     );
 }

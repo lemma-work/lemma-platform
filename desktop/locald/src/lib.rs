@@ -1,4 +1,5 @@
 pub mod agent_host;
+pub mod config_operations;
 pub mod daemon;
 pub mod host_process;
 pub mod local_domain;
@@ -14,6 +15,7 @@ pub mod reset;
 pub mod sharing;
 pub mod state;
 pub mod telemetry;
+mod vault_reads;
 
 pub const PROTOCOL_VERSION: u64 = 1;
 

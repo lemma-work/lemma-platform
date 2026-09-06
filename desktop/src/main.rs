@@ -8,6 +8,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+mod config_store;
+mod confirmation;
+mod ipc_read;
+mod recovery;
+mod shutdown;
+use recovery::RecoveryOutcome;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
@@ -25,7 +31,6 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, Webview, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::UpdaterExt as _;
 
 mod artifact_install;
@@ -44,7 +49,7 @@ const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
 // public release number.
-const REQUIRED_LOCALD_API_REVISION: u64 = 3;
+const REQUIRED_LOCALD_API_REVISION: u64 = 4;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -272,16 +277,11 @@ struct Shell {
     /// caller's multi-hundred-megabyte download blocked every other caller
     /// -- including Local settings' heartbeat -- for the whole install.
     runtime_install: Mutex<()>,
+    recovery_running: AtomicBool,
+    confirmations: confirmation::Confirmations,
+    recovery_mode: AtomicBool,
     quit_after_stop: AtomicBool,
-    /// Whether the shutdown work has already been done, off the main thread.
-    ///
-    /// `RunEvent::Exit` is delivered on the main thread with the window already
-    /// gone, so anything slow there is a beachball and then a process macOS
-    /// reports as "not responding". Every path now does that work on a worker
-    /// first and sets this; the handler on the main thread is a safety net for
-    /// the paths that never get one -- a system logout or restart -- not the
-    /// normal route.
-    teardown_done: AtomicBool,
+    shutdown: shutdown::Shutdown,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
     /// The tray's Agent Host line. A label, never a control: the toggle beside
@@ -334,8 +334,11 @@ impl Shell {
             locald_writer: Mutex::new(None),
             locald_connect: Mutex::new(()),
             runtime_install: Mutex::new(()),
+            recovery_running: AtomicBool::new(false),
+            confirmations: confirmation::Confirmations::default(),
+            recovery_mode: AtomicBool::new(false),
             quit_after_stop: AtomicBool::new(false),
-            teardown_done: AtomicBool::new(false),
+            shutdown: shutdown::Shutdown::default(),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),
             agent_host_status: Mutex::new(None),
@@ -667,7 +670,7 @@ fn write_resume_route(route: &str) {
 /// the installer, a published app — because none of those are somewhere to
 /// resume to.
 fn current_workspace_route(app: &AppHandle, target: &ResumeTarget) -> Option<String> {
-    let url = app.get_webview_window("main")?.url().ok()?;
+    let url = app.get_webview("main")?.url().ok()?;
     if !same_origin(&url, &target.url) {
         return None;
     }
@@ -742,76 +745,8 @@ fn generation_matches(client: &reqwest::blocking::Client, url: &str, generation:
 }
 
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let mut config = read_config();
-    update(&mut config);
-    let directory = app_support_dir();
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("could not create desktop config directory: {error}"))?;
-    let serialized = serde_json::to_vec_pretty(&config)
-        .map_err(|error| format!("could not encode desktop config: {error}"))?;
-    let destination = config_path();
-    let temporary = destination.with_extension(format!("json.next-{}", std::process::id()));
-    let _ = std::fs::remove_file(&temporary);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| format!("could not stage desktop config: {error}"))?;
-    file.write_all(&serialized)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("could not persist desktop config: {error}"))?;
-    replace_config_file(&temporary, &destination)
-        .map_err(|error| format!("could not activate desktop config: {error}"))?;
-    #[cfg(unix)]
-    {
-        if let Ok(directory) = std::fs::File::open(directory) {
-            let _ = directory.sync_all();
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn replace_config_file(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-fn replace_config_file(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    config_store::update(&config_path(), update)
+        .map_err(|error| format!("could not save desktop configuration: {error}"))
 }
 
 fn connection_mode() -> String {
@@ -1199,9 +1134,10 @@ fn runtime_info_snapshot() -> RuntimeInfo {
         // Retain the prior immutable pack, but never offer an unsafe downgrade.
         rollback_available: false,
         repair_available: downloaded_active
-            && configured
-                .as_ref()
-                .is_some_and(|runtime| runtime.release == env!("CARGO_PKG_VERSION")),
+            && config
+                .pointer("/installedRuntime/release")
+                .and_then(Value::as_str)
+                == Some(env!("CARGO_PKG_VERSION")),
     }
 }
 
@@ -1278,8 +1214,19 @@ fn enriched_path() -> String {
 // Durable local daemon lifecycle
 // ---------------------------------------------------------------------------
 
+fn require_no_recovery(shell: &Shell) -> Result<(), String> {
+    if shell.recovery_mode.load(Ordering::Acquire) {
+        return Err("Recovery mode: local services and downloads are paused. Use Recovery, or choose a connection mode to resume.".into());
+    }
+    if shell.recovery_running.load(Ordering::Acquire) {
+        return Err("Installation cleanup is running. Wait for it to finish before starting local services.".into());
+    }
+    Ok(())
+}
+
 fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     let shell: State<Shell> = app.state();
+    require_no_recovery(&shell)?;
     // The runtime comes first, and before the "already connected" check rather
     // than after it.
     //
@@ -1302,6 +1249,7 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     // every unrelated caller into a hang of the same length.
     {
         let _install_guard = shell.runtime_install.lock().unwrap();
+        require_no_recovery(&shell)?;
         ensure_runtime_artifacts(app)?;
     }
     if shell.locald_writer.lock().unwrap().is_some() {
@@ -1309,6 +1257,7 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     }
 
     let _connect_guard = shell.locald_connect.lock().unwrap();
+    require_no_recovery(&shell)?;
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
@@ -1356,10 +1305,12 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 /// installed app had already replaced.
 fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
     let shell: State<Shell> = app.state();
+    require_no_recovery(&shell)?;
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
     let _connect_guard = shell.locald_connect.lock().unwrap();
+    require_no_recovery(&shell)?;
     if shell.locald_writer.lock().unwrap().is_some() {
         return Ok(());
     }
@@ -1382,7 +1333,12 @@ fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
 }
 
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
-    match ensure_runtime_artifacts_inner(app) {
+    prepare_runtime_artifacts(app, false)
+}
+
+fn prepare_runtime_artifacts(app: &AppHandle, reinstall: bool) -> Result<(), String> {
+    require_no_recovery(&app.state::<Shell>())?;
+    match ensure_runtime_artifacts_inner(app, reinstall) {
         Ok(()) => Ok(()),
         Err(error) => {
             let message = actionable_runtime_install_error(&error);
@@ -1394,7 +1350,7 @@ fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
+fn ensure_runtime_artifacts_inner(app: &AppHandle, reinstall: bool) -> Result<(), String> {
     if runtime_root().join("desktop/locald/Cargo.toml").is_file() {
         return Ok(());
     }
@@ -1425,7 +1381,9 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
     // semantic release is unchanged. This lets signed test builds replace a
     // same-version runtime pack without silently retaining stale components.
     if let Some(runtime) = configured_runtime(&config, "installedRuntime").filter(|runtime| {
-        runtime.release == env!("CARGO_PKG_VERSION") && runtime.has_recorded_artifact_identity()
+        !reinstall
+            && runtime.release == env!("CARGO_PKG_VERSION")
+            && runtime.has_recorded_artifact_identity()
     }) {
         let Some(manifest) = bundled_manifest.as_ref() else {
             return Ok(());
@@ -1451,7 +1409,7 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
             env!("CARGO_PKG_VERSION")
         ));
     }
-    if let Some(runtime) = configured_runtime(&config, "installedRuntime") {
+    if let Some(runtime) = configured_runtime(&config, "installedRuntime").filter(|_| !reinstall) {
         let matches = artifact_install::runtime_matches_manifest(
             &runtime,
             &manifest,
@@ -1463,9 +1421,6 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         }
     }
     let install_operation_id = operation_id("runtime-install");
-    stop_locald_for_runtime_maintenance(app).map_err(|error| {
-        format!("could not stop the previous local runtime before update: {error}")
-    })?;
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
@@ -1483,7 +1438,12 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         None,
     );
     let install_started = std::time::Instant::now();
-    let installed = artifact_install::install_from_manifest(
+    let install = if reinstall {
+        artifact_install::reinstall_from_manifest
+    } else {
+        artifact_install::install_from_manifest
+    };
+    let installed = install(
         &manifest,
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
@@ -1527,6 +1487,9 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         },
     )
     .map_err(|error| format!("could not install the local runtime: {error}"))?;
+    stop_locald_for_runtime_maintenance(app).map_err(|error| {
+        format!("could not stop the previous local runtime before activation: {error}")
+    })?;
     activate_installed_runtime(&installed)?;
     emit_runtime_install_progress(
         app,
@@ -1620,9 +1583,7 @@ fn activate_installed_runtime(
             .get("installedRuntime")
             .cloned()
             .unwrap_or(Value::Null);
-        if runtime_from_config_value(&current).is_some()
-            && current.get("release") != next.get("release")
-        {
+        if runtime_from_config_value(&current).is_some() && current != next {
             config["previousRuntime"] = current;
         }
         config["installedRuntime"] = next;
@@ -1899,34 +1860,41 @@ where
 
 fn connect_locald() -> Result<LocaldConnection, String> {
     let root = locald_root();
-    let token = std::fs::read_to_string(root.join("control.token"))
+    let token_path = root.join("control.token");
+    if std::fs::metadata(&token_path).is_ok_and(|meta| meta.len() > 4096) {
+        return Err("control token exceeds its size limit".into());
+    }
+    let token = std::fs::read_to_string(token_path)
         .map_err(|error| format!("control token unavailable: {error}"))?;
-    let stream = LocalSocketStream::connect(locald_socket_name(&root)?)
+    let mut stream = LocalSocketStream::connect(locald_socket_name(&root)?)
         .map_err(|error| format!("control endpoint unavailable: {error}"))?;
-    let (receive, mut send) = stream.split();
+    // Named pipes do not support synchronous read timeouts. Nonblocking I/O
+    // bounds this handshake on both platforms without leaving a waiter thread.
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     writeln!(
-        send,
+        stream,
         "{}",
         json!({"v": 1, "cmd": "hello", "token": token.trim(), "client": "desktop"})
     )
     .map_err(|error| format!("daemon authentication failed: {error}"))?;
-    send.flush()
+    stream
+        .flush()
         .map_err(|error| format!("daemon authentication failed: {error}"))?;
-    let mut reader = BufReader::new(receive);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
+    let line = ipc_read::handshake_line(&mut stream, LOCALD_HANDSHAKE_BUDGET, 1024 * 1024)
         .map_err(|error| format!("daemon handshake failed: {error}"))?;
-    if line.len() > 1024 * 1024 {
-        return Err("daemon handshake exceeded 1 MiB".into());
-    }
     let hello: Value = serde_json::from_str(line.trim_end())
         .map_err(|error| format!("invalid daemon handshake: {error}"))?;
     if hello["event"].as_str() != Some("hello") || hello["protocol"].as_u64() != Some(1) {
         return Err("incompatible lemma-locald handshake".into());
     }
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| error.to_string())?;
+    let (receive, send) = stream.split();
     Ok(LocaldConnection {
-        reader,
+        reader: BufReader::new(receive),
         writer: send,
         hello,
     })
@@ -1952,7 +1920,7 @@ fn wait_for_locald_exit(attempts: usize, reason: &str) -> Result<(), String> {
         if LocalSocketStream::connect(name.clone()).is_err() {
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(LOCALD_EXIT_POLL);
     }
     Err(format!(
         "the local service manager did not stop for {reason}"
@@ -2002,7 +1970,7 @@ fn stop_locald(
         ));
     }
     force_terminate_packaged_locald(original_pid)?;
-    wait_for_locald_exit(150, reason)
+    wait_for_locald_exit(LOCALD_FORCE_EXIT_ATTEMPTS, reason)
 }
 
 #[cfg(target_os = "macos")]
@@ -2012,7 +1980,6 @@ fn force_terminate_packaged_locald(pid: u64) -> Result<(), String> {
     if pid <= 1 || pid == std::process::id() as i32 {
         return Err("refusing to terminate an invalid local service manager process".into());
     }
-    stop_packaged_vz_child(pid)?;
     let actual = macos_process_path(pid)?;
     let expected =
         bundled_locald().ok_or("the packaged local service manager executable is missing")?;
@@ -2022,6 +1989,7 @@ fn force_terminate_packaged_locald(pid: u64) -> Result<(), String> {
             actual.display()
         ));
     }
+    stop_packaged_vz_child(pid)?;
     let result = unsafe { libc::kill(pid, libc::SIGTERM) };
     if result != 0 {
         return Err(format!(
@@ -2090,7 +2058,7 @@ fn stop_packaged_vz_child(parent_pid: i32) -> Result<(), String> {
             }
             continue;
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        let deadline = std::time::Instant::now() + VM_STOP_GRACE_BUDGET;
         while std::time::Instant::now() < deadline {
             if unsafe { libc::kill(child_pid, 0) } != 0 {
                 break;
@@ -2099,7 +2067,7 @@ fn stop_packaged_vz_child(parent_pid: i32) -> Result<(), String> {
         }
         if unsafe { libc::kill(child_pid, 0) } == 0 {
             let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
-            let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let reap_deadline = std::time::Instant::now() + VM_STOP_REAP_BUDGET;
             while std::time::Instant::now() < reap_deadline {
                 if unsafe { libc::kill(child_pid, 0) } != 0 {
                     std::thread::sleep(Duration::from_millis(500));
@@ -2118,8 +2086,14 @@ fn force_terminate_packaged_locald(_pid: u64) -> Result<(), String> {
 }
 
 fn stop_locald_for_runtime_maintenance(app: &AppHandle) -> Result<(), String> {
-    if let Ok(connection) = connect_locald() {
-        replace_locald(connection)?;
+    match connect_locald() {
+        Ok(connection) => replace_locald(connection)?,
+        Err(error) => {
+            let root = locald_root();
+            if LocalSocketStream::connect(locald_socket_name(&root)?).is_ok() {
+                return Err(format!("A local service is still running but cannot be authenticated: {error}. Close that installation or restart this computer, then retry Recovery. No local data has been erased."));
+            }
+        }
     }
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock().unwrap() = None;
@@ -2214,13 +2188,14 @@ fn locald_gone(app: &AppHandle) {
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+    let _ = app.emit_to("control", "lemma:locald-disconnected", ());
     // The tray is driven from `handle_locald_event`, which by definition stops
     // arriving when the daemon does -- so the menu bar kept reading
     // "Lemma: running" and "Agent Host: connected" indefinitely after the stack
     // had gone, which is exactly when someone looks at it.
     refresh_tray_status(app);
     refresh_agent_host_tray(app, &json!({"available": false}));
-    if current_mode(app) == "local" {
+    if current_mode(app) == "local" && app.get_webview("control").is_none() {
         show_splash(app);
     }
 }
@@ -2599,8 +2574,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         // The services are down; the supervisor is not. Reaching the same exit
         // as every other quit is what keeps that true -- see
         // `leave_nothing_running`.
-        leave_nothing_running(app);
-        app.exit(0);
+        finish_quit(app);
         return;
     }
     if schedule_terminal_recovery {
@@ -2669,7 +2643,7 @@ fn settle_dock_presence(app: &AppHandle) {
     // workspace dropped the Dock tile while that app was still there, sitting
     // in the Dock as a window belonging to an application the Dock no longer
     // showed, with no way to ⌘-tab back to it.
-    let anything_on_screen = app.webview_windows().values().any(|window| {
+    let anything_on_screen = app.windows().values().any(|window| {
         window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false)
     });
     let _ = app.set_activation_policy(if anything_on_screen {
@@ -2699,15 +2673,16 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     // is the path the tray's Open uses to ask for it again. Refusing here would
     // leave a running app whose only interface is a tray icon that cannot open
     // anything, with no way back except quitting.
-    if app.get_webview_window("main").is_none() {
+    if app.get_window("main").is_none() {
         let mode = current_mode(app);
         build_main_window(app, &mode, WebviewUrl::App("index.html".into()), true)
             .map_err(|error| format!("could not reopen the window: {error}"))?;
     }
     let window = app
-        .get_webview_window("main")
+        .get_window("main")
         .ok_or("main window is not available")?;
-    window
+    app.get_webview("main")
+        .ok_or("main webview is not available")?
         .navigate(target)
         .map_err(|error| format!("could not open {url}: {error}"))?;
     // Before showing, so the icon and the window arrive together rather than
@@ -2731,10 +2706,7 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
 /// stable workspace must not be navigated for transient component recovery, and
 /// re-navigating it would throw away whatever the user was doing.
 fn main_window_needs_workspace(app: &AppHandle, workspace: &str) -> bool {
-    let Some(url) = app
-        .get_webview_window("main")
-        .and_then(|window| window.url().ok())
-    else {
+    let Some(url) = app.get_webview("main").and_then(|window| window.url().ok()) else {
         return false;
     };
     if native_splash_url(&url) {
@@ -2915,15 +2887,9 @@ fn show_splash(app: &AppHandle) {
 
 /// The splash, told what it is watching.
 ///
-/// It reloads as a fresh document every time, so it has no memory of why it was
-/// opened — it asks for state and, finding nothing running, assumes it is meant
-/// to start Lemma. That is right when the user opened the app and wrong when
-/// they asked it to stop: the screen said "Starting Lemma" through a shutdown,
-/// and worse, actually issued a start that raced the stop it was showing.
-///
-/// The intent rides in the query string because `show_splash` navigates, so
-/// there is no live page left to tell. `native_splash_url` matches on path, so
-/// the splash stays recognised as the splash.
+/// The intent rides in the query string because navigation discards the old
+/// page. A stop must display shutdown progress even before its first state
+/// event arrives. Startup itself is owned by the shell, never page loading.
 fn show_splash_with_intent(app: &AppHandle, intent: &str) {
     let _ = open_app_window(
         app,
@@ -2949,18 +2915,20 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
     if !matches!(
         page,
         "overview"
+            | "computer"
             | "ai"
             | "sharing"
             | "integrations"
             | "channels"
             | "runtime"
             | "updates"
+            | "recovery"
             | "diagnostics"
     ) {
         return Err(format!("unknown Local settings page: {page}"));
     }
     if let Some(webview) = app.get_webview("control") {
-        if let Some(main) = app.get_webview_window("main") {
+        if let Some(main) = app.get_window("main") {
             restore_dock_presence(app);
             let _ = main.show();
             let _ = main.set_focus();
@@ -2992,7 +2960,7 @@ fn create_control_child(app: &AppHandle, page: &str) -> Result<(), String> {
         return Ok(());
     }
     let main = app
-        .get_webview_window("main")
+        .get_window("main")
         .ok_or("main window is not available")?;
     restore_dock_presence(app);
     main.show().map_err(|error| error.to_string())?;
@@ -3018,7 +2986,7 @@ fn create_control_child(app: &AppHandle, page: &str) -> Result<(), String> {
             }
             NewWindowResponse::Deny
         });
-    let parent = main.as_ref().window();
+    let parent = &main;
     let size = parent.inner_size().map_err(|error| error.to_string())?;
     let webview = parent
         .add_child(builder, PhysicalPosition::new(0, 0), size)
@@ -3039,10 +3007,10 @@ fn create_control_child(app: &AppHandle, page: &str) -> Result<(), String> {
 fn open_developer_tools(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
     let main = app
-        .get_webview_window("main")
+        .get_webview("main")
         .ok_or("main window is not available")?;
     main.open_devtools();
-    let _ = main.show();
+    let _ = main.window().show();
     let _ = main.set_focus();
     Ok(())
 }
@@ -3095,7 +3063,12 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    ensure_locald(&app)?;
+    // Stop never installs a runtime or starts a replacement daemon. In
+    // particular, quitting a damaged installation must not start a download.
+    if app.state::<Shell>().locald_writer.lock().unwrap().is_none() {
+        let connection = connect_locald()?;
+        install_locald_connection(&app, connection);
+    }
     // Only put the splash up once the daemon has actually taken the stop.
     // Showing it first meant a refused operation left a "stopping Lemma"
     // screen in front of a stack that was never asked to stop.
@@ -3619,7 +3592,7 @@ struct AppUpdateStatus {
     /// user commits is the difference between a considered choice and a
     /// surprise.
     runtime_download_bytes: Option<u64>,
-    /// Whether taking this update requires discarding local data first.
+    /// Known database compatibility; this alone is not upgrade qualification.
     data_compatibility: &'static str,
 }
 
@@ -3662,7 +3635,13 @@ async fn check_for_app_update(window: Webview, app: AppHandle) -> Result<AppUpda
     // and hands back the parsed document, so this costs no extra request.
     let metadata = lemma_update_metadata(&update.raw_json);
     status.runtime_download_bytes = metadata.runtime_download_bytes;
-    status.data_compatibility = metadata.compatibility_with(installed_postgres_major());
+    status.data_compatibility = if !has_local_runtime_data() {
+        "compatible"
+    } else if cfg!(windows) {
+        "migration-unavailable"
+    } else {
+        metadata.compatibility_with(installed_postgres_major())
+    };
     Ok(status)
 }
 
@@ -3674,16 +3653,11 @@ struct LemmaUpdateMetadata {
 }
 
 impl LemmaUpdateMetadata {
-    /// Whether taking this update strands the data already on this Mac.
-    ///
-    /// Absent information warns rather than blocks. Blocking on absence would
-    /// strand every user the first time the feed lags a release, and the
-    /// runtime installer refuses an incompatible pairing anyway -- this exists
-    /// to say so *before* 506 MB is downloaded, not instead of that check.
+    /// Unknown compatibility blocks replacement when local runtime data exists.
     fn compatibility_with(&self, installed: Option<u64>) -> &'static str {
         match (installed, self.postgres_major) {
             (Some(installed), Some(candidate)) if installed == candidate => "compatible",
-            (Some(_), Some(_)) => "requires-reset",
+            (Some(_), Some(_)) => "migration-unavailable",
             _ => "unknown",
         }
     }
@@ -3704,6 +3678,27 @@ fn installed_postgres_major() -> Option<u64> {
     read_config()
         .pointer("/installedRuntime/dataCompatibility/postgres_major")
         .and_then(Value::as_u64)
+}
+
+fn has_local_runtime_data() -> bool {
+    configured_runtime(&read_config(), "installedRuntime").is_some()
+        || locald_root().join("runtime/macos/data.raw").exists()
+        || locald_root().join("runtime/windows").exists()
+}
+
+fn ensure_update_preserves_data(
+    reset_requested: bool,
+    has_runtime: bool,
+    compatibility: &str,
+    windows: bool,
+) -> Result<(), String> {
+    if reset_requested {
+        return Err("Updates never reset local data. Factory reset is a separate destructive action in recovery.".into());
+    }
+    if has_runtime && (windows || compatibility != "compatible") {
+        return Err("This update has no supported data-preserving migration for this installation. Your current version and data have been kept. Wait for a compatible update.".into());
+    }
+    Ok(())
 }
 
 /// Download and install a newer Lemma, then offer to restart.
@@ -3730,6 +3725,13 @@ async fn install_app_update(
         .map_err(|error| format!("could not check for updates: {error}"))?
         .ok_or("Lemma is already up to date")?;
 
+    ensure_update_preserves_data(
+        reset_data,
+        has_local_runtime_data(),
+        lemma_update_metadata(&update.raw_json).compatibility_with(installed_postgres_major()),
+        cfg!(windows),
+    )?;
+
     // Downloaded first, and deliberately not with `download_and_install`.
     //
     // `download` is where the signature is verified, and it is the step most
@@ -3741,25 +3743,6 @@ async fn install_app_update(
         .download(|_, _| {}, || {})
         .await
         .map_err(|error| format!("could not download the update: {error}"))?;
-
-    // The data goes now: after the download has been fetched and its signature
-    // checked, and while the daemon that has to do the wiping is still up.
-    //
-    // Not before the download, which is where the UI used to do it -- a network
-    // drop or an unverifiable key then destroyed every pod, file and account for
-    // an update that never began. And not after the install, because by then
-    // this app's bundle has been replaced and `ensure_locald` would start the
-    // *new* daemon against the old runtime.
-    //
-    // What remains is download-succeeded-then-install-failed, which leaves a
-    // working older app on empty data. Rare, recoverable, and the honest cost of
-    // an incompatible upgrade.
-    if reset_data {
-        let handle = app.clone();
-        tauri::async_runtime::spawn_blocking(move || reset_local_data_and_wait(&handle))
-            .await
-            .map_err(|error| error.to_string())??;
-    }
 
     // Now, and only now. A DMG install moves the old app to the Trash, so the
     // running daemon's executable path changes and `locald_is_this_build`
@@ -3774,6 +3757,12 @@ async fn install_app_update(
     update
         .install(bytes)
         .map_err(|error| format!("could not install the update: {error}"))?;
+
+    // The Windows updater exits this process to run the installer. Completion
+    // belongs to the next launch, not a dialog after installation.
+    if cfg!(windows) {
+        return Ok(());
+    }
 
     let restart = confirm_destructive_action_impl(
         app.clone(),
@@ -3827,14 +3816,14 @@ fn allocated_bytes(path: &std::path::Path) -> u64 {
 
 /// Destroy everything on this Mac that the user made, then start clean.
 #[tauri::command]
-async fn reset_local_data(window: Webview, app: AppHandle) -> Result<(), String> {
+async fn reset_local_data(window: Webview, app: AppHandle) -> Result<RecoveryOutcome, String> {
     require_local_native_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || reset_local_data_impl(app))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
+fn reset_local_data_impl(app: AppHandle) -> Result<RecoveryOutcome, String> {
     if !confirm_destructive_action_impl(
         app.clone(),
         "Reset local data?".into(),
@@ -3845,7 +3834,7 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
         ),
         "Reset Data".into(),
     )? {
-        return Ok(());
+        return Ok(RecoveryOutcome::Cancelled);
     }
 
     // Before anything is destroyed, and first, because the completion handler
@@ -3874,63 +3863,55 @@ fn reset_local_data_impl(app: AppHandle) -> Result<(), String> {
         &app,
         json!({"cmd": "local.reset-data", "confirm": "reset-local-data"}),
         operation_id("reset-data"),
-    )
-}
-
-/// The same reset, but not returning until the daemon says it is done.
-///
-/// `reset_local_data_impl` hands the request to `send_local_operation`, which
-/// returns as soon as it is written -- right for a button, where the splash
-/// renders the progress. Wrong for the update flow, which has to know the data
-/// is actually gone before it replaces the app on top of it.
-///
-/// No confirmation of its own: the caller has already asked, in the words of
-/// what it is about to do.
-fn reset_local_data_and_wait(app: &AppHandle) -> Result<(), String> {
-    clear_local_session_data(app);
-    if let Err(error) = write_config(|config| {
-        if let Some(object) = config.as_object_mut() {
-            object.remove("resumeTarget");
-        }
-    }) {
-        append_install_log(&format!(
-            "update: could not clear the resume target: {error}"
-        ));
-    }
-    ensure_locald(app)?;
-    locald_request_blocking(json!({
-        "v": 1,
-        "cmd": "local.reset-data",
-        "confirm": "reset-local-data",
-        "id": operation_id("update-reset-data"),
-    }))
-    .map(|_| ())
+    )?;
+    Ok(RecoveryOutcome::Started)
 }
 
 /// Return this Mac to the state of one that has never run Lemma.
 #[tauri::command]
-async fn reset_full_reinstall(window: Webview, app: AppHandle) -> Result<(), String> {
+async fn restart_into_recovery(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_control_window(&window)?;
+    std::fs::create_dir_all(app_support_dir()).map_err(|error| error.to_string())?;
+    std::fs::write(app_support_dir().join("recovery-mode"), b"recovery\n")
+        .map_err(|error| format!("could not request recovery mode: {error}"))?;
+    app.restart();
+}
+
+/// Erase this installation only after an explicit native confirmation.
+#[tauri::command]
+async fn reset_full_reinstall(window: Webview, app: AppHandle) -> Result<RecoveryOutcome, String> {
     require_local_native_window(&window)?;
     tauri::async_runtime::spawn_blocking(move || reset_full_reinstall_impl(app))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
+fn reset_full_reinstall_impl(app: AppHandle) -> Result<RecoveryOutcome, String> {
     if !confirm_destructive_action_impl(
         app.clone(),
-        "Start over?".into(),
+        "Permanently erase local Lemma and reinstall?".into(),
         format!(
-            "Everything Lemma keeps on {THIS_COMPUTER} is deleted: your pods and \
-             files, your AI provider settings and stored keys, and the downloaded \
-             runtime. Setting up again downloads about 506 MB.\n\nThis cannot be \
-             undone."
+            "This permanently deletes local pods, databases, files, accounts, schedules, \
+             AI provider settings and stored keys, downloaded runtime files, and this \
+             installation's Agent Host pairings and managed working folders on {THIS_COMPUTER}.\n\n\
+             Active local work stops. External project folders and Lemma Cloud workspace \
+             data are kept. The Lemma app and diagnostic logs are kept. Choosing Local Lemma \
+             afterwards downloads its verified services again and requires an internet connection.\n\n\
+             There is no automatic backup. Export anything you need before continuing. \
+             This cannot be undone."
         ),
-        "Start Over".into(),
+        "Erase Local Lemma".into(),
     )? {
-        return Ok(());
+        return Ok(RecoveryOutcome::Cancelled);
     }
 
+    let shell: State<Shell> = app.state();
+    let _recovery = recovery::RecoveryGuard::enter(&shell.recovery_running)
+        .map_err(|error| error.to_string())?;
+    let _installation = shell.runtime_install.try_lock()
+        .map_err(|_| "An installation is still running. Close and reopen Lemma, then use Recovery before starting setup.".to_string())?;
+    let _connection = shell.locald_connect.try_lock()
+        .map_err(|_| "The background service is still starting. Wait for startup to finish or close and reopen Lemma, then retry Recovery.".to_string())?;
     clear_local_session_data(&app);
     // The daemon has to be gone before its own state directory is removed, and
     // this tolerates there being no daemon at all -- which is the state this
@@ -3940,44 +3921,13 @@ fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
     let summary = run_locald_reset()?;
     append_install_log(&format!("full reinstall: {summary}"));
 
-    // The downloaded runtime, quarantined before it is deleted: a crash midway
-    // through a recursive delete would otherwise leave a partial release that
-    // `is_complete()` might still accept, where a dot-prefixed sibling can
-    // never be mistaken for one.
-    let releases = runtime_install_root().join("releases");
-    if releases.exists() {
-        let aside = releases.with_file_name(format!(
-            ".releases.invalid-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_millis())
-                .unwrap_or_default()
-        ));
-        std::fs::rename(&releases, &aside)
-            .map_err(|error| format!("could not set the installed runtime aside: {error}"))?;
-        let _ = std::fs::remove_dir_all(&aside);
-    }
-    // Deliberately not `runtime/` wholesale: install.log and launch.log live
-    // there and are the only surviving record of what went wrong.
-
-    // This one is load-bearing and its failure is raised. The runtime is gone
-    // from disk; a config that still names it would have the next launch treat
-    // a deleted release as installed, which is a worse state than the one the
-    // user pressed the button to escape.
-    write_config(|config| {
-        if let Some(object) = config.as_object_mut() {
-            for key in [
-                "installedRuntime",
-                "previousRuntime",
-                "resumeTarget",
-                "connectionMode",
-                "connectionModePromptRevision",
-            ] {
-                object.remove(key);
-            }
-        }
-    })
-    .map_err(|error| format!("local state was removed but the app's config was not: {error}"))?;
+    let root = locald_root();
+    let agent_host = root
+        .parent()
+        .ok_or("the local installation has no parent directory")?
+        .join("agent-host");
+    recovery::clear_reinstall_files(&app_support_dir(), &agent_host)
+        .map_err(|error| format!("Cleanup is incomplete: {error}. Some local data has already been erased. Retry force cleanup to finish."))?;
 
     let snapshot = {
         let shell: State<Shell> = app.state();
@@ -3991,8 +3941,13 @@ fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
         ui.clone()
     };
     let _ = app.emit("lemma:state", snapshot);
+    refresh_menus_for_connection_mode(&app);
+    shell.recovery_mode.store(false, Ordering::Release);
+    if let Some(control) = app.get_webview("control") {
+        let _ = control.close();
+    }
     show_splash(&app);
-    Ok(())
+    Ok(RecoveryOutcome::Completed)
 }
 
 /// Run `lemma-locald reset` and return its JSON summary.
@@ -4005,14 +3960,15 @@ fn reset_full_reinstall_impl(app: AppHandle) -> Result<(), String> {
 fn run_locald_reset() -> Result<String, String> {
     let executable = bundled_sibling("lemma-locald")
         .ok_or("the bundled lemma-locald is missing, so local state cannot be reset")?;
-    let output = Command::new(executable)
-        .arg("reset")
+    let mut command = Command::new(executable);
+    command
+        .args(["reset", "--confirm=erase-local-lemma"])
         .env("LEMMA_LOCALD_ROOT", locald_root())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .no_console_window()
-        .output()
+        .no_console_window();
+    let output = lemma_desktop_process::run(command, Duration::from_secs(120), 1024 * 1024)
         .map_err(|error| format!("could not run the local reset: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
@@ -4028,7 +3984,7 @@ fn run_locald_reset() -> Result<String, String> {
 /// webview will not answer, and the alternative to trying is a user who is
 /// signed in to a database that no longer exists.
 fn clear_local_session_data(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_webview("main") {
         let _ = window.clear_all_browsing_data();
     }
 }
@@ -4037,56 +3993,33 @@ fn repair_runtime_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
     }
-    let original_config = read_config();
-    let current = configured_runtime(&original_config, "installedRuntime")
-        .ok_or("there is no verified downloaded runtime to repair")?;
-    if current.release != env!("CARGO_PKG_VERSION") {
+    let shell: State<Shell> = app.state();
+    let _install_guard = shell.runtime_install.lock().unwrap();
+    require_no_recovery(&shell)?;
+    let config = read_config();
+    if config
+        .pointer("/installedRuntime/release")
+        .and_then(Value::as_str)
+        != Some(env!("CARGO_PKG_VERSION"))
+    {
         return Err(
             "this retained runtime cannot be repaired with the current signed manifest".into(),
         );
     }
-    let original_root = current
-        .host_pack_root
-        .parent()
-        .ok_or("installed runtime has no release root")?
-        .to_path_buf();
-    stop_locald_for_runtime_maintenance(&app)?;
     emit_runtime_install_progress(
         &app,
         "repair",
         "runtime",
-        "Isolating the damaged runtime",
+        "Preparing a verified replacement runtime",
         1,
         None,
         None,
         None,
         None,
     );
-    let quarantined = artifact_install::quarantine_runtime(&current)
-        .map_err(|error| format!("could not isolate the installed runtime: {error}"))?;
-
-    let repair = ensure_runtime_artifacts(&app)
-        .and_then(|_| start_after_runtime_maintenance(&app, "shell-start-after-runtime-repair"));
-    if let Err(error) = repair {
-        if original_root.exists() {
-            let replacement =
-                artifact_install::installed_runtime(&original_root, env!("CARGO_PKG_VERSION"));
-            if replacement.is_complete() {
-                let _ = artifact_install::quarantine_runtime(&replacement);
-            } else {
-                let failed = original_root
-                    .with_file_name(format!(".runtime-repair-failed-{}", std::process::id()));
-                let _ = std::fs::rename(&original_root, failed);
-            }
-        }
-        let _ = std::fs::rename(&quarantined, &original_root);
-        let _ = write_config(|config| *config = original_config);
-        let _ = start_after_runtime_maintenance(&app, "shell-start-after-repair-rollback");
-        return Err(format!(
-            "runtime repair failed and the prior verified release was restored: {error}"
-        ));
-    }
-    Ok(())
+    prepare_runtime_artifacts(&app, true)?;
+    drop(_install_guard);
+    start_after_runtime_maintenance(&app, "shell-start-after-runtime-repair")
 }
 
 #[tauri::command]
@@ -4101,7 +4034,8 @@ async fn control_snapshot(window: Webview, app: AppHandle, id: String) -> Result
 }
 
 fn control_snapshot_impl(app: AppHandle, id: String) -> Result<(), String> {
-    ensure_locald(&app)?;
+    // Opening settings is not consent to download or repair a local runtime.
+    ensure_locald_without_host_pack(&app)?;
     send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
 }
 
@@ -4711,7 +4645,7 @@ fn sharing_action_impl(
 fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
     window.close().map_err(|error| error.to_string())?;
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.get_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
     }
@@ -4726,8 +4660,8 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
 /// and "Verify & repair runtime", which made both buttons look inert on macOS
 /// -- the click was received and then silently discarded.
 ///
-/// The prompt text is chosen in the page, but the dialog is native, so it is
-/// the same one the tray and the quit path already use.
+/// The prompt uses a trusted, app-owned overlay shared with the tray and quit
+/// path, with Cancel focused before any destructive action can proceed.
 #[tauri::command]
 async fn confirm_destructive_action(
     window: Webview,
@@ -4753,23 +4687,97 @@ fn confirm_destructive_action_impl(
     message: String,
     confirm_label: String,
 ) -> Result<bool, String> {
-    // `show` hands the dialog to the main thread and returns; commands run off
-    // it, so waiting here blocks a worker rather than the UI.
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    app.dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            confirm_label,
-            "Cancel".into(),
-        ))
-        .show(move |confirmed| {
-            let _ = sender.send(confirmed);
-        });
+    show_app_prompt(app, title, message, confirm_label, true)
+}
+
+fn show_app_prompt(
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+    cancelable: bool,
+) -> Result<bool, String> {
+    let shell: State<Shell> = app.state();
+    let id = operation_id("confirmation");
+    let receiver = shell.confirmations.begin(id.clone())?;
+    let result = create_confirmation_overlay(&app, &id, title, message, confirm_label, cancelable);
+    if let Err(error) = result {
+        shell.confirmations.cancel();
+        close_confirmation_overlay(&app);
+        return Err(error);
+    }
     receiver
         .recv()
-        .map_err(|_| "the confirmation dialog closed unexpectedly".to_string())
+        .map_err(|_| "The confirmation closed without a decision.".into())
+}
+
+fn create_confirmation_overlay(
+    app: &AppHandle,
+    id: &str,
+    title: String,
+    message: String,
+    confirm_label: String,
+    cancelable: bool,
+) -> Result<(), String> {
+    let main = app
+        .get_window("main")
+        .ok_or("The app window is unavailable.")?;
+    restore_dock_presence(app);
+    main.show().map_err(|error| error.to_string())?;
+    let payload = json!({"id": id, "title": title, "message": message, "confirmLabel": confirm_label, "cancelable": cancelable});
+    let builder = WebviewBuilder::new("confirmation", WebviewUrl::App("confirmation.html".into()))
+        .auto_resize()
+        .focused(true)
+        .initialization_script(format!("window.__LEMMA_CONFIRMATION__={payload};"))
+        .on_navigation(|url| trusted_native_asset_url(url) && url.path() == "/confirmation.html")
+        .on_new_window(|_, _| NewWindowResponse::Deny);
+    let parent = &main;
+    let size = parent.inner_size().map_err(|error| error.to_string())?;
+    let overlay = parent
+        .add_child(builder, PhysicalPosition::new(0, 0), size)
+        .map_err(|error| error.to_string())?;
+    overlay.set_focus().map_err(|error| error.to_string())
+}
+
+fn close_confirmation_overlay(app: &AppHandle) {
+    remove_confirmation_overlay(app);
+    if let Some(previous) = app
+        .get_webview("control")
+        .or_else(|| app.get_webview("main"))
+    {
+        let _ = previous.set_focus();
+    }
+}
+
+fn remove_confirmation_overlay(app: &AppHandle) {
+    if let Some(overlay) = app.get_webview("confirmation") {
+        let _ = overlay.close();
+    }
+}
+
+#[tauri::command]
+async fn resolve_confirmation(
+    window: Webview,
+    app: AppHandle,
+    id: String,
+    confirmed: bool,
+) -> Result<(), String> {
+    if window.label() != "confirmation"
+        || !window
+            .url()
+            .is_ok_and(|url| trusted_native_asset_url(&url) && url.path() == "/confirmation.html")
+    {
+        return Err("Only the app confirmation can approve this action.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        // Close before releasing the waiter: a following action may open a new prompt.
+        let shell: State<Shell> = app.state();
+        shell.confirmations.validate(&id)?;
+        close_confirmation_overlay(&app);
+        shell.confirmations.resolve(&id, confirmed)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4789,6 +4797,10 @@ fn set_connection_mode_impl(app: AppHandle, mode: String) -> Result<(), String> 
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
     }
+    let _ = std::fs::remove_file(app_support_dir().join("recovery-mode"));
+    app.state::<Shell>()
+        .recovery_mode
+        .store(false, Ordering::Release);
     set_mode(&app, &mode)?;
     if mode == "hosted" {
         return open_app_window(&app, &hosted_url());
@@ -4867,7 +4879,7 @@ struct WindowPlacement {
     size: tauri::PhysicalSize<u32>,
 }
 
-fn placement_of(window: &tauri::WebviewWindow) -> Option<WindowPlacement> {
+fn placement_of(window: &tauri::Window) -> Option<WindowPlacement> {
     Some(WindowPlacement {
         position: window.outer_position().ok()?,
         size: window.inner_size().ok()?,
@@ -5045,7 +5057,7 @@ fn remember_placement(window: &tauri::WebviewWindow) {
     if window.is_minimized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
         return;
     }
-    let Some(placement) = placement_of(window) else {
+    let Some(placement) = placement_of(&window.as_ref().window()) else {
         return;
     };
     if placement.size.width < MIN_RESTORED.0 || placement.size.height < MIN_RESTORED.1 {
@@ -5444,7 +5456,7 @@ fn close_pod_app_window(app: &AppHandle) {
 }
 
 fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
-    let Some(existing) = app.get_webview_window("main") else {
+    let Some(existing) = app.get_window("main") else {
         // Nothing built yet -- `setup` will create it against the right store.
         return;
     };
@@ -5474,7 +5486,7 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
     // millisecond, which turned the fallback into a second identical attempt
     // and left the app with no window at all.
     if !wait_until_label_released(
-        || app.get_webview_window("main").is_some(),
+        || app.get_window("main").is_some(),
         LABEL_RELEASE_TIMEOUT,
         LABEL_RELEASE_POLL,
     ) {
@@ -5504,7 +5516,7 @@ fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str) {
              falling back to shared storage: {error}"
         ));
         let _ = wait_until_label_released(
-            || app.get_webview_window("main").is_some(),
+            || app.get_window("main").is_some(),
             LABEL_RELEASE_TIMEOUT,
             LABEL_RELEASE_POLL,
         );
@@ -5825,7 +5837,7 @@ fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
     if url.scheme() != "lemma" || url.host_str() != Some("auth") || url.path() != "/complete" {
         return;
     }
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -5965,23 +5977,19 @@ fn confirm_then_switch_connection(app: AppHandle) {
     };
     let (title, body, confirm) = connection_switch_prompt(&current, running);
     let handle = app.clone();
-    app.dialog()
-        .message(body)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            confirm,
-            "Cancel".into(),
-        ))
-        .show(move |confirmed| {
-            if !confirmed {
-                return;
-            }
-            let inner = handle.clone();
-            menu_attempt(&inner, "Switch connection", || {
-                choose_connection_mode_impl(handle).map(|_| ())
+    std::thread::spawn(move || {
+        let result = confirm_destructive_action_impl(handle.clone(), title, body, confirm)
+            .and_then(|confirmed| {
+                if confirmed {
+                    choose_connection_mode_impl(handle.clone()).map(|_| ())
+                } else {
+                    Ok(())
+                }
             });
-        });
+        if let Err(error) = result {
+            report_action_failure(&handle, "Switch connection", &error);
+        }
+    });
 }
 
 /// Say so when a menu action fails.
@@ -5997,12 +6005,12 @@ fn report_action_failure(app: &AppHandle, action: &str, error: &str) {
         &launch_log_path(),
         &format!("menu {action} failed: {error}"),
     );
-    app.dialog()
-        .message(error)
-        .title(action)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::Ok)
-        .show(|_| {});
+    let handle = app.clone();
+    let title = action.to_owned();
+    let message = error.to_owned();
+    std::thread::spawn(move || {
+        let _ = show_app_prompt(handle, title, message, "Close".into(), false);
+    });
 }
 
 /// Run a menu action, and surface whatever it has to say about failing.
@@ -6184,17 +6192,17 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             });
         }
         "back" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview("main") {
                 let _ = window.eval("window.history.back()");
             }
         }
         "forward" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview("main") {
                 let _ = window.eval("window.history.forward()");
             }
         }
         "reload" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview("main") {
                 let _ = window.eval("window.location.reload()");
             }
         }
@@ -6248,6 +6256,9 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
         "diagnostics" => {
             let _ = show_control_center_page(&app, Some("diagnostics"));
         }
+        "recovery" => {
+            let _ = show_control_center_page(&app, Some("recovery"));
+        }
         "agent-host-log" => {
             menu_background(&app, "Open Agent Host log", || {
                 reveal_path(&agent_host_log_path())
@@ -6263,9 +6274,9 @@ fn handle_menu_action(app: &AppHandle, id: &str) {
             });
         }
         "devtools" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview("main") {
                 window.open_devtools();
-                let _ = window.show();
+                let _ = window.window().show();
                 let _ = window.set_focus();
             }
         }
@@ -6296,8 +6307,15 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             ..Default::default()
         }),
     )?;
-    let settings = MenuItem::with_id(app, "control", "Settings…", local, Some("CmdOrCtrl+,"))?;
+    let settings = MenuItem::with_id(
+        app,
+        "control",
+        "Desktop settings…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
     let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
+    let recovery = MenuItem::with_id(app, "recovery", "Recovery…", true, None::<&str>)?;
 
     // Services / Hide / Hide Others / Show All are AppKit application-menu
     // conventions. muda will happily construct them elsewhere, where they
@@ -6324,6 +6342,7 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     lemma_items.push(&about);
     lemma_items.push(&lemma_separator);
     lemma_items.push(&settings);
+    lemma_items.push(&recovery);
     lemma_items.push(&connection);
     lemma_items.push(&lemma_separator);
     lemma_items.extend(platform_items.iter().map(|item| item.as_ref()));
@@ -6394,6 +6413,7 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &MenuItem::with_id(app, "docs", "Lemma Docs", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "diagnostics", "Diagnostics…", local, None::<&str>)?,
+            &MenuItem::with_id(app, "recovery", "Recovery…", true, None::<&str>)?,
             &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "start", "Start Lemma", local, None::<&str>)?,
@@ -6464,7 +6484,7 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
-    let control_item = MenuItem::with_id(app, "control", "Local settings…", local, None::<&str>)?;
+    let control_item = MenuItem::with_id(app, "control", "Desktop settings…", true, None::<&str>)?;
 
     // Disabled: a label, not an action. The tray is where you glance at whether
     // this computer is currently able to run coding agents.
@@ -6680,19 +6700,18 @@ fn request_quit(app: &AppHandle) {
         return;
     }
     let handle = app.clone();
-    app.dialog()
-        .message(quit_prompt_body(&impact))
-        .title("Stop Lemma and quit?")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
+    std::thread::spawn(move || {
+        match confirm_destructive_action_impl(
+            handle.clone(),
+            "Stop Lemma and quit?".into(),
+            quit_prompt_body(&impact),
             "Stop and Quit".into(),
-            "Cancel".into(),
-        ))
-        .show(move |confirmed| {
-            if confirmed {
-                stop_then_quit(&handle);
-            }
-        });
+        ) {
+            Ok(true) => stop_then_quit(&handle),
+            Ok(false) => {}
+            Err(error) => report_action_failure(&handle, "Quit Lemma", &error),
+        }
+    });
 }
 
 /// Stop everything this installation is running, then exit when it is down.
@@ -6714,6 +6733,10 @@ fn request_quit(app: &AppHandle) {
 const QUIT_STOP_BUDGET: Duration = Duration::from_secs(45);
 
 fn stop_then_quit(app: &AppHandle) {
+    if current_mode(app) != "local" {
+        finish_quit(app);
+        return;
+    }
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
     shell.quit_after_stop.store(true, Ordering::Release);
@@ -6763,31 +6786,27 @@ fn stop_then_quit(app: &AppHandle) {
 fn finish_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
-    // Off the main thread, and backstopped. Menu and tray handlers run on the
-    // main thread, so waiting for the daemon here would freeze the window --
-    // including the one showing "Winding down." -- for as long as the wait.
     let worker = app.clone();
-    std::thread::spawn(move || {
-        shut_down_gracefully(&worker);
-        worker.exit(0);
-    });
-    let backstop = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(QUIT_DAEMON_BUDGET);
-        // Idempotent, and the loser of this race changes nothing: whichever
-        // arrives first is the one that ends the process.
-        backstop.exit(0);
-    });
+    let exiting = app.clone();
+    shell.shutdown.start(
+        move || shut_down_gracefully(&worker),
+        move || exiting.exit(0),
+        QUIT_DAEMON_BUDGET,
+    );
 }
 
-/// How long a quit waits for the daemon before leaving without it.
-///
-/// Short on purpose. By the time this runs the services are already stopped --
-/// the long wait is `QUIT_STOP_BUDGET`, above -- so what is left is a
-/// supervisor with nothing to supervise, and that exits in well under a second
-/// unless it is wedged. Waiting longer for a wedged one only makes quitting
-/// feel broken as well.
-const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
+/// The watchdog must outlive the verified VM-stop fallback. Exiting the shell
+/// earlier kills its cleanup worker and leaves the VM and daemon orphaned.
+/// This work runs off the UI thread; the app remains responsive throughout.
+const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(70);
+const LOCALD_HANDSHAKE_BUDGET: Duration = Duration::from_secs(3);
+const LOCALD_EXIT_POLL: Duration = Duration::from_millis(100);
+const QUIT_DAEMON_GRACE_ATTEMPTS: usize = 30;
+const LOCALD_FORCE_EXIT_ATTEMPTS: usize = 150;
+#[cfg(any(target_os = "macos", test))]
+const VM_STOP_GRACE_BUDGET: Duration = Duration::from_secs(25);
+#[cfg(any(target_os = "macos", test))]
+const VM_STOP_REAP_BUDGET: Duration = Duration::from_secs(5);
 
 /// Quit has to mean quit.
 ///
@@ -6816,10 +6835,6 @@ const QUIT_DAEMON_BUDGET: Duration = Duration::from_secs(6);
 /// it again there would put the whole wait back on the main thread, which is
 /// the thing that made quitting hang.
 fn shut_down_gracefully(app: &AppHandle) {
-    let shell: State<Shell> = app.state();
-    if shell.teardown_done.swap(true, Ordering::AcqRel) {
-        return;
-    }
     if current_mode(app) == "local" {
         if let Err(error) = release_before_exit() {
             append_install_log(&format!("[quit] sharing could not be closed: {error}"));
@@ -6833,9 +6848,8 @@ fn leave_nothing_running(app: &AppHandle) {
     // it shuts down, and a writer belonging to a window that is going away is
     // one more thing that can block the exit.
     disconnect_locald(app);
-    // Half the budget for the graceful ask, so a daemon that ignores it still
-    // leaves room for the forced arm to verify identity and signal.
-    let outcome = connect_locald().and_then(|connection| stop_locald(connection, "quitting", 30));
+    let outcome = connect_locald()
+        .and_then(|connection| stop_locald(connection, "quitting", QUIT_DAEMON_GRACE_ATTEMPTS));
     match outcome {
         Ok(()) => append_install_log("[quit] the local service manager stopped"),
         // Not fatal, and deliberately not a dialog. The user has asked to
@@ -6915,18 +6929,6 @@ fn remember_workspace_route(app: &AppHandle) {
     }
 }
 
-/// Take every window off screen before a blocking shutdown step runs.
-///
-/// `RunEvent::Exit` is handed to us on the main thread with the webviews
-/// already torn down, so anything slow after this point is a frozen window the
-/// user is still looking at. Hiding first means the app disappears when the
-/// user asked it to and the cleanup finishes out of sight.
-fn hide_windows_for_exit(app: &AppHandle) {
-    for window in app.webview_windows().values() {
-        let _ = window.hide();
-    }
-}
-
 /// The window layer's colour for an appearance.
 fn canvas_color(theme: tauri::Theme) -> tauri::window::Color {
     match theme {
@@ -6985,7 +6987,13 @@ fn request_desktop_release() -> Result<(), String> {
 
 fn main() {
     LAUNCH_START.get_or_init(Instant::now);
-    let mode = connection_mode();
+    let recovery_launch = std::env::args().any(|argument| argument == "--recovery")
+        || app_support_dir().join("recovery-mode").is_file();
+    let mode = if recovery_launch {
+        "undecided".into()
+    } else {
+        connection_mode()
+    };
     launch_trace(&format!("process start, mode={mode}"));
 
     tauri::Builder::default()
@@ -6995,7 +7003,7 @@ fn main() {
                     handle_deep_link(app, &url);
                 }
             }
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -7005,13 +7013,18 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_dialog::init())
         // Deliberately not `tauri-plugin-process` alongside it. That plugin
         // exists to expose `relaunch` to JavaScript; the flow here is driven
         // from Rust and `AppHandle::restart()` is core, so adding it would
         // widen the ACL for nothing.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(Shell::new(mode.clone()))
+        .manage({
+            let shell = Shell::new(mode.clone());
+            shell
+                .recovery_mode
+                .store(recovery_launch, Ordering::Release);
+            shell
+        })
         .invoke_handler(tauri::generate_handler![
             start,
             stop,
@@ -7042,17 +7055,19 @@ fn main() {
             sharing_action,
             close_local_settings,
             confirm_destructive_action,
+            resolve_confirmation,
             open_developer_tools,
             local_recovery_options,
             reset_local_data,
             reset_full_reinstall,
+            restart_into_recovery,
             check_for_app_update,
             install_app_update
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            if connection_mode() == "hosted" && agent_host_wants_to_run() {
+            if !recovery_launch && mode == "hosted" && agent_host_wants_to_run() {
                 // "Runs while Lemma is open" has to hold for a cloud workspace
                 // too, and locald is what supervises the sidecar. An unpaired
                 // or switched-off machine still gets no daemon at all.
@@ -7119,7 +7134,7 @@ fn main() {
 
             // Local mode: connect to the durable daemon immediately so splash
             // has a live event stream the moment it loads.
-            if connection_mode() == "local" {
+            if !recovery_launch && mode == "local" {
                 if let Some(target) = resume.clone() {
                     // The workspace is already on screen and already answering.
                     // Seed the state the shell would otherwise learn from the
@@ -7229,7 +7244,9 @@ fn main() {
                     });
                 }
             }
-            if std::env::var("LEMMA_DESKTOP_OPEN_CONTROL").as_deref() == Ok("1") {
+            if recovery_launch {
+                let _ = show_control_center_page(&handle, Some("recovery"));
+            } else if std::env::var("LEMMA_DESKTOP_OPEN_CONTROL").as_deref() == Ok("1") {
                 let _ = show_control_center(&handle);
             }
             Ok(())
@@ -7252,6 +7269,8 @@ fn main() {
                     // Hidden first. The route is still readable from a hidden
                     // webview, and the user asked for the window to go away now.
                     api.prevent_close();
+                    window.app_handle().state::<Shell>().confirmations.cancel();
+                    remove_confirmation_overlay(window.app_handle());
                     let _ = window.hide();
                     remember_workspace_route(window.app_handle());
                     // ...and leave the Dock, which is the half that makes this
@@ -7295,7 +7314,7 @@ fn main() {
             // the variant does not exist on other platforms.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     restore_dock_presence(app);
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -7335,26 +7354,10 @@ fn main() {
                 request_quit(app);
             }
             tauri::RunEvent::Exit => {
-                // Read the route before anything is torn down or hidden.
-                remember_workspace_route(app);
-                // Off screen first: everything below blocks this thread, and a
-                // visible window with no live webview behind it renders black.
-                hide_windows_for_exit(app);
-                // Normally already done, on a worker, by `finish_quit` --
-                // in which case `shut_down_gracefully` returns immediately and
-                // this thread is not held at all. What remains here is the
-                // paths that never reach `ExitRequested` with a chance to
-                // prevent it: a system logout or restart.
-                // Not just `disconnect_locald`. This is the exit every path
-                // ends at, including the ones that never touch `request_quit`:
-                // Dock -> Quit, `osascript quit`, and a system logout or
-                // restart. Those reach `ExitRequested` with an empty impact --
-                // which is every state where the local stack is not up, and
-                // `lemma-locald` is running in all of them -- so they returned
-                // here having stopped nothing, and left a supervisor with no
-                // interface behind. See `leave_nothing_running`.
-                //
-                shut_down_gracefully(app);
+                // Cleanup belongs to the worker admitted by ExitRequested.
+                // At this point the event loop is leaving and must never wait
+                // for sockets, process shutdown, or another main-thread task.
+                app.state::<Shell>().confirmations.cancel();
             }
             _ => {}
         });
@@ -7781,22 +7784,6 @@ mod tests {
         }
     }
 
-    /// The one screen where a metered connection decides says the real number.
-    #[test]
-    fn first_run_states_the_download_it_actually_makes() {
-        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
-        assert!(
-            !splash.contains("several gigabytes"),
-            "the compressed download is ~500 MB; 'several gigabytes' is the \
-             expanded size and overstates the transfer about threefold",
-        );
-        assert!(splash.contains("about 500&nbsp;MB"));
-        assert!(
-            splash.contains("picks up where it left off"),
-            "downloads have always resumed; nothing told the user so",
-        );
-    }
-
     /// The channel stamp fails closed, and only stable self-updates.
     ///
     /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
@@ -7885,19 +7872,33 @@ mod tests {
         assert_eq!(same.compatibility_with(Some(18)), "compatible");
         assert_eq!(
             same.compatibility_with(Some(16)),
-            "requires-reset",
+            "migration-unavailable",
             "a Postgres major bump cannot open the existing cluster"
         );
 
-        // Absent information warns rather than blocks. Blocking would strand
-        // every user the first time the feed lags a release, and the runtime
-        // installer still refuses an incompatible pairing -- this exists to say
-        // so before 506 MB is downloaded, not instead of that check.
+        // The caller blocks an unknown pairing if an installed runtime has data.
         assert_eq!(same.compatibility_with(None), "unknown");
         assert_eq!(
             LemmaUpdateMetadata::default().compatibility_with(Some(18)),
             "unknown"
         );
+    }
+
+    #[test]
+    fn update_preflight_rejects_data_reset_and_unsupported_migrations() {
+        for windows in [false, true] {
+            for has_runtime in [false, true] {
+                assert!(
+                    ensure_update_preserves_data(true, has_runtime, "compatible", windows).is_err()
+                );
+            }
+        }
+        for compatibility in ["unknown", "requires-reset", "migration-unavailable"] {
+            assert!(ensure_update_preserves_data(false, true, compatibility, false).is_err());
+        }
+        assert!(ensure_update_preserves_data(false, true, "compatible", true).is_err());
+        assert!(ensure_update_preserves_data(false, true, "compatible", false).is_ok());
+        assert!(ensure_update_preserves_data(false, false, "unknown", true).is_ok());
     }
 
     /// A feed without the block, or with junk in it, is read safely.
@@ -8436,6 +8437,7 @@ mod tests {
         let raw = match name {
             "main" => include_str!("../capabilities/main.json"),
             "control" => include_str!("../capabilities/control.json"),
+            "confirmation" => include_str!("../capabilities/confirmation.json"),
             "workspace" => include_str!("../capabilities/workspace.json"),
             other => panic!("unknown capability {other}"),
         };
@@ -8472,7 +8474,7 @@ mod tests {
         );
 
         let mut all_granted: Vec<String> = Vec::new();
-        for name in ["main", "control", "workspace"] {
+        for name in ["main", "control", "workspace", "confirmation"] {
             all_granted.extend(granted(name));
         }
         for command in &all {
@@ -8489,6 +8491,7 @@ mod tests {
         for (capability, script) in [
             ("main", include_str!("../ui/index.html")),
             ("control", include_str!("../ui/control.js")),
+            ("confirmation", include_str!("../ui/confirmation.js")),
         ] {
             let grants = granted(capability);
             for command in invoked_commands(script) {
@@ -8719,7 +8722,7 @@ mod tests {
         // Local settings is a child webview of the main window, and capability
         // matching is (window OR webview). A window-scoped splash capability
         // would therefore hand its commands to Local settings as well.
-        for name in ["main", "control", "workspace"] {
+        for name in ["main", "control", "workspace", "confirmation"] {
             assert!(
                 capability(name).get("windows").is_none(),
                 "{name} must scope by webview, not window",
@@ -9047,168 +9050,6 @@ mod tests {
         assert!(
             removed < set,
             "removal has to happen before the deliberate sets"
-        );
-    }
-
-    #[test]
-    fn quitting_leaves_nothing_running_that_the_user_cannot_see() {
-        let source = include_str!("main.rs").replace("\r\n", "\n");
-        let body_of = |name: &str| {
-            let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
-            let end = source[start..]
-                .find("\nfn ")
-                .map_or(source.len(), |offset| start + offset);
-            &source[start..end]
-        };
-
-        // Closing hides. It must not stop anything, and it must not quit.
-        // Sliced to the end of the closure rather than the next `fn`: this
-        // handler lives inside the builder chain, so "the next fn" is hundreds
-        // of lines of unrelated code that trivially satisfies any assertion.
-        let close = {
-            // The handler comes before this test in the file, so the first
-            // match is the real one and not the copy of the needle sitting in
-            // this assertion. That is load-bearing: when this needle last went
-            // stale it matched *itself*, sliced a region of test source, and
-            // failed on an assertion about code it had never looked at.
-            let start = source
-                .find("tauri::WindowEvent::CloseRequested { api, .. } => {")
-                .expect("the close handler exists");
-            let end = source[start..]
-                .find("\n        })")
-                .expect("the close handler is a closure");
-            &source[start..start + end]
-        };
-        assert!(
-            close.contains("api.prevent_close()"),
-            "closing must not exit"
-        );
-        assert!(close.contains("window.hide()"), "closing hides to the tray");
-        assert!(
-            !close.contains("leave_nothing_running") && !close.contains("stop_impl"),
-            "closing the window must leave the services running",
-        );
-        // Only the main window. This handler is registered on the builder, so
-        // it sees every window -- ungated, it hid pod app windows and refused
-        // to let them close, which is an app the user cannot get rid of.
-        assert!(
-            close.contains("window.label() != \"main\""),
-            "only the main window hides to the tray",
-        );
-        // And the Dock icon goes with it. A hidden window under a live Dock
-        // icon is what sends people to Force Quit: the icon says the app is
-        // running, and clicking it looks like it does nothing.
-        assert!(
-            close.contains("settle_dock_presence"),
-            "closing leaves the Dock, keeping only the tray",
-        );
-
-        // Every exit does the opposite.
-        assert!(
-            body_of("fn finish_quit(").contains("shut_down_gracefully(&worker)"),
-            "the plain quit path has to stop the daemon",
-        );
-
-        // ...and the OS-driven one is given a worker rather than being allowed
-        // through to the main-thread handler. Letting that branch return is
-        // what made Dock -> Quit sit "not responding" for several seconds: the
-        // whole teardown ran on the thread macOS was waiting on.
-        let requested = {
-            let start = source
-                .find("tauri::RunEvent::ExitRequested { api, .. } => {")
-                .expect("the exit-requested handler exists");
-            let end = source[start..]
-                .find("\n            tauri::RunEvent::Exit => {")
-                .expect("the exit handler follows it");
-            &source[start..start + end]
-        };
-        let empty_impact = {
-            let start = requested
-                .find("if quit_impact(app).is_empty() {")
-                .expect("the no-impact branch exists");
-            &requested[start..]
-        };
-        assert!(
-            empty_impact.contains("api.prevent_exit();")
-                && empty_impact.contains("finish_quit(app);"),
-            "a quit with nothing to warn about still has a daemon to stop, and \
-             it must not be stopped on the main thread",
-        );
-
-        // Including the ones that never reach `request_quit` at all. Dock ->
-        // Quit, `osascript quit` and a system logout land straight on
-        // `RunEvent::Exit`, and `quit_impact` is empty in every state where the
-        // stack is not up -- which is exactly when the daemon is running with
-        // nothing on screen. This assertion is the one the previous version of
-        // this test was missing: it checked `finish_quit` and stopped there, so
-        // it passed while the most common OS-driven quit stopped nothing.
-        let exit = {
-            let start = source
-                .find("tauri::RunEvent::Exit => {")
-                .expect("the exit handler exists");
-            let end = source[start..]
-                .find("\n            _ => {}")
-                .expect("the match has a fallthrough");
-            &source[start..start + end]
-        };
-        assert!(
-            exit.contains("shut_down_gracefully(app)"),
-            "an OS-issued exit has to stop the daemon too",
-        );
-        let after_stop = body_of("fn handle_locald_event(");
-        assert!(
-            after_stop.contains("leave_nothing_running(app);\n        app.exit(0);"),
-            "the stop-then-quit path reaches the same exit",
-        );
-
-        // Done once. The confirmed path runs it on a worker and then calls
-        // `app.exit(0)`, which lands on the main-thread handler -- and without
-        // the guard that handler would do the whole wait again, on the thread
-        // the beachball is measuring.
-        let graceful = body_of("fn shut_down_gracefully(");
-        assert!(
-            graceful.contains("teardown_done.swap(true"),
-            "the teardown has to be once-only, or the exit repeats it on the \
-             main thread",
-        );
-        assert!(
-            graceful.contains("release_before_exit()")
-                && graceful.contains("leave_nothing_running(app)"),
-            "a graceful shutdown closes sharing and stops the daemon",
-        );
-
-        // And it uses the identity-verified path, not a signal at a PID.
-        let leave = body_of("fn leave_nothing_running(");
-        assert!(leave.contains(r#"stop_locald(connection, "quitting""#));
-        assert!(
-            !leave.contains("pkill") && !leave.contains("killall"),
-            "a daemon is only ever stopped after being verified as ours",
-        );
-    }
-
-    /// A quit cannot be held open by a daemon that will not go.
-    ///
-    /// Two properties, and the first is the one that would have shipped a
-    /// regression: menu and tray handlers run on the main thread, so waiting
-    /// for the daemon there freezes the window -- including the one showing
-    /// "Winding down." to the person who just asked to leave.
-    #[test]
-    fn a_wedged_daemon_cannot_stop_the_app_from_quitting() {
-        let source = include_str!("main.rs").replace("\r\n", "\n");
-        let start = source.find("fn finish_quit(").expect("finish_quit exists");
-        let body = &source[start..start + 1400];
-
-        assert!(
-            body.contains("std::thread::spawn"),
-            "the daemon shutdown must not run on the main thread",
-        );
-        assert!(
-            body.contains("QUIT_DAEMON_BUDGET"),
-            "and something has to end the wait",
-        );
-        assert!(
-            QUIT_DAEMON_BUDGET < QUIT_STOP_BUDGET,
-            "the services are already down by this point; only the supervisor is left",
         );
     }
 
@@ -9565,7 +9406,10 @@ mod tests {
             &source[start..end]
         };
 
-        assert!(menus.contains("\"Settings…\", local, Some(\"CmdOrCtrl+,\")"));
+        assert!(menus
+            .split_whitespace()
+            .collect::<String>()
+            .contains("\"Desktopsettings…\",true,Some(\"CmdOrCtrl+,\")"));
         assert!(menus.contains("\"Connection…\""));
 
         // Quit is one command, and it is the one that stops the local server.
@@ -9609,14 +9453,15 @@ mod tests {
     }
 
     #[test]
-    fn a_full_quit_cannot_hold_a_dead_window_on_screen() {
-        // release_before_exit runs on the main thread from RunEvent::Exit,
-        // after the webviews are torn down, so this timeout is literally how
-        // long an unresponsive black window can stay in front of the user. It
-        // was two minutes.
+    fn quit_watchdog_outlives_the_owned_runtime_cleanup_deadlines() {
+        let cleanup = RELEASE_ON_EXIT_TIMEOUT
+            + LOCALD_HANDSHAKE_BUDGET * 2
+            + LOCALD_EXIT_POLL * (QUIT_DAEMON_GRACE_ATTEMPTS + LOCALD_FORCE_EXIT_ATTEMPTS) as u32
+            + VM_STOP_GRACE_BUDGET
+            + VM_STOP_REAP_BUDGET;
         assert!(
-            RELEASE_ON_EXIT_TIMEOUT <= Duration::from_secs(5),
-            "a quit may not block the main thread for {RELEASE_ON_EXIT_TIMEOUT:?}"
+            QUIT_DAEMON_BUDGET > cleanup + Duration::from_secs(5),
+            "the shell must not terminate its cleanup worker before it can stop an unresponsive VM"
         );
     }
 
@@ -10205,7 +10050,7 @@ mod tests {
             .map_or(source.len(), |offset| start + offset);
         let helper = &source[start..end];
         assert!(
-            helper.contains("webview_windows()") && helper.contains("is_visible"),
+            helper.contains("windows()") && helper.contains("is_visible"),
             "dock presence must be decided by what is visible, not by the \
              workspace window alone",
         );
@@ -10256,32 +10101,6 @@ mod tests {
             new_window_disposition(&desktop, "hosted", "https://lemma.work", ""),
             NewWindowDisposition::OpenExternal
         );
-    }
-
-    #[test]
-    fn first_launch_chooser_explains_both_connection_modes() {
-        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
-
-        assert!(html.contains("Welcome to Lemma."));
-        assert!(html.contains("run Lemma on this Mac"));
-        // The consequence of choosing local now sits on the screen that asks
-        // for that choice, rather than on the one that no longer does.
-        assert!(html.contains("A local workspace shares no data with a cloud one"));
-        assert!(html.contains("Install local services"));
-        assert!(html.contains("Set up Windows runtime"));
-        assert!(html.contains("prepareRuntime: () => invoke(\"prepare_runtime\")"));
-        assert!(html.contains("lemma-mark-bar-2"));
-        assert!(html.contains("s.phaseKey === \"boot\""));
-        assert!(html.contains("!s.error"));
-        assert!(html.contains("await window.lemmaDesktop.openApp()"));
-        assert!(html.contains("request accepted · keep lemma open"));
-        assert!(html.contains("id=\"log-panel\""));
-        assert!(html.contains("id=\"operation-status\""));
-        assert!(html.contains("downloadedBytes"));
-        assert!(html.contains("s.phaseKey === \"stopped\""));
-        assert!(!html.contains("!s.running && s.phaseKey"));
-        assert!(!html.contains(">Create your account</button>"));
-        assert!(!html.contains("Nothing leaves your machine"));
     }
 
     /// A Windows user is never told about hardware they do not have.
@@ -10340,62 +10159,6 @@ mod tests {
         // And the one sentence that is about the operating system rather than
         // the box it runs on is named per platform, not rewritten.
         assert!(control.contains(r#"IS_WINDOWS ? "Windows" : "macOS""#));
-    }
-
-    /// Both choices invite you in the same words.
-    ///
-    /// Cloud keeps the recommendation -- that is a product decision, and the
-    /// gold rail and badge are untouched. What was wrong was the *verb*: cloud
-    /// said "Continue →" and local said "Review →", so the option someone
-    /// downloaded a desktop app to pick read as the one with homework attached.
-    /// A tester installed the DMG, landed on lemma.work, and had to find the
-    /// Connection menu to get back.
-    ///
-    /// The disclosure screen local opens is unchanged and still runs before
-    /// anything is installed, which is what the old label was trying to promise.
-    #[test]
-    fn the_first_screen_asks_one_thing_and_prices_the_alternative() {
-        // This used to assert the opposite: that both choices carried the same
-        // call to action, so neither read as the effortful one. The label fix
-        // behind it was right — "Review →" beside "Continue →" read as homework
-        // — but the conclusion was not. Drawing a sign-in and a fifteen-minute
-        // install as equals is misdirection however well meant, and the cost
-        // only appeared after the choice had been made.
-        //
-        // It also cannot pitch. Any line about coding agents tells the person
-        // who has not installed one that the app is not for them, on the first
-        // screen they ever see. What this machine has is checked after sign-in,
-        // where it is a fact.
-        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
-
-        assert!(
-            !html.contains("setup-kicker\">Workspace location"),
-            "the screen should not open on an architecture question"
-        );
-        assert!(
-            !html.contains("choice-action"),
-            "there is one action now, so nothing needs a matching call to action"
-        );
-        assert!(
-            html.contains(">Sign in</button>"),
-            "the one action is signing in"
-        );
-        // The alternative stays reachable and states its cost in the same breath,
-        // which is what makes the smaller weighting honest rather than a nudge.
-        assert!(html.contains("id=\"choose-local\""));
-        assert!(
-            html.contains("id=\"local-choice-cost\""),
-            "the local path must price itself where it is offered"
-        );
-        // Still gated: nothing is installed until the review screen is answered.
-        // Proven by that screen existing between the link and the install, not
-        // by a line of reassurance on a screen that installs nothing.
-        assert!(html.contains("id=\"local-confirm\""));
-        assert!(html.contains("Install local services"));
-        assert!(
-            !html.contains("no local services are installed until you confirm"),
-            "the welcome screen should not answer a fear nobody arrives with"
-        );
     }
 
     #[test]
@@ -10610,7 +10373,7 @@ mod tests {
         std::fs::write(&destination, br#"{"revision":1}"#).unwrap();
         std::fs::write(&source, br#"{"revision":2}"#).unwrap();
 
-        replace_config_file(&source, &destination).unwrap();
+        config_store::replace(&source, &destination).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(&destination).unwrap(),

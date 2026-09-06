@@ -12,12 +12,13 @@ use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
+use crate::config_operations::{ConfigOperation, ConfigOperations};
 use crate::host_process::HostProcessManager;
 use crate::managed_runtime::{
     ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
 };
 use crate::native_host_pack;
-use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
+use crate::operator_config::{OperatorConfigStore, OperatorConfigUpdate};
 use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
@@ -29,7 +30,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 3;
+const DAEMON_API_REVISION: u64 = 4;
 
 struct SupervisorProcess {
     child: Child,
@@ -49,6 +50,7 @@ pub struct Daemon {
     host_pack_root: Option<String>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
     operator_config: Arc<OperatorConfigStore>,
+    config_operations: Option<ConfigOperations>,
     sharing: Option<Arc<SharingController>>,
     host_operation_running: AtomicBool,
     agent_host: Arc<AgentHostSupervisor>,
@@ -145,6 +147,15 @@ impl Daemon {
             })
             .transpose()?;
         let agent_host = Arc::new(AgentHostSupervisor::discover(&paths.root));
+        let config_operations = match ConfigOperations::load(
+            paths.root.join("config-operations.json"),
+        ) {
+            Ok(journal) => Some(journal),
+            Err(error) => {
+                healed.push(format!("settings operation history is unavailable: {error}; settings writes are disabled until it is repaired"));
+                None
+            }
+        };
         Ok(Arc::new(Self {
             paths,
             token,
@@ -158,6 +169,7 @@ impl Daemon {
             host_pack_root: host_pack_root.map(path_identity),
             managed_runtime,
             operator_config,
+            config_operations,
             sharing,
             host_operation_running: AtomicBool::new(false),
             agent_host,
@@ -846,6 +858,7 @@ impl Daemon {
             "v": PROTOCOL_VERSION,
             "event": "control.snapshot",
             "operator": self.operator_config.snapshot()?,
+            "config_operations": self.config_operations.as_ref().map(ConfigOperations::snapshot),
             "state": self.state.lock().expect("state lock poisoned").event(None),
             "services": self.host_processes.as_ref().map(|manager| manager.status()),
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
@@ -1203,7 +1216,7 @@ impl Daemon {
             return;
         }
         let payload = request.get("payload").cloned().unwrap_or(Value::Null);
-        let apply: ApplyOperatorConfig = match serde_json::from_value(payload) {
+        let apply: OperatorConfigUpdate = match serde_json::from_value(payload) {
             Ok(apply) => apply,
             Err(error) => {
                 self.host_operation_running.store(false, Ordering::Release);
@@ -1218,13 +1231,25 @@ impl Daemon {
                 return;
             }
         };
+        if let Err(error) = self.begin_config_operation(id.as_ref()) {
+            self.host_operation_running.store(false, Ordering::Release);
+            self.send_direct(
+                client,
+                error_event(
+                    "config-operation-unavailable",
+                    error.to_string(),
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.apply", "id": id.as_ref()}),
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
-            let result = daemon.write_operator_config(|store| store.apply(apply));
+            let result = daemon.write_operator_config(|store| store.update(apply));
             daemon.finish_config_write(result, id.as_ref());
         });
     }
@@ -1286,6 +1311,32 @@ impl Daemon {
 
     /// Announce the outcome of an operator-config write and release the guard.
     fn finish_config_write(self: &Arc<Self>, result: io::Result<Value>, id: Option<&Value>) {
+        let code = if result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::AlreadyExists)
+        {
+            "config-conflict"
+        } else {
+            "config-apply-failed"
+        };
+        let outcome = match &result {
+            Ok(operator) => ConfigOperation::Succeeded {
+                operator: operator.clone(),
+            },
+            Err(error) => ConfigOperation::Failed {
+                code: code.into(),
+                message: error.to_string(),
+            },
+        };
+        if let (Some(journal), Some(id)) = (&self.config_operations, id.and_then(Value::as_str)) {
+            if let Err(error) = journal.finish(id, outcome) {
+                self.broadcast(error_event("config-outcome-unknown", format!("settings may have been applied, but completion could not be recorded: {error}; review settings before retrying"), Some(&json!(id))));
+                self.host_operation_running.store(false, Ordering::Release);
+                return;
+            }
+        }
+        // A completion can immediately trigger the next section's save.
+        self.host_operation_running.store(false, Ordering::Release);
         match result {
             Ok(snapshot) => self.broadcast(json!({
                 "v": PROTOCOL_VERSION,
@@ -1294,9 +1345,25 @@ impl Daemon {
                 "operator": snapshot,
                 "restart": "backend",
             })),
-            Err(error) => self.broadcast(error_event("config-apply-failed", error.to_string(), id)),
+            Err(error) => self.broadcast(error_event(code, error.to_string(), id)),
         }
-        self.host_operation_running.store(false, Ordering::Release);
+    }
+
+    fn begin_config_operation(&self, id: Option<&Value>) -> io::Result<()> {
+        let id = id.and_then(Value::as_str).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "settings write needs a string operation id",
+            )
+        })?;
+        self.config_operations
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::other(
+                    "settings operation history is unavailable; repair it before saving",
+                )
+            })?
+            .begin(id)
     }
 
     /// Change only the AI profile.
@@ -1320,6 +1387,18 @@ impl Daemon {
             return;
         }
         let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        if let Err(error) = self.begin_config_operation(id.as_ref()) {
+            self.host_operation_running.store(false, Ordering::Release);
+            self.send_direct(
+                client,
+                error_event(
+                    "config-operation-unavailable",
+                    error.to_string(),
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.set-ai", "id": id.as_ref()}),

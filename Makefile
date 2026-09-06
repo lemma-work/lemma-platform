@@ -24,7 +24,7 @@ SHELL := /bin/bash
         desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
         desktop-concepts desktop-concepts-check \
-        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
+        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-agent-host-e2e desktop-agent-host-browser-e2e \
         desktop-verify-guest desktop-clean \
         version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
@@ -974,6 +974,7 @@ desktop-test: _desktop-ensure-sidecars
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace tests…"
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
+	@node --test desktop/ui-tests/tests/*.test.mjs
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
@@ -1061,9 +1062,15 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+
+.PHONY: desktop-test-browser
+desktop-test-browser:
+	@npm ci --prefix desktop/ui-tests --ignore-scripts --no-audit --no-fund
+	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui-tests && npx --no-install playwright install chromium; fi
+	@npm --prefix desktop/ui-tests run test:browser
 
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
@@ -1194,7 +1201,22 @@ desktop-exe:
 	@echo "      pwsh desktop\\scripts\\desktop.ps1 exe"
 	@exit 1
 
-# The one command that answers "does ACP chat over Agent Host actually work?"
+# The real backend and Rust host share the same HTTP path as a browser chat.
+# A scripted ACP provider makes streaming and disconnects deterministic without
+# using installed agent accounts. Testcontainers owns the disposable services.
+desktop-agent-host-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@cd lemma-backend && uv run pytest \
+		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py -m 'not agent_host_browser' --no-showlocals
+
+desktop-agent-host-browser-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@npm --prefix lemma-typescript run build
+	@cd lemma-backend && CORS_ORIGIN_REGEX='^http://127[.]0[.]0[.]1:[0-9]+$$' \
+		uv run pytest app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
+		-m agent_host_browser --no-showlocals
+
+# Does ACP chat over Agent Host work with authenticated provider agents?
 # Drives Codex, Claude Code and OpenCode over real ACP and asserts each streams
 # a real answer back through the host protocol, keeps one provider session
 # across two turns, and survives a session the provider has forgotten.
@@ -1204,9 +1226,10 @@ desktop-exe:
 desktop-verify-agents:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@test -n "$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-}" || \
+		(echo "Set LEMMA_REAL_AGENT_HOST_DATA_DIR to a disposable directory with verified adapters; use dedicated provider test accounts."; exit 1)
 	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
 	@cd $(DESKTOP_DIR) && \
-		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" \
 		cargo test -p lemma-agent-host --locked --test real_harness_e2e -- \
 			--ignored --nocapture --test-threads=1
 	@echo "  ✓ ACP chat over Agent Host verified"
@@ -1335,6 +1358,7 @@ _desktop-verify-dist-app:
 	test "$$app_bytes" -le $$((850 * 1024 * 1024)) || ( \
 		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 850 MiB"; exit 1); \
 	codesign --verify --deep --strict "$$app"; \
+	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
 		| grep -qF "com.apple.security.virtualization"; \
 	codesign -dvvv "$$app/Contents/MacOS/lemma-locald" 2>&1 \
@@ -1964,6 +1988,8 @@ quality-frontend:
 		echo "    or run 'make quality' if your change is Python-only."; \
 		exit 1; \
 	fi
+	@echo "→ TypeScript SDK test types…"
+	@cd $(TS_DIR) && npx tsc --noEmit -p tsconfig.test.json
 	@echo "→ Frontend lint, types, design audit, education anchors…"
 	@cd $(FRONTEND_DIR) && npm run --silent check
 

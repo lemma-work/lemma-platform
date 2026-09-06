@@ -34,4 +34,5 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+lemma-desktop-process = { path = "../process" }
 tempfile = { workspace = true }

@@ -775,7 +775,7 @@ const PRIVATE_SERVICE_PORTS: [(&str, u16); 3] =
 /// one's stop kills the other's runtime, and the second silently runs against
 /// the first's data.
 #[cfg(windows)]
-fn wsl_distribution_for(root: &Path) -> String {
+pub(crate) fn wsl_distribution_for(root: &Path) -> String {
     if let Some(name) = env::var_os("LEMMA_RUNTIME_WSL_DISTRIBUTION")
         .map(|value| value.to_string_lossy().into_owned())
         .filter(|value| !value.trim().is_empty())

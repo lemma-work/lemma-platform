@@ -214,7 +214,7 @@ impl AgentDriver for AcpDriver {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _connection| {
+                async move |request: RequestPermissionRequest, responder, connection| {
                     if has_scoped_mcp_server
                         && is_scoped_mcp_tool_approval(&request, &scoped_mcp_tools)
                     {
@@ -259,35 +259,42 @@ impl AgentDriver for AcpDriver {
                             permission_sequence.fetch_add(1, Ordering::Relaxed)
                         )
                     });
-                    let _ = permission_callbacks.event(
+                    permission_callbacks.event(
                         EventType::PermissionRequest,
                         Some(request_id.clone()),
                         payload,
-                    );
-                    // Hold the agent's request open until Lemma answers. The
-                    // gate denies on timeout, so this cannot hang forever.
-                    let decision = permission_gate
-                        .wait(permission_run_id, request_id, permission_timeout, always)
-                        .await;
-                    let outcome = match decision {
-                        PermissionDecision::Allow { option_id } => request
-                            .options
-                            .iter()
-                            .find(|option| option.option_id.to_string() == option_id)
-                            .or_else(|| {
-                                request
-                                    .options
-                                    .iter()
-                                    .find(|option| option.kind == PermissionOptionKind::AllowOnce)
-                            })
-                            .map_or(RequestPermissionOutcome::Cancelled, |option| {
-                                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                                    option.option_id.clone(),
-                                ))
-                            }),
-                        PermissionDecision::Deny => RequestPermissionOutcome::Cancelled,
-                    };
-                    responder.respond(RequestPermissionResponse::new(outcome))
+                    ).map_err(|error| {
+                        agent_client_protocol::schema::v1::Error::internal_error()
+                            .data(error.to_string())
+                    })?;
+                    // Handlers share the ACP receive loop. Waiting here blocks
+                    // later tool updates, approvals and cancellation responses.
+                    // The connection owns this task and drops it on shutdown.
+                    let permission_gate = permission_gate.clone();
+                    connection.spawn(async move {
+                        let decision = permission_gate
+                            .wait(permission_run_id, request_id, permission_timeout, always)
+                            .await;
+                        let outcome = match decision {
+                            PermissionDecision::Allow { option_id } => request
+                                .options
+                                .iter()
+                                .find(|option| option.option_id.to_string() == option_id)
+                                .or_else(|| {
+                                    request
+                                        .options
+                                        .iter()
+                                        .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+                                })
+                                .map_or(RequestPermissionOutcome::Cancelled, |option| {
+                                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                        option.option_id.clone(),
+                                    ))
+                                }),
+                            PermissionDecision::Deny => RequestPermissionOutcome::Cancelled,
+                        };
+                        responder.respond(RequestPermissionResponse::new(outcome))
+                    })
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -798,6 +805,13 @@ pub fn normalize_session_update(
         "available_commands_update" | "session_info_update" => EventType::RunState,
         _ => return None,
     };
+    if event_type == EventType::ToolCallUpsert {
+        // ACP omits its default Pending status during serialization. The
+        // backend must still know that absent arguments are not final yet.
+        object
+            .entry("status")
+            .or_insert_with(|| Value::String("pending".to_owned()));
+    }
     flatten_content_text(object);
     let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"]);
     Some((
@@ -818,10 +832,7 @@ fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
     object.insert(
         "message".to_owned(),
         Value::String(
-            "The local agent asked for permission to use a native tool. Lemma \
-             is waiting for a decision; scoped Lemma MCP tools are approved \
-             automatically."
-                .to_owned(),
+            "This request controls the local agent's access on this computer.".to_owned(),
         ),
     );
     object
@@ -1653,6 +1664,20 @@ mod tests {
         let (kind, _, payload) = normalize_session_update(&update).unwrap();
         assert_eq!(kind, EventType::AgentMessageChunk);
         assert_eq!(payload.get("text"), Some(&Value::String("hi".into())));
+    }
+
+    #[test]
+    fn an_initial_tool_call_retains_acps_implicit_pending_status() {
+        let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "read-project",
+            "title": "Read README.md"
+        }))
+        .unwrap();
+        let (kind, id, payload) = normalize_session_update(&update).unwrap();
+        assert_eq!(kind, EventType::ToolCallUpsert);
+        assert_eq!(id.as_deref(), Some("read-project"));
+        assert_eq!(payload["status"], "pending");
     }
 
     #[test]

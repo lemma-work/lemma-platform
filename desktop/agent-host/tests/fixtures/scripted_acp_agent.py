@@ -27,6 +27,7 @@ traffic and the MCP traffic this agent generated.
 import json
 import os
 import pathlib
+import select
 import subprocess
 import sys
 import time
@@ -155,8 +156,7 @@ def run_mcp_turn(mcp_servers):
         client.notify("notifications/initialized")
         listed = client.request("tools/list")
         names = [
-            tool.get("name")
-            for tool in (listed.get("result") or {}).get("tools") or []
+            tool.get("name") for tool in (listed.get("result") or {}).get("tools") or []
         ]
         chunk("agent_message_chunk", "LEMMA_MCP_TOOLS:" + ",".join(names))
         if "lemma_echo" not in names:
@@ -358,6 +358,29 @@ def run_cancel_turn():
             return "cancelled"
 
 
+def run_stream_turn():
+    from json_acp_scenario import run_scenario
+
+    scenario = "crash.json" if MODE == "stream-crash" else "stream.json"
+    run_scenario(
+        pathlib.Path(__file__).parent / "scenarios" / scenario,
+        emit,
+        read_client_message,
+        wait_for_release,
+    )
+
+
+def wait_for_release():
+    release = LOG_PATH.with_suffix(".release")
+    deadline = time.monotonic() + 20
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("client did not observe live output before completion")
+        readable, _, _ = select.select([sys.stdin], [], [], 0.02)
+        if readable and read_client_message() is None:
+            return
+
+
 def main():
     mcp_servers = []
     while True:
@@ -385,7 +408,16 @@ def main():
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
         elif method == "session/prompt":
             stop_reason = "end_turn"
-            if MODE == "mcp":
+            if MODE.startswith("json:"):
+                from json_acp_scenario import run_scenario
+
+                stop_reason = run_scenario(
+                    MODE.removeprefix("json:"),
+                    emit,
+                    read_client_message,
+                    wait_for_release,
+                )
+            elif MODE == "mcp":
                 run_mcp_turn(mcp_servers)
             elif MODE == "mcp-refresh":
                 run_mcp_refresh_turn(mcp_servers)
@@ -395,8 +427,12 @@ def main():
                 run_parallel_permission_turn(("", ""))
             elif MODE == "cancel":
                 stop_reason = run_cancel_turn()
-            else:
+            elif MODE in {"stream", "stream-crash", "stream-deadline"}:
+                run_stream_turn()
+            elif MODE == "permission":
                 run_permission_turn()
+            else:
+                raise ValueError(f"unsupported scripted ACP mode: {MODE}")
             result(request_id, {"stopReason": stop_reason})
         elif method == "session/cancel":
             continue

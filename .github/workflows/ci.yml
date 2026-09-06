@@ -129,6 +129,8 @@ jobs:
             desktop_contract:
               - 'lemma-backend/**'
               - 'lemma-frontend/**'
+              - 'lemma-typescript/**'
+              - 'Makefile'
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
               - 'desktop/locald/src/native_host_pack.rs'
@@ -671,9 +673,9 @@ jobs:
   # host pack the app ships. Nothing connected the two, so a backend change
   # that broke the desktop stack merged with CI fully green.
   #
-  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  # Includes the real backend/Agent Host seam without the app crate or bundler.
   desktop-contract:
-    timeout-minutes: 20
+    timeout-minutes: 30
     name: Desktop contracts
     needs: changes
     if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
@@ -702,6 +704,43 @@ jobs:
       # guest-kernel Oops during first setup.
       - name: Memory balloon policy
         run: desktop/scripts/check-balloon-policy.sh
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install backend dependencies
+        working-directory: lemma-backend
+        run: uv sync --locked --extra local
+
+      - name: Real backend and Agent Host streaming
+        run: make desktop-agent-host-e2e
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            lemma-typescript/package-lock.json
+            lemma-frontend/package-lock.json
+            desktop/ui-tests/package-lock.json
+
+      - name: Install chat UI test dependencies
+        run: |
+          npm ci --prefix lemma-typescript
+          npm ci --prefix lemma-frontend
+          npm ci --prefix desktop/ui-tests
+          npm exec --prefix desktop/ui-tests -- playwright install --with-deps chromium
+
+      - name: Chat UI with JSON ACP agents
+        run: make desktop-agent-host-browser-e2e
+
+      - name: Upload chat UI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-host-chat-ui
+          path: output/playwright/agent-host-*/
+          if-no-files-found: ignore
 
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
@@ -821,6 +860,15 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --locked
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
@@ -1152,6 +1200,15 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       - name: Read the pinned Tauri CLI
         run: |

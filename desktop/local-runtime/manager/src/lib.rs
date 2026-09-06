@@ -109,6 +109,14 @@ pub struct ManagedRuntimeStatus {
     pub balloon_target_bytes: Option<u64>,
 }
 
+fn guest_request_budget(operation: &str) -> Duration {
+    match operation {
+        "system.shutdown" => Duration::from_secs(8),
+        "health" => Duration::from_secs(5),
+        _ => Duration::from_secs(8 * 60),
+    }
+}
+
 pub struct ManagedRuntime {
     config: ManagedRuntimeConfig,
     capability_file: PathBuf,
@@ -195,31 +203,32 @@ impl ManagedRuntime {
             "operation": operation,
             "parameters": parameters,
         });
-        let encoded = serde_json::to_vec(&request)?;
-        let mut child = Command::new(&self.config.bridge_executable)
+        let mut encoded = serde_json::to_vec(&request)?;
+        encoded.push(b'\n');
+        let mut command = Command::new(&self.config.bridge_executable);
+        command
             .no_console_window()
             .arg("request")
             .env("LEMMA_GUEST_CAPABILITY_FILE", &self.capability_file)
             .env("LEMMA_GUEST_CONTROL_SOCKET", &self.control_socket)
-            .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("runtime bridge stdin unavailable"))?;
-        stdin.write_all(&encoded)?;
-        stdin.write_all(b"\n")?;
-        drop(stdin);
-        let output = child.wait_with_output()?;
-        if output.stdout.len() > MAX_RESPONSE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "guest response exceeded 4 MiB",
-            ));
-        }
+            .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution);
+        let budget = guest_request_budget(operation);
+        let output =
+            lemma_desktop_process::run_with_input(command, encoded, budget, MAX_RESPONSE_BYTES)
+                .map_err(|error| match error {
+                    lemma_desktop_process::SetupProcessError::TimedOut => io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "runtime bridge exceeded its request deadline",
+                    ),
+                    lemma_desktop_process::SetupProcessError::OutputLimit => io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "runtime bridge exceeded its output limit",
+                    ),
+                    lemma_desktop_process::SetupProcessError::Io(error) => error,
+                    lemma_desktop_process::SetupProcessError::Cancelled => {
+                        io::Error::new(io::ErrorKind::Interrupted, "runtime command was cancelled")
+                    }
+                })?;
         if output.stdout.is_empty() {
             let detail = first_diagnostic(&output.stderr, "private guest did not respond");
             return Err(io::Error::new(
@@ -614,6 +623,19 @@ impl ManagedRuntime {
     /// installation's.
     #[cfg(target_os = "macos")]
     pub fn reclaim_owned_macos_vm(&self) -> io::Result<()> {
+        self.reclaim_macos_vm(true)
+    }
+
+    /// Destructive recovery also handles a helper from a replaced app bundle.
+    /// Its recorded executable and start identity still have to match the
+    /// running process; its path need not match the newly installed binary.
+    #[cfg(target_os = "macos")]
+    pub fn reclaim_owned_macos_vm_for_reset(&self) -> io::Result<()> {
+        self.reclaim_macos_vm(false)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reclaim_macos_vm(&self, require_current_executable: bool) -> io::Result<()> {
         let raw = match fs::read(&self.vm_process_marker) {
             Ok(raw) if raw.len() <= 64 * 1024 => raw,
             Ok(_) => return Ok(()),
@@ -626,7 +648,6 @@ impl ManagedRuntime {
         if marker.schema_version != VM_PROCESS_MARKER_SCHEMA_VERSION {
             return Ok(());
         }
-        let expected = self.config.vz_executable.canonicalize()?;
         let identity = match process_identity(marker.pid) {
             Ok(identity) => identity,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -636,10 +657,16 @@ impl ManagedRuntime {
         };
         if identity.executable == marker.executable
             && identity.start_identity == marker.start_identity
-            && Path::new(&identity.executable)
-                .canonicalize()
-                .is_ok_and(|actual| actual == expected)
         {
+            if require_current_executable {
+                let expected = self.config.vz_executable.canonicalize()?;
+                if !Path::new(&identity.executable)
+                    .canonicalize()
+                    .is_ok_and(|actual| actual == expected)
+                {
+                    return Err(io::Error::other("the running VM belongs to a different app release; use confirmed installation cleanup"));
+                }
+            }
             terminate_verified_process(marker.pid)?;
         }
         remove_if_present(&self.vm_process_marker)
@@ -799,15 +826,20 @@ impl ManagedRuntime {
     /// This destroys guest state. Callers must have asked first.
     #[cfg(windows)]
     pub fn unregister_windows_guest(&self) -> io::Result<()> {
-        let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
-        // Asked for the end state, not for the command. A distribution that is
-        // already gone is the outcome this repair exists to reach, and
-        // `--unregister` exits non-zero on a name it cannot find -- so running
-        // it unconditionally would report failure for the one case that needs
-        // no work. Anything else that goes wrong is now a real error, which it
-        // was not before: this used to discard the exit code entirely and tell
-        // the user the runtime had been reset when nothing had happened.
-        if self.distribution_is_registered() {
+        let output = match self.wsl_allowing_failure(&["--list", "--quiet"], None) {
+            Ok(output) => output,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && !self.config.local_root.join("runtime/wsl").exists() =>
+            {
+                return Ok(())
+            }
+            Err(error) => return Err(error),
+        };
+        // An unavailable WSL service is not evidence that the distribution is
+        // absent. Preserve its registration and cleanup records on ambiguity.
+        if registered_guest(output.status.success(), &output.stdout, self.distribution())? {
+            let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
             self.wsl(&["--unregister", self.distribution()], None)?;
         }
         let _ = fs::remove_file(self.guest_release_marker());
@@ -1294,6 +1326,16 @@ fn last_diagnostic(value: &[u8], fallback: &str) -> String {
 }
 
 #[cfg(any(windows, test))]
+fn registered_guest(success: bool, output: &[u8], distribution: &str) -> io::Result<bool> {
+    if !success {
+        return Err(io::Error::other("Windows could not list its local runtimes. The installation has been kept. Restart Windows and retry Recovery."));
+    }
+    Ok(decode_wsl_output(output)
+        .lines()
+        .any(|line| line.trim() == distribution))
+}
+
+#[cfg(any(windows, test))]
 fn decode_wsl_output(value: &[u8]) -> String {
     let decoded = if value.len() >= 2 && value.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         // `as_chunks`, not `chunks_exact(2)`: clippy 1.98 rejects a constant
@@ -1601,6 +1643,69 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    struct RecoveryTestChild(std::process::Child);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for RecoveryTestChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn confirmed_recovery_reclaims_a_verified_helper_from_a_replaced_bundle() {
+        let root = tempdir().unwrap();
+        let mut runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: PathBuf::from("/bin/sleep"),
+        })
+        .unwrap();
+        let mut child = RecoveryTestChild(Command::new("/bin/sleep").arg("10").spawn().unwrap());
+        runtime.record_macos_vm(&child.0).unwrap();
+        runtime.config.vz_executable = root.path().join("new-app/lemma-vz");
+        assert!(runtime.reclaim_owned_macos_vm().is_err());
+        assert!(runtime.vm_process_marker.exists());
+        thread::scope(|scope| {
+            let reclaim = scope.spawn(|| runtime.reclaim_owned_macos_vm_for_reset());
+            let status = child.0.wait().unwrap();
+            reclaim.join().unwrap().unwrap();
+            assert!(!status.success());
+        });
+        assert!(!runtime.vm_process_marker.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recovery_never_signals_a_reused_process_identity() {
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: PathBuf::from("/bin/sleep"),
+        })
+        .unwrap();
+        let mut child = RecoveryTestChild(Command::new("/bin/sleep").arg("10").spawn().unwrap());
+        runtime.record_macos_vm(&child.0).unwrap();
+        let mut marker: serde_json::Value =
+            serde_json::from_slice(&fs::read(&runtime.vm_process_marker).unwrap()).unwrap();
+        marker["start_identity"] = serde_json::json!("different process start");
+        fs::write(
+            &runtime.vm_process_marker,
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+        runtime.reclaim_owned_macos_vm_for_reset().unwrap();
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn reclaims_only_the_exact_recorded_vm_helper_across_daemon_replacement() {
         let root = tempdir().unwrap();
@@ -1620,6 +1725,21 @@ mod tests {
 
         assert!(!waiter.join().unwrap().success());
         assert!(!runtime.vm_process_marker.exists());
+    }
+
+    #[test]
+    fn recovery_requires_positive_evidence_of_guest_presence_or_absence() {
+        assert!(registered_guest(false, b"", "LemmaRuntime").is_err());
+        assert!(registered_guest(false, b"LemmaRuntime", "LemmaRuntime").is_err());
+        assert!(
+            !registered_guest(true, b"Ubuntu\r\nLemmaRuntime-dev\r\n", "LemmaRuntime").unwrap()
+        );
+        assert!(registered_guest(true, b"Ubuntu\r\nLemmaRuntime\r\n", "LemmaRuntime").unwrap());
+        let utf16: Vec<u8> = "LemmaRuntime\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(registered_guest(true, &utf16, "LemmaRuntime").unwrap());
     }
 
     #[cfg(windows)]

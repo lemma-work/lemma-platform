@@ -23,7 +23,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use lemma_agent_host::protocol::{Event, EventBatch, EventType, JsonMap, RunSpec};
+use lemma_agent_host::protocol::{
+    Command, CommandKind, Event, EventBatch, EventType, JsonMap, RunSpec,
+};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -616,7 +618,7 @@ struct ControlState {
     /// run with it, permanently: nothing re-offered it, so the test waited its
     /// whole 90s for events from a run that was never started. That is the
     /// `published=Some(..), start_sent=true, events=[]` failure.
-    start_command: Arc<Mutex<Option<Uuid>>>,
+    start_command: Arc<Mutex<Option<Command>>>,
     /// Drop the first response that carries a command, as a lost one would be.
     drop_first_command: Arc<AtomicBool>,
     /// Streamed text that, once seen, makes the next poll cancel the run.
@@ -639,6 +641,9 @@ struct ControlState {
     /// outcome, and usually finished the whole run, before Lemma decided.
     decisions: Arc<Mutex<Vec<DecisionSnapshot>>>,
     events: Arc<Mutex<Vec<Event>>>,
+    lose_append_ack: Arc<AtomicBool>,
+    append_attempts: Arc<Mutex<Vec<Vec<u64>>>>,
+    run_budget: Arc<Mutex<chrono::Duration>>,
     snapshots: Arc<Mutex<Vec<Value>>>,
     /// Commands the host refused, and why.
     ///
@@ -710,6 +715,9 @@ impl ControlPlane {
             answered: Arc::new(Mutex::new(std::collections::HashSet::new())),
             decisions: Arc::new(Mutex::new(Vec::new())),
             events: Arc::new(Mutex::new(Vec::new())),
+            lose_append_ack: Arc::new(AtomicBool::new(false)),
+            append_attempts: Arc::new(Mutex::new(Vec::new())),
+            run_budget: Arc::new(Mutex::new(chrono::Duration::minutes(3))),
             snapshots: Arc::new(Mutex::new(Vec::new())),
             rejections: Arc::new(Mutex::new(Vec::new())),
             harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
@@ -742,6 +750,18 @@ impl ControlPlane {
     /// Arm the stub to lose the first response that carries a command.
     pub fn lose_the_first_command(&self) {
         self.state.drop_first_command.store(true, Ordering::SeqCst);
+    }
+
+    pub fn lose_the_first_append_ack(&self) {
+        self.state.lose_append_ack.store(true, Ordering::SeqCst);
+    }
+
+    pub fn append_attempts(&self) -> Vec<Vec<u64>> {
+        self.state.append_attempts.lock().unwrap().clone()
+    }
+
+    pub fn set_run_budget(&self, budget: chrono::Duration) {
+        *self.state.run_budget.lock().unwrap() = budget;
     }
 
     pub fn cancel_when_text_contains(&self, marker: &str) {
@@ -1001,8 +1021,8 @@ async fn poll(
         })
         .unwrap_or_default();
     if !acked.is_empty()
-        && let Some(offered) = *state.start_command.lock().unwrap()
-        && acked.contains(&offered)
+        && let Some(offered) = state.start_command.lock().unwrap().as_ref()
+        && acked.contains(&offered.command_id)
     {
         state.start_sent.store(true, Ordering::SeqCst);
     }
@@ -1013,39 +1033,38 @@ async fn poll(
     if let Some((harness_id, revision)) = published
         && !state.start_sent.load(Ordering::SeqCst)
     {
-        let payload = serde_json::to_value(RunSpec {
-            agent_run_id: state.run_id,
-            conversation_id: Uuid::new_v4(),
-            harness_id,
-            profile_revision: revision,
-            model_name: None,
-            config_selections: JsonMap::new(),
-            system_prompt: "Follow the runtime instructions exactly.".to_owned(),
-            prompt: vec![json!({"type": "text", "text": state.prompt})],
-            resume_session_id: None,
-            context: BTreeMap::new(),
-            mcp: state.mcp.clone(),
-            run_deadline: Utc::now() + chrono::Duration::minutes(3),
-            system_prompt_delivery: None,
-        })
-        .unwrap();
-        // One id across every redelivery: the host acknowledges by id, and a
-        // fresh id each time would make an ack for the copy that landed fail to
-        // match the copy we are still offering.
-        let command_id = *state
+        // Redelivery preserves the whole command, including its conversation
+        // binding and deadline. Rebuilding those fields changes the work.
+        let command = state
             .start_command
             .lock()
             .unwrap()
-            .get_or_insert_with(Uuid::new_v4);
-        commands.push(json!({
-            "command_id": command_id,
-            "kind": "START_RUN",
-            "created_at": Utc::now(),
-            "expires_at": Utc::now() + chrono::Duration::minutes(2),
-            "run_id": state.run_id,
-            "lease_epoch": 1,
-            "payload": payload,
-        }));
+            .get_or_insert_with(|| Command {
+                command_id: Uuid::new_v4(),
+                kind: CommandKind::StartRun,
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(2),
+                run_id: Some(state.run_id),
+                lease_epoch: Some(1),
+                payload: serde_json::to_value(RunSpec {
+                    agent_run_id: state.run_id,
+                    conversation_id: Uuid::new_v4(),
+                    harness_id,
+                    profile_revision: revision,
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: "Follow the runtime instructions exactly.".to_owned(),
+                    prompt: vec![json!({"type": "text", "text": state.prompt})],
+                    resume_session_id: None,
+                    context: BTreeMap::new(),
+                    mcp: state.mcp.clone(),
+                    run_deadline: Utc::now() + *state.run_budget.lock().unwrap(),
+                    system_prompt_delivery: None,
+                })
+                .unwrap(),
+            })
+            .clone();
+        commands.push(serde_json::to_value(command).unwrap());
     }
     let cancel_after = state.cancel_after.lock().unwrap().clone();
     if let Some(marker) = cancel_after {
@@ -1081,7 +1100,7 @@ async fn poll(
     // for each tool it wants, and a control plane that answered once would
     // leave the second request to time out.
     if !matches!(state.permission_answer, PermissionAnswer::Ignore) {
-        let parked = state
+        let mut parked = state
             .events
             .lock()
             .unwrap()
@@ -1094,6 +1113,11 @@ async fn poll(
                     .map(|request_id| (request_id, event.payload.clone()))
             })
             .collect::<Vec<_>>();
+        if matches!(state.permission_answer, PermissionAnswer::AllowThenDeny) && parked.len() < 2 {
+            // A concurrency test must observe both requests before answering
+            // either. Immediate answers also pass a serial, blocked receiver.
+            parked.clear();
+        }
         let mut answered = state.answered.lock().unwrap();
         for (request_id, payload) in parked {
             let index = answered.len();
@@ -1146,13 +1170,45 @@ async fn append_events(
 ) -> Result<Json<Value>, StatusCode> {
     require_auth(&headers)?;
     let batch: EventBatch = serde_json::from_value(body).unwrap();
-    let last = batch.events.last().unwrap();
+    if batch.events.is_empty()
+        || batch
+            .events
+            .iter()
+            .any(|event| event.run_id != state.run_id || event.lease_epoch != 1)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    state
+        .append_attempts
+        .lock()
+        .unwrap()
+        .push(batch.events.iter().map(|event| event.sequence).collect());
+    let mut events = state.events.lock().unwrap();
+    let mut watermark = events.last().map_or(0, |event| event.sequence);
+    for event in &batch.events {
+        if event.sequence > watermark + 1 {
+            return Err(StatusCode::CONFLICT);
+        }
+        watermark = watermark.max(event.sequence);
+    }
+    for event in batch.events {
+        if events
+            .last()
+            .is_none_or(|last| event.sequence > last.sequence)
+        {
+            events.push(event);
+        }
+    }
+    // A response can be lost after the receiver committed the batch. Retries
+    // must preserve the first event for a sequence, just as the backend does.
+    if state.lose_append_ack.swap(false, Ordering::SeqCst) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     let response = json!({
-        "run_id": last.run_id,
-        "lease_epoch": last.lease_epoch,
-        "acked_through": last.sequence,
+        "run_id": state.run_id,
+        "lease_epoch": 1,
+        "acked_through": watermark,
     });
-    state.events.lock().unwrap().extend(batch.events);
     Ok(Json(response))
 }
 
@@ -1195,6 +1251,10 @@ impl HostProcess {
         .save(&paths)
         .unwrap();
 
+        Self::resume(root, control, shims)
+    }
+
+    pub fn resume(root: &Path, control: &ControlPlane, shims: &ShimmedAgents) -> Self {
         let stderr_path = root.join("host-stderr.log");
         let stderr = std::fs::File::create(&stderr_path).unwrap();
         let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_lemma-agent-host"))
@@ -1304,8 +1364,14 @@ impl InProcessHost {
         self.handle.is_finished()
     }
 
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
         self.handle.abort();
-        let _ = self.handle.await;
+        let _ = (&mut self.handle).await;
+    }
+}
+
+impl Drop for InProcessHost {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }

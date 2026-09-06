@@ -14,6 +14,8 @@
 -->
 <plist version="1.0">
 <dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Lemma connects to its private virtual machine on this Mac to run local services. Local network access is also used for connections you configure to devices on your network.</string>
   <key>CFBundleIdentifier</key>
   <string>work.lemma.locald</string>
   <key>CFBundleName</key>

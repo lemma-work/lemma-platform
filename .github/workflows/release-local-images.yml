@@ -1175,6 +1175,7 @@ jobs:
           app="desktop/target/release/bundle/macos/Lemma.app"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
+          test -n "$(plutil -extract NSLocalNetworkUsageDescription raw -o - "${app}/Contents/Info.plist")"
           xcrun stapler validate "${app}"
           xcrun stapler validate \
             "desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
