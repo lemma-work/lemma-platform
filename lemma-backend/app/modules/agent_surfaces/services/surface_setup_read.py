@@ -38,7 +38,7 @@ class SurfaceSetupReadMixin:
             surface=surface, is_custom_app=is_custom_app
         )
         cannot_verify = signing_secret_missing or app_id_missing
-        frontend_url = str(getattr(settings, "frontend_url", "") or "").rstrip("/")
+        frontend_url = settings.frontend_url.rstrip("/")
         actions = build_surface_setup_actions(
             platform=surface.surface_type,
             is_custom_app=is_custom_app,

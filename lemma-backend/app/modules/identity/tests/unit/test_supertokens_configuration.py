@@ -159,14 +159,14 @@ def test_get_allowed_cors_origin_regex_passthrough():
 
 
 def test_build_thirdparty_providers_includes_google_and_microsoft_when_configured():
-    original_google_client_id = settings.google_client_id
-    original_google_client_secret = settings.google_client_secret
+    original_google_client_id = identity_settings.google_client_id
+    original_google_client_secret = identity_settings.google_client_secret
     original_microsoft_client_id = identity_settings.microsoft_client_id
     original_microsoft_client_secret = identity_settings.microsoft_client_secret
     original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
-    settings.google_client_id = "google-client-id"
-    settings.google_client_secret = "google-client-secret"
+    identity_settings.google_client_id = "google-client-id"
+    identity_settings.google_client_secret = "google-client-secret"
     identity_settings.microsoft_client_id = "microsoft-client-id"
     identity_settings.microsoft_client_secret = "microsoft-client-secret"
     identity_settings.microsoft_tenant_id = "tenant-123"
@@ -174,8 +174,8 @@ def test_build_thirdparty_providers_includes_google_and_microsoft_when_configure
     try:
         providers = build_thirdparty_providers()
     finally:
-        settings.google_client_id = original_google_client_id
-        settings.google_client_secret = original_google_client_secret
+        identity_settings.google_client_id = original_google_client_id
+        identity_settings.google_client_secret = original_google_client_secret
         identity_settings.microsoft_client_id = original_microsoft_client_id
         identity_settings.microsoft_client_secret = original_microsoft_client_secret
         identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
@@ -201,14 +201,14 @@ def test_build_thirdparty_providers_includes_google_and_microsoft_when_configure
 
 
 def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default():
-    original_google_client_id = settings.google_client_id
-    original_google_client_secret = settings.google_client_secret
+    original_google_client_id = identity_settings.google_client_id
+    original_google_client_secret = identity_settings.google_client_secret
     original_microsoft_client_id = identity_settings.microsoft_client_id
     original_microsoft_client_secret = identity_settings.microsoft_client_secret
     original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
-    settings.google_client_id = None
-    settings.google_client_secret = None
+    identity_settings.google_client_id = None
+    identity_settings.google_client_secret = None
     identity_settings.microsoft_client_id = "microsoft-client-id"
     identity_settings.microsoft_client_secret = "microsoft-client-secret"
     identity_settings.microsoft_tenant_id = None
@@ -216,8 +216,8 @@ def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default(
     try:
         providers = build_thirdparty_providers()
     finally:
-        settings.google_client_id = original_google_client_id
-        settings.google_client_secret = original_google_client_secret
+        identity_settings.google_client_id = original_google_client_id
+        identity_settings.google_client_secret = original_google_client_secret
         identity_settings.microsoft_client_id = original_microsoft_client_id
         identity_settings.microsoft_client_secret = original_microsoft_client_secret
         identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
@@ -233,14 +233,14 @@ def test_build_thirdparty_providers_uses_common_tenant_for_microsoft_by_default(
 
 
 def test_build_thirdparty_providers_skips_unconfigured_providers():
-    original_google_client_id = settings.google_client_id
-    original_google_client_secret = settings.google_client_secret
+    original_google_client_id = identity_settings.google_client_id
+    original_google_client_secret = identity_settings.google_client_secret
     original_microsoft_client_id = identity_settings.microsoft_client_id
     original_microsoft_client_secret = identity_settings.microsoft_client_secret
     original_microsoft_tenant_id = identity_settings.microsoft_tenant_id
 
-    settings.google_client_id = "google-client-id"
-    settings.google_client_secret = None
+    identity_settings.google_client_id = "google-client-id"
+    identity_settings.google_client_secret = None
     identity_settings.microsoft_client_id = "microsoft-client-id"
     identity_settings.microsoft_client_secret = None
     identity_settings.microsoft_tenant_id = "tenant-123"
@@ -248,8 +248,8 @@ def test_build_thirdparty_providers_skips_unconfigured_providers():
     try:
         providers = build_thirdparty_providers()
     finally:
-        settings.google_client_id = original_google_client_id
-        settings.google_client_secret = original_google_client_secret
+        identity_settings.google_client_id = original_google_client_id
+        identity_settings.google_client_secret = original_google_client_secret
         identity_settings.microsoft_client_id = original_microsoft_client_id
         identity_settings.microsoft_client_secret = original_microsoft_client_secret
         identity_settings.microsoft_tenant_id = original_microsoft_tenant_id

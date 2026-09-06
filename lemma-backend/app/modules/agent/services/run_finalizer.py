@@ -25,7 +25,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
 )
-from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunUsage,

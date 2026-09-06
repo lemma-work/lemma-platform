@@ -12,7 +12,7 @@ from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
 
-from app.modules.function.domain.entities import (
+from app.modules.function.contracts import (
     FunctionEntity,
     FunctionType,
     FunctionUpdateEntity,

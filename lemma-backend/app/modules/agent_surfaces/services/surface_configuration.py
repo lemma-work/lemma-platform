@@ -257,7 +257,7 @@ class SurfaceConfigurationMixin(
                     external_user_id=external_user_id,
                     auth_ctx=ctx,
                 ),
-                workspace_url=str(getattr(settings, "frontend_url", "") or "") or None,
+                workspace_url=settings.frontend_url or None,
                 logo_url=surface_settings.slack_home_logo_url,
             )
 
@@ -297,7 +297,7 @@ class SurfaceConfigurationMixin(
                 surface_id=str(surface.id),
             )
             return []
-        domain = str(getattr(settings, "app_base_domain", "") or "").strip()
+        domain = settings.app_base_domain.strip()
         if not domain:
             return []
         return [(app.name, f"https://{app.public_slug}.{domain}") for app in apps]

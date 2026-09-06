@@ -86,6 +86,9 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "auth_whatsapp_mobile_verification_enabled",
         "desktop_auth_create_limit",
         "desktop_auth_create_window_seconds",
+        # Google joined Microsoft here; both are read by the same function.
+        "google_client_id",
+        "google_client_secret",
         "microsoft_client_id",
         "microsoft_client_secret",
         "microsoft_tenant_id",
@@ -158,6 +161,7 @@ def test_moved_settings_actually_arrived_on_their_new_class() -> None:
             "session_cookie_older_domain",
             "supertokens_api_gateway_path",
             "telegram_oidc_client_id",
+            "google_client_id",
             "user_cache_ttl_seconds",
         },
         WorkflowSettings: {

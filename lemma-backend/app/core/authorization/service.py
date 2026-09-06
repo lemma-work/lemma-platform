@@ -69,7 +69,8 @@ from app.modules.identity.infrastructure.models.organization_models import (
 )
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
-from app.modules.pod.domain.visibility import (
+from app.core.authorization.roles import (
+    SYSTEM_POD_ROLE_NAMES,
     normalize_role_list,
     normalize_role_name,
 )
@@ -108,7 +109,7 @@ async def _session_approval(
 
 
 SYSTEM_ORG_ROLES = {"ORG_MEMBER", "ORG_EDITOR", "ORG_OWNER"}
-SYSTEM_POD_ROLES = {"POD_VIEWER", "POD_USER", "POD_EDITOR", "POD_ADMIN"}
+SYSTEM_POD_ROLES = SYSTEM_POD_ROLE_NAMES
 
 # Scopes whose system roles are known to be fully provisioned. Entries are only
 # added when an ensure pass found nothing to write, so a rolled-back transaction
