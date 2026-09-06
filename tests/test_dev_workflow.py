@@ -115,6 +115,40 @@ class DevWorkflowTests(unittest.TestCase):
                 frontend.stdout,
             )
 
+    def test_the_cli_is_told_where_the_login_page_actually_is(self):
+        """The SDK appends /cli/login, and the portal serves it under /auth."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            backend = tmp / "lemma-backend"
+            backend.mkdir()
+
+            self.run_make(
+                tmp,
+                "_init-backend-env",
+                variables={"BACKEND_DIR": str(backend)},
+            )
+
+            values = self.env_values(backend / ".env")
+            self.assertEqual(
+                values["CLI_AUTH_FRONTEND_URL"], "http://localhost:3710/auth"
+            )
+            # The browser origin keeps the bare form; only the CLI needs the path.
+            self.assertEqual(values["AUTH_FRONTEND_URL"], "http://localhost:3710")
+
+    def test_the_frontend_hears_that_verification_is_off(self):
+        """The backend runs SuperTokens without the EmailVerification recipe."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+
+            frontend = self.run_make(tmp, "-n", "_run-frontend")
+            self.assertIn(
+                "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=false",
+                frontend.stdout,
+            )
+
+            backend = self.run_make(tmp, "-n", "_run-backend")
+            self.assertIn("AUTH_EMAIL_VERIFICATION_REQUIRED=false", backend.stdout)
+
     def test_fresh_dev_database_imports_native_connector_catalog(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
