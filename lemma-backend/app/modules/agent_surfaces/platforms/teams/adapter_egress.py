@@ -283,7 +283,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     json={"type": "typing"},
                 ):
                     pass  # best-effort, ignore status
-        except Exception:
+        except aiohttp.ClientError, TimeoutError:
             logger.debug(
                 "agent_surfaces.adapter.teams_typing_indicator_best_effort.observed"
             )
@@ -423,5 +423,5 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     url, headers=client.auth_headers(bot_token)
                 ) as response:
                     response.raise_for_status()
-        except Exception:
+        except aiohttp.ClientError, TimeoutError:
             return

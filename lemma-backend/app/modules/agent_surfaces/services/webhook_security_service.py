@@ -10,6 +10,7 @@ from uuid import UUID
 
 import httpx
 import jwt
+from redis.exceptions import RedisError
 from jwt.algorithms import RSAAlgorithm
 
 from app.core.authorization.scope import uow_scope
@@ -516,7 +517,7 @@ class SurfaceWebhookSecurityService:
         cache = _get_oidc_cache()
         try:
             cached = await cache.get_json(url)
-        except Exception:
+        except RedisError, OSError, TimeoutError, ValueError:
             cached = None
         if cached is not None:
             return cached
@@ -536,7 +537,7 @@ class SurfaceWebhookSecurityService:
             )
         try:
             await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
-        except Exception:
+        except RedisError, OSError, TimeoutError, TypeError:
             pass
         return payload
 

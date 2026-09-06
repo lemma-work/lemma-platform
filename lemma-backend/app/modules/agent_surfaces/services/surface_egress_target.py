@@ -7,6 +7,8 @@ every one of them starts here and none of them needs the others.
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -75,7 +77,7 @@ class SurfaceEgressTargetMixin:
             return None
         try:
             parsed_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
-        except Exception:
+        except ValidationError:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_egress_skipped_invalid_last.diagnostic",
                 conversation_id=conversation_id,

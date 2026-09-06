@@ -43,6 +43,7 @@ from app.modules.datastore.contracts.surfaces import create_pod_file
 from app.core.file_types import extension_for_mime, sniff_media_mime
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
+    DatastoreValidationError,
     normalize_datastore_name,
 )
 
@@ -163,7 +164,7 @@ def _safe_file_name(
         candidate += extension or ""
     try:
         return normalize_datastore_name(candidate)
-    except Exception:
+    except DatastoreValidationError:
         return "attachment"
 
 
