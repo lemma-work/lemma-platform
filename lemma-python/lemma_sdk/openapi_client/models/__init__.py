@@ -288,6 +288,8 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'MyUsageLimitsResponse': 'my_usage_limits_response',
+    'MyUsageLimitsResponsePayerType0': 'my_usage_limits_response_payer_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
@@ -480,6 +482,7 @@ _NAME_TO_MODULE = {
     'UpdateTableRequest': 'update_table_request',
     'UpdateTableRequestConfigType0': 'update_table_request_config_type_0',
     'UploadResponse': 'upload_response',
+    'UsageAllowanceResponse': 'usage_allowance_response',
     'UsageLimitScopeResponse': 'usage_limit_scope_response',
     'UsageLimitsResponse': 'usage_limits_response',
     'UsageListResponse': 'usage_list_response',
@@ -815,6 +818,8 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .my_usage_limits_response import MyUsageLimitsResponse
+    from .my_usage_limits_response_payer_type_0 import MyUsageLimitsResponsePayerType0
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
@@ -1007,6 +1012,7 @@ if TYPE_CHECKING:
     from .update_table_request import UpdateTableRequest
     from .update_table_request_config_type_0 import UpdateTableRequestConfigType0
     from .upload_response import UploadResponse
+    from .usage_allowance_response import UsageAllowanceResponse
     from .usage_limit_scope_response import UsageLimitScopeResponse
     from .usage_limits_response import UsageLimitsResponse
     from .usage_list_response import UsageListResponse
@@ -1355,6 +1361,8 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'MyUsageLimitsResponse',
+    'MyUsageLimitsResponsePayerType0',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
@@ -1547,6 +1555,7 @@ __all__ = [
     'UpdateTableRequest',
     'UpdateTableRequestConfigType0',
     'UploadResponse',
+    'UsageAllowanceResponse',
     'UsageLimitScopeResponse',
     'UsageLimitsResponse',
     'UsageListResponse',

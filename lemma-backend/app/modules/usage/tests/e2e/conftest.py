@@ -19,3 +19,9 @@ __all__ = [
     "test_database_url",
     "test_redis_url",
 ]
+
+test_app = e2e_fixtures.test_app
+async_client = e2e_fixtures.async_client
+fixed_test_user = e2e_fixtures.fixed_test_user
+authenticated_client = e2e_fixtures.authenticated_client
+fixed_test_org = e2e_fixtures.fixed_test_org

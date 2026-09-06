@@ -1,4 +1,7 @@
 "use client";
+import { ChatUsage } from "@/components/usage/chat-usage";
+import { usePod } from "@/lib/hooks/use-pods";
+
 
 import { useRouter } from "next/navigation";
 import {
@@ -262,6 +265,9 @@ function PodAssistantSurface({
 }) {
   const assistant = useAIAssistant();
   const mentionPodId = assistant.conversationPodId || assistant.podContext?.pod?.id;
+  const { data: usagePod } = usePod(mentionPodId || undefined);
+  const usageProfileScope = assistant.availableModels.find(model => model.id === assistant.conversationModel)?.profile?.scope;
+  const usageOrganizationId = assistant.conversationOrganizationId ?? usagePod?.organization_id ?? assistant.podContext?.pod?.organization_id;
   const { data: tablesData } = useTables(mentionPodId || undefined, DEFAULT_DATASTORE_NAME);
   const { data: filesData } = useDatastoreFiles(
     mentionPodId || undefined,
@@ -320,6 +326,16 @@ function PodAssistantSurface({
         showConversationList={showConversationList}
         showModelPicker={showModelPicker}
         composerModelControl={composerModelControl}
+        composerTrailingControls={
+          <ChatUsage
+            organizationId={usageOrganizationId ?? undefined}
+            enabled={!mentionPodId || Boolean(usageOrganizationId)}
+            errorCode={assistant.errorReason === "configuration" ? null : assistant.errorCode}
+            running={controller.isActiveConversationRunning}
+            conversationId={controller.activeConversationId}
+            ownCredentials={usageProfileScope === "ORGANIZATION" || usageProfileScope === "PERSONAL"}
+          />
+        }
         showNewConversationButton={showNewConversationButton}
         showHeader={showHeader}
         appearance="minimal"

@@ -26,6 +26,8 @@ export interface ParsedAssistantStreamEvent {
   token?: string;
   tokenKind?: string;
   error?: string;
+  errorCode?: string;
+  errorReason?: string;
   /**
    * The conversation was renamed. Generated from the first user message while
    * the run is still going, so it arrives mid-stream and belongs to the
@@ -212,6 +214,8 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
     return {
       status: "FAILED",
       error: extractErrorMessage(payload) ?? "Agent run failed.",
+      errorCode: typeof value.error_code === "string" ? value.error_code : undefined,
+      errorReason: typeof value.error_reason === "string" ? value.error_reason : undefined,
     };
   }
 
@@ -233,4 +237,20 @@ export function upsertConversationMessage(
 
   next.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   return next;
+}
+
+export class AssistantRunError extends Error {
+  constructor(message: string, public readonly code?: string, public readonly reason?: string) {
+    super(message);
+    this.name = 'AssistantRunError';
+  }
+}
+
+export function assistantFailureDetails(error: unknown): { code: string | null; reason: string | null } {
+  if (!error || typeof error !== 'object') return { code: null, reason: null };
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : null;
+  const details = 'details' in error ? error.details : null;
+  const reason = 'reason' in error && typeof error.reason === 'string' ? error.reason
+    : details && typeof details === 'object' && 'reason' in details && typeof details.reason === 'string' ? details.reason : null;
+  return { code, reason };
 }

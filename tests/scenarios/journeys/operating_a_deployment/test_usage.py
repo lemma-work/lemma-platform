@@ -21,14 +21,23 @@ async def test_usage_is_readable_by_a_member(world):
 
 @scenario("A person can see their own usage without administrative access")
 @proves("PS-OPS-002")
-@covers("usage.organization.me.summary.get")
+@covers("usage.me.summary.get", "usage.me.limits.get")
 async def test_own_usage_is_readable(world):
     alice = await world.person("priya")
     organization = alice.organization
 
-    mine = await alice.own_usage_in(organization)
-
+    member = await world.person("hannah")
+    await member.accepts(
+        await alice.invites(member, to=organization, as_role="ORG_MEMBER")
+    )
+    mine = await member.own_usage_in(organization)
     assert mine is not None
+    limits = await member.api.get(
+        f"/usage/me/limits?organization_id={organization['id']}"
+    )
+    assert "windows" in limits
+    assert "usd" not in str(limits)
+    await member.is_refused_usage_of(organization)
 
 
 @scenario("Someone outside an organization cannot read its usage")

@@ -36,7 +36,9 @@ rather than degrading in a way that only shows up as confused users.
   report it without requiring administrative access.
 - The system shall keep one person's usage from revealing another's.
 
-**Contracts:** `usage.organization.me.summary.get`
+- Members can inspect their own activity without organization reporting privileges. Shared allowance percentages do not grant access to shared dollar totals or other members' records.
+
+**Contracts:** `usage.organization.me.summary.get`, `usage.me.summary.get`, `usage.me.events.list`, `usage.me.stats.get`
 
 ### PS-OPS-003 — Usage records are a ledger, not a cache
 **Status:** covered
@@ -63,7 +65,10 @@ rather than degrading in a way that only shows up as confused users.
 - Where a deployment sets no limit, the system shall say so plainly rather than
   reporting a limit of zero or an absent one.
 
-**Contracts:** `usage.organization.limits.get`
+- Chat exposes allowances on demand with percent used and reset times. It shows the applicable plan, including all windows enforced by that plan. Personal allowances exclude organization-funded activity.
+- Unknown or loading usage is never displayed as zero or unlimited. In-flight overshoot remains visible even when the progress bar is full.
+
+**Contracts:** `usage.organization.limits.get`, `usage.me.limits.get`
 
 ### PS-OPS-011 — Unpriced work remains available without monetary limits
 **Status:** covered

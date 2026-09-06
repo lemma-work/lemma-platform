@@ -72,6 +72,8 @@ from app.modules.agent.services.run_finalizer import (
     RunFinalizer,
     finalize_safely,
     run_failure_message,
+    run_failure_code,
+    run_failure_reason,
 )
 from app.modules.agent.services.run_observer_delivery import (
     notify_run_failed,
@@ -378,11 +380,7 @@ class AgentRunnerService:
                             )
         except BaseException as exc:
             if is_usage_limit_error(exc):
-                # Not a crash: the organisation is out of plan quota. This was
-                # the single most common "error" in production (154 in a week),
-                # logged at ERROR with a stack trace and shown to the user as
-                # "check the agent runtime configuration" — which sent people
-                # debugging a system that was working exactly as designed.
+                # Exhaustion is an expected policy outcome, not a runtime crash.
                 logger.warning(
                     "agent.agent_runner_service.agent_run_quota_exhausted.degraded",
                     agent_run_id=agent_run_id,
@@ -436,6 +434,8 @@ class AgentRunnerService:
                             run=identity,
                             status=AgentRunStatus.FAILED,
                             error=run_failure_message(exc),
+                            error_code=run_failure_code(exc),
+                            error_reason=run_failure_reason(exc),
                         ),
                         agent_run_id=agent_run_id,
                     )

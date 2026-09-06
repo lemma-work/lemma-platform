@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.core.domain.errors import DomainError
 
 
@@ -20,13 +22,19 @@ class UsageLimitExceededError(UsageDomainError):
     """System-profile usage limit has been reached."""
 
     def __init__(
-        self, message: str = "LLM usage limit exceeded for this account"
+        self,
+        message: str = "LLM usage limit exceeded for this account",
+        *,
+        reason: Literal["exhausted", "configuration"] = "exhausted",
     ) -> None:
         super().__init__(
             message,
             code="USAGE_LIMIT_EXCEEDED",
             status_code=429,
         )
+
+        self.reason = reason
+        self.details = {"reason": reason}
 
 
 class UsageContextMissingError(UsageDomainError):
