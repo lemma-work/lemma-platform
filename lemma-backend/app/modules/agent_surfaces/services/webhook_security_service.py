@@ -538,6 +538,9 @@ class SurfaceWebhookSecurityService:
         try:
             await cache.set_json(url, payload, ttl_seconds=_OIDC_CACHE_TTL_SECONDS)
         except RedisError, OSError, TimeoutError, TypeError:
+            # The OIDC metadata was fetched and verified above; caching it only
+            # spares the next webhook the same fetch. An uncacheable document is
+            # still a valid one, and `payload` is returned below regardless.
             pass
         return payload
 

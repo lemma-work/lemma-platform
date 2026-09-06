@@ -108,6 +108,8 @@ class TelegramPlatformService:
                 try:
                     await cache.set_json(token, info)
                 except RedisError, OSError, TimeoutError, TypeError:
+                    # Caching `getMe` saves a round-trip, nothing more; `info`
+                    # is returned below whether or not the write lands.
                     pass
                 return info
         except Exception:
