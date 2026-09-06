@@ -132,6 +132,62 @@ async def test_whatsapp_transaction_sender_match_single_use_and_cache_invalidati
         await service.close()
 
 
+async def test_whatsapp_transaction_without_a_declared_number_binds_the_sender(
+    signup_user,
+    test_redis_url,
+    monkeypatch,
+):
+    """The connect journey mints a code for someone who has typed no number.
+
+    Nothing to match the sender against, so whichever phone sends the code is
+    the phone that gets bound -- the same rule Telegram's OIDC claim follows,
+    and the same number the declared flow would have written.
+    """
+    _enable(monkeypatch)
+    signed_up = await signup_user(email=f"wa-open-{uuid4().hex[:8]}@example.com")
+    user_id = UUID(signed_up["id"])
+    feedback_sender = AsyncMock(return_value=True)
+    service = WhatsAppMobileVerificationService(
+        test_redis_url, feedback_sender=feedback_sender
+    )
+    try:
+        transaction = await service.start(
+            user_id=user_id,
+            client_key=f"test:{uuid4()}",
+        )
+        assert transaction.code in transaction.whatsapp_url
+
+        assert await service.consume_message(
+            code=transaction.code,
+            sender_wa_id="14155553001",
+            destination_phone_number_id="global-phone",
+            whatsapp_message_id="wamid.undeclared",
+        )
+        assert (
+            await service.status(
+                transaction_id=transaction.transaction_id, user_id=user_id
+            )
+            == "VERIFIED"
+        )
+
+        async with async_session_maker() as session:
+            user = await session.get(User, user_id)
+        assert user is not None
+        assert user.mobile_number == "+14155553001"
+        assert user.mobile_verified_at is not None
+
+        # Single use survives the missing number: the code is spent, and a
+        # second sender cannot take the transaction off the first one.
+        assert not await service.consume_message(
+            code=transaction.code,
+            sender_wa_id="14155553002",
+            destination_phone_number_id="global-phone",
+            whatsapp_message_id="wamid.undeclared-second",
+        )
+    finally:
+        await service.close()
+
+
 async def test_whatsapp_transaction_expires(
     signup_user,
     test_redis_url,

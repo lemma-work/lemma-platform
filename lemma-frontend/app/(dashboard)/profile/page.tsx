@@ -12,6 +12,11 @@ import { PlainPageShell } from "@/components/dashboard/plain-page-shell";
 import { ProductIcon } from "@/components/pod/product-icon";
 import { UserSurfacesPanel } from "@/components/settings/user-surfaces-panel";
 import { WhatsAppMobileVerification } from "@/components/settings/whatsapp-mobile-verification";
+import {
+    isCompleteMobileNumber,
+    normalizeMobileNumber,
+    normalizeStoredMobileNumber,
+} from "@/lib/identity/whatsapp-mobile-verification";
 import { SettingsPanel, SettingsStack } from "@/components/settings/settings-kit";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
@@ -47,7 +52,7 @@ export default function ProfilePage() {
     const storedMobileNumber = normalizeStoredMobileNumber(profile?.mobile_number ?? "");
     const mobileNumber = draft?.mobileNumber ?? storedMobileNumber;
     const normalizedMobileNumber = normalizeMobileNumber(mobileNumber);
-    const isMobileNumberValid = !normalizedMobileNumber || /^\+[1-9]\d{7,14}$/.test(normalizedMobileNumber);
+    const isMobileNumberValid = !normalizedMobileNumber || isCompleteMobileNumber(normalizedMobileNumber);
     const hasChanges =
         firstName !== (profile?.first_name ?? "") ||
         lastName !== (profile?.last_name ?? "") ||
@@ -271,16 +276,4 @@ export default function ProfilePage() {
             </SettingsStack>
         </PlainPageShell>
     );
-}
-
-function normalizeMobileNumber(value: string) {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    const digits = trimmed.replace(/\D/g, "");
-    return `${trimmed.startsWith("+") ? "+" : ""}${digits}`;
-}
-
-function normalizeStoredMobileNumber(value: string) {
-    const digits = value.replace(/\D/g, "");
-    return digits ? `+${digits}` : "";
 }
