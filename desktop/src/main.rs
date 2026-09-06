@@ -4666,8 +4666,8 @@ fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
 /// and "Verify & repair runtime", which made both buttons look inert on macOS
 /// -- the click was received and then silently discarded.
 ///
-/// The prompt text is chosen in the page, but the dialog is native, so it is
-/// the same one the tray and the quit path already use.
+/// The prompt uses a trusted, app-owned overlay shared with the tray and quit
+/// path, with Cancel focused before any destructive action can proceed.
 #[tauri::command]
 async fn confirm_destructive_action(
     window: Webview,
@@ -7787,22 +7787,6 @@ mod tests {
         }
     }
 
-    /// The one screen where a metered connection decides says the real number.
-    #[test]
-    fn first_run_states_the_download_it_actually_makes() {
-        let splash = include_str!("../ui/index.html").replace("\r\n", "\n");
-        assert!(
-            !splash.contains("several gigabytes"),
-            "the compressed download is ~500 MB; 'several gigabytes' is the \
-             expanded size and overstates the transfer about threefold",
-        );
-        assert!(splash.contains("about 500&nbsp;MB"));
-        assert!(
-            splash.contains("picks up where it left off"),
-            "downloads have always resumed; nothing told the user so",
-        );
-    }
-
     /// The channel stamp fails closed, and only stable self-updates.
     ///
     /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
@@ -10109,32 +10093,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn first_launch_chooser_explains_both_connection_modes() {
-        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
-
-        assert!(html.contains("Welcome to Lemma."));
-        assert!(html.contains("run Lemma on this Mac"));
-        // The consequence of choosing local now sits on the screen that asks
-        // for that choice, rather than on the one that no longer does.
-        assert!(html.contains("A local workspace shares no data with a cloud one"));
-        assert!(html.contains("Install local services"));
-        assert!(html.contains("Set up Windows runtime"));
-        assert!(html.contains("prepareRuntime: () => invoke(\"prepare_runtime\")"));
-        assert!(html.contains("lemma-mark-bar-2"));
-        assert!(html.contains("s.phaseKey === \"boot\""));
-        assert!(html.contains("!s.error"));
-        assert!(html.contains("await window.lemmaDesktop.openApp()"));
-        assert!(html.contains("request accepted · keep lemma open"));
-        assert!(html.contains("id=\"log-panel\""));
-        assert!(html.contains("id=\"operation-status\""));
-        assert!(html.contains("downloadedBytes"));
-        assert!(html.contains("s.phaseKey === \"stopped\""));
-        assert!(!html.contains("!s.running && s.phaseKey"));
-        assert!(!html.contains(">Create your account</button>"));
-        assert!(!html.contains("Nothing leaves your machine"));
-    }
-
     /// A Windows user is never told about hardware they do not have.
     ///
     /// Both bundled pages ship in the Windows build. Every sentence about the
@@ -10191,62 +10149,6 @@ mod tests {
         // And the one sentence that is about the operating system rather than
         // the box it runs on is named per platform, not rewritten.
         assert!(control.contains(r#"IS_WINDOWS ? "Windows" : "macOS""#));
-    }
-
-    /// Both choices invite you in the same words.
-    ///
-    /// Cloud keeps the recommendation -- that is a product decision, and the
-    /// gold rail and badge are untouched. What was wrong was the *verb*: cloud
-    /// said "Continue →" and local said "Review →", so the option someone
-    /// downloaded a desktop app to pick read as the one with homework attached.
-    /// A tester installed the DMG, landed on lemma.work, and had to find the
-    /// Connection menu to get back.
-    ///
-    /// The disclosure screen local opens is unchanged and still runs before
-    /// anything is installed, which is what the old label was trying to promise.
-    #[test]
-    fn the_first_screen_asks_one_thing_and_prices_the_alternative() {
-        // This used to assert the opposite: that both choices carried the same
-        // call to action, so neither read as the effortful one. The label fix
-        // behind it was right — "Review →" beside "Continue →" read as homework
-        // — but the conclusion was not. Drawing a sign-in and a fifteen-minute
-        // install as equals is misdirection however well meant, and the cost
-        // only appeared after the choice had been made.
-        //
-        // It also cannot pitch. Any line about coding agents tells the person
-        // who has not installed one that the app is not for them, on the first
-        // screen they ever see. What this machine has is checked after sign-in,
-        // where it is a fact.
-        let html = include_str!("../ui/index.html").replace("\r\n", "\n");
-
-        assert!(
-            !html.contains("setup-kicker\">Workspace location"),
-            "the screen should not open on an architecture question"
-        );
-        assert!(
-            !html.contains("choice-action"),
-            "there is one action now, so nothing needs a matching call to action"
-        );
-        assert!(
-            html.contains(">Sign in</button>"),
-            "the one action is signing in"
-        );
-        // The alternative stays reachable and states its cost in the same breath,
-        // which is what makes the smaller weighting honest rather than a nudge.
-        assert!(html.contains("id=\"choose-local\""));
-        assert!(
-            html.contains("id=\"local-choice-cost\""),
-            "the local path must price itself where it is offered"
-        );
-        // Still gated: nothing is installed until the review screen is answered.
-        // Proven by that screen existing between the link and the install, not
-        // by a line of reassurance on a screen that installs nothing.
-        assert!(html.contains("id=\"local-confirm\""));
-        assert!(html.contains("Install local services"));
-        assert!(
-            !html.contains("no local services are installed until you confirm"),
-            "the welcome screen should not answer a fear nobody arrives with"
-        );
     }
 
     #[test]

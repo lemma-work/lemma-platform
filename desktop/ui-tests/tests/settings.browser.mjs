@@ -95,6 +95,28 @@ async function settings(t, mode = 'local', daemonOffline = false) {
   return page;
 }
 
+test('settings before deployment selection do not claim the workspace is in the cloud', async t => {
+  const page = await settings(t, 'undecided');
+  const description = await page.locator('#deployment-description').textContent();
+  assert.match(description, /Choose Lemma Cloud or Local Lemma/);
+  assert.doesNotMatch(description, /Your workspace data and orchestration live in Lemma Cloud/);
+});
+
+test('settings content remains readable when an embedded webview suspends animation', async (t) => {
+  const page = await settings(t, 'cloud');
+  await page.addStyleTag({ content: '* { animation-play-state: paused !important; }' });
+  for (const name of ['Updates', 'This computer', 'Recovery']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    const content = await page.locator('.page.active').evaluate(element => ({
+      opacity: getComputedStyle(element).opacity,
+      height: element.getBoundingClientRect().height,
+      text: element.innerText.trim(),
+    }));
+    assert.equal(content.opacity, '1', `${name} must paint without waiting for animation frames`);
+    assert.ok(content.height > 0 && content.text.length > 0, `${name} has readable content`);
+  }
+});
+
 test('real settings DOM preserves drafts across health refresh, navigation, and closing', async (t) => {
   const page = await settings(t);
   await page.getByRole('button', { name: 'AI provider', exact: true }).click();

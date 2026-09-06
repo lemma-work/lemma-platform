@@ -31,7 +31,13 @@ separately.
 2. Download `Lemma_<version>_aarch64-online.dmg`.
 3. Open the DMG and drag **Lemma** into **Applications**.
 4. Eject the DMG and open `/Applications/Lemma.app`.
-5. Choose **Local** and select **Install local services**.
+5. Choose **Use Local Lemma** and select **Install local services**.
+
+macOS may ask for Local Network access to let Lemma reach its private virtual
+machine on this Mac. If setup cannot connect to local services, check Lemma in
+**System Settings → Privacy & Security → Local Network**, then return to Lemma
+and select **Try again**. A connection failure does not require deleting local
+data. If access is already allowed, restart Lemma and check VPN or firewall rules.
 
 Run Lemma from Applications, not from the mounted DMG. The public application
 contains only the Desktop shell, `lemma-locald`, native runtime helpers, and
@@ -50,7 +56,7 @@ To try it:
    [Actions](https://github.com/lemma-work/lemma-platform/actions/workflows/release-desktop.yml).
 2. Download the `lemma-desktop-windows-<version>` artifact and unzip it.
 3. Run the signed installer and open Lemma.
-4. Choose **Local** and select **Install local services**.
+4. Choose **Use Local Lemma** and select **Install local services**.
 
 Lemma imports a private `LemmaRuntime` WSL2 distribution. It does not install
 Ubuntu, Docker Desktop, or Podman, and it does not change the default WSL

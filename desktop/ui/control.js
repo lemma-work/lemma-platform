@@ -310,7 +310,9 @@ function configureInteractionHandlers() {
   });
   $("deployment-description").textContent = LOCAL_MODE
     ? "Local Lemma runs its services and stores application data on this computer. Configured LLMs, connectors, and online features can send requested prompts, tool results, and payloads externally."
-    : "Your workspace data and orchestration live in Lemma Cloud. Installed coding agents run on this computer. Their requested results are sent to your cloud workspace.";
+    : window.__LEMMA_DESKTOP__?.mode === "undecided"
+      ? "Choose Lemma Cloud or Local Lemma when you return to setup. Cloud stores workspace data online; Local Lemma stores application data and runs services on this computer. Configured providers and connectors can communicate externally in either mode."
+      : "Your workspace data and orchestration live in Lemma Cloud. Installed coding agents run on this computer. Their requested results are sent to your cloud workspace.";
   $("unsaved-cancel").addEventListener("click", () => $("unsaved-dialog").close());
   $("unsaved-discard").addEventListener("click", async () => {
     if (pendingSaves.size) {

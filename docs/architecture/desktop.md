@@ -276,6 +276,28 @@ enabled in local mode. Connecting and choosing agents still live in the
 workspace page, which both modes can reach. See
 [Agent Host in the desktop app](agent-host.md).
 
+Settings content paints immediately without a page-entry fade. A child webview
+can suspend animation frames while its parent changes; starting the page at
+zero opacity can leave usable controls in the accessibility tree while the
+window looks blank. Native qualification checks both the visible page and its
+accessibility tree, including opening settings before deployment setup.
+
+The first screen describes both deployment choices before sign-in: Lemma Cloud
+stores workspace data online and can use this computer's agents; Local Lemma
+stores application data and runs services on this computer. Both can send
+requested data to configured providers and connectors. Local setup requires a
+separate install action; returning to the choices performs no installation.
+
+On macOS, host services connect to the private VM through its local IP address.
+The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
+explains this permission before installation. A blocked or unreachable guest
+connection offers Local Network settings guidance and a retry without deleting
+data; that socket error alone does not establish that permission was denied.
+Terminal connectivity does not prove app connectivity because macOS attributes
+helper access to its responsible app. Candidate qualification must exercise the
+installed app with its release signing identity and both allowed and denied
+access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+
 ## 7.2 Sharing and canonical origin
 
 `SharingController` starts in This computer mode on every daemon launch. Its

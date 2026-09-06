@@ -235,8 +235,9 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
 .state-pill.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); background: var(--red-soft); }
 
 .page { display: none; max-width: 1120px; margin: 0 auto; }
-.page.active { display: block; animation: page-in .16s ease-out; }
-@keyframes page-in { from { opacity: 0; transform: translateY(3px); } }
+/* Child webviews can suspend animation frames while their parent changes.
+   Settings must paint immediately, including recovery and confirmation paths. */
+.page.active { display: block; }
 
 .attention-banner {
   display: grid;

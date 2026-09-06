@@ -1358,6 +1358,7 @@ _desktop-verify-dist-app:
 	test "$$app_bytes" -le $$((850 * 1024 * 1024)) || ( \
 		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 850 MiB"; exit 1); \
 	codesign --verify --deep --strict "$$app"; \
+	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
 		| grep -qF "com.apple.security.virtualization"; \
 	codesign -dvvv "$$app/Contents/MacOS/lemma-locald" 2>&1 \

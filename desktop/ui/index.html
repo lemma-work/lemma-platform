@@ -301,6 +301,11 @@
     border-left: 1px solid var(--hairline);
   }
   #choose { width: 100%; display: flex; flex-direction: column; align-items: center; }
+  .choice-description { max-width: 420px; margin: 10px 0 0; color: var(--ink-soft); font-size: .82rem; line-height: 1.5; }
+  .choice-network { max-width: 440px; margin: 18px 0 0; color: var(--ink-faint); font-size: .74rem; line-height: 1.5; }
+  .scene.welcoming { overflow-y: auto; padding-top: 36px; padding-bottom: 70px; justify-content: safe center; }
+  .scene.welcoming .orb-wrap { width: 160px; height: 160px; flex-shrink: 0; margin-bottom: 18px; }
+  .scene.welcoming .statement { flex-shrink: 0; }
   button.start {
     all: unset;
     box-sizing: border-box;
@@ -431,6 +436,16 @@
     .scene.choosing { padding-top: 36px; padding-bottom: 36px; }
     .scene.choosing .statement { min-height: 200px; }
     .scene.choosing .statement p { font-size: 3.15rem; }
+  }
+  @media (max-width: 850px) {
+    .scene.choosing { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 24px; padding: 28px 24px 70px; overflow-y: auto; }
+    .scene.choosing .setup-intro { height: auto; }
+    .scene.choosing .setup-brand { position: static; margin-bottom: 20px; }
+    .scene.choosing .statement { min-height: 0; }
+    .scene.choosing .statement p { position: static; font-size: 2.25rem; }
+    .scene.choosing .setup-support { margin-top: 12px; }
+    .scene.choosing #local-confirm { border-left: 0; padding: 0; min-width: 0; }
+    .confirm-actions { flex-wrap: wrap; }
   }
 
   /* ---------- quiet chrome ---------- */
@@ -654,31 +669,15 @@
   </div>
   <p class="truth" id="truth"></p>
 
-  <!--
-    One button, because on this screen we do not yet know who is holding the app.
-
-    This used to be two equal choices under the heading "Workspace location" — an
-    architecture question asked before anything had been established, of someone
-    with no basis to answer it. Equal visual weight for options with wildly
-    unequal cost is misdirection however well meant, and the cost only appeared
-    on the next screen.
-
-    It also cannot pitch. Any line about coding agents excludes the person who
-    has not installed one, on the first screen they ever see. What the machine
-    actually has is checked after sign-in, where it is a fact rather than a
-    guess — and now cheap enough to check that the screen can be built on it.
-  -->
   <section id="choose" hidden>
-    <button class="primary start" id="choose-cloud" type="button">Sign in</button>
+    <button class="primary start" id="choose-cloud" type="button">Use Lemma Cloud</button>
+    <p class="choice-description">Workspace data lives in Lemma Cloud. You can connect coding agents on this computer without installing local services.</p>
     <p class="mode-note">
-      Or <button class="linklike" id="choose-local" type="button">run Lemma on this Mac</button>
-      <!-- Qualitative on purpose. A figure here is a promise made on the first
-           screen anyone sees, over a download whose length is somebody else's
-           network, and the review screen behind this link is where the cost is
-           actually laid out. "A number in prose goes stale silently" applies to
-           product copy as much as to docs. -->
-      <span class="local-cost" id="local-choice-cost">· downloads and installs services</span>
+      <button class="linklike" id="choose-local" type="button">Use Local Lemma</button>
     </p>
+    <p class="choice-description">Lemma services and stored application data live on this Mac.</p>
+    <p class="local-cost" id="local-choice-cost">Downloads and installs local services.</p>
+    <p class="choice-network">Configured AI providers and connectors can send requested data over the internet in either mode.</p>
   </section>
 
   <section id="local-confirm" hidden>
@@ -687,18 +686,10 @@
     <div class="local-review">
       <ul>
         <li id="local-data-copy">Workspace data is stored on this Mac.</li>
-        <!-- Moved here from the choice screen. It is a consequence of picking
-             local, so it belongs where that is being decided rather than on a
-             screen that no longer asks the question. -->
         <li>A local workspace shares no data with a cloud one.</li>
-        <!-- The real numbers. "Several gigabytes" overstated the transfer by
-             about three times: the download gate is 750 MiB compressed, and a
-             current release is around 506 MB. This is the one screen where
-             somebody on a hotspot or a metered connection decides, so it should
-             not be the screen that guesses high. Resumability is worth saying
-             for the same reason -- it is already true, and nothing told them. -->
-        <li>First setup downloads about 500&nbsp;MB and installs about 1.8&nbsp;GB. On a slow connection this takes a while; you can close Lemma and it picks up where it left off.</li>
+        <li>First setup installs the local runtime and downloads service images. Download and storage needs depend on the release and cached files. Interrupted runtime downloads can resume.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
+        <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" hidden></p>
       <div class="confirm-actions">
@@ -831,6 +822,7 @@
 
   // ---- the script: poetic line + honest mono subtitle per real phase ----
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+  document.getElementById("local-network-permission").hidden = IS_WINDOWS;
   const DEVICE = IS_WINDOWS ? "PC" : "Mac";
   /** Any sentence about the machine, said the way this machine's owner would. */
   function forThisDevice(text) {
@@ -1396,8 +1388,8 @@
   const localSetupError = document.getElementById("local-setup-error");
   const confirmLocalBtn = document.getElementById("confirm-local");
   function showChooser() {
-    // Deliberately not `.choosing`: this is the splash, with a button.
     scene.classList.remove("choosing");
+    scene.classList.add("welcoming");
     chooseEl.hidden = false;
     localConfirmEl.hidden = true;
     switchModeBtn.hidden = true;
@@ -1411,15 +1403,10 @@
     // this machine, because nothing has looked yet and a wrong guess here tells
     // someone the app is not for them before they have used it.
     say("Welcome to Lemma.");
-    // Nothing. This used to promise "no local services are installed until you
-    // confirm" — a reassurance against a fear nobody arrives with, referring to
-    // a confirmation step they have not seen, on a screen whose only action is
-    // signing in. It was written for the other path and was invisible here
-    // anyway until this screen stopped being a two-column layout. The gating it
-    // describes is self-evident on the review screen that actually does it.
     truth.textContent = "";
   }
   function showLocalConfirmation() {
+    scene.classList.remove("welcoming");
     scene.classList.add("choosing");
     chooseEl.hidden = true;
     localConfirmEl.hidden = false;
@@ -1430,7 +1417,7 @@
     truth.textContent = "review before installation";
   }
   function hideConnectionChoice() {
-    scene.classList.remove("choosing");
+    scene.classList.remove("choosing", "welcoming");
     chooseEl.hidden = true;
     localConfirmEl.hidden = true;
   }
