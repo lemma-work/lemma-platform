@@ -695,9 +695,13 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
     )
     assert isinstance(unresolved_ctx, SurfaceReplyContext)
     unresolved_message = (unresolved_ctx.reply_message or "").lower()
+    # However each platform words it, the reply has to say how to become known:
+    # Telegram asks for the contact, WhatsApp names the number it did not
+    # recognise and points at the profile that would claim it.
     assert (
         "sign up" in unresolved_message
         or "contact" in unresolved_message
         or "share your phone" in unresolved_message
+        or "profile" in unresolved_message
     )
     assert "/pods/" not in (unresolved_ctx.reply_message or "")

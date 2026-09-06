@@ -401,6 +401,7 @@ def _build_service(
     service._resolve_account_credentials = AsyncMock(return_value={})
     service.event_dedup_store = SimpleNamespace(
         claim_message=AsyncMock(return_value=True),
+        claim_stranger_reply=AsyncMock(return_value=True),
     )
     return service
 
