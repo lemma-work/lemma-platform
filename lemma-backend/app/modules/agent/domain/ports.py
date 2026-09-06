@@ -280,6 +280,8 @@ class ConversationRepository(Protocol):
         status: AgentRunStatus,
         conversation_status: ConversationStatus | None = None,
         error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
         output_data: JsonValue | None = None,
     ) -> AgentRunFinishResult | None: ...
 

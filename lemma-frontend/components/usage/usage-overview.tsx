@@ -1,366 +1,381 @@
-'use client';
+"use client";
 
-import { useMemo, useState } from 'react';
-import { AlertCircle, BarChart3, ReceiptText } from '@/components/ui/icons';
-
-import { Badge } from '@/components/ui/badge';
-import { ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
-import { EmptyState } from '@/components/shared/empty-state';
+import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
-import { useRecentUsage, useUsageLimits, useUsageStats, useUsageSummary } from '@/lib/hooks/use-usage';
-import type { UsageLimits, UsageRecord, UsageStats, UsageSummary } from '@/lib/types';
-import { Skeleton } from '@/components/shared/loading';
+  ResourceMetric,
+  ResourceMetricStrip,
+} from "@/components/pod/resource-layout";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/shared/loading";
+import {
+  useRecentUsage,
+  useMyUsageLimits,
+  useUsageStats,
+  useUsageSummary,
+} from "@/lib/hooks/use-usage";
+import { useAccessiblePods } from "@/lib/hooks/use-pods";
+import type { UsageRecord } from "@/lib/types";
+import { UsageAllowances } from "./usage-allowances";
+import {
+  formatUsageCost,
+  usageAccountingLabel,
+  usageBreakdown,
+} from "./usage-format";
 
-type UsageScope = 'organization' | 'pod';
+type UsageScope = "organization" | "pod" | "personal";
 
-interface UsageOverviewProps {
-    organizationId: string;
-    podId?: string;
-    title?: string;
-    scope: UsageScope;
-}
-
-const DAY_OPTIONS = [
-    { value: '7', label: '7 days' },
-    { value: '30', label: '30 days' },
-    { value: '90', label: '90 days' },
-];
-
-export function UsageOverview({ organizationId, podId, scope }: UsageOverviewProps) {
-    const [days, setDays] = useState('30');
-    const dayCount = Number(days);
-    const filters = useMemo(
-        () => ({
-            days: dayCount,
-            limit: 12,
-            podId: scope === 'pod' ? podId : undefined,
-        }),
-        [dayCount, podId, scope]
-    );
-    const summary = useUsageSummary(organizationId, filters, { enabled: scope !== 'pod' || Boolean(podId) });
-    const stats = useUsageStats(organizationId, { ...filters, granularity: 'day' }, { enabled: scope !== 'pod' || Boolean(podId) });
-    const recent = useRecentUsage(organizationId, filters, { enabled: scope !== 'pod' || Boolean(podId) });
-    const limits = useUsageLimits(organizationId);
-
-    const isLoading = summary.isLoading || stats.isLoading || recent.isLoading || limits.isLoading;
-    const error = summary.error || stats.error || recent.error || limits.error;
-
-    return (
-        <div className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <UsageMetricStrip summary={summary.data} limits={limits.data} scope={scope} />
-                <Select value={days} onValueChange={setDays}>
-                    <SelectTrigger className="w-full sm:w-[8.5rem]" aria-label="Usage period">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {DAY_OPTIONS.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-            </div>
-
-            {error ? <UsageError error={error} /> : null}
-
-            {isLoading ? (
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(21rem,0.75fr)]">
-                    <div className="surface-panel min-h-[18rem] p-4">
-                        <Skeleton shape="block" className="h-4 w-32" />
-                        <Skeleton shape="block" className="mt-4 h-[13rem] w-full" />
-                    </div>
-                    <div className="surface-panel min-h-[18rem] p-4">
-                        <Skeleton shape="block" className="h-4 w-28" />
-                        <div className="mt-4 space-y-3">
-                            <Skeleton className="h-3 w-full" />
-                            <Skeleton className="h-3 w-4/5" />
-                            <Skeleton className="h-3 w-3/5" />
-                            <Skeleton className="h-3 w-2/3" />
-                        </div>
-                    </div>
-                </div>
-            ) : (
-                <>
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(21rem,0.75fr)]">
-                        <UsageTrend stats={stats.data} />
-                        <UsageBreakdown summary={summary.data} />
-                    </div>
-                    <RecentUsageList records={recent.data?.items || []} />
-                </>
-            )}
-        </div>
-    );
-}
-
-function UsageMetricStrip({
-    summary,
-    limits,
-    scope,
+export function UsageOverview({
+  organizationId,
+  podId,
+  scope,
 }: {
-    summary?: UsageSummary;
-    limits?: UsageLimits;
-    scope: UsageScope;
+  organizationId?: string;
+  podId?: string;
+  title?: string;
+  scope: UsageScope;
 }) {
-    const limitScope = limits?.org_monthly;
-    const userLimitScope = limits?.user_weekly;
-    const remaining = scope === 'organization' ? limitScope?.remaining_usd : userLimitScope?.remaining_usd;
-    const resetAt = scope === 'organization' ? limitScope?.reset_at : userLimitScope?.reset_at;
-
-    // Read-only stats, not tabs. `active` draws the selected-tab underline,
-    // which made "Cost" look like the chosen one of five things you could pick —
-    // none of these are clickable.
-    return (
-        <ResourceMetricStrip className="lemma-index-tabs-left p-0">
-            <ResourceMetric label="Cost" value={formatCurrency(summary?.system_cost_usd)} />
-            <ResourceMetric label="Tokens" value={formatCompact(summary?.total_tokens)} />
-            <ResourceMetric
-                label={scope === 'organization' ? 'Org monthly left' : 'Your weekly left'}
-                value={remaining == null ? 'No cap' : formatCurrency(remaining)}
-            />
-            <ResourceMetric
-                label="Window"
-                value={summary?.period_days ? `${summary.period_days} days` : 'No data'}
-            />
-            {resetAt ? <ResourceMetric label="Resets" value={formatDate(resetAt)} /> : null}
-        </ResourceMetricStrip>
-    );
-}
-
-function UsageTrend({ stats }: { stats?: UsageStats }) {
-    const buckets = stats?.items || [];
-    const maxCost = Math.max(...buckets.map((bucket) => bucket.system_cost_usd), 0);
-
-    return (
-        <section className="surface-panel p-4">
-            <div className="mb-4 flex items-start justify-between gap-3">
-                <div>
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Usage trend</h3>
-                    <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">Daily spend buckets from the selected window.</p>
-                </div>
-                <Badge variant="outline">{stats?.granularity || 'day'}</Badge>
-            </div>
-
-            {buckets.length === 0 ? (
-                <EmptyState variant="inline"
-                    icon={<BarChart3 className="h-4 w-4" />}
-                    title="No trend yet"
-                    description="Usage will appear here after this scope has activity in the selected window."
-                    className="surface-panel-dashed min-h-[9rem] items-center px-4 py-5"
-                />
-            ) : (
-                <div className="space-y-3">
-                    {buckets.slice(-12).map((bucket) => {
-                        const width = maxCost > 0 ? Math.max(4, (bucket.system_cost_usd / maxCost) * 100) : 4;
-                        return (
-                            <div key={`${bucket.bucket}-${bucket.group || 'all'}`} className="grid gap-2 sm:grid-cols-[6.5rem_minmax(0,1fr)_5.5rem] sm:items-center">
-                                <div className="truncate text-xs text-[var(--text-tertiary)]">{formatBucket(bucket.bucket)}</div>
-                                <div className="h-2 rounded-full bg-[var(--surface-2)]">
-                                    <div
-                                        className={`h-2 rounded-full bg-[var(--action-primary)] ${barWidthClass(width)}`}
-                                    />
-                                </div>
-                                <div className="text-right text-xs font-medium text-[var(--text-secondary)]">
-                                    {formatCurrency(bucket.system_cost_usd)}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </section>
-    );
-}
-
-function UsageBreakdown({ summary }: { summary?: UsageSummary }) {
-    const byModel = flattenTotals(summary?.total_by_model);
-    const byKind = flattenTotals(summary?.total_by_kind);
-
-    return (
-        <section className="surface-panel p-4">
-            <div className="mb-4">
-                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Breakdown</h3>
-                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">Grouped totals returned by the billing API.</p>
-            </div>
-
-            <div className="space-y-5">
-                <BreakdownGroup title="By model" rows={byModel} />
-                <BreakdownGroup title="By kind" rows={byKind} />
-            </div>
-        </section>
-    );
-}
-
-function BreakdownGroup({ title, rows }: { title: string; rows: BreakdownRow[] }) {
-    return (
-        <div>
-            <p className="mb-2 type-eyebrow">{title}</p>
-            {rows.length === 0 ? (
-                <p className="surface-panel-dashed px-3 py-3 text-sm text-[var(--text-tertiary)]">
-                    No grouped usage returned.
-                </p>
-            ) : (
-                <div className="space-y-2">
-                    {rows.slice(0, 5).map((row) => (
-                        <div key={`${title}-${row.label}`} className="surface-panel-muted px-3 py-2">
-                            <div className="flex items-center justify-between gap-3">
-                                <p className="truncate text-sm font-medium text-[var(--text-primary)]">{humanize(row.label)}</p>
-                                <p className="shrink-0 text-xs text-[var(--text-secondary)]">{row.primary}</p>
-                            </div>
-                            {row.detail ? <p className="mt-1 truncate text-xs text-[var(--text-tertiary)]">{row.detail}</p> : null}
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function RecentUsageList({ records }: { records: UsageRecord[] }) {
-    return (
-        <section>
-            <div className="lemma-index-tabs lemma-index-tabs-left flex-wrap">
-                <ResourceMetric label="Recent usage" value={records.length} active />
-            </div>
-
-            {records.length === 0 ? (
-                <EmptyState variant="inline"
-                    icon={<ReceiptText className="h-4 w-4" />}
-                    title="No usage events yet"
-                    description="Recent model and tool activity will appear here."
-                    className="px-1 py-3"
-                />
-            ) : (
-                <div className="lemma-index-list">
-                    {records.map((record) => (
-                        <div key={record.id} className="lemma-index-row group flex items-center gap-2">
-                            <ReceiptText className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                            <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                                <p className="truncate text-sm font-medium text-[var(--text-primary)]">{record.model_name || 'Unknown model'}</p>
-                                <p className="hidden truncate text-xs text-[var(--text-secondary)] md:block">
-                                    {humanize(record.usage_kind)} · {formatDateTime(record.occurred_at || record.created_at)}
-                                </p>
-                            </div>
-                            {record.status ? (
-                                <Badge variant={record.status.toLowerCase() === 'success' ? 'success' : 'outline'} className="hidden shrink-0 md:inline-flex">
-                                    {humanize(record.status)}
-                                </Badge>
-                            ) : null}
-                            <span className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline">{formatCompact(record.total_tokens)} tokens</span>
-                            <span className="shrink-0 text-sm font-medium text-[var(--text-primary)]">{formatCurrency(record.cost_usd)}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </section>
-    );
-}
-
-function UsageError({ error }: { error: unknown }) {
-    return (
-        <div className="state-surface-error flex gap-3 rounded-lg p-4 text-sm text-[var(--text-primary)]">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--state-error)]" />
+  const navigation = useAccessiblePods({ enabled: scope !== "personal" });
+  const role = navigation.data.organizations.find(
+    (org) => org.id === organizationId,
+  )?.role;
+  const canReadOrganization = role === "ORG_OWNER" || role === "ORG_EDITOR";
+  const self = scope === "personal";
+  const enabled =
+    self || (canReadOrganization && (scope !== "pod" || Boolean(podId)));
+  const [days, setDays] = useState("30");
+  const [limit, setLimit] = useState(50);
+  const [conversationId, setConversationId] = useState("");
+  const [agentRunId, setAgentRunId] = useState("");
+  const [applied, setApplied] = useState({
+    conversationId: "",
+    agentRunId: "",
+  });
+  const filters = {
+    days: Number(days),
+    podId: scope === "pod" ? podId : undefined,
+    ...applied,
+  };
+  const summary = useUsageSummary(organizationId, filters, { enabled, self });
+  const stats = useUsageStats(
+    organizationId,
+    { ...filters, granularity: "day" },
+    { enabled, self },
+  );
+  const recent = useRecentUsage(
+    organizationId,
+    { ...filters, limit },
+    { enabled, self },
+  );
+  const limits = useMyUsageLimits(organizationId);
+  const buckets = [...(stats.data?.items ?? [])].sort((a, b) =>
+    a.bucket.localeCompare(b.bucket),
+  );
+  const maxCost = Math.max(
+    0,
+    ...buckets.map((bucket) => bucket.system_cost_usd),
+  );
+  return (
+    <div className="space-y-6">
+      <section className="surface-panel p-5">
+        <UsageAllowances
+          data={limits.data}
+          loading={limits.isPending}
+          error={limits.error}
+          retry={() => void limits.refetch()}
+        />
+      </section>
+      {!self && !canReadOrganization ? (
+        <QuerySection
+          loading={navigation.isLoading}
+          error={navigation.error}
+          retry={() => void navigation.refetch()}
+        >
+          <p className="text-sm text-[var(--text-secondary)]">
+            Organization spending details are available to owners and editors.
+          </p>
+          <Link
+            href={`/profile/usage?organizationId=${encodeURIComponent(organizationId ?? "")}`}
+            className="text-sm text-[var(--action-primary)]"
+          >
+            View your own usage →
+          </Link>
+        </QuerySection>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-                <p className="font-medium">Usage could not fully load.</p>
-                <p className="mt-1 text-[var(--text-secondary)]">{error instanceof Error ? error.message : 'The usage API returned an error.'}</p>
+              <h2 className="text-base font-semibold">
+                {self
+                  ? "Your activity"
+                  : scope === "pod"
+                    ? "Pod activity"
+                    : "Organization activity"}
+              </h2>
+              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                Recorded spend and tokens in the selected period. Pending or
+                unavailable costs are not included in spend.
+              </p>
             </div>
+            <Select
+              value={days}
+              onValueChange={(value) => {
+                setDays(value);
+                setLimit(50);
+              }}
+            >
+              <SelectTrigger className="w-32" aria-label="Usage period">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[7, 30, 90].map((day) => (
+                  <SelectItem key={day} value={String(day)}>
+                    {day} days
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <details>
+            <summary className="cursor-pointer text-sm text-[var(--text-secondary)]">
+              Filter by conversation or run
+            </summary>
+            <form
+              className="mt-3 flex flex-wrap items-end gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setApplied({
+                  conversationId: conversationId.trim(),
+                  agentRunId: agentRunId.trim(),
+                });
+                setLimit(50);
+              }}
+            >
+              <label className="space-y-1 text-xs text-[var(--text-secondary)]">
+                Conversation ID
+                <Input
+                  value={conversationId}
+                  onChange={(event) => setConversationId(event.target.value)}
+                  placeholder="All conversations"
+                />
+              </label>
+              <label className="space-y-1 text-xs text-[var(--text-secondary)]">
+                Run ID
+                <Input
+                  value={agentRunId}
+                  onChange={(event) => setAgentRunId(event.target.value)}
+                  placeholder="All runs"
+                />
+              </label>
+              <Button type="submit" variant="secondary" size="sm">
+                Apply filters
+              </Button>
+            </form>
+          </details>
+          <QuerySection
+            loading={summary.isPending}
+            error={summary.error}
+            retry={() => void summary.refetch()}
+          >
+            <ResourceMetricStrip>
+              <ResourceMetric
+                label="Recorded spend"
+                value={formatUsageCost(summary.data?.system_cost_usd)}
+              />
+              <ResourceMetric
+                label="Tokens"
+                value={summary.data?.total_tokens.toLocaleString() ?? "—"}
+              />
+            </ResourceMetricStrip>
+            <div className="mt-4 grid gap-5 sm:grid-cols-2">
+              {(["total_by_model", "total_by_kind"] as const).map(
+                (key, index) => (
+                  <div key={key}>
+                    <h3 className="mb-3 text-sm font-medium">
+                      {index === 0 ? "By model" : "By activity"}
+                    </h3>
+                    {usageBreakdown(summary.data?.[key]).length === 0 ? (
+                      <p className="text-sm text-[var(--text-tertiary)]">
+                        No activity in this period.
+                      </p>
+                    ) : (
+                      usageBreakdown(summary.data?.[key]).map((row) => (
+                        <div
+                          key={row.label}
+                          className="flex items-baseline justify-between gap-3 border-b border-[var(--border-subtle)] py-2 text-sm"
+                        >
+                          <span className="min-w-0 truncate" title={row.label}>
+                            {row.label}
+                          </span>
+                          <span className="shrink-0 text-[var(--text-secondary)]">
+                            {formatUsageCost(row.cost)} ·{" "}
+                            {row.tokens.toLocaleString()} tokens
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ),
+              )}
+            </div>
+          </QuerySection>
+          <QuerySection
+            loading={stats.isPending}
+            error={stats.error}
+            retry={() => void stats.refetch()}
+          >
+            <h3 className="mb-4 text-sm font-medium">Daily recorded spend</h3>
+            {buckets.length === 0 ? (
+              <p className="text-sm text-[var(--text-tertiary)]">
+                No activity in this period.
+              </p>
+            ) : (
+              <div className="max-h-80 space-y-3 overflow-y-auto">
+                {buckets.map((bucket) => (
+                  <div
+                    key={bucket.bucket}
+                    className="grid grid-cols-[5rem_minmax(0,1fr)_6rem] items-center gap-3 text-xs"
+                  >
+                    <span className="text-[var(--text-secondary)]">
+                      {new Date(bucket.bucket).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </span>
+                    <meter
+                      aria-label={`Recorded spend ${bucket.bucket}`}
+                      min={0}
+                      max={maxCost || 1}
+                      value={bucket.system_cost_usd}
+                      className="h-2 w-full [&::-webkit-meter-bar]:border-0 [&::-webkit-meter-bar]:bg-[var(--surface-2)] [&::-webkit-meter-optimum-value]:bg-[var(--action-primary)]"
+                    />
+                    <span className="text-right tabular-nums">
+                      {formatUsageCost(bucket.system_cost_usd)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </QuerySection>
+          <QuerySection
+            loading={recent.isPending}
+            error={recent.error}
+            retry={() => void recent.refetch()}
+          >
+            <h3 className="mb-3 text-sm font-medium">Recent activity</h3>
+            {!recent.data?.items.length ? (
+              <p className="text-sm text-[var(--text-tertiary)]">
+                No activity in this period.
+              </p>
+            ) : (
+              <div className="divide-y divide-[var(--border-subtle)]">
+                {recent.data.items.map((record) => (
+                  <UsageActivity key={record.id} record={record} />
+                ))}
+              </div>
+            )}
+            {recent.data?.items.length === limit && limit < 1000 ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-4"
+                onClick={() => setLimit(Math.min(1000, limit * 2))}
+              >
+                Load more
+              </Button>
+            ) : null}
+            {recent.data?.items.length === 1000 ? (
+              <p className="mt-3 text-xs text-[var(--text-tertiary)]">
+                Showing the most recent 1,000 records. Narrow the period or
+                filter by conversation or run.
+              </p>
+            ) : null}
+          </QuerySection>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuerySection({
+  loading,
+  error,
+  retry,
+  children,
+}: {
+  loading: boolean;
+  error: unknown;
+  retry: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="surface-panel p-5">
+      {error ? (
+        <div role="status" className="space-y-3">
+          <p className="text-sm text-[var(--text-secondary)]">
+            This usage section could not load.
+          </p>
+          <Button variant="secondary" size="sm" onClick={retry}>
+            Try again
+          </Button>
         </div>
-    );
+      ) : loading ? (
+        <Skeleton aria-label="Loading usage" className="h-20 w-full" />
+      ) : (
+        children
+      )}
+    </section>
+  );
 }
 
-type BreakdownRow = {
-    label: string;
-    primary: string;
-    detail: string;
-};
-
-function flattenTotals(source: Record<string, Record<string, number>> | undefined): BreakdownRow[] {
-    return Object.entries(source || {})
-        .map(([label, values]) => {
-            const entries = Object.entries(values || {}).filter(([, value]) => typeof value === 'number');
-            const costEntry = entries.find(([key]) => key.toLowerCase().includes('cost'));
-            const tokenEntry = entries.find(([key]) => key.toLowerCase().includes('token'));
-            const primaryEntry = costEntry || tokenEntry || entries[0];
-
-            return {
-                label,
-                primary: primaryEntry ? formatMetric(primaryEntry[0], primaryEntry[1]) : 'No value',
-                detail: entries
-                    .filter(([key]) => key !== primaryEntry?.[0])
-                    .slice(0, 3)
-                    .map(([key, value]) => formatMetric(key, value))
-                    .join(' · '),
-            };
-        })
-        .sort((left, right) => right.primary.localeCompare(left.primary));
-}
-
-function formatMetric(key: string, value: number) {
-    const label = humanize(key);
-    if (key.toLowerCase().includes('cost')) return `${label}: ${formatCurrency(value)}`;
-    return `${label}: ${formatCompact(value)}`;
-}
-
-function formatCurrency(value: number | null | undefined) {
-    return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        maximumFractionDigits: value && value < 1 ? 4 : 2,
-    }).format(value || 0);
-}
-
-function formatCompact(value: number | null | undefined) {
-    return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value || 0);
-}
-
-function formatDate(value: string) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
-}
-
-function formatDateTime(value: string) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-    }).format(date);
-}
-
-function formatBucket(value: string) {
-    if (/^\d{4}-\d{2}-\d{2}/.test(value)) return formatDate(value);
-    return value;
-}
-
-function barWidthClass(width: number) {
-    if (width >= 96) return 'w-full';
-    if (width >= 88) return 'w-11/12';
-    if (width >= 80) return 'w-10/12';
-    if (width >= 72) return 'w-9/12';
-    if (width >= 64) return 'w-8/12';
-    if (width >= 56) return 'w-7/12';
-    if (width >= 48) return 'w-6/12';
-    if (width >= 40) return 'w-5/12';
-    if (width >= 32) return 'w-4/12';
-    if (width >= 24) return 'w-3/12';
-    if (width >= 16) return 'w-2/12';
-    return 'w-1/12';
-}
-
-function humanize(value: string) {
-    return value
-        .replace(/[_-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+function UsageActivity({ record }: { record: UsageRecord }) {
+  return (
+    <details className="py-3">
+      <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="min-w-0 truncate font-medium">
+          {record.model_name}
+        </span>
+        <span className="text-xs text-[var(--text-secondary)]">
+          {new Date(record.occurred_at).toLocaleString()}
+        </span>
+        <span className="tabular-nums">{formatUsageCost(record.cost_usd)}</span>
+      </summary>
+      <div className="mt-3 grid gap-2 text-xs text-[var(--text-secondary)] sm:grid-cols-2">
+        <p>Accounting: {usageAccountingLabel(record)}</p>
+        <p>Run: {record.status ?? "In progress"}</p>
+        <p>
+          Input: {record.input_tokens.toLocaleString()} · Output:{" "}
+          {record.output_tokens.toLocaleString()}
+        </p>
+        <p>Recorded cost: {formatUsageCost(record.cost_usd, true)}</p>
+        <p>
+          Cached input:{" "}
+          {record.cached_input_tokens?.toLocaleString() ?? "Unavailable"}
+        </p>
+        <p>
+          Cache writes:{" "}
+          {record.cache_write_tokens?.toLocaleString() ?? "Unavailable"}
+        </p>
+        {record.agent_run_id ? (
+          <p className="break-all">Run ID: {record.agent_run_id}</p>
+        ) : null}
+        {record.conversation_id && record.pod_id ? (
+          <Link
+            className="text-[var(--action-primary)]"
+            href={`/pod/${encodeURIComponent(record.pod_id)}/conversations/${encodeURIComponent(record.conversation_id)}`}
+          >
+            Open conversation →
+          </Link>
+        ) : null}
+      </div>
+    </details>
+  );
 }

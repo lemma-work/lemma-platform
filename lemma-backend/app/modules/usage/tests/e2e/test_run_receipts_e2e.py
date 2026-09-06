@@ -180,3 +180,71 @@ async def test_finalizer_retry_labels_receipts_with_committed_status_after_failu
         ).one()
         assert receipt.status == "COMPLETED"
         assert receipt.cost_amount == Decimal(".1")
+
+
+async def test_failed_run_persists_structured_reason_without_overwriting_terminal_state(
+    db_manager: DatabaseManager,
+) -> None:
+    from app.modules.agent.infrastructure.repositories.conversation_repository import (
+        ConversationRepository,
+    )
+
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    user_id, org_id, pod_id, conversation_id, run_id = (uuid4() for _ in range(5))
+    async with factory() as uow:
+        uow.session.add_all(
+            [
+                User(id=user_id, email=f"{user_id}@example.test"),
+                Organization(id=org_id, name="Usage review", slug=f"usage-{org_id}"),
+            ]
+        )
+        await uow.session.flush()
+        uow.session.add(
+            Pod(id=pod_id, user_id=user_id, organization_id=org_id, name="Usage")
+        )
+        await uow.session.flush()
+        uow.session.add(
+            ConversationModel(
+                id=conversation_id,
+                user_id=user_id,
+                pod_id=pod_id,
+                organization_id=org_id,
+                status="RUNNING",
+            )
+        )
+        await uow.session.flush()
+        uow.session.add(
+            AgentRunModel(
+                id=run_id,
+                conversation_id=conversation_id,
+                started_at=datetime.now(timezone.utc),
+                status="RUNNING",
+                run_metadata={"preserved": True},
+            )
+        )
+    async with factory() as uow:
+        repository = ConversationRepository(uow)
+        await repository.finish_agent_run(
+            agent_run_id=run_id,
+            status=AgentRunStatus.FAILED,
+            error="Allowance exhausted",
+            error_code="USAGE_LIMIT_EXCEEDED",
+            error_reason="exhausted",
+        )
+        await repository.finish_agent_run(
+            agent_run_id=run_id, status=AgentRunStatus.COMPLETED
+        )
+    async with factory() as uow:
+        run = await uow.session.get(AgentRunModel, run_id)
+        assert run is not None
+        assert run.status == "FAILED"
+        assert run.run_metadata == {
+            "preserved": True,
+            "failure": {"code": "USAGE_LIMIT_EXCEEDED", "reason": "exhausted"},
+        }
+        conversation = await uow.session.get(ConversationModel, conversation_id)
+        assert conversation is not None
+        await uow.session.refresh(conversation, ["agent_runs"])
+        restored = conversation.to_entity()
+        assert restored.last_run_error_code == "USAGE_LIMIT_EXCEEDED"
+        assert restored.last_run_error_reason == "exhausted"

@@ -55,6 +55,7 @@ interface AIAssistantContextType {
     hasPodContext: boolean;
     podContext: PodContext | null | undefined;
     conversationPodId: string | null;
+    conversationOrganizationId: string | null;
     openAssistant: () => void;
     closeAssistant: (options?: { skipUrlSync?: boolean; suppressUrlRestore?: boolean }) => void;
     toggleAssistant: () => void;
@@ -82,6 +83,8 @@ interface AIAssistantContextType {
     isLoadingOlderMessages: boolean;
     hasOlderMessages: boolean;
     error: string | null;
+    errorCode: string | null;
+    errorReason: string | null;
     canRetryFailedMessage: boolean;
     sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
     /** Append a follow-up to a conversation that already has a run in flight. */
@@ -661,6 +664,7 @@ export function AIAssistantProvider({
         hasPodContext: isProviderEnabled && !!podContext,
         podContext,
         conversationPodId: conversationScope.podId ?? null,
+        conversationOrganizationId: controller.conversations.find(conversation => conversation.id === controller.openedConversationId)?.organization_id ?? conversationScope.organizationId ?? null,
         openAssistant,
         closeAssistant,
         toggleAssistant,
@@ -684,6 +688,8 @@ export function AIAssistantProvider({
         isLoadingOlderMessages: controller.isLoadingOlderMessages,
         hasOlderMessages: controller.hasOlderMessages,
         error: controller.error,
+        errorCode: controller.errorCode,
+        errorReason: controller.errorReason,
         canRetryFailedMessage: controller.canRetryFailedMessage,
         sendMessage,
         steerMessage,
@@ -718,6 +724,8 @@ export function AIAssistantProvider({
         controller.conversationRuntime,
         controller.conversations,
         controller.error,
+        controller.errorCode,
+        controller.errorReason,
         controller.hasOlderMessages,
         controller.isOpenedConversationRunning,
         controller.isLoading,
@@ -733,6 +741,7 @@ export function AIAssistantProvider({
         controller.stop,
         controller.uploadFiles,
         conversationScope.podId,
+        conversationScope.organizationId,
         isOpen,
         isProviderEnabled,
         lastCreatedResource,

@@ -472,6 +472,8 @@ class ConversationRepository(
         status: AgentRunStatus,
         conversation_status: ConversationStatus | None = None,
         error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
         output_data: JsonValue | None = None,
     ) -> AgentRunFinishResult | None:
         result = await self.session.execute(
@@ -513,6 +515,11 @@ class ConversationRepository(
 
         model.status = next_status.value
         model.error = error
+        metadata = dict(model.run_metadata or {})
+        metadata.pop("failure", None)
+        if next_status == AgentRunStatus.FAILED and error_code:
+            metadata["failure"] = {"code": error_code, "reason": error_reason}
+        model.run_metadata = metadata
         if output_data is not None:
             model.output_data = output_data
         resolved_conversation_status = conversation_status or ConversationStatus(

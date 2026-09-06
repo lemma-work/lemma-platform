@@ -67,7 +67,9 @@ def _record_response(record: UsageRecord) -> UsageRecordResponse:
         output_tokens=record.output_tokens,
         total_tokens=record.total_tokens,
         units=record.units,
-        cost_usd=record.cost_usd,
+        cost_usd=float(record.cost_amount)
+        if record.cost_amount is not None
+        else record.cost_usd,
         cached_input_tokens=record.cached_input_tokens,
         cache_write_tokens=record.cache_write_tokens,
         status=record.status,

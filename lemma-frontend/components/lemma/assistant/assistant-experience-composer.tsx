@@ -39,6 +39,7 @@ export interface AssistantExperienceComposerBodyProps {
   hasPendingFileUploads: boolean;
   runtimeLabel: string | null;
   composerModelControl: ReactNode;
+  composerTrailingControls?: ReactNode;
   onUploadSelection: (files: FileList | null) => void;
   onDraftChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -61,6 +62,7 @@ export function AssistantExperienceComposerBody({
   hasPendingFileUploads,
   runtimeLabel,
   composerModelControl,
+  composerTrailingControls,
   onUploadSelection,
   onDraftChange,
   onKeyDown,
@@ -123,9 +125,14 @@ export function AssistantExperienceComposerBody({
         isAttaching={controller.isUploadingFiles}
         density={density === 'compact' ? 'tight' : 'roomy'}
         className={cn(radius === 'none' && 'rounded-none')}
-        controls={composerModelControl ?? (runtimeLabel ? (
-          <span className="truncate px-2 py-1 text-xs text-[var(--text-secondary)]">{runtimeLabel}</span>
-        ) : null)}
+        controls={
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            {composerModelControl ?? (runtimeLabel ? (
+              <span className="truncate px-2 py-1 text-xs text-[var(--text-secondary)]">{runtimeLabel}</span>
+            ) : null)}
+            {composerTrailingControls}
+          </div>
+        }
       />
     </div>
   );

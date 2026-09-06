@@ -9,7 +9,7 @@ import type {
   ConversationModel,
   CursorPage,
 } from "../types.js";
-import { parseAssistantStreamEvent, upsertConversationMessage } from "../assistant-events.js";
+import { AssistantRunError, parseAssistantStreamEvent, upsertConversationMessage } from "../assistant-events.js";
 import {
   conversationMessageText,
   getLatestAssistantMessage,
@@ -833,7 +833,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           continue;
         }
         if (parsed.error) {
-          const streamError = new Error(parsed.error);
+          const streamError = new AssistantRunError(parsed.error, parsed.errorCode, parsed.errorReason);
           setError(streamError);
           onErrorRef.current?.(streamError);
           setConversationStatus(parsed.status ?? "FAILED");

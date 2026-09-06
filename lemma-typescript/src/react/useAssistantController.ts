@@ -1,3 +1,4 @@
+import { assistantFailureDetails } from "../assistant-events.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LemmaClient } from "../client.js";
 import type {
@@ -109,6 +110,8 @@ export interface UseAssistantControllerResult {
   pendingFiles: File[];
   pendingFileUploads: AssistantPendingFileUpload[];
   error: string | null;
+  errorCode: string | null;
+  errorReason: string | null;
   canRetryFailedMessage: boolean;
   pendingActions: AssistantAction[];
   completedActions: AssistantAction[];
@@ -954,9 +957,13 @@ export function useAssistantController({
     ? activeConversation.last_run_error
     : null;
   const error = localError ?? persistedRunError;
+  const sessionFailure = localError && localError === assistantSession.error?.message ? assistantFailureDetails(assistantSession.error) : null;
+  const errorCode = sessionFailure?.code ?? (!localError && persistedRunError ? activeConversation?.last_run_error_code ?? null : null);
+  const errorReason = sessionFailure?.reason ?? (!localError && persistedRunError ? activeConversation?.last_run_error_reason ?? null : null);
   const canRetryFailedMessage = (
     activeConversation?.last_run_status?.toUpperCase() === "FAILED"
     && activeConversation.last_run_retryable === true
+    && !(errorCode === "USAGE_LIMIT_EXCEEDED" && errorReason !== "configuration")
   );
   const isLoading = isStreaming || sessionIsStreaming;
 
@@ -2164,6 +2171,8 @@ export function useAssistantController({
     pendingFiles,
     pendingFileUploads,
     error,
+    errorCode,
+    errorReason,
     canRetryFailedMessage,
     pendingActions,
     completedActions,
