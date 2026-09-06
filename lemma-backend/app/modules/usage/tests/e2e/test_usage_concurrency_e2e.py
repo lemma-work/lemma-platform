@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
 
+from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.ports import UsageLimitValues
@@ -18,7 +21,7 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture(autouse=True)
-def _system_model_metadata():
+def _system_model_metadata() -> Iterator[None]:
     UsageService.register_model_pricing({"test-model": ModelPricing(1.0, 0.0)})
     yield
     UsageService._SYSTEM_MODEL_PRICING.pop("test-model", None)
@@ -33,7 +36,9 @@ class _Limits:
             user_limit_scope="organization",
         )
 
-    async def resolve_limits(self, *, organization_id, user_id):
+    async def resolve_limits(
+        self, *, organization_id: UUID | None, user_id: UUID
+    ) -> UsageLimitValues:
         del organization_id, user_id
         return self.values
 
@@ -65,7 +70,9 @@ async def _reserve(
         return False
 
 
-async def test_concurrent_fresh_window_never_admits_above_exact_limit(db_manager):
+async def test_concurrent_fresh_window_never_admits_above_exact_limit(
+    db_manager: DatabaseManager,
+) -> None:
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id = uuid4()
     now = datetime(2026, 7, 9, 12, tzinfo=timezone.utc)
@@ -94,10 +101,12 @@ async def test_concurrent_fresh_window_never_admits_above_exact_limit(db_manager
             ).all()
         )
     assert len(counters) == 1
-    assert counters[0].reserved_usd == pytest.approx(0.05)
+    assert counters[0].reserved_usd == Decimal("0.05")
 
 
-async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manager):
+async def test_rejected_multi_scope_reservation_rolls_back_every_scope(
+    db_manager: DatabaseManager,
+) -> None:
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id = uuid4()
     organization_id = uuid4()
@@ -122,4 +131,4 @@ async def test_rejected_multi_scope_reservation_rolls_back_every_scope(db_manage
     async with db_manager.session_factory() as session:
         counters = list((await session.scalars(select(UsageLimitCounter))).all())
     assert len(counters) == 2
-    assert all(counter.reserved_usd == pytest.approx(0.01) for counter in counters)
+    assert all(counter.reserved_usd == Decimal("0.01") for counter in counters)

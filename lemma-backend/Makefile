@@ -208,7 +208,7 @@ test-e2e-indexing:
 # little while making a rate-limit failure look like a flake.
 test-e2e-real-llm:
 	E2E_LLM_MODE=real uv run pytest -m "e2e and not slow and not workspace and not local_cli and not indexing" \
-		app/modules/agent -o timeout=300
+		app/modules/agent app/modules/usage/tests/e2e/test_real_model_accounting_e2e.py -o timeout=300
 
 # Byte-identical to the marker filter and environment in
 # `.github/workflows/backend-protected-e2e.yml`, and asserted so by
@@ -360,8 +360,80 @@ test-connectors:
 # Telegram. A controller is exactly where that goes unnoticed: it is the layer
 # tests reach through a client rather than by calling, so a keyword nobody
 # passes in a test is a keyword nobody checks.
+# Standard type checking accepts absent annotations. Keep accounting boundaries
+# and their test doubles explicit so deleting a type cannot make this gate pass.
+AGENT_HARNESS_TYPED_PATHS := \
+	app/modules/agent/capabilities/assembler.py \
+	app/modules/agent/capabilities/deferred_hint.py \
+	app/modules/agent/capabilities/instructed_toolset.py \
+	app/modules/agent/capabilities/todo.py \
+	app/modules/agent/domain/ports.py \
+	app/modules/agent/domain/value_objects.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/dispatch.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/harness.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/run_config.py \
+	app/modules/agent/infrastructure/harnesses/history.py \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai.py \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai_node_loop.py \
+	app/modules/agent/infrastructure/harnesses/remote_payload.py \
+	app/modules/agent/services/agent_runner_service.py \
+	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/services/runtime_model_factory.py \
+	app/modules/agent/services/runtime_profile_service.py \
+	app/modules/agent/services/summarization_model.py \
+	app/modules/agent/services/vision_service.py \
+	app/modules/agent/tools/graceful_toolset.py \
+	app/modules/agent/tools/registry.py \
+	app/modules/agent/tools/tool_assembler.py \
+	app/modules/agent_surfaces/contracts/egress.py \
+	app/modules/agent_surfaces/infrastructure/adapters/platform_tool_factory.py
+
+USAGE_ANNOTATED_PATHS := \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai.py \
+	app/modules/agent/infrastructure/harnesses/history.py \
+	app/modules/agent/services/agent_runner_service.py \
+	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/services/run_usage_recorder.py \
+	app/modules/agent/services/runtime_model_factory.py \
+	app/modules/agent/services/runtime_profile_service.py \
+	app/modules/agent/services/summarization_model.py \
+	app/modules/agent/services/vision_service.py \
+	app/modules/agent/tests/unit/test_runtime_model_settings.py \
+	app/modules/usage/api/controllers.py \
+	app/modules/usage/config.py \
+	app/modules/usage/contracts/metering.py \
+	app/modules/usage/domain/accounting.py \
+	app/modules/usage/domain/budget_windows.py \
+	app/modules/usage/domain/ports.py \
+	app/modules/usage/domain/query_types.py \
+	app/modules/usage/infrastructure/provider_retries.py \
+	app/modules/usage/infrastructure/request_features.py \
+	app/modules/usage/infrastructure/cost_expressions.py \
+	app/modules/usage/infrastructure/usage_limit_reads.py \
+	app/modules/usage/infrastructure/request_accounting.py \
+	app/modules/usage/services/request_accounting_gateway.py \
+	app/modules/usage/services/request_meter.py \
+	app/modules/usage/tests/unit/test_request_meter.py \
+	app/modules/usage/infrastructure/metered_model.py \
+	app/modules/usage/infrastructure/models.py \
+	app/modules/usage/infrastructure/price_catalog.py \
+	app/modules/usage/infrastructure/repositories.py \
+	app/modules/usage/services/metering_scope.py \
+	app/modules/usage/services/pricing.py \
+	app/modules/usage/services/run_receipts.py \
+	app/modules/usage/services/usage_service.py \
+	app/modules/usage/services/usage_service_factory.py \
+	app/modules/usage/tests/e2e \
+	app/modules/usage/tests/fakes.py \
+	app/modules/usage/tests/unit/test_accounting_money.py \
+	app/modules/usage/tests/unit/test_price_catalog.py \
+	app/modules/usage/tests/unit/test_request_features.py \
+	app/modules/usage/tests/unit/test_accounting_failures.py
+
 typecheck-critical:
-	uv run basedpyright --level error \
+	uv run ruff check --select ANN $(USAGE_ANNOTATED_PATHS) $(AGENT_HARNESS_TYPED_PATHS)
+	uv run basedpyright --project pyright-usage-tests.json
+	uv run basedpyright --level error $(AGENT_HARNESS_TYPED_PATHS) \
 		app/core/domain/events.py \
 		app/core/domain/errors.py \
 		app/core/api/schemas.py \
@@ -381,7 +453,7 @@ typecheck-critical:
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
-		app/modules/usage/domain \
+		app/modules/usage \
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \

@@ -19,8 +19,15 @@ service and adapter layers.
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.services.progress_observer import (
+        SurfaceAgentRunProgressObserver,
+    )
 from uuid import UUID
+from pydantic_ai.toolsets import AbstractToolset
+from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import Conversation, DisplayResourceRequest
@@ -50,12 +57,8 @@ def parse_surface_event_metadata(
 async def build_surface_toolsets(
     uow_factory: UnitOfWorkFactory,
     conversation: Conversation,
-) -> list[object]:
-    """The tools this conversation's platform adds to the run.
-
-    ``list[object]`` because the elements are `pydantic_ai` toolsets, which the
-    caller only ever extends its own list with.
-    """
+) -> list[AbstractToolset[ConversationContext]]:
+    """The tools this conversation's platform adds to the run."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,
     )
@@ -100,7 +103,9 @@ async def deliver_voice_note(*, conversation_id: UUID, file_path: str) -> bool:
     )
 
 
-def build_progress_observer(*, uow_factory: UnitOfWorkFactory):
+def build_progress_observer(
+    *, uow_factory: UnitOfWorkFactory
+) -> SurfaceAgentRunProgressObserver:
     """An observer that streams a run's progress to the surface watching it.
 
     Builds its own ingress service rather than taking one. The caller is

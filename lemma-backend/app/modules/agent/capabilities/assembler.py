@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from pydantic_ai.capabilities import ToolSearch
+from pydantic_ai.capabilities import ToolSearch, AgentCapability
 from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -44,7 +44,7 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
@@ -112,10 +112,13 @@ def _agent_has_toolset(agent: Agent, toolset: AgentToolset) -> bool:
 
 
 def _partition_core_extra(
-    toolsets: list[object],
+    toolsets: list[AbstractToolset[ConversationContext]],
     *,
     is_pod_default: bool,
-) -> tuple[list[object], list[object]]:
+) -> tuple[
+    list[AbstractToolset[ConversationContext]],
+    list[AbstractToolset[ConversationContext]],
+]:
     """Split toolsets into core (prompt-visible) vs extra (deferred via ToolSearch).
 
     Deferral only applies to the pod-default agent, which otherwise accumulates
@@ -125,14 +128,16 @@ def _partition_core_extra(
     """
     if not is_pod_default:
         return list(toolsets), []
-    core: list[object] = []
-    extra: list[object] = []
+    core: list[AbstractToolset[ConversationContext]] = []
+    extra: list[AbstractToolset[ConversationContext]] = []
     for toolset in toolsets:
         (extra if id(toolset) in _EXTRA_TOOLSET_IDS else core).append(toolset)
     return core, extra
 
 
-def _graceful(toolset: object) -> object:
+def _graceful(
+    toolset: AbstractToolset[ConversationContext],
+) -> AbstractToolset[ConversationContext]:
     """Wrap a toolset so a raising tool body returns an error instead of aborting.
 
     Identity checks in the assembler run on the RAW toolset before this wraps it,
@@ -161,7 +166,9 @@ def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
     return None
 
 
-def _visible_capability(toolset: object) -> object:
+def _visible_capability(
+    toolset: AbstractToolset[ConversationContext],
+) -> AgentCapability[ConversationContext]:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
@@ -181,7 +188,9 @@ def _visible_capability(toolset: object) -> object:
     )
 
 
-def _deferred_capability(toolset: object) -> object:
+def _deferred_capability(
+    toolset: AbstractToolset[ConversationContext],
+) -> AgentCapability[ConversationContext]:
     """Wrap one extra toolset as a deferred-loading capability.
 
     Graceful wrapping is applied INNER and deferral OUTER, so ``ToolSearch`` still
@@ -202,11 +211,11 @@ def _deferred_capability(toolset: object) -> object:
 
 async def build_lemma_harness_tooling(
     *,
-    ctx: AgentContext,
-    full_toolsets: list[object],
+    ctx: ConversationContext,
+    full_toolsets: list[AbstractToolset[ConversationContext]],
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
-) -> list[object]:
+) -> list[AgentCapability[ConversationContext]]:
     """Return the full capability list for the in-process LEMMA harness.
 
     It used to take an agent, a unit of work and a run id as well, and discard
@@ -228,18 +237,20 @@ async def build_lemma_harness_tooling(
 
 async def _build_lemma_harness_tooling(
     *,
-    ctx: AgentContext,
-    full_toolsets: list[object],
+    ctx: ConversationContext,
+    full_toolsets: list[AbstractToolset[ConversationContext]],
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
-) -> list[object]:
+) -> list[AgentCapability[ConversationContext]]:
     core, extra = _partition_core_extra(
         full_toolsets, is_pod_default=ctx.is_pod_default_agent
     )
 
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
-    capabilities: list[object] = [_visible_capability(obj) for obj in core]
+    capabilities: list[AgentCapability[ConversationContext]] = [
+        _visible_capability(obj) for obj in core
+    ]
     capabilities.append(CurrentTimeCapability())
 
     # Anything the person says while this run is working is steered into it

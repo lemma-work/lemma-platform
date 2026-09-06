@@ -129,14 +129,14 @@ class RemoteHarness:
         # outliving its original token without waiting out the real hour.
         self._now = clock or (lambda: datetime.now(timezone.utc))
 
-    async def run(
+    async def run[DepsT: AgentContext](
         self,
         *,
         agent: Agent,
         conversation: Conversation,
         messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
+        ctx: DepsT,
+        options: HarnessOptions[DepsT],
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         try:
@@ -186,14 +186,14 @@ class RemoteHarness:
             if finished:
                 await self.events.delete(run_id=agent_run_id)
 
-    async def _consume(
+    async def _consume[DepsT: AgentContext](
         self,
         *,
         agent_run_id: UUID,
         agent: Agent,
-        ctx: AgentContext,
+        ctx: DepsT,
         conversation: Conversation,
-        options: HarnessOptions,
+        options: HarnessOptions[DepsT],
         run_config: AgentHostRunConfig,
         dispatch: DispatchedRun,
     ) -> AsyncIterator[AgentEvent]:
@@ -467,11 +467,11 @@ class RemoteHarness:
             for event in events
         ]
 
-    async def _cancel_if_requested(
+    async def _cancel_if_requested[DepsT](
         self,
         *,
         agent_run_id: UUID,
-        options: HarnessOptions,
+        options: HarnessOptions[DepsT],
         stop_sent: bool,
     ) -> bool:
         if stop_sent or options.should_stop is None:
