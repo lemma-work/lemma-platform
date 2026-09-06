@@ -422,6 +422,14 @@ A local model is reached the same way as any other provider: Ollama and LM
 Studio prefill a loopback OpenAI-compatible endpoint that the user already
 runs, so Lemma never owns, downloads, or supervises a model process.
 
+Onboarding binds model discovery to the selected provider and credential draft.
+Switching either invalidates the pending result and its model choices. A failed
+apply preserves the draft with an inline error; an admitted apply freezes its
+fields until completion. A saved coding agent counts as ready only while its
+profile is active and the host reports it available. First-pod default selection
+skips unavailable agents, and the setup banner links saved-agent failures to
+Models rather than asking for an unrelated installation provider.
+
 The backend exposes safe capability health. The frontend local banner calls
 the validated native `open_control_center` command with `ai`; accepted
 destinations include `ai`, `connectors`/`integrations`, `surfaces`, services,
