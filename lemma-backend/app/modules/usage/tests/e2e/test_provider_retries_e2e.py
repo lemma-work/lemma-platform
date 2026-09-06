@@ -13,7 +13,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
-from app.core.config import settings
+from app.modules.usage.config import usage_settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.usage.contracts.metering import with_external_stream_retries
@@ -34,7 +34,7 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 def retry_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     name = f"retry-test-{uuid4()}"
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 10.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 10.0)
     UsageService.register_model_pricing({name: ModelPricing(1000, 0)})
     try:
         yield name
@@ -235,7 +235,7 @@ async def test_unconfirmed_attempts_do_not_invent_a_charge(
     streaming: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     provider = TransientProvider(503, failures=10)
     user_id = uuid4()
     with pytest.raises(ProviderAttemptsExhaustedError):
@@ -265,7 +265,7 @@ async def test_each_provider_retry_observes_changed_shared_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def exhaust_allowance() -> None:
-        monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.0)
+        monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 0.0)
 
     provider = TransientProvider(503, failures=10, on_failure=exhaust_allowance)
     user_id = uuid4()
