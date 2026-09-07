@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 const MANIFEST_SCHEMA_VERSION: u64 = 1;
 const MAX_ARCHIVE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u128 = 12 * 1024 * 1024 * 1024;
-const MAX_COMBINED_COMPRESSED_BYTES: u64 = 750 * 1024 * 1024;
-const MAX_COMBINED_EXPANDED_BYTES: u64 = 2250 * 1024 * 1024;
+const MAX_COMBINED_COMPRESSED_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const MAX_COMBINED_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const INSTALLED_ARTIFACTS_FILE: &str = ".lemma-runtime-artifacts.json";
 const OPERATING_HEADROOM_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -193,17 +193,8 @@ fn stage_from_manifest(
         .expanded_size
         .checked_add(guest.expanded_size)
         .ok_or_else(|| invalid("combined expanded artifact size overflow"))?;
-    if download_total > MAX_COMBINED_COMPRESSED_BYTES {
-        return Err(invalid(
-            "combined runtime archives exceed the 750 MiB product limit",
-        ));
-    }
-    if expanded_total > MAX_COMBINED_EXPANDED_BYTES {
-        return Err(invalid(
-            "expanded immutable runtime exceeds the 2.25 GiB product limit",
-        ));
-    }
-    preflight_free_space(install_root, expanded_total)?;
+    let required_space = installation_space_required(download_total, expanded_total)?;
+    preflight_free_space(install_root, required_space)?;
     let downloads = install_root.join("downloads").join(&manifest.version);
     fs::create_dir_all(&downloads)?;
     let client = download_client()?;
@@ -1042,11 +1033,26 @@ fn copy_sparse(input: &mut impl Read, output: &mut File) -> io::Result<u64> {
     Ok(copied)
 }
 
-fn preflight_free_space(install_root: &Path, expanded_total: u64) -> io::Result<()> {
+fn installation_space_required(download_total: u64, expanded_total: u64) -> io::Result<u64> {
+    if download_total > MAX_COMBINED_COMPRESSED_BYTES {
+        return Err(invalid(
+            "combined runtime archives exceed the 6 GiB supported size",
+        ));
+    }
+    if expanded_total > MAX_COMBINED_EXPANDED_BYTES {
+        return Err(invalid(
+            "expanded immutable runtime exceeds the 8 GiB supported size",
+        ));
+    }
+    // Downloads coexist with extracted candidate files until installation commits.
+    download_total
+        .checked_add(expanded_total)
+        .and_then(|bytes| bytes.checked_add(OPERATING_HEADROOM_BYTES))
+        .ok_or_else(|| invalid("runtime free-space requirement overflow"))
+}
+
+fn preflight_free_space(install_root: &Path, required: u64) -> io::Result<()> {
     fs::create_dir_all(install_root)?;
-    let required = expanded_total
-        .checked_add(OPERATING_HEADROOM_BYTES)
-        .ok_or_else(|| invalid("runtime free-space requirement overflow"))?;
     let available = available_space(install_root)?;
     if available < required {
         return Err(io::Error::other(format!(
@@ -1317,6 +1323,31 @@ fn guest_target() -> &'static str {
 mod tests {
     use super::*;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn runtime_above_previous_limits_reserves_downloads_extraction_and_headroom() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(installation_space_required(gib, 3 * gib).unwrap(), 8 * gib);
+    }
+
+    #[test]
+    fn runtime_size_boundaries_are_inclusive() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(
+            installation_space_required(6 * gib, 8 * gib).unwrap(),
+            18 * gib
+        );
+        for (download, expanded, message) in [
+            (6 * gib + 1, 8 * gib, "archives exceed the 6 GiB"),
+            (6 * gib, 8 * gib + 1, "runtime exceeds the 8 GiB"),
+            (u64::MAX, 1, "archives exceed the 6 GiB"),
+            (1, u64::MAX, "runtime exceeds the 8 GiB"),
+        ] {
+            let error = installation_space_required(download, expanded).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8], u32)]) {
         let mut writer = zip::ZipWriter::new(File::create(path).unwrap());

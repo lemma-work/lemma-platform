@@ -26,6 +26,15 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def clone_disk(source: Path, destination: Path) -> None:
+    # APFS cloning preserves sparse reference images without another full copy.
+    if platform.system() == "Darwin":
+        subprocess.run(["cp", "-c", str(source), str(destination)], check=True)
+    else:
+        shutil.copyfile(source, destination)
+    destination.chmod(0o600)
+
+
 def stop(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -49,12 +58,7 @@ def check(
         inputs["seed"] = seed
     provenance = {name: {"path": str(path.resolve()), "sha256": digest(path)} for name, path in inputs.items()}
     (evidence / "inputs.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    # APFS cloning preserves sparse reference images without another full copy.
-    if platform.system() == "Darwin":
-        subprocess.run(["cp", "-c", str(disk), str(private_disk)], check=True)
-    else:
-        shutil.copyfile(disk, private_disk)
-    private_disk.chmod(0o600)
+    clone_disk(disk, private_disk)
     started = time.monotonic()
     reason = "deadline"
     returncode: int | None = None

@@ -20,9 +20,9 @@ first needed, so this release is not an air-gapped installer.
 Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet,
 and Windows on x86-64 is experimental rather than published — see below.
 
-Allow at least the expanded runtime size shown during setup plus 4 GiB of
-working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
-combined; user databases, files, images, and workspace sandboxes grow
+Allow space for both downloaded archives and the expanded runtime shown during
+setup, plus 4 GiB of working headroom. The immutable host and guest runtimes are
+gated at 8 GiB combined; user databases, files, images, and workspace sandboxes grow
 separately.
 
 ## macOS installation
@@ -384,10 +384,10 @@ This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and
 sandbox OCI images still require network access. CI rejects:
 
-- combined host/guest compressed archives above 750 MiB;
-- the PR application resources above 850 MiB;
-- expanded immutable runtimes above 2.25 GiB;
-- a macOS guest root above 1.25 GiB.
+- combined host/guest compressed archives above 6 GiB;
+- the PR application resources above 7 GiB;
+- expanded immutable runtimes above 8 GiB;
+- a macOS guest root above 2 GiB.
 
 Download the artifact for the exact commit, copy Lemma to Applications, and
 perform the clean-install checklist in

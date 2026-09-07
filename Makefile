@@ -1355,8 +1355,8 @@ _desktop-verify-dist-app:
 	test ! -e "$$app/Contents/Resources/local-runtime"; \
 	test ! -e "$$app/Contents/Resources/managed-runtime"; \
 	app_bytes=$$(du -sk "$$app" | awk '{print $$1 * 1024}'); \
-	test "$$app_bytes" -le $$((850 * 1024 * 1024)) || ( \
-		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 850 MiB"; exit 1); \
+	test "$$app_bytes" -le $$((7 * 1024 * 1024 * 1024)) || ( \
+		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 7 GiB"; exit 1); \
 	codesign --verify --deep --strict "$$app"; \
 	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \

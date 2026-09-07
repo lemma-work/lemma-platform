@@ -31,18 +31,19 @@ class GuestLifecycleTests(unittest.TestCase):
         path.write_text(f"#!{sys.executable}\n" + code)
         path.chmod(0o700)
 
-    def write_helper(self, fault: bool = False, ignore_stop: bool = False) -> None:
+    def write_helper(self, fault: bool = False, ignore_stop: bool = False,
+                     existing_data: bool = False) -> None:
         self.script(self.helper, f"""
 import os, pathlib, signal, sys, time
 state = pathlib.Path(sys.argv[sys.argv.index('--runtime') + 1])
 share = pathlib.Path(sys.argv[sys.argv.index('--control-share') + 1])
 count = state / 'boot-count'
 boot = int(count.read_text()) + 1 if count.exists() else 1
-assert (share / 'data-disk-fresh').exists() == (boot == 1)
+assert (share / 'data-disk-fresh').exists() == (boot == 1 and not {existing_data!r})
 with (state / 'data.raw').open('r+b') as data:
-    assert data.read(1) == (b'\\0' if boot == 1 else b'X')
+    assert data.read(1) == (b'\\0' if boot == 1 and not {existing_data!r} else bytes([87 + boot]))
     data.seek(0)
-    data.write(b'X')
+    data.write(bytes([88 + boot]))
 count.write_text(str(boot))
 def stop(signum, frame):
     (state / 'ready').unlink()
@@ -75,11 +76,12 @@ print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int
 """)
 
     def run_check(self, boots: int = 1, shutdown_seconds: float = 3,
-                  shutdown_method: Literal["guest", "power-button"] = "guest") -> None:
+                  shutdown_method: Literal["guest", "power-button"] = "guest",
+                  initial_data_disk: Path | None = None) -> None:
         with contextlib.redirect_stdout(io.StringIO()):
             check(self.helper, self.cli, self.release, self.evidence,
                   boots=boots, samples=2, seconds=5, shutdown_seconds=shutdown_seconds,
-                  shutdown_method=shutdown_method)
+                  shutdown_method=shutdown_method, initial_data_disk=initial_data_disk)
 
     def assert_reaped(self) -> None:
         pid = int((self.evidence / "state/pid").read_text())
@@ -99,6 +101,23 @@ print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int
             self.assertEqual(result["shutdown_method"], "guest")
         self.assertEqual((self.release / "disk.raw").read_bytes(), b"immutable artifact")
         self.assert_reaped()
+
+    def test_existing_data_is_cloned_without_a_fresh_disk_marker(self) -> None:
+        original = self.root / "old-data.raw"
+        original.write_bytes(b"X" + bytes(511))
+        self.write_helper(existing_data=True)
+        self.run_check(boots=2, initial_data_disk=original)
+        self.assertEqual(original.read_bytes(), b"X" + bytes(511))
+        self.assertEqual((self.evidence / "state/data.raw").read_bytes(), b"Z" + bytes(511))
+        self.assertIn("initial_data_disk", json.loads((self.evidence / "inputs.json").read_text()))
+        self.assert_reaped()
+
+    def test_an_invalid_initial_disk_is_rejected_before_startup(self) -> None:
+        original = self.root / "invalid.raw"
+        original.write_bytes(b"not a raw disk")
+        with self.assertRaisesRegex(ValueError, "512-byte"):
+            self.run_check(initial_data_disk=original)
+        self.assertFalse(self.evidence.exists())
 
     def test_a_kernel_fault_rejects_an_otherwise_healthy_guest(self) -> None:
         self.write_helper(fault=True)

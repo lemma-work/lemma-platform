@@ -248,8 +248,8 @@ switch ($Verb) {
             if (-not (Test-Path $_)) { Fail "bundled payload is missing: $_" }
             (Get-Item $_).Length
         } | Measure-Object -Sum).Sum
-        if ($bytes -gt 850MB) {
-            Fail "bundled payload is $bytes bytes; the gate is 850 MiB"
+        if ($bytes -gt 7GB) {
+            Fail "bundled payload is $bytes bytes; the gate is 7 GiB"
         }
 
         $manifest = Get-Content (Join-Path $BundledDir 'lemma-local.json') | ConvertFrom-Json

@@ -88,10 +88,10 @@ system state.
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
 and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
 
-The build creates a 1.25 GiB maximum ext4 image, populates it with numeric
-ownership preserved, shrinks it to minimum contents, adds 128 MiB headroom,
-and verifies the final logical size. ZIP extraction preserves sparse zero
-regions.
+The build creates a 2 GiB maximum ext4 image, populates it with numeric
+ownership preserved, shrinks it to minimum contents, and verifies the final
+logical size. Boot files ship separately from the immutable root; the root
+needs no space for in-place updates. ZIP extraction preserves sparse zero regions.
 
 Windows imports the versioned root as Lemma’s private WSL distribution.
 Persistent guest data currently lives inside that distribution. Replacing an
@@ -497,7 +497,7 @@ updates, and diagnostics.
 - builds/prunes host packs;
 - builds/shrinks guest runtimes;
 - writes archive sidecars and size breakdown;
-- enforces 750 MiB compressed and 2.25 GiB expanded gates;
+- enforces 6 GiB compressed and 8 GiB expanded gates;
 - publishes runtime assets for a release;
 - on manual non-publish dispatch, builds the compressed PR test DMG.
 

@@ -68,9 +68,8 @@ if [[ "$target" == "macos-aarch64" ]]; then
   tar -xf "$rootfs_tar" -C "$rootfs"
   python3 "$repo_root/desktop/scripts/prepare_guest_boot.py" \
     --root "$rootfs" --output "$artifact"
-  # Build within the product budget, then shrink the ext4 filesystem to its
-  # actual contents plus 128 MiB of update headroom. The resulting RAW file is
-  # sparse and is attached read-only by Lemma Desktop.
+  # The OS disk is immutable. Boot assets are shipped alongside it, and a
+  # runtime update replaces the whole image rather than growing this filesystem.
   truncate -s 2048M "$artifact/disk.raw"
   docker run --rm --name "$assembly_container" --platform "linux/$docker_arch" \
     --mount "type=bind,source=$rootfs_tar,target=/input/rootfs.tar,readonly" \
@@ -81,6 +80,8 @@ if [[ "$target" == "macos-aarch64" ]]; then
       apt-get install -y --no-install-recommends e2fsprogs >/dev/null
       mkdir -p /rootfs
       tar --numeric-owner -xf /input/rootfs.tar -C /rootfs
+      rm -rf /rootfs/boot
+      mkdir /rootfs/boot
       rm -f /rootfs/etc/resolv.conf
       ln -s ../run/systemd/resolve/stub-resolv.conf /rootfs/etc/resolv.conf
       mkfs.ext4 -F -L lemma-root -d /rootfs /artifact/disk.raw
@@ -88,13 +89,7 @@ if [[ "$target" == "macos-aarch64" ]]; then
       resize2fs -M /artifact/disk.raw >/dev/null
       block_size="$(dumpe2fs -h /artifact/disk.raw 2>/dev/null | grep "^Block size:" | tr -dc "0-9")"
       block_count="$(dumpe2fs -h /artifact/disk.raw 2>/dev/null | grep "^Block count:" | tr -dc "0-9")"
-      headroom_blocks="$((128 * 1024 * 1024 / block_size))"
-      target_blocks="$((block_count + headroom_blocks))"
-      # With no suffix resize2fs interprets the value in filesystem blocks.
-      # Its "s" suffix means 512-byte sectors, which made this request eight
-      # times too small on our 4 KiB ext4 image and failed the ARM64 build.
-      resize2fs /artifact/disk.raw "$target_blocks" >/dev/null
-      truncate -s "$((target_blocks * block_size))" /artifact/disk.raw
+      truncate -s "$((block_count * block_size))" /artifact/disk.raw
       e2fsck -fy /artifact/disk.raw >/dev/null
       test "$(stat -c %s /artifact/disk.raw)" -le "$((2048 * 1024 * 1024))"
     '

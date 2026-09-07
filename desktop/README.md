@@ -64,10 +64,10 @@ manifest sources to trusted resource names. It must not contain expanded
 
 Current hard gates:
 
-- host plus guest compressed: 750 MiB;
-- PR bundled application: 850 MiB;
-- expanded immutable runtime: 2.25 GiB;
-- macOS root disk: 1.25 GiB;
+- host plus guest compressed: 6 GiB;
+- PR bundled application: 7 GiB;
+- expanded immutable runtime: 8 GiB;
+- macOS root disk before shrinking: 2 GiB;
 - public application: 25 MiB.
 
 OCI infrastructure/sandbox images are not included. Public offline claims and

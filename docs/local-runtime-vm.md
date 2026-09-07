@@ -48,6 +48,13 @@ helpers to that standard target; it no longer replaces the distribution's boot
 sequence. The persistent-data unit waits for the control share before checking
 the host's fresh-disk marker.
 
+The immutable OS image uses virtio block storage. The writable `data.raw` uses
+Apple's NVMe controller and appears as `/dev/nvme0n1` in Linux. The controller
+does not change the ext4 data format: an existing data file is checked and
+mounted in place, never reformatted to change its virtual device type. Build
+and qualify the helper and guest filesystem together so their device contracts
+agree.
+
 ## 2. Build and sign the VZ helper
 
 The virtualization entitlement is what makes this Mac-only and signature-bound:
@@ -180,6 +187,13 @@ also fail the check, including faults observed during shutdown. The tool keeps
 input hashes, per-boot console logs and result files, and owns process cleanup
 on failure or cancellation. Run this on a Mac that supports
 Virtualization.framework; unit-test CI alone cannot certify a bootable artifact.
+
+To check an existing installation's storage, add `--initial-data-disk
+/path/to/data.raw`. The checker hashes and clones that disk, boots only the
+private copy, and never creates the fresh-disk marker for it. Stop the source
+installation before cloning so its filesystem has a consistent state. Verify
+known records or files in the resulting copy as well as health and shutdown;
+readiness alone does not prove data retention.
 
 The default shutdown path sends `system.shutdown`, as the app does, allowing
 the guest to stop its containers before powering off. A lost RPC reply is

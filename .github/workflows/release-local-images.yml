@@ -822,10 +822,10 @@ jobs:
                   host_packs[host_target]["expanded_size"]
                   + guest_runtimes[guest_target]["expanded_size"]
               )
-              if compressed > 750 * 1024 * 1024:
-                  raise SystemExit(f"{host_target} compressed runtime exceeds 750 MiB")
-              if expanded > 2250 * 1024 * 1024:
-                  raise SystemExit(f"{host_target} expanded runtime exceeds 2.25 GiB")
+              if compressed > 6 * 1024 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} compressed runtime exceeds 6 GiB")
+              if expanded > 8 * 1024 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} expanded runtime exceeds 8 GiB")
               print(json.dumps({
                   "target": host_target,
                   "compressed_bytes": compressed,

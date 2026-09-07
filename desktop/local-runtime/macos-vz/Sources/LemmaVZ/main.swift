@@ -136,7 +136,7 @@ private func configuration(
     )
     configuration.storageDevices = [
         VZVirtioBlockDeviceConfiguration(attachment: diskAttachment),
-        VZVirtioBlockDeviceConfiguration(attachment: dataAttachment),
+        VZNVMExpressControllerDeviceConfiguration(attachment: dataAttachment),
     ]
 
     let network = VZVirtioNetworkDeviceConfiguration()

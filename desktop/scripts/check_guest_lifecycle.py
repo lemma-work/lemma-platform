@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import Literal
 
-from check_vm_boot import FAULTS, digest
+from check_vm_boot import FAULTS, clone_disk, digest
 
 
 def check(
@@ -19,30 +19,41 @@ def check(
     boots: int = 3, samples: int = 20, seconds: float = 180,
     shutdown_seconds: float = 30,
     shutdown_method: Literal["guest", "power-button"] = "guest",
+    initial_data_disk: Path | None = None,
 ) -> None:
     if boots < 1 or samples < 1 or seconds <= 0 or shutdown_seconds <= 0:
         raise ValueError("Boots, samples and deadlines must be positive")
     if shutdown_method not in ("guest", "power-button"):
         raise ValueError("Unknown shutdown method")
+    if initial_data_disk is not None:
+        size = initial_data_disk.stat().st_size
+        if not initial_data_disk.is_file() or size == 0 or size % 512:
+            raise ValueError("Initial data must be a nonempty raw disk with 512-byte blocks")
     evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     state = evidence / "state"
     share = evidence / "share"
     state.mkdir(mode=0o700)
     share.mkdir(mode=0o700)
     inputs = {"helper": helper, "cli": cli}
+    if initial_data_disk is not None:
+        inputs["initial_data_disk"] = initial_data_disk
     inputs.update({name: release / name for name in ("vmlinuz", "initrd", "disk.raw")})
     (evidence / "inputs.json").write_text(json.dumps({
         name: {"path": str(path.resolve()), "sha256": digest(path)}
         for name, path in inputs.items()
     }, indent=2) + "\n")
-    with (state / "data.raw").open("xb") as disk:
-        disk.truncate(24 * 1024**3)
-    (state / "data.raw").chmod(0o600)
+    if initial_data_disk is None:
+        with (state / "data.raw").open("xb") as disk:
+            disk.truncate(24 * 1024**3)
+        (state / "data.raw").chmod(0o600)
+    else:
+        clone_disk(initial_data_disk, state / "data.raw")
     capability = share / "guest.capability"
     capability.write_text(secrets.token_hex(32))
     capability.chmod(0o600)
     fresh = share / "data-disk-fresh"
-    fresh.touch()
+    if initial_data_disk is None:
+        fresh.touch()
     env = os.environ.copy()
     env["LEMMA_GUEST_CONTROL_SOCKET"] = str(state / "control.sock")
     env["LEMMA_GUEST_CAPABILITY_FILE"] = str(capability)
@@ -164,6 +175,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("helper", "cli", "release", "evidence"):
         parser.add_argument(f"--{name}", type=Path, required=True)
+    parser.add_argument("--initial-data-disk", type=Path)
     parser.add_argument("--boots", type=int, default=3)
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--seconds", type=float, default=180)
