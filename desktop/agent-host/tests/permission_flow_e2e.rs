@@ -361,6 +361,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
                     system_prompt: String::new(),
                     prompt: vec![json!({"type": "text", "text": "Delete the build directory."})],
                     resume_session_id: None,
+                    workspace_cwd: None,
                     context: JsonMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(2),

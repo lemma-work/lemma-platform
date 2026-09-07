@@ -404,6 +404,8 @@ def main():
                 },
             )
         elif method == "session/new":
+            if MODE == "cwd":
+                os.chdir(message["params"]["cwd"])
             mcp_servers = (message.get("params") or {}).get("mcpServers") or []
             result(request_id, {"sessionId": SESSION_ID, "configOptions": []})
         elif method == "session/prompt":
@@ -417,6 +419,12 @@ def main():
                     read_client_message,
                     wait_for_release,
                 )
+            elif MODE == "cwd":
+                emit({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": SESSION_ID,
+                    "update": {"sessionUpdate": "agent_message_chunk",
+                               "content": {"type": "text", "text": os.getcwd()}},
+                }})
             elif MODE == "mcp":
                 run_mcp_turn(mcp_servers)
             elif MODE == "mcp-refresh":

@@ -410,6 +410,7 @@ async fn main() -> anyhow::Result<()> {
                 prompt: vec![serde_json::json!({"type": "text", "text": prompt})],
                 // A smoke run is one shot with no conversation behind it.
                 resume_session_id: None,
+                workspace_cwd: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),

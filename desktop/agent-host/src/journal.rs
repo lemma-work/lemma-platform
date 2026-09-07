@@ -1261,6 +1261,7 @@ mod tests {
             system_prompt: "system".into(),
             prompt: vec![serde_json::json!({"role": "user", "content": "hello"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             mcp: serde_json::json!({
                 "url": "https://lemma.test/mcp",

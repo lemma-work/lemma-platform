@@ -1299,7 +1299,21 @@ impl TargetWorker {
                 )?;
                 return Ok(());
             }
-            let scratch = prepare_conversation_directory(&paths, target_id, spec.conversation_id)?;
+            let scratch = match prepare_run_directory(&paths, target_id, &spec) {
+                Ok(path) => path,
+                Err(error) => {
+                    terminal_failure(
+                        &journal,
+                        target_id,
+                        run_id,
+                        lease_epoch,
+                        RunState::Failed,
+                        &format!("could not open the conversation working directory: {error}"),
+                    )?;
+                    events_ready.notify_one();
+                    return Ok(());
+                }
+            };
             let host_cwd = scratch
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("conversation directory is not valid Unicode"))?
@@ -2538,6 +2552,24 @@ fn prepare_conversation_directory(
     Ok(path)
 }
 
+fn prepare_run_directory(
+    paths: &HostPaths,
+    target: Uuid,
+    spec: &RunSpec,
+) -> anyhow::Result<PathBuf> {
+    let legacy = scratch_directory(paths, target, spec.conversation_id);
+    // Provider session indexes may include the lexical cwd. Never move an
+    // existing session's files behind its back during an app upgrade.
+    if legacy.exists() || spec.workspace_cwd.is_none() {
+        return prepare_conversation_directory(paths, target, spec.conversation_id);
+    }
+    crate::conversation_directory::prepare(
+        &crate::conversation_directory::workspace_root()?,
+        target,
+        spec.workspace_cwd.as_deref().expect("checked above"),
+    )
+}
+
 fn generated_image_payloads(
     scratch_directory: &std::path::Path,
 ) -> anyhow::Result<Vec<(String, JsonMap)>> {
@@ -2980,6 +3012,7 @@ mod target_worker_tests {
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
                 resume_session_id: None,
+                workspace_cwd: None,
                 context: JsonMap::new(),
                 mcp: serde_json::json!({}),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -3547,6 +3580,7 @@ mod target_worker_tests {
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             // Not an object, so the spawned run journals its failure and ends
             // without going anywhere near a driver. This test is about whether
@@ -4026,6 +4060,7 @@ mod stream_upsert_tests {
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             mcp: Value::Null,
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -4456,6 +4491,20 @@ mod adapter_failure_message_tests {
         assert_eq!(
             std::fs::read_to_string(reopened.join("user-work.txt")).unwrap(),
             "keep this work"
+        );
+        let spec: super::RunSpec = serde_json::from_value(serde_json::json!({
+            "agent_run_id": uuid::Uuid::new_v4(), "conversation_id": conversation,
+            "harness_id": uuid::Uuid::new_v4(), "profile_revision": "test",
+            "system_prompt": "test", "prompt": [],
+            "workspace_cwd": "/workspace/c/2026-09-07/new-layout",
+            "resume_session_id": "existing-provider-session",
+            "run_deadline": chrono::Utc::now(),
+        }))
+        .unwrap();
+        assert_eq!(
+            super::prepare_run_directory(&paths, target, &spec).unwrap(),
+            first,
+            "an upgrade must not relocate a provider session's existing cwd"
         );
     }
 

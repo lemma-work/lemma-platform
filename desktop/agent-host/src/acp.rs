@@ -202,12 +202,15 @@ impl AgentDriver for AcpDriver {
                     if let Some((event_type, object_id, payload)) =
                         normalize_session_update(&notification.update)
                     {
+                        tracing::debug!(?event_type, "ACP notification received");
                         notification_callbacks
                             .event(event_type, object_id, payload)
                             .map_err(|error| {
+                                tracing::error!(%error, ?event_type, "could not persist ACP notification");
                                 agent_client_protocol::schema::v1::Error::internal_error()
                                     .data(error.to_string())
                             })?;
+                        tracing::debug!(?event_type, "ACP notification persisted");
                     }
                     Ok(())
                 },
@@ -652,6 +655,8 @@ fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
                 bytes = line.len(),
                 "ACP adapter stderr"
             );
+        } else if matches!(direction, agent_client_protocol::LineDirection::Stdout) {
+            tracing::debug!(bytes = line.len(), "ACP stdout frame received");
         }
     })
 }
@@ -1615,6 +1620,7 @@ mod tests {
             system_prompt: "Be exact.".into(),
             prompt: vec![serde_json::json!({"type": "text", "text": "Hello"})],
             resume_session_id: resume_session_id.map(str::to_owned),
+            workspace_cwd: None,
             context: JsonMap::new(),
             mcp: serde_json::Value::Null,
             run_deadline: chrono::Utc::now(),

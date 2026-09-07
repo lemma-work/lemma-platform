@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use lemma_agent_host::protocol::EventType;
@@ -12,6 +13,92 @@ use tempfile::TempDir;
 mod support;
 
 use support::{ControlPlane, HostProcess, PermissionAnswer, ShimmedAgents};
+
+#[tokio::test]
+async fn persisted_conversation_cwd_reaches_the_native_session_and_checkpoint() {
+    let directory = TempDir::new().unwrap();
+    let shims = ShimmedAgents::install(directory.path(), "cwd");
+    let control = ControlPlane::start(
+        &shims.harness_key,
+        "Report pwd",
+        json!({}),
+        PermissionAnswer::Deny,
+    )
+    .await;
+    control.set_workspace_cwd("/workspace/c/2026-09-07/Δ project");
+    let host = HostProcess::start(directory.path(), &control, &shims).await;
+    control
+        .wait_for(
+            "native cwd",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+    let expected = directory.path().join("lemma/c/2026-09-07/Δ project");
+    assert_eq!(
+        PathBuf::from(control.assistant_text())
+            .canonicalize()
+            .unwrap(),
+        expected.canonicalize().unwrap()
+    );
+    let traffic = shims.traffic();
+    assert!(
+        traffic
+            .iter()
+            .any(|entry| entry["message"]["method"] == "session/new"
+                && entry["message"]["params"]["cwd"] == expected.to_str().unwrap())
+    );
+    assert!(
+        control
+            .events()
+            .iter()
+            .any(|event| event.event_type == EventType::RunState
+                && event.payload.get("host_cwd") == Some(&json!(expected.to_str().unwrap())))
+    );
+}
+
+#[tokio::test]
+async fn invalid_conversation_cwd_fails_without_dispatching_a_prompt() {
+    let directory = TempDir::new().unwrap();
+    let shims = ShimmedAgents::install(directory.path(), "cwd");
+    let control = ControlPlane::start(
+        &shims.harness_key,
+        "Report pwd",
+        json!({}),
+        PermissionAnswer::Deny,
+    )
+    .await;
+    control.set_workspace_cwd("/workspace/../../escape");
+    let host = HostProcess::start(directory.path(), &control, &shims).await;
+    control
+        .wait_for(
+            "cwd rejection",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+    let terminal = control
+        .events()
+        .into_iter()
+        .find(|event| event.event_type == EventType::Terminal)
+        .unwrap();
+    assert_eq!(terminal.payload["state"], "FAILED");
+    assert!(
+        terminal.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("working directory")
+    );
+    assert!(
+        !shims
+            .traffic()
+            .iter()
+            .any(|entry| entry["message"]["method"] == "session/prompt")
+    );
+    assert!(!directory.path().join("lemma").exists());
+}
 
 async fn streaming_run(
     mode: &str,

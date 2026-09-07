@@ -157,6 +157,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                             "text": format!("Reply with exactly: {marker}"),
                         })],
                         resume_session_id: None,
+                        workspace_cwd: None,
                         context: BTreeMap::new(),
                         mcp: Value::Null,
                         run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
@@ -253,6 +254,7 @@ async fn one_turn(
                 system_prompt: "Answer in one short sentence.".to_owned(),
                 prompt: vec![json!({"type": "text", "text": prompt})],
                 resume_session_id,
+                workspace_cwd: None,
                 context: BTreeMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -425,6 +427,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                     ),
                 })],
                 resume_session_id: None,
+                workspace_cwd: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
@@ -914,6 +917,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                                  reply. Do not use any tools.",
                     })],
                     resume_session_id: None,
+                    workspace_cwd: None,
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -1153,5 +1157,46 @@ async fn a_real_agent_wakes_and_carries_on_where_it_slept() {
             "{agent} did not carry on from where it slept; it answered {answer:?}"
         );
         println!("{agent}: LEMMA_REAL_WAKE_OK -> {answer:?}");
+    }
+}
+
+/// Exercise provider-native pwd and session continuity in the mapped layout.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn real_harnesses_resume_in_the_saved_workspace_directory() {
+    let source = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(source.adapters);
+    let directory = TempDir::new().unwrap();
+    let root = directory.path().join("lemma");
+    let target = Uuid::new_v4();
+    for agent in configured_agents() {
+        let conversation = Uuid::new_v4();
+        let saved = format!(
+            "/workspace/c/{}/{}",
+            Utc::now().format("%Y-%m-%d"),
+            &conversation.simple().to_string()[..8]
+        );
+        let cwd = lemma_agent_host::conversation_directory::prepare(&root, target, &saved).unwrap();
+        let (session, answer) = one_turn(&manifest, &cwd, &agent, conversation,
+            "Run pwd once using your native shell and report its exact output. Remember my name is Ada. Do not modify files.", None).await;
+        assert!(
+            answer.contains(cwd.to_str().unwrap())
+                || answer.contains(cwd.canonicalize().unwrap().to_str().unwrap()),
+            "{agent}: {answer}"
+        );
+        let reopened =
+            lemma_agent_host::conversation_directory::prepare(&root, target, &saved).unwrap();
+        assert_eq!(cwd, reopened);
+        let (next_session, answer) = one_turn(&manifest, &reopened, &agent, conversation,
+            "What is my name? Run pwd once using your native shell and report its exact output. Do not modify files.", Some(session.clone())).await;
+        assert_eq!(session, next_session, "{agent} changed provider session");
+        assert!(answer.contains("Ada"), "{agent}: {answer}");
+        assert!(
+            answer.contains(cwd.to_str().unwrap())
+                || answer.contains(cwd.canonicalize().unwrap().to_str().unwrap()),
+            "{agent}: {answer}"
+        );
     }
 }

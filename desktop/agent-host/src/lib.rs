@@ -8,6 +8,7 @@ pub mod acp;
 pub mod adapters;
 pub mod api;
 pub mod config;
+pub mod conversation_directory;
 pub mod journal;
 pub mod mcp_bridge;
 pub mod permissions;

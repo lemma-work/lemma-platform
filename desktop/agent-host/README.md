@@ -120,7 +120,7 @@ somewhere else.
 - Agent Host does not advertise ACP client-side filesystem or terminal
   capabilities, permission requests fail closed, and known unrestricted or
   pre-approved provider modes are filtered and rejected again at dispatch.
-- Adapter subprocesses start in private scratch directories. A cancellation is
+- ACP sessions open and resume in the conversation's persistent directory. A cancellation is
   first an ACP `session/cancel`, so the agent ends its own turn and the provider
   flushes the session file the next turn resumes from; a process-tree kill is
   the backstop for an adapter that ignores it, and for shutdown. ACP is not an
@@ -218,6 +218,25 @@ This mode is intended for release qualification and local diagnosis. It creates
 an isolated scratch directory under the Agent Host data directory.
 
 ## Durable local state
+
+New conversations use the cwd saved by the backend at conversation creation.
+Agent Host maps `/workspace/c/<date>/<slug>` to `~/lemma/c/<date>/<slug>` and
+passes that absolute directory to both ACP `session/new` and `session/load`,
+for Claude Code, Codex, OpenCode, and other ACP harnesses. The native path and
+provider session ID are reported before the prompt is dispatched and stored in
+conversation metadata. Parent conversations and their children share the saved
+cwd. Lemma MCP sandbox tools still use `/workspace`; this mapping does not mount
+or synchronize the two filesystems.
+
+Existing conversations with an old scratch directory keep it across upgrades,
+preserving files and provider session indexes. Older backends that omit
+`workspace_cwd` retain that compatibility layout. A path outside `/workspace`,
+traversal, symlink components, unclaimed existing files, or a directory already
+claimed by another paired workspace fails with an actionable run error.
+The ownership registry under `~/lemma/.lemma` prevents accidental directory
+collisions; it is not an OS sandbox or a project trust grant. For isolated QA,
+set `LEMMA_AGENT_HOST_WORKSPACE_ROOT` to an absolute temporary directory before
+starting Agent Host; production uses `~/lemma`.
 
 Default data locations:
 

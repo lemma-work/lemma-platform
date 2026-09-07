@@ -644,6 +644,7 @@ struct ControlState {
     lose_append_ack: Arc<AtomicBool>,
     append_attempts: Arc<Mutex<Vec<Vec<u64>>>>,
     run_budget: Arc<Mutex<chrono::Duration>>,
+    workspace_cwd: Arc<Mutex<Option<String>>>,
     snapshots: Arc<Mutex<Vec<Value>>>,
     /// Commands the host refused, and why.
     ///
@@ -719,6 +720,7 @@ impl ControlPlane {
             lose_append_ack: Arc::new(AtomicBool::new(false)),
             append_attempts: Arc::new(Mutex::new(Vec::new())),
             run_budget: Arc::new(Mutex::new(chrono::Duration::minutes(3))),
+            workspace_cwd: Arc::new(Mutex::new(None)),
             snapshots: Arc::new(Mutex::new(Vec::new())),
             rejections: Arc::new(Mutex::new(Vec::new())),
             harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
@@ -764,6 +766,10 @@ impl ControlPlane {
 
     pub fn set_run_budget(&self, budget: chrono::Duration) {
         *self.state.run_budget.lock().unwrap() = budget;
+    }
+
+    pub fn set_workspace_cwd(&self, cwd: &str) {
+        *self.state.workspace_cwd.lock().unwrap() = Some(cwd.to_owned());
     }
 
     pub fn cancel_when_text_contains(&self, marker: &str) {
@@ -1087,6 +1093,7 @@ async fn poll(
                     system_prompt: "Follow the runtime instructions exactly.".to_owned(),
                     prompt: vec![json!({"type": "text", "text": state.prompt})],
                     resume_session_id: None,
+                    workspace_cwd: state.workspace_cwd.lock().unwrap().clone(),
                     context: BTreeMap::new(),
                     mcp: state.mcp.clone(),
                     run_deadline: Utc::now() + *state.run_budget.lock().unwrap(),
@@ -1305,6 +1312,7 @@ impl HostProcess {
             // install landing mid-test makes the host re-publish its harnesses,
             // which is what used to strand a run.
             .env("LEMMA_AGENT_HOST_SKIP_ADAPTER_DOWNLOAD", "1")
+            .env("LEMMA_AGENT_HOST_WORKSPACE_ROOT", root.join("lemma"))
             .env("RUST_LOG", "lemma_agent_host=debug")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

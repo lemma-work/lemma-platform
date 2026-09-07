@@ -42,7 +42,7 @@ for raw_line in sys.stdin:
                 "agentInfo": {"name": "fake-acp", "version": "1.0.0"},
             },
         )
-    elif method == "session/new":
+    elif method in {"session/new", "session/load"}:
         result(
             request_id,
             {
