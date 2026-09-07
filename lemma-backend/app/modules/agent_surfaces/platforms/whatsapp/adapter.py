@@ -174,8 +174,10 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         number = f"+{digits}"
         profile_url = f"{settings.frontend_url.rstrip('/')}/profile"
         return (
-            f"I don't recognise {number}. Add it as the mobile number on your "
-            f"Lemma profile and I'll know it's you: {profile_url}",
+            (
+                f"I don't recognise {number}. Add it as the mobile number on your "
+                f"Lemma profile and I'll know it's you: {profile_url}"
+            ),
             {},
         )
 

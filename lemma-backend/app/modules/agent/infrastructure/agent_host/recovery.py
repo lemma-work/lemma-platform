@@ -345,6 +345,8 @@ def _unaccepted_timeout(
     return (
         AgentHostRunState.DISPATCH_UNKNOWN,
         "HOST_ACCEPTANCE_UNKNOWN",
-        "The run was delivered to Agent Host, but acceptance could not be "
-        "confirmed; Lemma did not start a fallback",
+        (
+            "The run was delivered to Agent Host, but acceptance could not be "
+            "confirmed; Lemma did not start a fallback"
+        ),
     )

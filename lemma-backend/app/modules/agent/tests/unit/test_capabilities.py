@@ -410,9 +410,11 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
         "write_todos",
         {
             "todos": [
-                "- [x] Research</td>\n"
-                "<item>- [x] Build deck</item></item>\n"
-                "<item>- [ ] Upload</item>\n</todos>"
+                (
+                    "- [x] Research</td>\n"
+                    "<item>- [x] Build deck</item></item>\n"
+                    "<item>- [ ] Upload</item>\n</todos>"
+                )
             ]
         },
     )
@@ -427,11 +429,13 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
         "write_todos",
         {
             "todos": [
-                "RESEARCH DONE</item>\n"
-                "<item>DECK DONE</item>\n"
-                "<item>WRITE HTML DONE</item>\n"
-                "<item>RENDER PDF DONE</item>\n"
-                "<item>UPLOAD DONE"
+                (
+                    "RESEARCH DONE</item>\n"
+                    "<item>DECK DONE</item>\n"
+                    "<item>WRITE HTML DONE</item>\n"
+                    "<item>RENDER PDF DONE</item>\n"
+                    "<item>UPLOAD DONE"
+                )
             ]
         },
     )

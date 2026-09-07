@@ -26,8 +26,10 @@ _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"@lemma/pod-client|\bLemmaPodClient\b|\bcreateIframeTokenProvider\b"
         ),
-        "Uses the retired `@lemma/pod-client` SDK. Load `/public/sdk/lemma-client.js` and use "
-        "`new window.LemmaClient.LemmaClient()` instead.",
+        (
+            "Uses the retired `@lemma/pod-client` SDK. Load `/public/sdk/lemma-client.js` and use "
+            "`new window.LemmaClient.LemmaClient()` instead."
+        ),
     ),
     (
         re.compile(
@@ -41,24 +43,30 @@ _LINT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"\bsrc\s*=\s*['\"]https?://[^'\"]*/public/sdk/lemma-client\.js['\"]",
             re.IGNORECASE,
         ),
-        "Hardcodes an absolute host for the SDK script. Build the URL from "
-        "`window.__LEMMA_CONFIG__.apiUrl` (the API origin) and load it in a dynamically "
-        "created `<script>` that boots in `onload` — never the app's own subdomain.",
+        (
+            "Hardcodes an absolute host for the SDK script. Build the URL from "
+            "`window.__LEMMA_CONFIG__.apiUrl` (the API origin) and load it in a dynamically "
+            "created `<script>` that boots in `onload` — never the app's own subdomain."
+        ),
     ),
     (
         re.compile(
             r"\bsrc\s*=\s*['\"]/(?:public/sdk|sdk)/lemma-(?:client|ui)\.js['\"]",
             re.IGNORECASE,
         ),
-        "Loads an SDK bundle (`lemma-client.js` / `lemma-ui.js`) with a relative "
-        "`/public/sdk/...` src, which 404s on app subdomains (only the API origin serves "
-        "the SDK). Build the URL from `window.__LEMMA_CONFIG__.apiUrl` and boot in the "
-        "script's `onload` — see the `lemma-widget` skill's \"Loading the SDK\".",
+        (
+            "Loads an SDK bundle (`lemma-client.js` / `lemma-ui.js`) with a relative "
+            "`/public/sdk/...` src, which 404s on app subdomains (only the API origin serves "
+            "the SDK). Build the URL from `window.__LEMMA_CONFIG__.apiUrl` and boot in the "
+            "script's `onload` — see the `lemma-widget` skill's \"Loading the SDK\"."
+        ),
     ),
     (
         re.compile(r"new\s+window\.LemmaClient\s*\("),
-        "`new window.LemmaClient(...)` references the namespace object, not the constructor — "
-        "use `new window.LemmaClient.LemmaClient()`.",
+        (
+            "`new window.LemmaClient(...)` references the namespace object, not the constructor — "
+            "use `new window.LemmaClient.LemmaClient()`."
+        ),
     ),
 )
 
@@ -260,15 +268,19 @@ def validate_widget_html(html: str) -> list[str]:
 
     if not _ELEMENT_TAG.search(content):
         return [
-            "Widget content must be an HTML fragment — no element tag found. "
-            "Pass raw markup, not base64 or any other encoded form."
+            (
+                "Widget content must be an HTML fragment — no element tag found. "
+                "Pass raw markup, not base64 or any other encoded form."
+            )
         ]
 
     if _SVG_ROOT.match(_without_leading_comments(content)):
         return [
-            "Widget content must be an HTML fragment, not a standalone SVG. "
-            "Upload the image with `lemma files upload` and show it with "
-            'display_resource(type="FILE", path=...).'
+            (
+                "Widget content must be an HTML fragment, not a standalone SVG. "
+                "Upload the image with `lemma files upload` and show it with "
+                'display_resource(type="FILE", path=...).'
+            )
         ]
 
     errors = list(lint_app_html(content))

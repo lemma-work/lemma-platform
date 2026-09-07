@@ -97,8 +97,10 @@ def render_schedule_paused_email(
         heading=f"{display_name} needs attention.",
         body=(
             explanation,
-            "Review the underlying error, then re-enable the schedule when the "
-            "cause has been addressed.",
+            (
+                "Review the underlying error, then re-enable the schedule when the "
+                "cause has been addressed."
+            ),
         ),
         action=EmailAction("Review schedule", review_url),
         details=tuple(details),

@@ -70,8 +70,10 @@ def test_other_attachments_survive_alongside_a_voice_note():
 def test_plain_files_are_unchanged_without_voice_metadata():
     blocks = _shared_files_blocks({"ingested_files": ["/me/slack/report.csv"]}, "SLACK")
     assert blocks == [
-        "The user shared files; they are saved in the pod datastore at:\n"
-        "- /me/slack/report.csv"
+        (
+            "The user shared files; they are saved in the pod datastore at:\n"
+            "- /me/slack/report.csv"
+        )
     ]
 
 
