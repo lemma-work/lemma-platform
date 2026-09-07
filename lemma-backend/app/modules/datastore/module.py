@@ -255,8 +255,46 @@ async def _close_reindex_queue(context):
         await close_datastore_reindex_queue()
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.datastore.infrastructure.models.datastore_models import (
+        DatastoreFile,
+        DatastoreTable,
+    )
+
+    return (
+        (
+            ResourceType.DATASTORE_TABLE,
+            ResourceNameTable(
+                DatastoreTable.id, DatastoreTable.pod_id, DatastoreTable.table_name
+            ),
+        ),
+        # `FOLDER` and `DOCUMENT` are the same rows, addressed by path.
+        (
+            ResourceType.FOLDER,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+        (
+            ResourceType.DOCUMENT,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="datastore",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_preload_local_embeddings, _backfill_query_role),

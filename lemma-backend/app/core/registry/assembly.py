@@ -33,9 +33,36 @@ def configure_stream_topology(modules: Sequence[LemmaModule]) -> None:
     declare_stream_groups(group for module in modules for group in module.stream_groups)
 
 
+def configure_resource_names(modules: Sequence[LemmaModule]) -> None:
+    """Collect how each module maps a resource name to a row id.
+
+    Called from both process entry points, beside `configure_stream_topology`
+    and for the same reason: a grant resolved in the worker has to mean what it
+    means in the API.
+    """
+    from app.core.authorization.resource_names import declare_resource_names
+
+    for module in modules:
+        if module.resource_names is None:
+            continue
+        declare_resource_names(module.resource_names())
+
+
+def configure_pod_liveness(modules: Sequence[LemmaModule]) -> None:
+    """Register the module that can say whether a pod is deleted."""
+    from app.core.authorization.pod_liveness import declare_pod_liveness_reader
+
+    for module in modules:
+        if module.pod_liveness is None:
+            continue
+        declare_pod_liveness_reader(module.pod_liveness())
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
     configure_stream_topology(modules)
+    configure_resource_names(modules)
+    configure_pod_liveness(modules)
     for module in modules:
         if module.routers is None:
             continue
@@ -75,6 +102,8 @@ def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
 def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") -> None:
     """Register streaq tasks then include every module's FastStream routers."""
     configure_stream_topology(modules)
+    configure_resource_names(modules)
+    configure_pod_liveness(modules)
     register_streaq_tasks(modules)
     for module in modules:
         if module.event_routers is None:

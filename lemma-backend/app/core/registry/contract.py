@@ -30,24 +30,46 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
     from fastapi import FastAPI
     from faststream.redis import RedisRouter
 
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.pod_liveness import PodLivenessReader
+    from app.core.authorization.resource_names import ResourceNameTable
     from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
 
 
 # --- thunk aliases -----------------------------------------------------------
 # Each returns heavy objects lazily, inside the process/phase that needs them.
-RouterProvider = Callable[[], "Sequence[Any]"]
+#
+# PEP 695 `type` rather than a plain assignment: the right-hand side of a `type`
+# statement is evaluated lazily, so a name that exists only under TYPE_CHECKING
+# can be written as itself instead of quoted. The quoted form worked, but only a
+# type checker ever read inside the string -- which is why three of these
+# imports were reported as unused, and why a typo in one would have gone
+# unnoticed at runtime.
+type RouterProvider = Callable[[], Sequence[Any]]
 """Returns a sequence of ``fastapi.APIRouter`` to ``include_router`` (in order)."""
 
-EventRouterProvider = Callable[[], "Sequence[RedisRouter]"]
+type EventRouterProvider = Callable[[], Sequence[RedisRouter]]
 """Returns FastStream ``RedisRouter`` objects to ``broker.include_router``."""
 
-StreaqRegistrar = Callable[[], None]
+type ResourceNameProvider = Callable[
+    [], Sequence[tuple[ResourceType, ResourceNameTable]]
+]
+"""Returns how this module's resource types map a human name to a row id.
+
+A thunk, like `routers`: it is called at assembly, so declaring a table does not
+drag a module's ORM models into every process that merely imports the registry.
+"""
+
+type PodLivenessProvider = Callable[[], PodLivenessReader]
+"""Returns the reader core's deleted-pod guard asks whether a pod is live."""
+
+type StreaqRegistrar = Callable[[], None]
 """Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
 
 # Lifespan hooks are ``@asynccontextmanager`` functions entered inside an
 # ``AsyncExitStack``; teardown happens automatically (LIFO) on stack unwind.
-ApiLifespan = Callable[["FastAPI"], AbstractAsyncContextManager[None]]
-WorkerLifespan = Callable[["AppWorkerContext"], AbstractAsyncContextManager[None]]
+type ApiLifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
+type WorkerLifespan = Callable[[AppWorkerContext], AbstractAsyncContextManager[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,3 +90,11 @@ class LemmaModule:
     # Redis Streams owned by this module's durable consumers. Publishers use
     # this topology before XADD, even in processes that never import handlers.
     stream_groups: Sequence[tuple[str, str]] = ()
+
+    # Grant APIs speak resource names; grant storage keeps ids. This is how one
+    # becomes the other for this module's types.
+    resource_names: ResourceNameProvider | None = None
+
+    # A deleted pod stops answering for its contents. Core owns that rule and
+    # this module owns the row it turns on.
+    pod_liveness: PodLivenessProvider | None = None
