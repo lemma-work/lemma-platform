@@ -987,7 +987,7 @@ fn setup_stamp(parts: &[&str]) -> String {
         // same, and two different states would share a stamp.
         hasher.update([0u8]);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// A fingerprint of the migration revisions a pack carries.
@@ -1013,7 +1013,7 @@ fn migrations_fingerprint(backend_dir: &Path) -> String {
         hasher.update(name.as_bytes());
         hasher.update([0u8]);
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn random_hex(byte_count: usize) -> io::Result<String> {
