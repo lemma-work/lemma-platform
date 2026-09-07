@@ -217,9 +217,21 @@ async def _close_e2e_process_clients() -> None:
 
     ``httpx.ASGITransport`` intentionally does not run the application's
     lifespan. E2E requests can therefore initialize the same lazy singletons as
-    production without invoking their production shutdown hooks. Keep this
-    cleanup on the pytest async loop and call it from the canonical client
-    fixture after all dependent request fixtures have unwound.
+    production without invoking their production shutdown hooks.
+
+    Call it only through the ``e2e_process_clients`` fixture, which exists to
+    put it after every fixture that could still be using one of these -- see
+    that fixture for what goes wrong when it runs earlier.
+
+    The message bus is deliberately not in the list, and nothing else in the
+    harness closes it either. It is the one process-wide client an E2E request
+    cannot open: ``SqlAlchemyUnitOfWork`` stages domain events in the outbox
+    and a separate dispatcher publishes them, so no request path ever reaches
+    ``FastStreamRedisMessageBus._get_broker``. The only connect in this process
+    is ``app/app.py``'s lifespan, which closes it in the same ``finally``.
+    Measured rather than assumed: ``_get_broker`` is called 0 times across the
+    112 tests of ``app/modules/pod/tests/e2e``, and exactly as many times as
+    ``close`` on a suite that runs ``backend_server``.
     """
 
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
@@ -738,34 +750,6 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     return settings
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def cleanup_workspace_containers_session():
-    yield
-    # The message bus is a process-wide singleton with no per-test subscribe
-    # state (it's publish-only; the real FastStream consumers run in the
-    # separate streaq worker subprocess, unaffected by this connection's
-    # lifecycle) -- close it once per xdist worker here instead of
-    # reconnecting it on every single test's teardown via
-    # _close_e2e_process_clients.
-    from app.core.infrastructure.events.message_bus import close_message_bus
-
-    await _run_cleanup_step("close_message_bus", close_message_bus)
-    # Close exactly the contexts created by this pytest process. Broad sweeps
-    # by the shared label are unsafe even in a serial session because another
-    # independently invoked pytest process may be running at the same time.
-    _close_shared_contexts()
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def cleanup_workspace_containers_function():
-    yield
-    # Per-test: only reap this test's sandbox pods. Sweeping all lemma.e2e
-    # containers here would kill the shared session testcontainers and break every
-    # subsequent test.
-    _cleanup_e2e_workspace_containers(sandboxes_only=True)
-    await _close_e2e_process_clients()
-
-
 def _import_e2e_models() -> None:
     """Populate shared SQLAlchemy metadata before schema creation.
 
@@ -1179,17 +1163,52 @@ async def db_session(db_manager) -> AsyncGenerator:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
+async def e2e_process_clients() -> AsyncGenerator[None, None]:
+    """Own the shutdown of the process-wide clients a test may have opened.
+
+    A fixture rather than a `finally` inside `async_client`, because *when*
+    this runs is the whole point and only a dependency edge can state it.
+    Every fixture that can leave one of these singletons open depends on this
+    one, so pytest sets it up first and finalises it last -- after all of them.
+
+    It has to be last because the singletons are not all opened the same way.
+    `async_client` opens them lazily, one HTTPX ASGI request at a time, on the
+    pytest loop. `backend_server` opens them inside the application's own
+    lifespan, running on uvicorn's lifespan task -- and some carry an anyio
+    cancel scope bound to whichever task entered it. Closing the streaq queue
+    from the wrong task cancels that scope's *host*, which is uvicorn's
+    lifespan task parked in `receive()`: the application shutdown then unwinds
+    mid-cancellation, stops partway through `app/app.py`'s core closers, and
+    prints a cancel-scope `RuntimeError` from the MCP session manager's task
+    group on the way out. Green, loud, and directly under whatever else that
+    test printed -- which is how it was once read as the cause of an unrelated
+    failure.
+
+    The noise was the visible half. The closers that never ran were the other
+    one: every test with a `backend_server` leaked the redis connection and
+    socket that `close_redis_json_caches` was cancelled in the middle of, and
+    reported them as `ResourceWarning`s nobody connected to this.
+
+    Ordered after the server, the application's own lifespan closes what it
+    opened, on the task that opened it, and this is left with nothing to do.
+    """
+
+    yield
+    await _close_e2e_process_clients()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_client(
+    test_app, e2e_process_clients
+) -> AsyncGenerator["AsyncClient", None]:
     from httpx import ASGITransport, AsyncClient
 
+    del e2e_process_clients  # ordering only; see the fixture's docstring
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
-        try:
-            yield client
-        finally:
-            await _close_e2e_process_clients()
+        yield client
 
 
 @pytest_asyncio.fixture(scope="function")

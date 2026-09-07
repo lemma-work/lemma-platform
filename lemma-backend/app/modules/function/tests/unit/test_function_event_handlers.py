@@ -14,6 +14,9 @@ from app.modules.function.config import function_settings
 from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
 from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+)
 from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.domain.identities import function_run_job_id
 from app.modules.function.infrastructure.function_run_queue import (
@@ -68,9 +71,12 @@ async def test_reconcile_does_not_hold_db_connection_during_queue_io(
         def __init__(self, uow):
             assert uow == "uow"
 
-        async def list_pending_async_runs(self, *, now, limit):
+        async def list_pending_async_runs(self, *, now, min_age_seconds, limit):
             assert state["open"] is True
             assert limit == 100
+            # The sweep is recovery, not a second dispatcher: it must always
+            # ask for an age floor, never for every unqueued run it can see.
+            assert min_age_seconds == FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS
             return [run_id]
 
     class _Queue:

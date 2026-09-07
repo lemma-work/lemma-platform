@@ -44,6 +44,7 @@ from app.modules.function.infrastructure.execution_repository import (
 )
 from app.modules.function.application.runtime_policy import (
     FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
+    FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
 )
 from app.core.log.log import get_logger
 
@@ -119,6 +120,7 @@ async def _reconcile_unqueued_function_runs(
     async with uow_factory() as uow:
         run_ids = await FunctionRunRepository(uow).list_pending_async_runs(
             now=now,
+            min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
             limit=limit,
         )
 

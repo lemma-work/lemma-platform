@@ -528,16 +528,16 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_pending_async_runs(
-        self,
-        *,
-        now: datetime,
-        limit: int = 100,
+        self, *, now: datetime, min_age_seconds: int, limit: int = 100
     ) -> list[UUID]:
-        """Return asynchronous runs still waiting for their one execution.
+        """Return asynchronous runs whose one execution was never queued.
 
-        ``job_id`` is the durable asynchronous-dispatch intent. Queue publication
-        happens after this UoW closes; republishing a queued run is safe because
-        Streaq atomically deduplicates the deterministic task identity.
+        ``job_id`` is the durable asynchronous-dispatch intent, and publication
+        follows the unit of work that sets it -- so every asynchronous run is
+        briefly PENDING-and-unqueued even when nothing went wrong. Republishing
+        one is harmless (Streaq deduplicates the deterministic task identity)
+        but claiming one is not, which is what ``min_age_seconds`` is for; the
+        argument for its value lives on the constant it is passed from.
         """
 
         statement = (
@@ -547,6 +547,7 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
                 FunctionRunModel.job_id.is_not(None),
                 FunctionRunModel.deadline_at.is_not(None),
                 FunctionRunModel.deadline_at > now,
+                FunctionRunModel.created_at <= now - timedelta(seconds=min_age_seconds),
             )
             .order_by(FunctionRunModel.created_at, FunctionRunModel.id)
             .limit(limit)

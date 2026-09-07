@@ -26,6 +26,8 @@ usage: run_codeql.sh [--language python|javascript-typescript] [--all] [--base <
   --base      Diff against this ref (default: origin/main, or $CODEQL_DIFF_BASE).
 
 Results are cached under .codeql/; delete that directory to force a rebuild.
+The evaluator is given half of physical memory, clamped to 4-16 GB; set
+$CODEQL_RAM_MB to override.
 USAGE
 }
 
@@ -56,6 +58,46 @@ if [[ -z "$languages" ]]; then
   languages="python javascript-typescript"
 fi
 
+# CodeQL picks its own memory budget, and the choice does not scale with the
+# machine: on macOS it settles on a Java heap of 1084 MiB no matter how much is
+# free, and `Classes/ConflictingAttributesInBaseClasses.ql` exhausts that on
+# this database. The run then dies with exit 99 after eight to ten minutes of
+# evaluation -- which reads like a broken query rather than a budget, and costs
+# the whole analysis every time. So say what the budget is instead of accepting
+# a default that cannot finish.
+#
+# `CODEQL_RAM_MB` overrides it. CI does not use this script (the security
+# workflow runs `github/codeql-action`, which sizes itself from the runner), so
+# this is a laptop-facing number.
+detect_total_ram_mb() {
+  local total_bytes total_kb
+  if total_bytes="$(sysctl -n hw.memsize 2>/dev/null)" &&
+    [[ "$total_bytes" =~ ^[0-9]+$ ]]; then
+    echo "$((total_bytes / 1048576))"
+    return
+  fi
+  if [[ -r /proc/meminfo ]]; then
+    total_kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)"
+    if [[ "$total_kb" =~ ^[0-9]+$ ]]; then
+      echo "$((total_kb / 1024))"
+      return
+    fi
+  fi
+  echo 0
+}
+
+ram_mb="${CODEQL_RAM_MB:-}"
+if [[ -z "$ram_mb" ]]; then
+  ram_mb="$(($(detect_total_ram_mb) / 2))"
+  # Floor: comfortably above the ~1 GB default that failed, so a small machine
+  # still gets a budget rather than the one that cannot finish. Ceiling: past
+  # this the analysis gains nothing here and the rest of the machine loses a
+  # lot. A box that reports no memory at all lands on the floor, which is the
+  # safe end to be wrong on.
+  if ((ram_mb < 4096)); then ram_mb=4096; fi
+  if ((ram_mb > 16384)); then ram_mb=16384; fi
+fi
+
 changed_files="$db_root/changed-files.txt"
 mkdir -p "$db_root"
 if [[ "$scope" == "diff" ]]; then
@@ -71,7 +113,22 @@ if [[ "$scope" == "diff" ]]; then
   git -C "$repo_root" diff -U0 --diff-filter=d "$base_ref...HEAD" \
     | awk '/^\+\+\+ b\//{f=substr($0,7)} /^@@/{split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2]+0); if(n>0) print f":"s"-"(s+n-1)}' \
     > "$changed_files"
-  echo "Scope: $(cut -d: -f1 "$changed_files" | sort -u | wc -l | tr -d ' ') file(s) changed against $base_ref"
+  changed_count="$(cut -d: -f1 "$changed_files" | sort -u | wc -l | tr -d ' ')"
+  echo "Scope: $changed_count file(s) changed against $base_ref"
+  # The scope is a three-dot diff, which cannot see uncommitted or unstaged
+  # work. Analysing anyway spends ten minutes to report nothing and then says
+  # it passed -- a green that means "your change was never looked at". Say so
+  # and stop, which is both honest and ten minutes faster.
+  if [[ "$changed_count" == "0" ]]; then
+    cat >&2 <<NOTHING
+Nothing to analyse: no committed change against $base_ref.
+
+  This scope is the diff $base_ref...HEAD, so work that is only in the working
+  tree or the index is invisible to it. Commit first, or pass --all to analyse
+  the whole repository.
+NOTHING
+    exit 0
+  fi
 else
   : > "$changed_files"
   echo "Scope: the whole repository"
@@ -116,11 +173,12 @@ for language in $languages; do
   suite_language="$language"
   [[ "$language" == "javascript-typescript" ]] && suite_language="javascript"
 
-  echo "==> Analysing $language with security-and-quality"
+  echo "==> Analysing $language with security-and-quality (${ram_mb} MB)"
   codeql database analyze "$db" \
     "codeql/${suite_language}-queries:codeql-suites/${suite_language}-security-and-quality.qls" \
     --format=sarif-latest \
     --output="$sarif" \
+    --ram="$ram_mb" \
     --download >/dev/null
 
   python3 "$repo_root/scripts/summarize_codeql.py" \

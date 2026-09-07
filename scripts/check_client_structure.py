@@ -18,14 +18,14 @@ pointed at the client tree, and deliberately only the part of it that transfers:
 * **untyped escapes** -- same rule, `Any` and bare containers in annotations.
 
 What is left behind, so that its absence is a decision rather than an omission:
-`forbidden_imports`, `composition_deep_imports`, `core_module_imports` and
-`module_cycles` all encode the backend's modular-monolith layering -- a module
-may only be reached through its published contracts, and `app/core` may not
-depend on a module. The clients have no such architecture to protect. A CLI is
-a command tree over an SDK, and `lemma_cli.cli_core.commands.pods` importing
-`lemma_cli.cli_core.io` is the design, not a breach of it. Applying the rule
-here would have produced a large baseline of violations that nobody intends to
-ever fix, which is the fastest way to teach people that a gate means nothing.
+`forbidden_imports`, `core_module_imports` and `module_cycles` all encode the
+backend's modular-monolith layering -- a module may only be reached through its
+published contracts, and `app/core` may not depend on a module. The clients
+have no such architecture to protect. A CLI is a command tree over an SDK, and
+`lemma_cli.cli_core.commands.pods` importing `lemma_cli.cli_core.io` is the
+design, not a breach of it. Applying the rule here would have produced a large
+baseline of violations that nobody intends to ever fix, which is the fastest
+way to teach people that a gate means nothing.
 
 Written as a sibling rather than by parameterising the backend's checker: the
 thresholds and the counting rules are shared, but the *inputs* are not. The
