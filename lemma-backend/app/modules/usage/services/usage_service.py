@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Unpack
 from uuid import UUID
 
 from opentelemetry import metrics
@@ -15,7 +14,6 @@ from app.modules.usage.domain.entities import (
     UsageLimitCounterScope,
     UsageRecord,
     UsageReservation,
-    UsageSummary,
 )
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import (
@@ -30,11 +28,10 @@ from app.modules.usage.domain.ports import (
 from app.modules.usage.domain.query_types import (
     UsageLimits,
     UsageLimitScope,
-    UsageStatsBucket,
-    UsageStatsQuery,
 )
 from app.modules.usage.infrastructure.repositories import UsageRepository
 from app.modules.usage.services.pricing import UsagePricing
+from app.modules.usage.services.usage_reporting import UsageReporting
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
 meter = metrics.get_meter(__name__)
@@ -42,7 +39,7 @@ token_counter = meter.create_counter("lemma.llm.tokens")
 cost_counter = meter.create_counter("lemma.llm.cost_usd")
 
 
-class UsageService(UsagePricing):
+class UsageService(UsagePricing, UsageReporting):
     """Service for profile-aware usage recording and system-profile limits."""
 
     DEFAULT_RESERVATION_USD = 0.01
@@ -77,7 +74,7 @@ class UsageService(UsagePricing):
     ) -> UsageReservation | None:
         if not self._is_system_scope(profile_scope):
             return None
-        limit_values = await self._resolve_usage_limit_values(
+        limit_values = await self.resolve_usage_limit_values(
             organization_id=organization_id,
             user_id=user_id,
         )
@@ -335,106 +332,18 @@ class UsageService(UsagePricing):
             metadata=metadata,
         )
 
-    async def get_organization_usage_summary(
-        self,
-        organization_id: UUID,
-        *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        agent_run_id: UUID | None = None,
-        conversation_id: UUID | None = None,
-        profile_id: str | None = None,
-        profile_scope: str | None = None,
-        model_name: str | None = None,
-        usage_kind: str | None = None,
-        source_type: str | None = None,
-        status: str | None = None,
-    ) -> UsageSummary:
-        end = end or datetime.now(timezone.utc)
-        start = start or (end - timedelta(days=30))
-        return await self.usage_repository.get_usage_summary(
-            organization_id=organization_id,
-            start=start,
-            end=end,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            agent_run_id=agent_run_id,
-            conversation_id=conversation_id,
-            profile_id=profile_id,
-            profile_scope=profile_scope,
-            model_name=model_name,
-            usage_kind=usage_kind,
-            source_type=source_type,
-            status=status,
-        )
-
-    async def get_usage_events(
-        self,
-        organization_id: UUID,
-        *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        days: int = 30,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        agent_run_id: UUID | None = None,
-        conversation_id: UUID | None = None,
-        profile_id: str | None = None,
-        profile_scope: str | None = None,
-        model_name: str | None = None,
-        usage_kind: str | None = None,
-        source_type: str | None = None,
-        status: str | None = None,
-        limit: int = 100,
-    ) -> list[UsageRecord]:
-        end = end or datetime.now(timezone.utc)
-        start = start or (end - timedelta(days=days))
-        return list(
-            await self.usage_repository.list_usage(
-                organization_id=organization_id,
-                start=start,
-                end=end,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                agent_run_id=agent_run_id,
-                conversation_id=conversation_id,
-                profile_id=profile_id,
-                profile_scope=profile_scope,
-                model_name=model_name,
-                usage_kind=usage_kind,
-                source_type=source_type,
-                status=status,
-                limit=limit,
-            )
-        )
-
-    async def get_usage_stats(
-        self, organization_id: UUID, **kwargs: Unpack[UsageStatsQuery]
-    ) -> list[UsageStatsBucket]:
-        return list(
-            await self.usage_repository.get_usage_stats(
-                organization_id=organization_id,
-                **kwargs,
-            )
-        )
-
     async def require_remote_budget_support(
         self, *, organization_id: UUID | None, user_id: UUID, profile_scope: str
     ) -> None:
         if not self._is_system_scope(profile_scope):
             return
-        values = await self._resolve_usage_limit_values(
+        values = await self.resolve_usage_limit_values(
             organization_id=organization_id, user_id=user_id
         )
         if self._has_applicable_limit(values, organization_id):
             raise UsageLimitExceededError(
-                "This runtime cannot enforce a budget before each provider dispatch. Use a managed runtime or your own provider credentials."
+                "This runtime cannot enforce a budget before each provider dispatch. Use a managed runtime or your own provider credentials.",
+                reason="configuration",
             )
 
     async def get_usage_limits(
@@ -453,7 +362,7 @@ class UsageService(UsagePricing):
             second=0,
             microsecond=0,
         )
-        limit_values = _limit_values or await self._resolve_usage_limit_values(
+        limit_values = _limit_values or await self.resolve_usage_limit_values(
             organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
@@ -534,7 +443,7 @@ class UsageService(UsagePricing):
             ),
         }
 
-    async def _resolve_usage_limit_values(
+    async def resolve_usage_limit_values(
         self,
         *,
         organization_id: UUID | None,

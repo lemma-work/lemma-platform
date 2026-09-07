@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
+from typing import Unpack
 
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -22,7 +23,11 @@ from app.modules.usage.domain.entities import (
     _as_int,
 )
 from app.modules.usage.domain.ports import UsageRepositoryPort
-from app.modules.usage.domain.query_types import UsageFilters, UsageStatsBucket
+from app.modules.usage.domain.query_types import (
+    UsageFilters,
+    UsageStatsBucket,
+    UsageReportFilters,
+)
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import (
     UsageLimitCounter,
@@ -68,10 +73,18 @@ class UsageRepository(UsageRepositoryPort):
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
+        exclude_organization_ids: tuple[UUID, ...] = (),
         system_cost_only: bool = False,
     ) -> Select[T]:
         if organization_id is not None:
             stmt = stmt.where(UsageRecordModel.organization_id == organization_id)
+        if exclude_organization_ids:
+            stmt = stmt.where(
+                or_(
+                    UsageRecordModel.organization_id.is_(None),
+                    UsageRecordModel.organization_id.not_in(exclude_organization_ids),
+                )
+            )
         if pod_id is not None:
             stmt = stmt.where(UsageRecordModel.pod_id == pod_id)
         if user_id is not None:
@@ -109,7 +122,7 @@ class UsageRepository(UsageRepositoryPort):
     async def list_usage(
         self,
         *,
-        organization_id: UUID,
+        organization_id: UUID | None,
         start: datetime,
         end: datetime,
         pod_id: UUID | None = None,
@@ -123,6 +136,7 @@ class UsageRepository(UsageRepositoryPort):
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
+        exclude_organization_ids: tuple[UUID, ...] = (),
         limit: int | None = None,
     ) -> Sequence[UsageRecord]:
         stmt = select(UsageRecordModel).where(
@@ -143,6 +157,7 @@ class UsageRepository(UsageRepositoryPort):
             usage_kind=usage_kind,
             source_type=source_type,
             status=status,
+            exclude_organization_ids=exclude_organization_ids,
         )
         # Listing endpoints are bounded even when a caller omits the limit.
         stmt = stmt.order_by(
@@ -168,6 +183,7 @@ class UsageRepository(UsageRepositoryPort):
         usage_kind: str | None = None,
         source_type: str | None = None,
         status: str | None = None,
+        exclude_organization_ids: tuple[UUID, ...] = (),
     ) -> UsageSummary:
         """Totals cost one row per distinct profile, model and kind used."""
         filters: UsageFilters = {
@@ -183,6 +199,7 @@ class UsageRepository(UsageRepositoryPort):
             "usage_kind": usage_kind,
             "source_type": source_type,
             "status": status,
+            "exclude_organization_ids": exclude_organization_ids,
         }
         summary = UsageSummary(
             organization_id=organization_id,
@@ -500,43 +517,31 @@ class UsageRepository(UsageRepositoryPort):
     async def get_usage_stats(
         self,
         *,
-        organization_id: UUID,
+        organization_id: UUID | None,
         start: datetime,
         end: datetime,
         granularity: str = "day",
         group_by: str | None = None,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        agent_run_id: UUID | None = None,
-        conversation_id: UUID | None = None,
-        profile_id: str | None = None,
-        profile_scope: str | None = None,
-        model_name: str | None = None,
-        usage_kind: str | None = None,
-        source_type: str | None = None,
-        status: str | None = None,
+        **filters: Unpack[UsageReportFilters],
     ) -> Sequence[UsageStatsBucket]:
         if granularity not in {"hour", "day", "week"}:
             granularity = "day"
         bucket = func.date_trunc(granularity, UsageRecordModel.occurred_at).label(
             "bucket"
         )
-        group_column = None
-        if group_by == "profile":
-            group_column = UsageRecordModel.profile_id.label("group")
-        elif group_by == "model":
-            group_column = UsageRecordModel.model_name.label("group")
-        elif group_by == "user":
-            group_column = UsageRecordModel.user_id.label("group")
-        elif group_by == "pod":
-            group_column = UsageRecordModel.pod_id.label("group")
-        elif group_by == "agent":
-            group_column = UsageRecordModel.agent_id.label("group")
-        elif group_by == "kind":
-            group_column = UsageRecordModel.usage_kind.label("group")
-        elif group_by == "source":
-            group_column = UsageRecordModel.source_type.label("group")
+        group_columns = {
+            "profile": UsageRecordModel.profile_id,
+            "model": UsageRecordModel.model_name,
+            "user": UsageRecordModel.user_id,
+            "pod": UsageRecordModel.pod_id,
+            "agent": UsageRecordModel.agent_id,
+            "kind": UsageRecordModel.usage_kind,
+            "source": UsageRecordModel.source_type,
+        }
+        selected_group = group_columns.get(group_by) if group_by else None
+        group_column = (
+            selected_group.label("group") if selected_group is not None else None
+        )
 
         columns = [
             bucket,
@@ -553,23 +558,13 @@ class UsageRepository(UsageRepositoryPort):
         if group_column is not None:
             columns.insert(1, group_column)
         stmt = select(*columns).where(
-            UsageRecordModel.organization_id == organization_id,
             UsageRecordModel.occurred_at >= start,
             UsageRecordModel.occurred_at <= end,
         )
         stmt = self._apply_filters(
             stmt,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            agent_run_id=agent_run_id,
-            conversation_id=conversation_id,
-            profile_id=profile_id,
-            profile_scope=profile_scope,
-            model_name=model_name,
-            usage_kind=usage_kind,
-            source_type=source_type,
-            status=status,
+            organization_id=organization_id,
+            **filters,
         )
         stmt = stmt.group_by(bucket)
         if group_column is not None:

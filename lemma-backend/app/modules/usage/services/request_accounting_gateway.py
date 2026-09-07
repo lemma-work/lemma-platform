@@ -66,7 +66,8 @@ class PostgresRequestAccountingGateway:
             limited = bool(windows)
             if limited and (not priceable or not self.pricing.priceable):
                 raise UsageLimitExceededError(
-                    "This request needs supported usage reporting and a known price to run with monetary limits"
+                    "This request needs supported usage reporting and a known price to run with monetary limits",
+                    reason="configuration",
                 )
             await request_accounting.begin(
                 uow.session, request_id, self.identity, self.pricing, windows, now

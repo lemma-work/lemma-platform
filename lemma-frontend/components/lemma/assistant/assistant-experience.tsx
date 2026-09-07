@@ -189,6 +189,7 @@ export function AssistantExperienceView({
   headerLeadingActions,
   headerActions,
   composerModelControl,
+  composerTrailingControls,
   className,
   contentWidthClassName,
   composerWidthClassName,
@@ -803,6 +804,7 @@ export function AssistantExperienceView({
           hasPendingFileUploads={hasPendingFileUploads}
           runtimeLabel={runtimeLabel}
           composerModelControl={composerModelControl}
+          composerTrailingControls={composerTrailingControls}
           onUploadSelection={(files) => { void handleUploadSelection(files); }}
           onDraftChange={(event) => {
             setDraft(event.target.value);
