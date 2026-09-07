@@ -3,14 +3,17 @@
 Signing up creates a person and nothing else, deliberately -- a first
 organization is a decision about who you work with, and the journey spec says
 guessing it wrong is worse than asking. This is what happens *after* that
-decision point, when someone has arrived and needs a workspace: the same three
-doors the web onboarding walks, in the same order.
+decision point, when someone has arrived and needs a workspace: the doors the
+web onboarding walks, in the same order, plus one only a chat surface can offer.
 
     1. An organization they already belong to. Nothing to make.
-    2. One that already claimed their email domain -- joined, not duplicated.
+    2. The organization whose surface they arrived through, if it will have
+       them. Somebody standing inside a company's own Slack is not a candidate
+       for a private organization of one.
+    3. One that already claimed their email domain -- joined, not duplicated.
        A colleague got here first, and fragmenting the company across two
        workspaces is worse than landing in theirs with the least privilege.
-    3. Otherwise a new one, named after the company where the address names a
+    4. Otherwise a new one, named after the company where the address names a
        company and generated where it does not.
 
 The order matters more than any single step: the failure this exists to prevent
@@ -31,6 +34,10 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.identity.domain.email_domains import work_domain_from_email
+from app.modules.identity.domain.errors import (
+    IdentityAccessDeniedError,
+    OrganizationNotFoundError,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationJoinPolicy,
@@ -51,8 +58,30 @@ class ProvisionedWorkspace:
 
     organization_id: UUID
     pod_id: UUID | None
-    #: ``existing`` | ``domain_join`` | ``new_org`` -- the door they came through.
+    #: ``existing`` | ``surface_join`` | ``domain_join`` | ``new_org`` -- the
+    #: door they came through.
     entry: str
+
+
+async def _try_join(
+    organization_service: OrganizationService,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+) -> UUID | None:
+    """Join this organization if it will have them, else ``None``.
+
+    Refusal is an ordinary answer here rather than a failure: an invite-only
+    organization declining somebody who wandered in from a chat surface is the
+    policy working, and the caller carries on to the next door.
+    """
+    try:
+        joined = await organization_service.join_auto_join_organization(
+            organization_id, user_id
+        )
+    except IdentityAccessDeniedError, OrganizationNotFoundError:
+        return None
+    return joined.id
 
 
 async def ensure_first_workspace(
@@ -63,12 +92,21 @@ async def ensure_first_workspace(
     email: str,
     full_name: str | None = None,
     with_pod: bool = True,
+    arrived_through_organization_id: UUID | None = None,
 ) -> ProvisionedWorkspace:
     """Return the workspace this person should be in, making one if they have none.
 
     Idempotent by construction: someone who already belongs somewhere gets that
     organization back and nothing is created, so a retried onboarding cannot
     leave a second empty workspace behind.
+
+    ``arrived_through_organization_id`` is the organization whose surface they
+    messaged -- a Slack workspace an organization installed Lemma into, say.
+    Somebody standing inside a company's own Slack is not a candidate for a
+    private organization of one, so that organization is tried before the domain
+    match. It is only *tried*: the organization's own join policy decides, and an
+    invite-only one still refuses, because the surface being reachable is not the
+    same as its organization being open.
     """
     existing, _ = await organization_service.list_user_organizations(user_id, limit=1)
     if existing:
@@ -77,6 +115,20 @@ async def ensure_first_workspace(
             pod_id=None,
             entry="existing",
         )
+
+    if arrived_through_organization_id is not None:
+        joined_id = await _try_join(
+            organization_service,
+            organization_id=arrived_through_organization_id,
+            user_id=user_id,
+        )
+        if joined_id is not None:
+            logger.info(
+                "identity.first_workspace.joined_through_surface", user_id=str(user_id)
+            )
+            return ProvisionedWorkspace(
+                organization_id=joined_id, pod_id=None, entry="surface_join"
+            )
 
     suggested, _cursor = await organization_service.list_suggested_organizations(
         user_id, limit=1

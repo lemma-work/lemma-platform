@@ -132,6 +132,83 @@ async def test_the_second_person_from_a_domain_joins_instead_of_fragmenting(
     assert second_workspace.organization_id == first_workspace.organization_id
 
 
+async def test_the_organization_someone_arrived_through_is_tried_first(
+    signup_user, db_session
+):
+    """Somebody inside a company's own Slack is not a candidate for a private org.
+
+    A personal address would otherwise get one of its own, which is the wrong
+    answer for a colleague standing in their employer's workspace.
+    """
+    uow = SqlAlchemyUnitOfWork(db_session)
+    service = _organization_service(uow)
+
+    host = await signup_user(email=f"owner-{uuid4().hex[:8]}@gmail.com")
+    installing = await service.create_organization(
+        OrganizationEntity(
+            name=f"Installing Org {uuid4().hex[:6]}",
+            slug="",
+            join_policy=OrganizationJoinPolicy.PUBLIC,
+        ),
+        UUID(host["id"]),
+        resolve_name_conflicts=True,
+    )
+    await uow.commit()
+
+    arriving = await signup_user(email=f"ada-{uuid4().hex[:8]}@gmail.com")
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=service,
+        user_id=UUID(arriving["id"]),
+        email=arriving["email"],
+        arrived_through_organization_id=installing.id,
+    )
+    await uow.commit()
+
+    assert workspace.entry == "surface_join"
+    assert workspace.organization_id == installing.id
+    # Joined the organization, given no pod: being reachable in a channel is not
+    # access to the pod behind it.
+    assert workspace.pod_id is None
+
+
+async def test_an_invite_only_organization_still_refuses_a_surface_arrival(
+    signup_user, db_session
+):
+    """A reachable surface is not an open organization.
+
+    The refusal is not a failure -- they fall through to the ordinary doors and
+    get a workspace of their own.
+    """
+    uow = SqlAlchemyUnitOfWork(db_session)
+    service = _organization_service(uow)
+
+    host = await signup_user(email=f"owner-{uuid4().hex[:8]}@gmail.com")
+    closed = await service.create_organization(
+        OrganizationEntity(
+            name=f"Closed Org {uuid4().hex[:6]}",
+            slug="",
+            join_policy=OrganizationJoinPolicy.INVITE_ONLY,
+        ),
+        UUID(host["id"]),
+        resolve_name_conflicts=True,
+    )
+    await uow.commit()
+
+    arriving = await signup_user(email=f"ada-{uuid4().hex[:8]}@gmail.com")
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=service,
+        user_id=UUID(arriving["id"]),
+        email=arriving["email"],
+        arrived_through_organization_id=closed.id,
+    )
+    await uow.commit()
+
+    assert workspace.entry == "new_org"
+    assert workspace.organization_id != closed.id
+
+
 async def test_somebody_who_already_belongs_somewhere_gets_nothing_new(
     signup_user, db_session
 ):

@@ -81,6 +81,7 @@ async def onboard_chat_sender(
     full_name: str | None = None,
     mobile_number: str | None = None,
     telegram_username: str | None = None,
+    arrived_through_organization_id: UUID | None = None,
 ) -> ChatOnboarding:
     """Give a proven sender an account, a workspace, and a linked identity.
 
@@ -102,6 +103,7 @@ async def onboard_chat_sender(
         full_name=full_name,
         mobile_number=mobile_number,
         telegram_username=telegram_username,
+        arrived_through_organization_id=arrived_through_organization_id,
     )
 
 

@@ -563,6 +563,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.mobile_verification.whatsapp.rejected': EventSpec('info', frozenset({'reason'})),
     'identity.chat_signup.account_created': EventSpec('info', frozenset({'user_id'})),
     'identity.first_workspace.joined_by_domain': EventSpec('info', frozenset({'user_id'})),
+    'identity.first_workspace.joined_through_surface': EventSpec('info', frozenset({'user_id'})),
     'identity.first_workspace.organization_created': EventSpec('info', frozenset({'user_id'})),
     'identity.mobile_verification.whatsapp.started': EventSpec('info', frozenset({'user_id'})),
     'identity.mobile_verification.whatsapp.succeeded': EventSpec('info', frozenset({'user_id'})),

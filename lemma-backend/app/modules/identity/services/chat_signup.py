@@ -113,6 +113,7 @@ async def onboard_proven_email(
     full_name: str | None = None,
     mobile_number: str | None = None,
     telegram_username: str | None = None,
+    arrived_through_organization_id: UUID | None = None,
 ) -> ChatOnboarding:
     """Link or create, then make sure there is somewhere to work.
 
@@ -141,6 +142,7 @@ async def onboard_proven_email(
         user_id=user_id,
         email=email,
         full_name=full_name,
+        arrived_through_organization_id=arrived_through_organization_id,
     )
     return ChatOnboarding(
         user_id=user_id, workspace=workspace, account_created=account_created

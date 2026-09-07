@@ -12,6 +12,7 @@ stays testable without a database.
 
 from __future__ import annotations
 
+from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -32,6 +33,7 @@ from app.modules.agent_surfaces.services.surface_onboarding import (
     advance_onboarding,
     surface_label,
 )
+from app.modules.pod.contracts.agent_access import pod_organization_id
 
 logger = get_logger(__name__)
 
@@ -41,6 +43,12 @@ logger = get_logger(__name__)
 # and read a code would be the most obviously broken moment in the product.
 _ASKS_FOR_AN_EMAIL = frozenset(
     {SurfacePlatform.WHATSAPP.value, SurfacePlatform.TELEGRAM.value}
+)
+
+# Where the address arrives already vouched for by the workspace an organization
+# installed Lemma into, so there is nothing to ask and nothing to send.
+_WORKSPACE_VOUCHES = frozenset(
+    {SurfacePlatform.SLACK.value, SurfacePlatform.TEAMS.value}
 )
 
 
@@ -79,6 +87,16 @@ async def onboarding_reply(
 
     proven = _vouched_email_sender(parsed)
     turn = None
+    if proven is None and platform in _WORKSPACE_VOUCHES:
+        # The install is the proof. Asking somebody standing inside their own
+        # company's Slack to go and read a code would be the most obviously
+        # broken moment in the product.
+        proven = str(parsed.sender_email or "").strip().lower() or None
+        if proven is None:
+            # Teams can decline to give an email at all, and its adapter falls
+            # back to a `userPrincipalName`, which is a sign-in name rather than
+            # a mailbox. Without one there is nothing to onboard against.
+            return None
     if proven is None:
         if platform not in _ASKS_FOR_AN_EMAIL:
             return None
@@ -94,9 +112,17 @@ async def onboarding_reply(
     if proven is None:
         return _reply(surface, parsed, agent_display_name, turn.message, audience)
 
+    # The organization whose surface they messaged. Somebody standing inside a
+    # company's own Slack is not a candidate for a private organization of one,
+    # so that organization is offered before the domain match -- and its own
+    # join policy still decides, because a reachable surface is not an open
+    # organization.
+    arrived_through = await pod_organization_id(uow, surface.pod_id)
+
     onboarding = await onboard_sender(
         uow,
         email=proven,
+        arrived_through_organization_id=arrived_through,
         full_name=parsed.sender_display_name,
         mobile_number=(
             parsed.sender_phone if platform == SurfacePlatform.WHATSAPP.value else None
@@ -116,12 +142,14 @@ async def onboarding_reply(
         surface,
         parsed,
         agent_display_name,
-        _welcome(onboarding, agent_display_name, surface_label(platform)),
+        _welcome(onboarding, surface, agent_display_name, surface_label(platform)),
         audience,
     )
 
 
-def _welcome(onboarding, agent_display_name: str, label: str) -> str:
+def _welcome(
+    onboarding, surface: AgentSurfaceEntity, agent_display_name: str, label: str
+) -> str:
     """What to say once somebody is actually in.
 
     Names what happened rather than only greeting: a person who has just been
@@ -129,9 +157,20 @@ def _welcome(onboarding, agent_display_name: str, label: str) -> str:
     linked to an account they already had should not be told they were given
     anything.
     """
+    if onboarding.workspace.entry == "surface_join":
+        # In the organization, deliberately not in the pod. Being present in a
+        # Slack channel is not access to the pod behind it -- that is a product
+        # rule, not an oversight -- so the last step is theirs to ask for.
+        base = settings.frontend_url.rstrip("/")
+        return (
+            f"You're in — I've added you to your team's Lemma organization. "
+            f"{agent_display_name} works out of a workspace you're not in yet; "
+            f"ask for access here and someone can let you in: "
+            f"{base}/pod/{surface.pod_id}"
+        )
     if not onboarding.account_created:
         return (
-            f"Got it — that's your Lemma account. This {label} number reaches "
+            f"Got it — that's your Lemma account. This {label} account reaches "
             f"{agent_display_name} as you from now on."
         )
     if onboarding.workspace.entry == "domain_join":
