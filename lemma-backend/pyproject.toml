@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "genai-prices==0.1.3",
+    "genai-prices==0.1.6",
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
     "structlog>=25.4.0",
@@ -139,7 +139,7 @@ dev = [
     # connector clients and migrations. `make lint` runs the default set, so
     # an unbounded bump does not tighten the gate, it drowns it. Adopting
     # those rules is its own piece of work.
-    "ruff>=0.14.8,<0.16",
+    "ruff>=0.14.8,<0.17",
 ]
 
 [build-system]

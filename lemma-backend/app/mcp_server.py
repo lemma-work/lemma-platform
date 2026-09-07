@@ -7,7 +7,8 @@ from uuid import UUID
 import mcp.types
 from fastmcp import FastMCP
 from fastmcp.server.auth import AccessToken, AuthProvider
-from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.context import ServerRequestContext
+from fastmcp.server.dependencies import bind_request_context, get_http_headers
 from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
@@ -33,6 +34,25 @@ _POD_MCP_PATH = re.compile(
 )
 
 
+# These two are the only reason the subclasses below exist: Lemma serves tools
+# per conversation and per pod, resolved from request headers, not the static
+# set a FastMCP instance registers. They are private names on a dependency, and
+# fastmcp 4 renamed them from `_list_tools_mcp`/`_call_tool_mcp`.
+#
+# A rename is not loud. An override that no longer matches anything is a method
+# nobody calls, so the base implementation answers instead -- with the tools
+# this server has registered, which is none. Every tool listing silently comes
+# back empty and every call is an unknown tool. That is why this is asserted at
+# import: refusing to start is the only version of this failure anyone notices.
+for _hook in ("_on_list_tools", "_on_call_tool"):
+    if not hasattr(FastMCP, _hook):
+        raise RuntimeError(
+            f"fastmcp.FastMCP has no {_hook!r}; the MCP tool hooks have been "
+            "renamed again. Re-point the overrides in app/mcp_server.py at the "
+            "new names -- leaving them stale serves an empty tool list."
+        )
+
+
 class LemmaMCPAuthProvider(AuthProvider):
     async def verify_token(self, token: str) -> AccessToken | None:
         if not token:
@@ -46,32 +66,35 @@ class LemmaMCPAuthProvider(AuthProvider):
 
 
 class ConversationFastMCP(FastMCP):
-    async def _list_tools_mcp(
+    async def _on_list_tools(
         self,
-        request: mcp.types.ListToolsRequest,
+        ctx: ServerRequestContext,
+        params: mcp.types.PaginatedRequestParams | None,
     ) -> mcp.types.ListToolsResult:
-        del request
-        conversation_id, token, agent_run_id = await _request_context()
-        await _ensure_authorized(conversation_id=conversation_id, token=token)
-        tools = await conversation_mcp_service.list_tools(
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
-        )
+        del params
+        with bind_request_context(ctx):
+            conversation_id, token, agent_run_id = await _request_context()
+            await _ensure_authorized(conversation_id=conversation_id, token=token)
+            tools = await conversation_mcp_service.list_tools(
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+            )
         return mcp.types.ListToolsResult(tools=tools)
 
-    async def _call_tool_mcp(
+    async def _on_call_tool(
         self,
-        key: str,
-        arguments: dict,
+        ctx: ServerRequestContext,
+        params: mcp.types.CallToolRequestParams,
     ) -> mcp.types.CallToolResult:
-        conversation_id, token, agent_run_id = await _request_context()
-        await _ensure_authorized(conversation_id=conversation_id, token=token)
-        return await conversation_mcp_service.call_tool(
-            conversation_id=conversation_id,
-            agent_run_id=agent_run_id,
-            name=key,
-            arguments=arguments,
-        )
+        with bind_request_context(ctx):
+            conversation_id, token, agent_run_id = await _request_context()
+            await _ensure_authorized(conversation_id=conversation_id, token=token)
+            return await conversation_mcp_service.call_tool(
+                conversation_id=conversation_id,
+                agent_run_id=agent_run_id,
+                name=params.name,
+                arguments=params.arguments or {},
+            )
 
 
 async def _request_context() -> tuple[UUID, str, UUID | None]:
@@ -213,31 +236,34 @@ def get_agent_mcp_app() -> ConversationMCPASGIApp:
 
 
 class PodFastMCP(FastMCP):
-    async def _list_tools_mcp(
+    async def _on_list_tools(
         self,
-        request: mcp.types.ListToolsRequest,
+        ctx: ServerRequestContext,
+        params: mcp.types.PaginatedRequestParams | None,
     ) -> mcp.types.ListToolsResult:
-        del request
-        pod_id, token = await _pod_request_context()
-        if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
-            raise ValueError("Unauthorized pod MCP token")
-        tools = await pod_mcp_service.list_tools(pod_id=pod_id, token=token)
+        del params
+        with bind_request_context(ctx):
+            pod_id, token = await _pod_request_context()
+            if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
+                raise ValueError("Unauthorized pod MCP token")
+            tools = await pod_mcp_service.list_tools(pod_id=pod_id, token=token)
         return mcp.types.ListToolsResult(tools=tools)
 
-    async def _call_tool_mcp(
+    async def _on_call_tool(
         self,
-        key: str,
-        arguments: dict,
+        ctx: ServerRequestContext,
+        params: mcp.types.CallToolRequestParams,
     ) -> mcp.types.CallToolResult:
-        pod_id, token = await _pod_request_context()
-        if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
-            raise ValueError("Unauthorized pod MCP token")
-        return await pod_mcp_service.call_tool(
-            pod_id=pod_id,
-            token=token,
-            name=key,
-            arguments=arguments,
-        )
+        with bind_request_context(ctx):
+            pod_id, token = await _pod_request_context()
+            if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
+                raise ValueError("Unauthorized pod MCP token")
+            return await pod_mcp_service.call_tool(
+                pod_id=pod_id,
+                token=token,
+                name=params.name,
+                arguments=params.arguments or {},
+            )
 
 
 async def _pod_request_context() -> tuple[UUID, str]:
