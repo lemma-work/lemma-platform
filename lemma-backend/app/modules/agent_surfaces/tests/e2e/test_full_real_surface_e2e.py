@@ -55,7 +55,7 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
     wait_for_slack_replies,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
@@ -1183,7 +1183,7 @@ async def test_resend_signed_webhook_replies_via_worker(
             "api_base_url": fake_resend.api_base,
         },
         email="surface@resend.test",
-        provider=AuthProvider.LEMMA,
+        kind=ConnectorKind.HTTP,
     )
     agent_name = await _create_system_lemma_agent(authenticated_client, pod_id)
     surface = await _create_surface(

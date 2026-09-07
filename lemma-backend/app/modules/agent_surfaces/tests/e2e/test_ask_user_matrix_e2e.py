@@ -59,7 +59,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_ask_user,
     script_text,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import ConnectorKind
 
 pytestmark = pytest.mark.e2e
 
@@ -784,7 +784,7 @@ async def test_ask_user_on_resend_completes_in_the_one_reply(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        provider=AuthProvider.LEMMA,
+        kind=ConnectorKind.HTTP,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,

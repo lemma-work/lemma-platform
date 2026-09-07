@@ -62,9 +62,6 @@ from app.modules.connectors.services.account_credentials import (
 from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
 )
-from app.modules.connectors.services.account_profile import (
-    load_native_account_profile,
-)
 from app.modules.connectors.services.account_revocation import revoke_one
 from app.modules.connectors.services.auth.mcp_install_authorization import (
     negotiate_mcp_authorization,
@@ -147,11 +144,6 @@ class ConnectorService:
         if isinstance(code, str) and len(code) <= 100:
             details["upstream_code"] = code
         return details
-
-    async def _load_native_account_profile(
-        self, connector: ConnectorEntity, credentials: OAuthCredentials
-    ) -> dict | None:
-        return await load_native_account_profile(connector, credentials)
 
     async def _fetch_account_profile(
         self,
@@ -368,8 +360,6 @@ class ConnectorService:
                 continue
             capabilities.append(capability)
 
-        # `kinds`, not `provider_capabilities`: the latter is a read-only view,
-        # so updating it here silently discarded the enrichment.
         return connector.model_copy(update={"kinds": capabilities})
 
     def _validate_auth_config_request(

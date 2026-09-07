@@ -1230,6 +1230,41 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
     assert surface_fake.created is not None
 
 
+async def test_surface_apply_accepts_a_bundle_exported_under_the_package_kind(
+    tmp_path, monkeypatch
+):
+    """Every bundle exported before the `package` kind was removed says
+    `package`, and every connector that was installable as `package` is
+    installable as `http` now. Holding an old bundle to a kind that no longer
+    exists would make it unimportable for a rename."""
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "connector_kind": "package",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(
+        connector_id="microsoft_teams", auth_config_id=uuid4()
+    )
+    _patch_surface_deps(
+        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="http")
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None
+
+
 async def test_an_explicitly_empty_grant_list_clears_the_target_s_grants(
     tmp_path, monkeypatch
 ):

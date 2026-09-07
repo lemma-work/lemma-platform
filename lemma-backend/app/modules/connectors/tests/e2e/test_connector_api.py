@@ -101,7 +101,7 @@ async def test_get_connector_not_found_returns_domain_payload(
     "kind,expected_config_field",
     [
         (ConnectorKind.COMPOSIO.value, "composio_field"),
-        (ConnectorKind.PACKAGE.value, "lemma_field"),
+        (ConnectorKind.HTTP.value, "lemma_field"),
     ],
 )
 async def test_triggers_filtered_by_auth_config_kind(

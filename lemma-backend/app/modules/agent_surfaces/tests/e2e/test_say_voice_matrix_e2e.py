@@ -60,7 +60,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _telegram_payload,
     _whatsapp_payload,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
@@ -358,7 +358,7 @@ async def test_say_on_resend_attaches_the_audio_to_the_one_reply(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        provider=AuthProvider.LEMMA,
+        kind=ConnectorKind.HTTP,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,

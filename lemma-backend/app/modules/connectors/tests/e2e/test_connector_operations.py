@@ -23,7 +23,7 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ComposioProviderCapability,
     ConnectorKind,
-    LemmaProviderCapability,
+    HttpKindSpec,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.adapters.schema_compiler import (
@@ -67,7 +67,7 @@ def _provider_capability(kind: str, auth_method: str) -> dict:
             auth_scheme=AuthMethod(auth_method),
             toolkit_slug="googlecalendar",
         ).model_dump(mode="json")
-    return LemmaProviderCapability(
+    return HttpKindSpec(
         kind="package",
         auth_scheme=AuthMethod(auth_method),
     ).model_dump(mode="json")
@@ -95,7 +95,7 @@ async def _seed_auth_config(
     *,
     app_id: str,
     organization_id: str,
-    kind: str = ConnectorKind.PACKAGE.value,
+    kind: str = ConnectorKind.HTTP.value,
 ) -> AuthConfig:
     auth_config = AuthConfig(
         organization_id=organization_id,

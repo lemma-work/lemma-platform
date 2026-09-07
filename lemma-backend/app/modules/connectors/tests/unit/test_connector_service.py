@@ -29,7 +29,6 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
     HttpKindSpec,
-    LemmaProviderCapability,
     McpKindSpec,
 )
 from app.modules.connectors.domain.connector_operation import (
@@ -53,7 +52,7 @@ ORG_ID = uuid4()
 
 
 def _connector(id: str = "slack") -> ConnectorEntity:
-    return ConnectorEntity(id=id, provider_capabilities=[LemmaProviderCapability()])
+    return ConnectorEntity(id=id, kinds=[HttpKindSpec()])
 
 
 def _auth_provider():
@@ -74,7 +73,7 @@ def _auth_config(connector_id: str = "slack") -> AuthConfigEntity:
         id=uuid4(),
         organization_id=ORG_ID,
         connector_id=connector_id,
-        provider="LEMMA",
+        kind=ConnectorKind.HTTP,
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
         name=connector_id,
     )
@@ -143,7 +142,7 @@ async def test_get_connector_raises_not_found():
 
 async def test_get_connector_enriches_system_default_for_http_kind():
     """Regression test: _enrich_connector_defaults previously only handled
-    LemmaProviderCapability (the vendored-package kind), so an http-kind
+    HttpKindSpec (the vendored-package kind), so an http-kind
     OAuth2 connector with its own system_oauth (e.g. a native GitHub
     connector) always reported system_default_available=False even when the
     env vars were set -- forcing every org to enter its own client
@@ -152,7 +151,7 @@ async def test_get_connector_enriches_system_default_for_http_kind():
     """
     connector = ConnectorEntity(
         id="github",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(auth_scheme=AuthScheme.OAUTH2, supports_org_custom_oauth=True),
         ],
     )
@@ -169,19 +168,17 @@ async def test_get_connector_enriches_system_default_for_http_kind():
 
 async def test_fetch_account_profile_routes_http_kind_through_kind_dispatcher():
     """Regression test: `_fetch_account_profile` always went through
-    `operation_gateway.execute_operation` -- the legacy provider-gateway
-    split, which only knows Composio and the vendored-package client for
-    "LEMMA" -- so an http-kind connector's profile operation (e.g. GitHub's
-    `users_get_authenticated`) always threw (no vendored `lemma_connectors`
-    package exists for it) and the exception was silently swallowed by the
-    caller, leaving email/display_name/provider_account_id permanently null
-    for every such account. http/sql/mcp must route through the same
-    KindDispatcher the execute-operation route itself uses; Composio/package
-    keep the existing, already-proven gateway path untouched.
+    `operation_gateway.execute_operation` -- the legacy provider-gateway split,
+    which knew only Composio and a vendored client for "LEMMA" -- so an
+    http-kind connector's profile operation (e.g. GitHub's
+    `users_get_authenticated`) always threw, and the exception was silently
+    swallowed by the caller, leaving email/display_name/provider_account_id
+    permanently null for every such account. Everything but Composio routes
+    through the same KindDispatcher the execute-operation route itself uses.
     """
     github_app = ConnectorEntity(
         id="github",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(
                 auth_scheme=AuthScheme.OAUTH2,
                 profile_operation_names=["users_get_authenticated"],
@@ -303,7 +300,7 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
     user_id = uuid4()
     app = ConnectorEntity(
         id="dropbox",
-        provider_capabilities=[ComposioProviderCapability(toolkit_slug="dropbox")],
+        kinds=[ComposioProviderCapability(toolkit_slug="dropbox")],
     )
     auth_config_repo = AsyncMock(
         get_active_by_org_and_app=AsyncMock(return_value=None),
@@ -343,7 +340,7 @@ async def test_create_composio_auth_config_refuses_org_custom_credentials():
     """
     app = ConnectorEntity(
         id="dropbox",
-        provider_capabilities=[ComposioProviderCapability(toolkit_slug="dropbox")],
+        kinds=[ComposioProviderCapability(toolkit_slug="dropbox")],
     )
     auth_config_repo = AsyncMock(
         get_active_by_org_and_app=AsyncMock(return_value=None),
@@ -388,7 +385,7 @@ async def test_composio_api_key_toolkit_keeps_its_credential_form():
     }
     app = ConnectorEntity(
         id="freshdesk",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="freshdesk",
                 auth_scheme=AuthScheme.API_KEY,
@@ -408,7 +405,7 @@ async def test_composio_api_key_toolkit_keeps_its_credential_form():
     # An OAuth2 toolkit legitimately carries none, and must not acquire one.
     oauth_app = ConnectorEntity(
         id="hubspot",
-        provider_capabilities=[ComposioProviderCapability(toolkit_slug="hubspot")],
+        kinds=[ComposioProviderCapability(toolkit_slug="hubspot")],
     )
     oauth_service = _service(
         connector_repository=AsyncMock(get=AsyncMock(return_value=oauth_app))
@@ -461,7 +458,7 @@ async def test_create_account_composio_api_key_connects_via_provider():
     user_id = uuid4()
     app = ConnectorEntity(
         id="airtable",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="airtable",
                 auth_scheme=AuthScheme.API_KEY,
@@ -511,7 +508,7 @@ async def test_create_account_enriches_identity_via_profile_operation():
     user_id = uuid4()
     app = ConnectorEntity(
         id="notion",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="notion",
                 auth_scheme=AuthScheme.API_KEY,
@@ -568,7 +565,7 @@ async def test_create_account_allows_multiple_and_sets_default():
     user_id = uuid4()
     app = ConnectorEntity(
         id="airtable",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="airtable",
                 auth_scheme=AuthScheme.API_KEY,
@@ -664,7 +661,7 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
                 id=account.auth_config_id,
                 organization_id=ORG_ID,
                 connector_id="slack",
-                provider="LEMMA",
+                kind=ConnectorKind.HTTP,
                 config_source=AuthConfigSource.SYSTEM_DEFAULT,
                 name="slack",
             )
@@ -723,13 +720,10 @@ async def test_handle_oauth_callback_resets_status_to_connected():
         auth_provider_registry=registry,
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        account = await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=state-reauth&code=abc",
-            state="state-reauth",
-        )
+    account = await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=state-reauth&code=abc",
+        state="state-reauth",
+    )
 
     assert account.status == AccountStatus.CONNECTED
 
@@ -829,7 +823,7 @@ async def test_get_account_credentials_refreshes_expired_token():
                 id=account.auth_config_id,
                 organization_id=ORG_ID,
                 connector_id="slack",
-                provider="LEMMA",
+                kind=ConnectorKind.HTTP,
                 config_source=AuthConfigSource.SYSTEM_DEFAULT,
                 name="slack",
             )
@@ -889,7 +883,7 @@ async def test_get_account_credentials_force_refreshes_valid_token():
                 id=account.auth_config_id,
                 organization_id=ORG_ID,
                 connector_id="slack",
-                provider="LEMMA",
+                kind=ConnectorKind.HTTP,
                 config_source=AuthConfigSource.SYSTEM_DEFAULT,
                 name="slack",
             )
@@ -947,13 +941,10 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
         auth_provider_registry=registry,
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        account = await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=state-1&code=abc",
-            state="state-1",
-        )
+    account = await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=state-1&code=abc",
+        state="state-1",
+    )
 
     assert account.provider_account_id == "U077RUS3FS7"
     account_repo.create.assert_awaited_once()
@@ -1099,13 +1090,10 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
         auth_provider_registry=registry,
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        account = await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=state-2&code=abc",
-            state="state-2",
-        )
+    account = await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=state-2&code=abc",
+        state="state-2",
+    )
 
     assert account.provider_account_id == "U0999999999"
     account_repo.update.assert_awaited_once()
@@ -1116,7 +1104,7 @@ def _composio_auth_config(connector_id: str) -> AuthConfigEntity:
         id=uuid4(),
         organization_id=ORG_ID,
         connector_id=connector_id,
-        provider="COMPOSIO",
+        kind=ConnectorKind.COMPOSIO,
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
         name=connector_id,
     )
@@ -1126,7 +1114,7 @@ def _profile_operation(connector_id: str, name: str) -> ConnectorOperationEntity
     return ConnectorOperationEntity(
         id=f"{connector_id}:{name.lower()}",
         connector_id=connector_id,
-        provider=AuthProvider.COMPOSIO,
+        kind=ConnectorKind.COMPOSIO,
         name=name,
         provider_operation_name=name,
     )
@@ -1184,7 +1172,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
 
     outlook_app = ConnectorEntity(
         id="outlook",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="outlook",
                 profile_operation_names=["OUTLOOK_GET_PROFILE"],
@@ -1201,13 +1189,10 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
         operation_repository=operation_repository,
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        account = await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=state-outlook&code=abc",
-            state="state-outlook",
-        )
+    account = await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=state-outlook&code=abc",
+        state="state-outlook",
+    )
 
     assert account.email == "user@lemma.work"
     operation_repository.get_by_connector_kind_and_name.assert_awaited_with(
@@ -1234,7 +1219,7 @@ async def test_fetch_account_profile_unwraps_composio_data_envelope():
     email/identity extraction would never find anything for any Composio app."""
     connector = ConnectorEntity(
         id="asana",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="asana",
                 profile_operation_names=["ASANA_GET_CURRENT_USER"],
@@ -1264,31 +1249,33 @@ async def test_fetch_account_profile_unwraps_composio_data_envelope():
 
 
 async def test_fetch_account_profile_does_not_unwrap_for_lemma_provider():
-    """Native (Lemma) operation results are never Composio-wrapped -- a
-    coincidental top-level "data" key must be left alone."""
+    """Only Composio wraps its results; a native connector's coincidental
+    top-level "data" key must be left alone."""
     connector = ConnectorEntity(
         id="gmail",
-        provider_capabilities=[
-            LemmaProviderCapability(profile_operation_names=["get_profile"]),
+        kinds=[
+            HttpKindSpec(profile_operation_names=["get_profile"]),
         ],
     )
     operation_repository = AsyncMock()
     operation_repository.get_by_connector_kind_and_name.return_value = (
         _profile_operation("gmail", "get_profile")
     )
-    operation_gateway = AsyncMock()
-    operation_gateway.execute_operation.return_value = {
+    dispatcher = AsyncMock()
+    dispatcher.build_request = Mock(return_value=object())
+    dispatcher.execute.return_value = {
         "email_address": "user@gmail.com",
         "data": "not an envelope",
     }
 
     service = _service(
-        operation_gateway=operation_gateway,
+        operation_gateway=AsyncMock(),
         operation_repository=operation_repository,
     )
-    result = await service._fetch_account_profile(
-        connector, "LEMMA", OAuthCredentials(access_token="tok")
-    )
+    with patch.object(service, "_profile_dispatcher", return_value=dispatcher):
+        result = await service._fetch_account_profile(
+            connector, "LEMMA", OAuthCredentials(access_token="tok")
+        )
 
     assert result == {
         "email_address": "user@gmail.com",
@@ -1309,7 +1296,7 @@ async def test_fetch_account_profile_skips_when_provider_unsupported():
 async def test_fetch_account_profile_tries_catalog_operation_names_in_order():
     connector = ConnectorEntity(
         id="asana",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="asana",
                 profile_operation_names=["ASANA_MISSING_OP", "ASANA_GET_CURRENT_USER"],
@@ -1424,13 +1411,10 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
         auth_provider_registry=registry,
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        account = await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=state-clobber&code=abc",
-            state="state-clobber",
-        )
+    account = await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=state-clobber&code=abc",
+        state="state-clobber",
+    )
 
     # A NEW account was created for the new identity; the default was not touched.
     account_repo.create.assert_awaited_once()
@@ -1492,7 +1476,7 @@ async def test_delete_non_default_account_does_not_promote():
 def _airtable_service(*, existing_by_identity):
     app = ConnectorEntity(
         id="airtable",
-        provider_capabilities=[
+        kinds=[
             ComposioProviderCapability(
                 toolkit_slug="airtable", auth_scheme=AuthScheme.API_KEY
             )
@@ -1606,9 +1590,6 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
 
     with (
         patch.object(
-            service, "_load_native_account_profile", AsyncMock(return_value=None)
-        ),
-        patch.object(
             service,
             "_fetch_account_profile",
             AsyncMock(return_value={"login": "sreejinping", "id": 298642121}),
@@ -1649,7 +1630,6 @@ class TestAnInstallSaysHowItAuthenticates:
             id=uuid4(),
             organization_id=ORG_ID,
             connector_id="mcp",
-            provider="LEMMA",
             kind=ConnectorKind.MCP,
             config_source=AuthConfigSource.ORG_CUSTOM,
             name="an-mcp-server",

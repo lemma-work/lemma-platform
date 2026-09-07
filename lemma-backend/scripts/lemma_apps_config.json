@@ -6693,8 +6693,6 @@
     "title": "Jira",
     "description": "Jira connector for issue tracking and project management",
     "auth_method": "OAUTH2",
-    "auth_provider": "LEMMA",
-    "operation_executor": "LEMMA",
     "icon": null,
     "config": {
       "access_token_path": "access_token",
@@ -6741,15 +6739,14 @@
     },
     "agent_instruction": "Use Jira to manage issues, sprints, projects, and boards. Create, update, and query issues, manage workflows, and track project progress.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "microsoft_teams",
     "title": "Microsoft Teams",
     "description": "Connect Lemma assistants to Microsoft Teams. Chat with the bot in direct messages or @mention it in channels.",
     "auth_method": "OAUTH2",
-    "auth_provider": "LEMMA",
-    "operation_executor": "LEMMA",
     "icon": null,
     "config": {
       "access_token_path": "access_token",
@@ -6773,7 +6770,8 @@
     },
     "agent_instruction": "Use Microsoft Teams to send messages and interact with users in channels and direct messages.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "whatsapp",
@@ -6820,7 +6818,8 @@
     },
     "agent_instruction": "Use WhatsApp Business credentials to send and receive agent messages on WhatsApp surfaces.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "telegram",
@@ -6844,7 +6843,8 @@
     },
     "agent_instruction": "Use Telegram bot credentials to send and receive agent messages on Telegram surfaces.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "resend",
@@ -6874,15 +6874,14 @@
     },
     "agent_instruction": "Use the pod's own email address to receive mail and reply on the same thread.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "confluence",
     "title": "Confluence",
     "description": "Confluence connector for documentation and knowledge management",
     "auth_method": "OAUTH2",
-    "auth_provider": "LEMMA",
-    "operation_executor": "LEMMA",
     "icon": null,
     "config": {
       "access_token_path": "access_token",
@@ -6916,7 +6915,8 @@
     },
     "agent_instruction": "Use Confluence to create, read, update, and manage pages and spaces. Access documentation, knowledge bases, and team wikis.",
     "is_active": true,
-    "triggers": []
+    "triggers": [],
+    "kind": "http"
   },
   {
     "name": "gmail",

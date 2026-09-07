@@ -1,18 +1,14 @@
-"""Routing a catalog-curated profile operation to the right connector kind.
+"""Running a catalog-curated profile operation, whatever kind the install is.
 
-`RoutingOperationGateway` only understands two routes -- Composio, and the
-legacy vendored-package client for "LEMMA" -- because it predates the
-http/sql/mcp kind framework. That's fine for package-kind connectors (Gmail,
-Slack, Jira all have a vendored client), but silently fails for any newer
-kind's profile operation (e.g. an http-kind connector like GitHub): the
-legacy client has no entry for it, so the profile fetch always threw and was
-swallowed by the caller's blanket `except Exception`, leaving every such
-account's email/display_name/provider_account_id permanently null. Composio
-and package keep the existing, proven path; http/sql/mcp route through the
-same KindDispatcher the execute-operation route itself uses.
+Composio goes through its own gateway; everything else goes through the same
+`KindDispatcher` the execute-operation route uses. The split is not
+decoration -- a third route used to exist here, a vendored client reached
+through the legacy "LEMMA" provider, and it had no entry for any newer kind. So
+an http-kind connector's profile fetch always threw, the caller's blanket
+`except Exception` swallowed it, and every such account was stored with a null
+email, display name and provider account id.
 
-Split out of the connector service, mirroring `account_profile.py`, because
-it is a self-contained concern.
+Split out of the connector service because it is a self-contained concern.
 """
 
 from __future__ import annotations
@@ -35,7 +31,7 @@ async def execute_profile_operation(
     get_dispatcher: Callable[[], Any],
 ) -> Any:
     third_party_credentials = credentials.model_dump(exclude_none=True)
-    if kind in (ConnectorKind.PACKAGE.value, ConnectorKind.COMPOSIO.value):
+    if kind == ConnectorKind.COMPOSIO.value:
         return await operation_gateway.execute_operation(
             connector_id=connector_id,
             operation_name=operation.execution_name,
@@ -72,11 +68,20 @@ def normalize_profile_result(result: object, provider: str) -> dict | None:
     top level. Every other kind answers with the provider's own body.
     """
     from app.modules.connectors.domain.connector import AuthProvider
-    from app.modules.connectors.services.account_profile import profile_to_dict
 
-    profile = profile_to_dict(result)
+    profile = _profile_to_dict(result)
     if isinstance(profile, dict) and provider.upper() == AuthProvider.COMPOSIO.value:
         unwrapped = profile.get("data")
         if isinstance(unwrapped, dict):
             return unwrapped
     return profile
+
+
+def _profile_to_dict(profile: object) -> dict | None:
+    """A provider's answer as a plain dict, whatever shape it arrived in."""
+    if isinstance(profile, dict):
+        return profile
+    if hasattr(profile, "model_dump"):
+        data = profile.model_dump(exclude_none=True, exclude_unset=True, mode="json")
+        return data if isinstance(data, dict) else None
+    return None

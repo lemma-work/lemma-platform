@@ -53,7 +53,6 @@ _TIMEOUT_BY_KIND: dict[str, float] = {
     ConnectorKind.MCP.value: 60.0,
     # Composio brokers a second hop out to the real provider.
     ConnectorKind.COMPOSIO.value: 90.0,
-    ConnectorKind.PACKAGE.value: 45.0,
 }
 
 

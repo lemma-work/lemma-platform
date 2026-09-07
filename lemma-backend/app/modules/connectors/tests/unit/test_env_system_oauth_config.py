@@ -5,7 +5,7 @@ import pytest
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthScheme,
-    LemmaProviderCapability,
+    HttpKindSpec,
     OAuth2Defaults,
 )
 from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
@@ -17,7 +17,7 @@ def _native_app(connector_id: str) -> ConnectorEntity:
     """A native app row as stored in the DB: LEMMA capability, no OAuth defaults."""
     return ConnectorEntity(
         id=connector_id,
-        provider_capabilities=[LemmaProviderCapability(auth_scheme=AuthScheme.OAUTH2)],
+        kinds=[HttpKindSpec(auth_scheme=AuthScheme.OAUTH2)],
     )
 
 
@@ -66,7 +66,7 @@ def test_resolve_oauth2_defaults_prefers_stored_capability_defaults(
     )
     app = ConnectorEntity(
         id="slack",
-        provider_capabilities=[LemmaProviderCapability(oauth2_defaults=stored)],
+        kinds=[HttpKindSpec(oauth2_defaults=stored)],
     )
 
     defaults = adapter.resolve_oauth2_defaults(app)

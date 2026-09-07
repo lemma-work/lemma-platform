@@ -13,6 +13,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.domain.connector import (
@@ -21,9 +22,8 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
     KindSpecAdapter,
-    PackageKindSpec,
+    HttpKindSpec,
     kind_to_provider,
-    provider_to_kind,
 )
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
@@ -34,11 +34,11 @@ from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEnti
 
 
 def _dual_kind_connector() -> ConnectorEntity:
-    """gmail ships as both a vendored package and a Composio toolkit."""
+    """gmail ships as both a native OpenAPI connector and a Composio toolkit."""
     return ConnectorEntity(
         id="gmail",
         kinds=[
-            PackageKindSpec(package_name="lemma_connectors.gmail"),
+            HttpKindSpec(),
             ComposioKindSpec(toolkit_slug="gmail"),
         ],
     )
@@ -50,11 +50,11 @@ def test_one_connector_can_be_installed_as_two_different_kinds():
     # accounts.connector_id foreign key and the pod-bundle export key.
     connector = _dual_kind_connector()
     assert connector.supported_kinds() == [
-        ConnectorKind.PACKAGE,
+        ConnectorKind.HTTP,
         ConnectorKind.COMPOSIO,
     ]
     assert connector.spec_for(ConnectorKind.COMPOSIO).toolkit_slug == "gmail"
-    assert connector.spec_for("package").package_name == "lemma_connectors.gmail"
+    assert connector.spec_for("http").kind is ConnectorKind.HTTP
 
 
 def test_spec_for_rejects_a_kind_the_connector_does_not_support():
@@ -66,7 +66,6 @@ def test_spec_for_rejects_a_kind_the_connector_does_not_support():
     ("kind", "provider"),
     [
         (ConnectorKind.COMPOSIO, AuthProvider.COMPOSIO),
-        (ConnectorKind.PACKAGE, AuthProvider.LEMMA),
         (ConnectorKind.HTTP, AuthProvider.LEMMA),
         (ConnectorKind.SQL, AuthProvider.LEMMA),
         (ConnectorKind.MCP, AuthProvider.LEMMA),
@@ -76,30 +75,26 @@ def test_kind_maps_onto_the_legacy_provider_vocabulary(kind, provider):
     assert kind_to_provider(kind) is provider
 
 
-def test_provider_maps_back_to_the_kind_that_actually_shipped():
-    # LEMMA covered every non-Composio install. At the point of the collapse the
-    # native catalog was entirely vendored packages, so this is lossless for all
-    # existing data; http/sql/mcp installs must state their kind explicitly.
-    assert provider_to_kind(AuthProvider.COMPOSIO) is ConnectorKind.COMPOSIO
-    assert provider_to_kind(AuthProvider.LEMMA) is ConnectorKind.PACKAGE
-    assert provider_to_kind("LEMMA") is ConnectorKind.PACKAGE
-
-
 def test_capability_for_resolves_lemma_to_the_connectors_own_native_kind():
     connector = _dual_kind_connector()
-    assert connector.capability_for(AuthProvider.LEMMA).kind is ConnectorKind.PACKAGE
+    assert connector.capability_for(AuthProvider.LEMMA).kind is ConnectorKind.HTTP
     assert (
         connector.capability_for(AuthProvider.COMPOSIO).kind is ConnectorKind.COMPOSIO
     )
 
 
-def test_connector_still_accepts_provider_capabilities_from_unmigrated_callers():
-    connector = ConnectorEntity(
-        id="slack",
-        provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
-    )
-    assert connector.supported_kinds() == [ConnectorKind.PACKAGE]
-    assert connector.provider_capabilities == connector.kinds
+def test_a_kind_spec_must_name_its_kind():
+    """The `provider`-shaped dict a caller could once pass is no longer read.
+
+    It resolved to the vendored-package kind, which is the one kind that no
+    longer exists, so accepting it would silently mislabel an install rather
+    than fail.
+    """
+    with pytest.raises(ValidationError):
+        ConnectorEntity(
+            id="slack",
+            kinds=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
+        )
 
 
 def test_install_schema_reads_the_legacy_auth_config_schema_key():
@@ -117,22 +112,21 @@ class TestAuthConfigEntity:
             organization_id=uuid4(),
             connector_id="slack",
             name="slack-eng",
-            provider=AuthProvider.LEMMA,
+            kind=ConnectorKind.HTTP,
             provider_config={"client_id": "x"},
         )
-        assert entity.kind is ConnectorKind.PACKAGE
+        assert entity.kind is ConnectorKind.HTTP
         assert entity.config == {"client_id": "x"}
         # ...and still reads back the old way for callers not yet migrated.
         assert entity.provider is AuthProvider.LEMMA
         assert entity.provider_config == entity.config
 
-    def test_explicit_kind_wins_over_a_legacy_provider(self):
+    def test_an_install_states_its_kind(self):
         entity = AuthConfigEntity(
             organization_id=uuid4(),
             connector_id="mcp",
             name="internal-mcp",
             kind=ConnectorKind.MCP,
-            provider=AuthProvider.LEMMA,
         )
         assert entity.kind is ConnectorKind.MCP
         assert entity.provider is AuthProvider.LEMMA
@@ -149,21 +143,32 @@ def test_operation_entities_carry_kind_and_the_legacy_provider_view():
     catalog = ConnectorOperationEntity(
         id="gmail:composio:gmail_send_email",
         connector_id="gmail",
-        provider=AuthProvider.COMPOSIO,
+        kind=ConnectorKind.COMPOSIO,
         name="gmail_send_email",
     )
     assert catalog.kind is ConnectorKind.COMPOSIO
     assert catalog.provider is AuthProvider.COMPOSIO
 
 
-def test_trigger_entity_accepts_legacy_provider():
-    trigger = ConnectorTriggerEntity(
-        id="gmail:lemma:new_message",
+def test_an_operation_defaults_to_the_native_kind():
+    """`provider=` is no longer accepted, and the default is no longer
+    `package`. Nothing writes a row without naming its kind, but a default that
+    named a kind which does not exist would be unreadable the moment it did."""
+    catalog = ConnectorOperationEntity(
+        id="gmail:http:messages_send",
         connector_id="gmail",
-        provider=AuthProvider.LEMMA,
+        name="messages_send",
+    )
+    assert catalog.kind is ConnectorKind.HTTP
+
+
+def test_trigger_entity_defaults_to_the_native_kind():
+    trigger = ConnectorTriggerEntity(
+        id="gmail:http:new_message",
+        connector_id="gmail",
         event_type="new_message",
     )
-    assert trigger.kind is ConnectorKind.PACKAGE
+    assert trigger.kind is ConnectorKind.HTTP
     assert trigger.provider is AuthProvider.LEMMA
 
 

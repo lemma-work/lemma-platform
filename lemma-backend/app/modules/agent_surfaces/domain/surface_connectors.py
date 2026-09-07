@@ -44,16 +44,16 @@ SURFACE_CONNECTOR_BINDINGS: dict[SurfacePlatform, SurfaceConnectorBinding] = {
         connector_id="slack", kind="http", self_managed_credentials=False
     ),
     SurfacePlatform.TEAMS: SurfaceConnectorBinding(
-        connector_id="microsoft_teams", kind="package", self_managed_credentials=True
+        connector_id="microsoft_teams", kind="http", self_managed_credentials=True
     ),
     SurfacePlatform.WHATSAPP: SurfaceConnectorBinding(
-        connector_id="whatsapp", kind="package", self_managed_credentials=True
+        connector_id="whatsapp", kind="http", self_managed_credentials=True
     ),
     SurfacePlatform.TELEGRAM: SurfaceConnectorBinding(
-        connector_id="telegram", kind="package", self_managed_credentials=True
+        connector_id="telegram", kind="http", self_managed_credentials=True
     ),
     SurfacePlatform.RESEND: SurfaceConnectorBinding(
-        connector_id="resend", kind="package", self_managed_credentials=True
+        connector_id="resend", kind="http", self_managed_credentials=True
     ),
 }
 

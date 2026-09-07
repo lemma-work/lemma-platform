@@ -6,7 +6,6 @@ export type SchemaValues = Record<string, unknown>;
 export type AuthConfigMode = 'MANAGED' | 'CUSTOM';
 
 export const KIND = {
-    PACKAGE: 'package',
     COMPOSIO: 'composio',
     HTTP: 'http',
     SQL: 'sql',
@@ -46,7 +45,7 @@ export const getSupportedKinds = (app: Connector | null | undefined): string[] =
     const kinds = getKindSpecs(app)
         .map((capability) => String(capability.kind ?? ''))
         .filter((kind) => kind.length > 0);
-    return kinds.length > 0 ? kinds : [KIND.PACKAGE];
+    return kinds.length > 0 ? kinds : [KIND.HTTP];
 };
 
 export const getKindSpec = (
@@ -69,7 +68,7 @@ export const getPrimaryKindSpec = (app: Connector | null | undefined): Connector
 };
 
 export const getPrimaryKind = (app: Connector | null | undefined): string =>
-    getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.PACKAGE;
+    getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.HTTP;
 
 export const getConfigSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
     const schema = capability?.config_schema;
@@ -107,7 +106,8 @@ export const hasSystemDefault = (capability: ConnectorKindSpec | null): boolean 
 /**
  * A kind alone stopped being enough to describe an install once a first-party
  * OAuth connector shipped over the http kind. GitHub is `http`, but nobody
- * points Lemma at a GitHub spec — they sign in.
+ * points Lemma at a GitHub spec — they sign in. Slack and Gmail joined it when
+ * the vendored connector clients were removed.
  */
 export const isOAuthOverHttp = (
     kind: string,
@@ -139,7 +139,14 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
     if (!capability) return false;
     const kind = String(capability.kind);
     if (!TENANT_CONFIGURED_KINDS.has(kind)) return false;
-    return !isOAuthOverHttp(kind, capability);
+    // Neither of these has an address to ask for. `http` became the one native
+    // kind when the vendored connector clients were removed, so it now covers
+    // first-party OAuth (GitHub, Slack, Gmail) and the credential-managed
+    // surface bots (WhatsApp, Telegram, Resend) as well as "point Lemma at a
+    // spec". Treating those as tenant-configured opens the "add a connection"
+    // form and asks for a host that does not exist.
+    if (isOAuthOverHttp(kind, capability)) return false;
+    return !usesDirectCredentials(capability);
 };
 
 /**
@@ -248,7 +255,6 @@ export const getTenantConfiguredKindSpec = (
     getKindSpecs(app).find((capability) => isTenantConfigured(capability)) ?? null;
 
 export const formatKindName = (kind: string): string => {
-    if (kind === KIND.PACKAGE) return 'Native';
     if (kind === KIND.COMPOSIO) return 'Composio';
     if (kind === KIND.SQL) return 'Database';
     if (kind === KIND.HTTP) return 'API';
@@ -262,8 +268,7 @@ export const formatKindName = (kind: string): string => {
 
 export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (kind === KIND.COMPOSIO) return 'Composio (recommended)';
-    if (kind === KIND.PACKAGE && usesDirectCredentials(capability)) return 'Native credentials';
-    if (kind === KIND.PACKAGE) return 'Native OAuth';
+    if (usesDirectCredentials(capability) && kind === KIND.HTTP) return 'Native credentials';
     if (isOAuthOverHttp(kind, capability)) return 'Native OAuth';
     return formatKindName(kind);
 };
@@ -277,7 +282,6 @@ export const getKindDescription = (kind: string, capability: ConnectorKindSpec |
     if (kind === KIND.HTTP) return 'Point Lemma at an OpenAPI spec; its endpoints become operations.';
     if (kind === KIND.MCP) return 'Point Lemma at an MCP server; its tools become operations.';
     if (usesDirectCredentials(capability)) return 'Connect with a key or token from the app itself.';
-    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s app, or with your own.';
     return 'Another way to connect this.';
 };
 
@@ -302,7 +306,6 @@ export const getManagedConfigCopy = (kind: string, capability: ConnectorKindSpec
     if (isTenantConfigured(capability)) return 'This one needs an address. Fill in the fields below.';
     if (usesDirectCredentials(capability)) return 'Nothing to set up here — you’ll add the account’s details next.';
     if (kind === KIND.COMPOSIO) return 'Composio handles this one. Nothing to set up.';
-    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s own app. Nothing to set up.';
     return 'Use Lemma’s default setup for this.';
 };
 

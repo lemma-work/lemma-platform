@@ -202,7 +202,7 @@ async def seed_connector_operation(
             description="Mock app for function e2e",
             kinds=[
                 {
-                    "kind": "package",
+                    "kind": "http",
                     "auth_scheme": "API_KEY",
                     "system_default_available": True,
                 }
@@ -216,7 +216,7 @@ async def seed_connector_operation(
         organization_id=organization_id,
         connector_id=connector_id,
         name=connector_id,
-        kind="package",
+        kind="http",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )

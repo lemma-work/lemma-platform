@@ -2,7 +2,7 @@
 
 The pure spec-walking helpers (``resolve_ref``/``deep_resolve_refs``/
 ``build_parameter_entry``/``pick_content_schema``/``prefers_binary_response`` …)
-are ported from ``lemma-connectors/scripts/generate_openapi_metadata.py`` (which
+are ported from the vendored connector package's metadata generator (which
 lives under ``scripts/`` and is not importable, and whose ``generate_metadata``/
 ``sanitize_spec`` are codegen-coupled and force request bodies to
 ``application/json`` — destroying multipart). We reimplement the walk here so it
