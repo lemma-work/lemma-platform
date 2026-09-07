@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.modules.identity.config import identity_settings
 from app.modules.agent.config import agent_settings
 from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
@@ -579,8 +580,8 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # assertions), so opt the e2e stack in explicitly, the same way `make init`
     # sets ``API_DOCS_ENABLED=true`` for the dev stack.
     settings.api_docs_enabled = True
-    settings.google_client_id = "test-google-client-id"
-    settings.google_client_secret = "test-google-client-secret"
+    identity_settings.google_client_id = "test-google-client-id"
+    identity_settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
     settings.auth_email_verification_required = True
     settings.auth_email_deliverability_checks_enabled = False
@@ -887,6 +888,8 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     import asyncio
     import redis.asyncio as redis
 
+    from app.core.config import settings
+
     # Worker lifespans may reconcile persisted state before any function-scoped
     # db_manager fixture runs. Build the schema once before starting the
     # session-scoped production worker; per-test db_manager still truncates it.
@@ -960,7 +963,15 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
-                "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
+                # `settings`, not `e2e_settings`: they are the same object --
+                # the fixture mutates the core singleton and hands it back --
+                # but `check_settings_attrs.py` can only resolve a name it can
+                # follow to an import. A field read off a fixture parameter is
+                # invisible to it, which is how the harness set these by string
+                # key and nothing noticed until a sandbox was already running.
+                # The parameter stays in the signature: it is what orders this
+                # after the fixture has applied its overrides.
+                "EMAIL_OUTPUT_DIR": settings.email_output_dir,
                 "GCS_STORAGE_BUCKET": "",
                 "STORAGE_BUCKET": "",
                 "PUBLIC_BUCKET_NAME": "",

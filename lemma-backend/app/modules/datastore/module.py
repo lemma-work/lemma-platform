@@ -220,6 +220,30 @@ async def _datastore_outbox_dispatcher(context):
 
 
 @asynccontextmanager
+async def _close_datastore_engine(context):
+    """Dispose this module's own engine when the worker stops.
+
+    It used to be a function-local import and a call at the end of
+    `streaq_runtime`'s shutdown, which is one of the two things core did that
+    made it import a module. The module owns the engine, so the module closes
+    it.
+
+    Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
+    so entering this one first makes it the last of datastore's to unwind --
+    after `_close_reindex_queue` and the outbox dispatcher, both of which can
+    still want the engine on their way out.
+    """
+    try:
+        yield
+    finally:
+        from app.modules.datastore.infrastructure.session import (
+            close_datastore_engine,
+        )
+
+        await close_datastore_engine()
+
+
+@asynccontextmanager
 async def _close_reindex_queue(context):
     try:
         yield
@@ -237,6 +261,7 @@ module = LemmaModule(
     event_routers=_event_routers,
     api_lifespans=(_preload_local_embeddings, _backfill_query_role),
     worker_lifespans=(
+        _close_datastore_engine,
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,
         _close_reindex_queue,

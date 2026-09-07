@@ -8,6 +8,8 @@ outbound half: nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from app.modules.agent_surfaces.services.surface_member_send import (
     SurfaceMemberSendMixin,
 )
@@ -293,7 +295,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
             return False
         try:
             request = AskUserRequest.model_validate(raw_request)
-        except Exception:
+        except ValidationError:
             # Stored tool_args that will not validate is a bug in whatever wrote
             # them, not a transient — and the question is dropped here.
             logger.warning(

@@ -35,7 +35,7 @@
     "app/modules/agent_surfaces/services/telegram_manager_store.py": 4,
     "app/modules/agent_surfaces/services/telegram_mini_app_mixin.py": 2,
     "app/modules/agent_surfaces/services/token_stream.py": 6,
-    "app/modules/apps/api/controllers/app_controller.py": 3,
+    "app/modules/apps/api/controllers/app_controller.py": 2,
     "app/modules/datastore/api/controllers/changes_controller.py": 2,
     "app/modules/datastore/api/controllers/file_controller.py": 11,
     "app/modules/datastore/api/controllers/record_controller.py": 4,

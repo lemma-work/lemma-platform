@@ -20,6 +20,9 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 
+from app.modules.agent_surfaces.platforms.common import (
+    PLATFORM_TRANSPORT_ERRORS,
+)
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.api.schemas import SurfaceReach
 from app.modules.agent_surfaces.config import surface_settings
@@ -159,7 +162,7 @@ class SurfaceReachResolver:
     async def _teams_handle(self, surface: AgentSurfaceEntity) -> str | None:
         app_id = surface_settings.microsoft_bot_app_id
         if app_id:
-            with suppress(Exception):
+            with suppress(*PLATFORM_TRANSPORT_ERRORS):
                 tenant_id = surface.external_tenant_id or "botframework.com"
                 token = await get_graph_token(tenant_id)
                 if token:

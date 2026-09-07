@@ -56,9 +56,6 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     get_streaq_job_queue,
     load_job_observability_context,
 )
-from app.modules.identity.infrastructure.supertokens_auth.initialization import (
-    initialize_supertokens,
-)
 from app.core.log.log import (
     get_dependency_logger,
     get_logger,
@@ -386,7 +383,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     job_queue = get_streaq_job_queue()
     await job_queue.connect()
     await get_message_bus().connect()
-    initialize_supertokens()
     context = AppWorkerContext(
         job_queue=job_queue,
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
@@ -550,9 +546,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             "channel_service.disconnect", channel_service.disconnect
         )
 
-        from app.modules.datastore.infrastructure.session import close_datastore_engine
-
-        await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
         if started:
             logger.info("service.stopped")
         shutdown_telemetry()

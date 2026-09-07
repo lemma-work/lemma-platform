@@ -75,16 +75,18 @@ def build_supertokens_app_info() -> InputAppInfo:
 def build_thirdparty_providers() -> list[ProviderInput]:
     providers: list[ProviderInput] = []
 
-    if settings.is_google_oauth_configured():
-        assert settings.google_client_id is not None
+    if identity_settings.is_google_oauth_configured():
+        assert identity_settings.google_client_id is not None
         providers.append(
             ProviderInput(
                 config=ProviderConfig(
                     third_party_id="google",
                     clients=[
                         ProviderClientConfig(
-                            client_id=settings.google_client_id,
-                            client_secret=reveal_secret(settings.google_client_secret),
+                            client_id=identity_settings.google_client_id,
+                            client_secret=reveal_secret(
+                                identity_settings.google_client_secret
+                            ),
                         ),
                     ],
                 ),

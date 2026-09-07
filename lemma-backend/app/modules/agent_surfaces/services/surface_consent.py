@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import httpx
+from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
@@ -42,6 +43,24 @@ _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 # granted / 10 s denied), so the Graph probe is shared across replicas. Redis
 # unavailable -> re-probe (never fails).
 _consent_check_cache: RedisJsonCache | None = None
+
+
+def access_token_from(payload: object) -> str | None:
+    """The bearer token in a token-endpoint body, or None if there is not one.
+
+    Entra answers with an object. A proxy, a captive portal or a misrouted host
+    can answer 200 with a list or a bare scalar, and `.get` on one of those is
+    an `AttributeError` -- a bug, not a transport failure, and so not something
+    the handler around the request should be catching. Checking the shape here
+    keeps that handler narrow and makes "not an object" mean the same thing as
+    "no token in it": not granted.
+    """
+    if not isinstance(payload, dict):
+        return None
+    token = payload.get("access_token")
+    # An empty string is not a token, and returning it would make the docstring
+    # above false for a caller that checks the sentinel rather than truthiness.
+    return token if isinstance(token, str) and token else None
 
 
 def _get_consent_cache() -> RedisJsonCache:
@@ -198,7 +217,7 @@ class SurfaceConsentMixin:
         cache = _get_consent_cache()
         try:
             cached = await cache.get_json(cache_key)
-        except Exception:
+        except RedisError, OSError, TimeoutError, ValueError:
             # An unreadable cache costs a Graph round-trip, not an answer.
             logger.warning(
                 "agent_surfaces.consent.cache_read_failed.degraded",
@@ -224,14 +243,16 @@ class SurfaceConsentMixin:
                 if token_response.status_code != 200:
                     try:
                         await cache.set_json(cache_key, False, ttl_seconds=10)
-                    except Exception:
+                    except RedisError, OSError, TimeoutError:
                         # The cache is an optimisation over a Graph round-trip.
                         # Not being able to write it costs the next caller that
                         # round-trip, which is not worth failing the check over.
                         pass
                     return False
-                token = token_response.json().get("access_token")
-        except Exception:
+                token = access_token_from(token_response.json())
+        # `ValueError` too: the body is decoded above, and a non-JSON 200 from
+        # the token endpoint raises `JSONDecodeError`, not an `httpx.HTTPError`.
+        except httpx.HTTPError, ValueError:
             # Fail closed: a surface whose consent we could not verify must not
             # be activated. But "not granted" and "we could not tell" are
             # different facts, and only one of them is the tenant's doing --
@@ -255,7 +276,7 @@ class SurfaceConsentMixin:
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 granted = probe.status_code == 200
-        except Exception:
+        except httpx.HTTPError:
             # Same as the token request above: indeterminate, reported as not
             # granted, and worth saying so out loud.
             logger.warning(
@@ -267,7 +288,7 @@ class SurfaceConsentMixin:
 
         try:
             await cache.set_json(cache_key, granted, ttl_seconds=60 if granted else 10)
-        except Exception:
+        except RedisError, OSError, TimeoutError:
             # Same again: a consent answer we could not cache is still a correct
             # answer, and the next call simply asks Graph rather than failing.
             pass

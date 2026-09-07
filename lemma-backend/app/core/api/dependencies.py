@@ -9,7 +9,7 @@ from app.core.infrastructure.db.uow_factory import (
 )
 
 
-from app.modules.identity.domain.user_entities import UserEntity
+from app.core.domain.entity import AuthenticatedPrincipal
 from fastapi import Request, HTTPException, status
 
 
@@ -28,8 +28,15 @@ def get_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-def get_current_user(request: Request) -> UserEntity:
-    """Dependency that provides the current authenticated user."""
+def get_current_user(request: Request) -> AuthenticatedPrincipal:
+    """The principal the auth middleware put on the request.
+
+    Annotated as what it actually returns. It used to say `UserEntity`, an
+    `AggregateRoot` with an email and a superuser flag -- but `app/core/security.py`
+    is the only thing that assigns `request.state.user` and it assigns an
+    `AuthenticatedPrincipal`, so any caller trusting that annotation for
+    anything past `.id` would have got an `AttributeError` at runtime.
+    """
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(
@@ -58,4 +65,4 @@ def get_current_user(request: Request) -> UserEntity:
 #: ``get_uow_factory`` and open their own — so nothing needs the session to
 #: outlive the handler.
 UoWDep = Annotated[SqlAlchemyUnitOfWork, Depends(get_uow, scope="function")]
-CurrentUser = Annotated[UserEntity, Depends(get_current_user)]
+CurrentUser = Annotated[AuthenticatedPrincipal, Depends(get_current_user)]

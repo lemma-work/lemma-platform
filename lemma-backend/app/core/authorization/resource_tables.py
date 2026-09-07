@@ -198,3 +198,11 @@ def pod_is_unknowable(resource: ResourceRef) -> bool:
     if resource.resource_type in NOT_POD_SCOPED:
         return False
     return resource.pod_id is None
+
+
+#: Datastore's file columns, via the one table that names them. `FOLDER` and
+#: `DOCUMENT` share a row, so either serves.
+#:
+#: Defined once here rather than in each reader: splitting `service.py` copied
+#: it into three files, two of which used it, and the third was dead.
+FILE_COLUMNS = RESOURCE_TABLES[ResourceType.FOLDER]

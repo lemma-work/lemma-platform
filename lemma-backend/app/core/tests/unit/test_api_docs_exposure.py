@@ -29,6 +29,32 @@ import pytest
 from app.core.config import Settings
 
 
+def _all_paths(app) -> set[str]:
+    """Every route path, including those inside an included router.
+
+    FastAPI 0.141 wraps each `include_router` call in an `_IncludedRouter`, so a
+    flat scan of `app.routes` sees only the handful registered directly on the
+    app -- five of them here, against sixty-three routers. This walked flat
+    until the health probes moved into a router of their own and `/livez`
+    vanished from a test that had been reading the same blind spot all along.
+    """
+    found: set[str] = set()
+    pending = list(app.routes)
+    while pending:
+        route = pending.pop()
+        path = getattr(route, "path", None)
+        if path:
+            found.add(path)
+        pending.extend(getattr(route, "routes", ()) or ())
+        # FastAPI 0.141 keeps the included router on `original_router`, not on
+        # `routes`; without this the walk stops at the wrapper.
+        for attr in ("original_router", "router"):
+            inner = getattr(route, attr, None)
+            if inner is not None:
+                pending.extend(getattr(inner, "routes", ()) or ())
+    return found
+
+
 def test_documentation_is_off_unless_asked_for() -> None:
     assert not Settings.model_construct(api_docs_enabled=False).api_docs_served()
 
@@ -64,14 +90,18 @@ def test_the_app_registers_no_documentation_route_when_off(monkeypatch) -> None:
     from app.app import create_app
 
     app = create_app()
-    paths = {getattr(route, "path", None) for route in app.routes}
+    # Flat, deliberately: FastAPI registers `/docs`, `/redoc` and this repo's
+    # `/scalar` directly on the app, and a deep walk would instead find a
+    # module's own `/docs` route and fail for the wrong reason.
+    directly_registered = {getattr(route, "path", None) for route in app.routes}
 
     assert app.openapi_url is None
-    assert "/scalar" not in paths
-    assert "/docs" not in paths
-    assert "/redoc" not in paths
-    # The application's own routes are untouched.
-    assert "/livez" in paths
+    assert "/scalar" not in directly_registered
+    assert "/docs" not in directly_registered
+    assert "/redoc" not in directly_registered
+    # The application's own routes are untouched. Deep, because the probes are
+    # an included router.
+    assert "/livez" in _all_paths(app)
 
 
 def test_the_app_serves_them_when_asked(monkeypatch) -> None:
@@ -82,7 +112,7 @@ def test_the_app_serves_them_when_asked(monkeypatch) -> None:
     from app.app import create_app
 
     app = create_app()
-    paths = {getattr(route, "path", None) for route in app.routes}
+    paths = _all_paths(app)
 
     assert app.openapi_url == "/openapi.json"
     assert "/scalar" in paths

@@ -7,6 +7,9 @@ from pydantic import TypeAdapter
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.modules.agent_surfaces.platforms.common import (
+    PLATFORM_TRANSPORT_ERRORS,
+)
 from app.modules.agent_surfaces.services.surface_configuration import (
     SurfaceConfigurationMixin,
 )
@@ -219,7 +222,7 @@ class AgentSurfaceIngressService(
             uow=self.uow,
         ):
             return
-        with suppress(Exception):
+        with suppress(*PLATFORM_TRANSPORT_ERRORS):
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,
