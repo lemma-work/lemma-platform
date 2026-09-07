@@ -19,4 +19,28 @@ def _register_streaq() -> None:
     import app.modules.apps.events.tasks  # noqa: F401
 
 
-module = LemmaModule(name="apps", routers=_routers, register_streaq=_register_streaq)
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.apps.infrastructure.models import AppModel
+
+    return (
+        (
+            ResourceType.APP,
+            ResourceNameTable(AppModel.id, AppModel.pod_id, AppModel.name),
+        ),
+    )
+
+
+module = LemmaModule(
+    name="apps",
+    resource_names=_resource_names,
+    routers=_routers,
+    register_streaq=_register_streaq,
+)

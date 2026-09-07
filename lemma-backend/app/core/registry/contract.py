@@ -30,6 +30,9 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
     from fastapi import FastAPI
     from faststream.redis import RedisRouter
 
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.pod_liveness import PodLivenessReader
+    from app.core.authorization.resource_names import ResourceNameTable
     from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
 
 
@@ -40,6 +43,16 @@ RouterProvider = Callable[[], "Sequence[Any]"]
 
 EventRouterProvider = Callable[[], "Sequence[RedisRouter]"]
 """Returns FastStream ``RedisRouter`` objects to ``broker.include_router``."""
+
+ResourceNameProvider = Callable[[], "Sequence[tuple[ResourceType, ResourceNameTable]]"]
+"""Returns how this module's resource types map a human name to a row id.
+
+A thunk, like `routers`: it is called at assembly, so declaring a table does not
+drag a module's ORM models into every process that merely imports the registry.
+"""
+
+PodLivenessProvider = Callable[[], "PodLivenessReader"]
+"""Returns the reader core's deleted-pod guard asks whether a pod is live."""
 
 StreaqRegistrar = Callable[[], None]
 """Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
@@ -68,3 +81,11 @@ class LemmaModule:
     # Redis Streams owned by this module's durable consumers. Publishers use
     # this topology before XADD, even in processes that never import handlers.
     stream_groups: Sequence[tuple[str, str]] = ()
+
+    # Grant APIs speak resource names; grant storage keeps ids. This is how one
+    # becomes the other for this module's types.
+    resource_names: ResourceNameProvider | None = None
+
+    # A deleted pod stops answering for its contents. Core owns that rule and
+    # this module owns the row it turns on.
+    pod_liveness: PodLivenessProvider | None = None
