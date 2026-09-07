@@ -40,17 +40,17 @@ def test_create_lemma_info_client_imports_only_target_client_module():
 
     def fake_import_module(module_name: str):
         imported_modules.append(module_name)
-        if module_name == "lemma_connectors.gmail.client":
-            return SimpleNamespace(GmailInfoClient=FakeInfoClient)
+        if module_name == "lemma_connectors.google_drive.client":
+            return SimpleNamespace(GoogleDriveInfoClient=FakeInfoClient)
         raise AssertionError(f"Unexpected import: {module_name}")
 
     with patch(
         "app.modules.connectors.infrastructure.adapters.lemma_connector_factory.importlib.import_module",
         side_effect=fake_import_module,
     ):
-        client = create_lemma_info_client("gmail")
+        client = create_lemma_info_client("google_drive")
 
-    assert imported_modules == ["lemma_connectors.gmail.client"]
+    assert imported_modules == ["lemma_connectors.google_drive.client"]
     assert client is not None
 
 
@@ -79,8 +79,8 @@ def test_create_lemma_execution_client_imports_only_target_client_and_auth_modul
                 ApiKeyCredentials=FakeApiKeyCredentials,
                 OAuth2Credentials=FakeOAuth2Credentials,
             )
-        if module_name == "lemma_connectors.gmail.client":
-            return SimpleNamespace(GmailClient=FakeClient)
+        if module_name == "lemma_connectors.google_drive.client":
+            return SimpleNamespace(GoogleDriveClient=FakeClient)
         raise AssertionError(f"Unexpected import: {module_name}")
 
     with patch(
@@ -88,12 +88,12 @@ def test_create_lemma_execution_client_imports_only_target_client_and_auth_modul
         side_effect=fake_import_module,
     ):
         client = create_lemma_execution_client(
-            "gmail",
+            "google_drive",
             {"access_token": "access-token", "token_type": "Bearer"},
         )
 
     assert imported_modules == [
-        "lemma_connectors.gmail.client",
+        "lemma_connectors.google_drive.client",
         "lemma_connectors.core.auth",
     ]
     assert client is not None

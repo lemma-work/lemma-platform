@@ -42,11 +42,11 @@ async def load_native_account_profile(
     except ValueError:
         return None
 
-    if connector.id == "slack":
-        return await _load_slack_account_profile(connector, credentials)
-
+    # Slack and Gmail are not here any more: they install as `http` and their
+    # profile operation is curated in `connector_profile_operations.json`, so
+    # `_fetch_account_profile` reaches them through the same catalog route as
+    # every other kind.
     profile_operation_by_app = {
-        "gmail": ("users_get_profile", {"user_id": "me"}),
         "google_drive": ("about_get", {}),
     }
     config = profile_operation_by_app.get(connector.id)
@@ -65,50 +65,6 @@ async def load_native_account_profile(
         profile_dict = profile_to_dict(profile)
         if profile_dict is not None:
             return profile_dict
-    return None
-
-
-async def _load_slack_account_profile(
-    connector: ConnectorEntity,
-    credentials: OAuthCredentials,
-) -> dict | None:
-    if not credentials.access_token:
-        return None
-
-    with suppress(Exception):
-        client = await run_blocking(
-            create_lemma_execution_client,
-            connector,
-            credentials.model_dump(exclude_none=True),
-            limiter="cpu_bound",
-        )
-        auth_profile = profile_to_dict(
-            await client.execute_operation(
-                "auth_test",
-                {"token": credentials.access_token},
-            )
-        )
-        if not auth_profile:
-            return None
-
-        profile: dict = {"auth_test": auth_profile, **auth_profile}
-        user_id = _extract_nested_value(auth_profile, "user_id")
-        if user_id:
-            try:
-                user_info = profile_to_dict(
-                    await client.execute_operation(
-                        "users_info",
-                        {"token": credentials.access_token, "user": user_id},
-                    )
-                )
-                if user_info:
-                    profile["user_info"] = user_info
-            except Exception:
-                logger.debug(
-                    "connectors.connector_service.enrich_slack_user_profile_s.diagnostic",
-                    user_id=user_id,
-                )
-        return profile
     return None
 
 

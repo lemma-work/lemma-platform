@@ -422,7 +422,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.connector_service.auth_config_updated': EventSpec('info', frozenset({'accounts_marked_for_reauth', 'auth_config_id', 'operations_discovered', 'operations_discovery_status', 'organization_id'})),
     'connectors.connector_service.credential_refresh_rejected.degraded': EventSpec('warning', frozenset({'account_id', 'connector_id', 'error_type'})),
     'connectors.connector_service.discovery_credentials.skipped': EventSpec('info', frozenset({'auth_config_id', 'error_type'})),
-    'connectors.connector_service.enrich_slack_user_profile_s.diagnostic': EventSpec('debug', frozenset({'user_id'})),
     'connectors.connector_service.exchange_connector_authorization_code.propagated': EventSpec('debug', frozenset({'error_type'})),
     'connectors.connector_service.get_connector_authorization_url.propagated': EventSpec('debug', frozenset({'error_type'})),
     'connectors.connector_service.revoke.failed': EventSpec('error', frozenset()),

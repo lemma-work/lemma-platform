@@ -67,14 +67,9 @@ class AsyncLemmaExecutionClientAdapter:
         return await self._client.execute_operation(operation_name, payload)
 
 
+# Slack and Gmail are absent: they install as `http` and their operations
+# come from the curated `static_operations` in `lemma_apps_config.json`.
 _BINDINGS: dict[str, LemmaConnectorBinding] = {
-    "gmail": LemmaConnectorBinding(
-        package_name="gmail",
-        info_client_class="GmailInfoClient",
-        client_class="GmailClient",
-        title="Gmail",
-        description="Native Gmail connector for mail, labels, drafts, messages, and threads.",
-    ),
     "google_calendar": LemmaConnectorBinding(
         package_name="google_calendar",
         info_client_class="GoogleCalendarInfoClient",
@@ -102,13 +97,6 @@ _BINDINGS: dict[str, LemmaConnectorBinding] = {
         client_class="GoogleSheetsClient",
         title="Google Sheets",
         description="Native Google Sheets connector for spreadsheets, values, and batch updates.",
-    ),
-    "slack": LemmaConnectorBinding(
-        package_name="slack",
-        info_client_class="SlackInfoClient",
-        client_class="SlackClient",
-        title="Slack",
-        description="Native Slack connector for channels, messages, files, users, and workspace APIs.",
     ),
     "jira": LemmaConnectorBinding(
         package_name="jira",

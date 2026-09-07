@@ -274,6 +274,20 @@ async def _resolve_identity(
     # second identity's re-auth is matched to the user's default account and
     # overwrites its credentials.
     account_profile = email_profile or native_profile
+    if email_profile:
+        # Store it under the same key the vendored path used. It is not
+        # decoration: `resolve_account_identity` reads
+        # `user_data.profile.email_address` for Gmail, and once a connector
+        # migrates to a kind whose profile arrives through the catalog fetch,
+        # leaving this unwritten would silently empty that lookup.
+        credentials = credentials.model_copy(
+            update={
+                "user_data": {
+                    **(credentials.user_data or {}),
+                    "profile": email_profile,
+                }
+            }
+        )
     provider_account_id = provider_account_id or provider_account_id_from_profile(
         connector.id, account_profile
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, create_autospec, patch
 from uuid import uuid4
 
@@ -959,6 +960,14 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
 
 
 async def test_handle_oauth_callback_enriches_slack_account_profile():
+    """Slack's profile now arrives through the catalog route, merged.
+
+    It used to come from a hardcoded pair of vendored-client calls. Now it is
+    two curated operations -- `auth_test` says who and which workspace,
+    `users_profile_get` carries the address -- and `_fetch_account_profile`
+    merges them. Returning the first non-empty result, as it did, would label
+    every Slack account with no email at all.
+    """
     user_id = uuid4()
     auth_config = _auth_config("slack")
     connect_request = ConnectRequestEntity(
@@ -977,8 +986,28 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     registry = Mock()
     registry.get.return_value = auth_provider
 
-    native_client = AsyncMock()
-    native_client.execute_operation.side_effect = [
+    connector = ConnectorEntity(
+        id="slack",
+        kinds=[
+            HttpKindSpec(
+                auth_scheme=AuthScheme.OAUTH2,
+                profile_operation_names=["auth_test", "users_profile_get"],
+            )
+        ],
+    )
+    operation_repository = AsyncMock()
+    operation_repository.get_by_connector_kind_and_name.side_effect = (
+        lambda connector_id, kind, name: SimpleNamespace(
+            name=name,
+            execution_name=name,
+            input_schema=None,
+            execution={"kind": "http", "mode": "openapi"},
+        )
+    )
+    operation_gateway = AsyncMock()
+    dispatcher = AsyncMock()
+    dispatcher.build_request = Mock(return_value=object())
+    dispatcher.execute.side_effect = [
         {
             "ok": True,
             "team": "Acme",
@@ -988,18 +1017,9 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
             "user_id": "U123",
             "bot_id": "B123",
         },
-        {
-            "ok": True,
-            "user": {
-                "id": "U123",
-                "name": "rahul",
-                "profile": {
-                    "email": "rahul@example.com",
-                    "real_name": "Rahul",
-                },
-            },
-        },
+        {"ok": True, "profile": {"email": "rahul@example.com", "real_name": "Rahul"}},
     ]
+
     account_repo = AsyncMock()
     account_repo.get_by_user_and_auth_config.return_value = None
     account_repo.get_by_user_auth_config_and_provider_account.return_value = None
@@ -1009,34 +1029,28 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
-        connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("slack"))),
+        connector_repository=AsyncMock(get=AsyncMock(return_value=connector)),
         auth_config_repository=_auth_config_repo(auth_config),
         account_repository=account_repo,
         connect_request_repository=connect_repo,
         auth_provider_registry=registry,
+        operation_repository=operation_repository,
+        operation_gateway=operation_gateway,
     )
 
-    with patch(
-        "app.modules.connectors.services.account_profile.create_lemma_execution_client",
-        return_value=native_client,
-    ):
+    with patch.object(service, "_profile_dispatcher", return_value=dispatcher):
         account = await service.handle_oauth_callback(
             redirect_uri="https://cb?state=state-profile&code=abc",
             state="state-profile",
         )
 
+    profile = account.credentials.user_data["profile"]
+    # Both operations ran, and neither result displaced the other.
+    assert profile["team"] == "Acme"
+    assert profile["profile"]["email"] == "rahul@example.com"
     assert account.provider_account_id == "U123"
     assert account.email == "rahul@example.com"
-    assert account.credentials.user_data["profile"]["team"] == "Acme"
-    assert account.credentials.user_data["profile"]["user_info"]["user"]["id"] == "U123"
-    native_client.execute_operation.assert_any_await(
-        "auth_test",
-        {"token": "xoxb-token"},
-    )
-    native_client.execute_operation.assert_any_await(
-        "users_info",
-        {"token": "xoxb-token", "user": "U123"},
-    )
+    assert dispatcher.execute.await_count == 2
 
 
 async def test_handle_oauth_callback_updates_provider_account_id_on_existing_account():

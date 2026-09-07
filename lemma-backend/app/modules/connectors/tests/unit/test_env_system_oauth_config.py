@@ -29,7 +29,8 @@ def adapter() -> EnvSystemOAuthConfigAdapter:
 @pytest.mark.parametrize(
     ("connector_id", "expected_api_scope"),
     [
-        ("gmail", "https://www.googleapis.com/auth/gmail.modify"),
+        # Gmail is deliberately absent: it declares its own endpoints and
+        # scopes in lemma_apps_config.json now that it installs as `http`.
         ("google_calendar", "https://www.googleapis.com/auth/calendar"),
         ("google_drive", "https://www.googleapis.com/auth/drive"),
         ("google_docs", "https://www.googleapis.com/auth/documents"),
@@ -84,7 +85,7 @@ def test_system_default_availability_tracks_env_presence(
     adapter: EnvSystemOAuthConfigAdapter,
     monkeypatch,
 ):
-    app = _native_app("gmail")
+    app = _native_app("google_calendar")
 
     monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
@@ -101,7 +102,7 @@ def test_system_default_availability_tracks_env_presence(
     assert config.client_secret == "sys-client-secret"
     # System client is paired with the registry's Google endpoints/scopes.
     assert config.authorization_url == "https://accounts.google.com/o/oauth2/v2/auth"
-    assert "https://www.googleapis.com/auth/gmail.modify" in config.default_scopes
+    assert "https://www.googleapis.com/auth/calendar" in config.default_scopes
 
 
 def test_unknown_app_has_no_system_default(

@@ -60,3 +60,23 @@ async def execute_profile_operation(
         config={},
     )
     return await dispatcher.execute(request)
+
+
+def normalize_profile_result(result: object, provider: str) -> dict | None:
+    """One operation's answer, as a plain dict the identity readers understand.
+
+    Composio wraps every tool execution result in
+    ``{"data": ..., "successful": ..., "error": ...}``
+    (``composio.tools.execute``'s ``ToolExecutionResponse``); the toolkit's
+    actual fields -- email, name -- live one level down in ``data``, not at the
+    top level. Every other kind answers with the provider's own body.
+    """
+    from app.modules.connectors.domain.connector import AuthProvider
+    from app.modules.connectors.services.account_profile import profile_to_dict
+
+    profile = profile_to_dict(result)
+    if isinstance(profile, dict) and provider.upper() == AuthProvider.COMPOSIO.value:
+        unwrapped = profile.get("data")
+        if isinstance(unwrapped, dict):
+            return unwrapped
+    return profile

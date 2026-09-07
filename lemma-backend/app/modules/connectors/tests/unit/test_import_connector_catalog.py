@@ -1033,30 +1033,18 @@ async def test_sync_composio_catalog_supports_both_providers_for_google_apps(
 
 
 @pytest.mark.asyncio
-async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages():
-    connector_repository = SimpleNamespace(
-        get=AsyncMock(side_effect=[None, None]),
-    )
+async def test_sync_native_catalog_imports_slack_operations_from_static_operations():
+    """Slack's operations come from the catalog entry, not a vendored client.
+
+    Replaces a test that asserted the opposite. Slack installs as `http` now,
+    so its operations are the curated `static_operations` in
+    lemma_apps_config.json and they must be tagged with the declared kind --
+    tagged `package` instead, a strict (connector, kind, name) lookup on the
+    execute route would never find them.
+    """
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()
     trigger_repository = SimpleNamespace()
-    info_client = SimpleNamespace(
-        get_connector_info=AsyncMock(
-            return_value=SimpleNamespace(
-                platform_name="Slack",
-                description="Slack connector",
-                agent_guide="Use Slack",
-            )
-        ),
-        list_available_operations=AsyncMock(
-            return_value=["send_message", "get_channel_info"]
-        ),
-        get_operation_details=AsyncMock(
-            side_effect=lambda name: _operation_details(name)
-        ),
-    )
-    schema_compiler = SimpleNamespace(
-        to_json_schema=MagicMock(return_value={"type": "object"})
-    )
 
     with (
         patch.object(
@@ -1068,19 +1056,24 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
                     "title": "Slack",
                     "description": "Slack connector",
                     "auth_method": "OAUTH2",
-                    "auth_provider": "LEMMA",
-                    "operation_executor": "LEMMA",
-                    "config": {
-                        "access_token_path": "authed_user.access_token",
-                        "refresh_token_path": "refresh_token",
-                    },
+                    "kind": "http",
+                    "is_active": True,
                     "triggers": [],
+                    "static_operations": [
+                        {
+                            "name": "chat_post_message",
+                            "description": "Send a message",
+                            "execution": {"kind": "http", "mode": "openapi"},
+                        },
+                        {
+                            "name": "conversations_list",
+                            "description": "List conversations",
+                            "execution": {"kind": "http", "mode": "openapi"},
+                        },
+                    ],
                 }
             ],
         ),
-        patch.object(
-            importer, "get_native_info_client", AsyncMock(return_value=info_client)
-        ) as get_native_info_client,
         patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
         patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
     ):
@@ -1089,23 +1082,21 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
             operation_repository,
             trigger_repository,
             app_filters={"slack"},
-            schema_compiler=schema_compiler,
+            schema_compiler=SimpleNamespace(
+                to_json_schema=MagicMock(return_value={"type": "object"})
+            ),
         )
 
-    assert totals == (2, 2, 0)
-    assert connector_repository.get.await_args_list[0].args == ("slack",)
-    assert connector_repository.get.await_args_list[1].args == ("slack",)
-    assert upsert_connector.await_args_list[1].args[1].id == "slack"
-    assert _providers(upsert_connector.await_args_list[1].args[1]) == [
-        AuthProvider.LEMMA
-    ]
-    get_info_client_call = get_native_info_client.await_args
-    assert get_info_client_call.args == ("slack",)
+    assert totals == (1, 2, 0)
+    entity = upsert_connector.await_args.args[1]
+    assert entity.id == "slack"
+    assert [capability.kind for capability in entity.kinds] == [ConnectorKind.HTTP]
     assert upsert_operation.await_count == 2
-    assert upsert_operation.await_args_list[0].args[1] == "slack"
-    assert upsert_operation.await_args_list[0].kwargs["public_name"] == "send_message"
-    assert (
-        upsert_operation.await_args_list[1].kwargs["public_name"] == "get_channel_info"
+    assert [
+        call.kwargs["public_name"] for call in upsert_operation.await_args_list
+    ] == ["chat_post_message", "conversations_list"]
+    assert all(
+        call.kwargs["kind"] == "http" for call in upsert_operation.await_args_list
     )
 
 
@@ -1124,7 +1115,7 @@ async def test_sync_native_catalog_imports_google_apps_for_lemma_provider():
             connector_repository,
             operation_repository,
             trigger_repository,
-            app_filters={"gmail"},
+            app_filters={"google_calendar"},
             schema_compiler=SimpleNamespace(
                 to_json_schema=MagicMock(return_value={"type": "object"})
             ),
@@ -1133,7 +1124,7 @@ async def test_sync_native_catalog_imports_google_apps_for_lemma_provider():
     assert totals[0] == 1
     assert totals[1] > 0
     entity = upsert_connector.await_args.args[1]
-    assert entity.id == "gmail"
+    assert entity.id == "google_calendar"
     assert _providers(entity) == [AuthProvider.LEMMA]
     assert upsert_operation.await_count == totals[1]
 
@@ -1760,9 +1751,36 @@ class TestADeadPackageKindIsNotCarriedForever:
         assert [capability.kind for capability in merged] == [ConnectorKind.COMPOSIO]
 
     def test_a_google_app_that_resolves_its_endpoints_at_runtime_is_kept(self):
-        """Gmail stores no endpoints either -- it resolves them from the native
-        registry. By shape alone it is indistinguishable from a dead spec, and
-        pruning it would be far worse than the bug this fixes."""
+        """Google Calendar stores no endpoints either -- it resolves them from
+        the native registry. By shape alone it is indistinguishable from a dead
+        spec, and pruning it would be far worse than the bug this fixes."""
+        calendar = ConnectorEntity(
+            id="google_calendar",
+            title="Google Calendar",
+            provider_capabilities=[
+                LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
+                ComposioProviderCapability(toolkit_slug="googlecalendar"),
+            ],
+        )
+
+        merged = importer._merge_provider_capabilities(
+            calendar,
+            importer._composio_provider_capability(
+                auth_method=AuthMethod.OAUTH2, toolkit_slug="googlecalendar"
+            ),
+        )
+
+        assert ConnectorKind.PACKAGE in [capability.kind for capability in merged]
+
+    def test_gmails_package_spec_is_now_pruned_because_it_moved_to_http(self):
+        """The migration's own cleanup, arriving through the existing guard.
+
+        Gmail left `NATIVE_LEMMA_OAUTH2_DEFAULTS` when it started declaring its
+        endpoints in `lemma_apps_config.json`, so its stored `package` spec --
+        which names no package, carries no endpoints and has no system client --
+        is now exactly the dead shape this prunes. Nothing has to remove it by
+        hand.
+        """
         gmail = ConnectorEntity(
             id="gmail",
             title="Gmail",
@@ -1779,7 +1797,7 @@ class TestADeadPackageKindIsNotCarriedForever:
             ),
         )
 
-        assert ConnectorKind.PACKAGE in [capability.kind for capability in merged]
+        assert ConnectorKind.PACKAGE not in [capability.kind for capability in merged]
 
     def test_a_kind_this_import_produced_is_never_pruned(self):
         """The prune is about what is *carried*. A spec the current import just
@@ -1817,7 +1835,7 @@ class TestOrgCustomOAuthIsOnlyOfferedWhereItWorks:
 
     def test_a_google_app_resolving_its_endpoints_at_runtime_does_too(self):
         spec = importer._native_kind_spec(
-            connector_id="gmail", auth_method=AuthMethod.OAUTH2
+            connector_id="google_calendar", auth_method=AuthMethod.OAUTH2
         )
 
         assert spec.supports_org_custom_oauth is True

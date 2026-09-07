@@ -837,7 +837,23 @@ def _resolve_composio_connector_id(toolkit_slug: str) -> str:
 
 
 def _uses_native_operations(connector_id: str) -> bool:
-    return _normalize_connector_id(connector_id) in NATIVE_OPERATION_CONNECTOR_IDS
+    """Whether Lemma serves this connector's operations itself.
+
+    Two sources, and both matter. A vendored package is one; a
+    `lemma_apps_config.json` entry with its own `static_operations` is the
+    other, and it is how Slack, Gmail and GitHub work now that they install as
+    `http`. Keyed on the packages alone, this returned False the moment a
+    connector migrated -- and the Composio pass then overwrote the curated
+    title, description and icon with the toolkit's own.
+    """
+    normalized = _normalize_connector_id(connector_id)
+    if normalized in NATIVE_OPERATION_CONNECTOR_IDS:
+        return True
+    return normalized in {
+        _normalize_connector_id(app_config["name"])
+        for app_config in _load_lemma_apps_config()
+        if app_config.get("name")
+    }
 
 
 def _resolve_composio_provider_operation_name(tool) -> str:
