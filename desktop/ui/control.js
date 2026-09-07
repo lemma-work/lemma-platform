@@ -253,13 +253,52 @@ async function loadAppUpdate() {
   }
 }
 
+let closeDecisionPending = false;
+
 async function closeLocalSettings() {
-  if (document.querySelector(".config-page.dirty") || pendingSaves.size) {
-    const dialog = $("unsaved-dialog");
-    if (!dialog.open) dialog.showModal();
+  if (closeDecisionPending) return false;
+  const status = $("settings-close-status");
+  status.hidden = true;
+  if (pendingSaves.size) {
+    status.textContent = "A save is still running. Wait for its result before closing.";
+    status.hidden = false;
     return false;
   }
-  return await leaveSettings();
+  closeDecisionPending = true;
+  try {
+    if (document.querySelector(".config-page.dirty")) {
+      const decision = await invoke("confirm_settings_changes");
+      if (decision === "confirm") {
+        for (const page of document.querySelectorAll(".config-page.dirty")) {
+          if (!await saveConfiguration(page.querySelector("[data-save]"))) {
+            status.textContent = "A section could not be saved. Review its error; your draft is preserved.";
+            status.hidden = false;
+            return false;
+          }
+        }
+        if (document.querySelector(".config-page.dirty")) {
+          status.textContent = "New edits are still unsaved. Review them before closing.";
+          status.hidden = false;
+          return false;
+        }
+      } else if (decision !== "discard") {
+        return false;
+      }
+      if (pendingSaves.size) {
+        status.textContent = "A save is still running. Wait for its result before closing.";
+        status.hidden = false;
+        return false;
+      }
+    }
+    return await leaveSettings();
+  } catch (error) {
+    status.textContent = `Couldn't close settings. ${friendlyError(error)}`;
+    status.hidden = false;
+    return false;
+  } finally {
+    closeDecisionPending = false;
+    $("back-to-lemma").focus();
+  }
 }
 
 async function leaveSettings() {
@@ -301,19 +340,6 @@ function labelSecretButton(button, input) {
 }
 
 function configureInteractionHandlers() {
-  document.querySelectorAll("dialog").forEach((dialog) => {
-    dialog.addEventListener("keydown", (event) => {
-      if (event.key !== "Tab") return;
-      const controls = [...dialog.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
-        .filter((control) => control.tabIndex >= 0 && !control.matches(":disabled") && control.getClientRects().length);
-      if (!controls.length) return;
-      event.preventDefault();
-      const current = controls.indexOf(document.activeElement);
-      const next = current < 0 ? (event.shiftKey ? controls.length - 1 : 0)
-        : (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
-      controls[next].focus();
-    });
-  });
   document.querySelectorAll('[data-action="reset-local-data"]').forEach((button) => { button.disabled = !LOCAL_MODE; });
   document.querySelectorAll(".nav-item").forEach((button) => {
     if (!LOCAL_MODE && LOCAL_PAGES.has(button.dataset.page)) {
@@ -326,38 +352,12 @@ function configureInteractionHandlers() {
     : window.__LEMMA_DESKTOP__?.mode === "undecided"
       ? "Choose Lemma Cloud or Local Lemma when you return to setup. Cloud stores workspace data online; Local Lemma stores application data and runs services on this computer. Configured providers and connectors can communicate externally in either mode."
       : "Your workspace data and orchestration live in Lemma Cloud. Installed coding agents run on this computer. Their requested results are sent to your cloud workspace.";
-  $("unsaved-cancel").addEventListener("click", () => $("unsaved-dialog").close());
-  $("unsaved-discard").addEventListener("click", async () => {
-    if (pendingSaves.size) {
-      $("unsaved-status").textContent = "A save is still running. Wait for its result before closing.";
-      return;
-    }
-    $("unsaved-dialog").close();
-    await leaveSettings();
-  });
-  $("unsaved-save").addEventListener("click", async () => {
-    const button = $("unsaved-save");
-    button.disabled = true;
-    $("unsaved-status").textContent = "Saving changes…";
-    try {
-      for (const page of document.querySelectorAll(".config-page.dirty")) {
-        if (!await saveConfiguration(page.querySelector("[data-save]"))) {
-          $("unsaved-status").textContent = "A section could not be saved. Cancel to review its error; your draft is preserved.";
-          return;
-        }
-      }
-      $("unsaved-dialog").close();
-      await closeLocalSettings();
-    } finally {
-      button.disabled = false;
-    }
-  });
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
   $("back-to-lemma").addEventListener("click", closeLocalSettings);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !event.defaultPrevented && !document.querySelector("dialog[open]")) closeLocalSettings();
+    if (event.key === "Escape" && !event.defaultPrevented) closeLocalSettings();
   });
   document.querySelectorAll(".config-page input, .config-page select").forEach((input) => {
     input.addEventListener("input", () => markDirty(input));
@@ -437,8 +437,6 @@ function configureInteractionHandlers() {
   $("sharing-enable-lan").addEventListener("click", enableLanSharing);
   $("sharing-enable-public").addEventListener("click", enablePublicSharing);
   $("sharing-disable").addEventListener("click", disableSharing);
-  $("public-confirm-cancel").addEventListener("click", () => $("public-confirm-dialog").close());
-  $("public-confirm-activate").addEventListener("click", activatePublicSharing);
 }
 
 // Loopback endpoints for the two local runners, and base URLs for the API
@@ -1121,13 +1119,19 @@ async function enableLanSharing() {
   }
 }
 
-function enablePublicSharing() {
-  const dialog = $("public-confirm-dialog");
-  if (!dialog.open) dialog.showModal();
+async function enablePublicSharing() {
+  try {
+    if (await confirmAction(
+      "Create a public link?",
+      "Anyone with this link can create an account and use this Lemma installation. The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.",
+      "I understand · create link",
+    )) await activatePublicSharing();
+  } catch (error) {
+    toast(friendlyError(error), true);
+  }
 }
 
 async function activatePublicSharing() {
-  $("public-confirm-dialog").close();
   const payload = {
     mode: "public",
     provider: sharingProvider,

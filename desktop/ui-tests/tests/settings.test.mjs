@@ -136,18 +136,6 @@ test('an existing snapshot does not prevent reconnect or hide an outage', () => 
   assert.equal(requested, true);
 });
 
-test('closing a dirty page offers a decision before closing the webview', async () => {
-  const { context, element, pages } = fixture();
-  let closed = false;
-  let prompted = false;
-  context.document.querySelector = () => pages[0];
-  context.invoke = async () => { closed = true; };
-  element('unsaved-dialog').showModal = () => { prompted = true; };
-  load(context, 'async function closeLocalSettings(', 'function markDirty(');
-  assert.equal(await vm.runInContext('closeLocalSettings()', context), false);
-  assert.equal(prompted, true);
-  assert.equal(closed, false);
-});
 
 test('unsupported updates never invoke the installer or request a reset', async () => {
   const { context } = fixture();

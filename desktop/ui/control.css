@@ -569,35 +569,6 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
 }
 .toast.error { background: var(--red); color: #ffffff; }
 
-.confirm-dialog {
-  width: min(480px, calc(100vw - 40px));
-  margin: auto;
-  padding: 24px;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 28px 90px rgb(13 15 18 / 0.28);
-}
-.confirm-dialog::backdrop {
-  background: rgb(13 15 18 / 0.52);
-  backdrop-filter: blur(4px);
-}
-.confirm-dialog h2 { margin: 12px 0 6px; font-size: 23px; }
-.confirm-dialog > p { margin: 0 0 18px; color: var(--muted); line-height: 1.55; }
-.confirm-icon {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  color: var(--red);
-  background: var(--red-soft);
-  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
-  border-radius: 50%;
-  font-weight: 800;
-}
-.confirm-actions { justify-content: flex-end; margin-top: 20px; }
-
 @media (max-width: 930px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
   .content { padding-inline: 24px; }

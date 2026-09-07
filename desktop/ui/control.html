@@ -33,6 +33,7 @@
 
       <div class="sidebar-foot">
         <button class="back-button" id="back-to-lemma" type="button"><span aria-hidden="true">←</span> Back to Lemma</button>
+        <p id="settings-close-status" role="status" hidden></p>
         <div><span id="release">Release —</span><br />Credentials are encrypted on this computer; the OS vault protects their key.</div>
       </div>
     </aside>
@@ -320,30 +321,6 @@
     </main>
   </div>
 
-  <dialog class="confirm-dialog" id="public-confirm-dialog" aria-labelledby="public-confirm-title" aria-describedby="public-confirm-description">
-    <div class="confirm-icon" aria-hidden="true">!</div>
-    <h2 id="public-confirm-title">Create a public link?</h2>
-    <p id="public-confirm-description">Anyone with this link can create an account and use this Lemma installation.</p>
-    <div class="danger-warning">
-      <strong>Open signup is enabled.</strong>
-      <p>The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.</p>
-    </div>
-    <div class="button-row confirm-actions">
-      <button class="btn" id="public-confirm-cancel">Cancel</button>
-      <button class="btn danger solid" id="public-confirm-activate">I understand · create link</button>
-    </div>
-  </dialog>
-
-  <dialog class="confirm-dialog" id="unsaved-dialog" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
-    <h2 id="unsaved-title">Save your settings changes?</h2>
-    <p id="unsaved-description">Save each changed section, discard your drafts, or keep editing.</p>
-    <p id="unsaved-status" role="status" aria-live="polite"></p>
-    <div class="button-row confirm-actions">
-      <button class="btn" id="unsaved-cancel" autofocus>Cancel</button>
-      <button class="btn danger" id="unsaved-discard">Discard</button>
-      <button class="btn primary" id="unsaved-save">Save changes</button>
-    </div>
-  </dialog>
   <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
 </body>
 </html>

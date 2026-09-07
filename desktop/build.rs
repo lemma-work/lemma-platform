@@ -36,6 +36,7 @@ const COMMANDS: &[&str] = &[
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",
+    "confirm_settings_changes",
     "resolve_confirmation",
     "open_developer_tools",
     "local_recovery_options",

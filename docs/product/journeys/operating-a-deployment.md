@@ -188,6 +188,35 @@ rather than degrading in a way that only shows up as confused users.
 
 ---
 
+## Desktop settings
+
+### PS-OPS-040 — Desktop settings keep drafts until a deliberate decision
+**Status:** manual
+
+- While a person edits Desktop settings, the system shall preserve their draft
+  during health refreshes and navigation between settings sections.
+- When a person leaves Desktop settings with unsaved changes, the system shall
+  offer Save changes, Discard, and Cancel in an app-owned confirmation.
+- When that confirmation opens, the system shall focus Cancel.
+- When a person presses Escape, the system shall preserve the draft and return
+  focus to the settings navigation action.
+- When a person chooses Save changes, the system shall save each changed section
+  before leaving settings.
+- If a section cannot be saved, the system shall retain its draft and display
+  the failure without closing settings.
+- While an admitted save is unfinished, the system shall keep settings open.
+- When a person chooses Discard, the system shall leave settings without saving
+  their remaining drafts.
+
+> **Verified by:** installed-app QA on each supported platform: edit multiple
+> sections, wait for health refresh, exercise each decision with mouse and
+> keyboard, and attempt an invalid provider save. Check native accessibility
+> for all three controls and confirm saved values after reopening settings.
+> Executable desktop browser and daemon tests cover the deterministic state
+> transitions; they do not replace the native window/IPC check.
+
+**Contracts:** *(native desktop IPC; see [Desktop architecture](../../architecture/desktop.md))*
+
 ## Not covered here
 
 | Concern | Where it lives |

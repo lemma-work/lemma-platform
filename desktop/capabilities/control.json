@@ -23,6 +23,7 @@
     "allow-sharing-action",
     "allow-close-local-settings",
     "allow-confirm-destructive-action",
+    "allow-confirm-settings-changes",
     "allow-open-developer-tools",
     "allow-local-recovery-options",
     "allow-reset-local-data",

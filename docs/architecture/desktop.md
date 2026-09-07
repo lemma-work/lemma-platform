@@ -105,6 +105,15 @@ existing guest release is blocked until a data-preserving migration is available
 
 ## 4. Lifecycle protocol
 
+Guest readiness and host connectivity are separate startup gates. After the
+guest starts PostgreSQL and Redis, locald refreshes the guest endpoint and checks
+both TCP services from the host before launching migrations or the backend.
+This check also runs when migrations are cached. Authentication starts alongside
+the backend, and all private services must be reachable before reporting ready.
+Connectivity waits honor cancellation and their overall deadline. Failures name
+the unavailable service and distinguish a denied connection, missing route,
+refused connection, and timeout without presenting a backend traceback.
+
 Every mutating operation has an `operation_id`. Events include:
 
 ```json
@@ -311,6 +320,14 @@ denied. Privileged commands verify both webview label and current URL.
 Escape, Close, and Back to Lemma destroy the child and focus the original
 workspace.
 
+Unsaved settings and public-sharing decisions use the same trusted confirmation
+webview as recovery and Quit. It opens with Cancel focused and traps keyboard
+focus until answered. Decisions are typed and bound to the requesting operation;
+Discard is accepted only for a settings prompt. A close request cannot interrupt
+an admitted save. Save applies dirty sections sequentially and retains the page
+after an error or newer edits, with an inline explanation. Cancel preserves the
+draft and restores focus to Back to Lemma.
+
 The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
 dependencies. Navigation is Overview; AI provider; Sharing,
 Integrations/Channels; Runtime, Updates/Diagnostics.
@@ -481,7 +498,10 @@ actions. Reusing a saved AI key requires the same protocol and provider URL;
 changing the destination requires a replacement or explicit removal.
 
 Apply validates the provider, persists configuration, and restarts only the
-backend when it is running. Failed activation restores the prior configuration
+backend when it is running. Reconfiguration holds crash-reconciliation ownership
+without setting the global Stop flag, so the restarted backend must pass its
+normal health gate. A real Stop cancels that wait and cannot be reversed by a
+late restart. The frontend stays running. Failed activation restores the prior configuration
 and secrets. `locald/config-operations.json` records operation IDs and outcomes
 without credential values. A snapshot exposes these outcomes so settings can
 recover after missing an event. A daemon restart marks unfinished writes

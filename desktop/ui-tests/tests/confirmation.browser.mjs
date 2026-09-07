@@ -32,11 +32,11 @@ test('Enter and Escape cancel; only an explicit action approves cleanup', async 
     const page = await prompt(t);
     assert.equal(await page.locator(':focus').textContent(), 'Cancel');
     await page.keyboard.press(key);
-    assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', confirmed: false } }]);
+    assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision: 'cancel' } }]);
   }
   const page = await prompt(t);
   await page.getByRole('button', { name: 'Erase Local Lemma' }).click();
-  assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', confirmed: true } }]);
+  assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision: 'confirm' } }]);
   assert.equal(await page.getByRole('button', { name: 'Erase Local Lemma' }).isDisabled(), true);
 });
 test('prompt copy is inert, keyboard focus is contained, and small windows scroll', async (t) => {
@@ -59,4 +59,27 @@ test('failed approval remains visible and can be cancelled; notices have one Clo
   const notice = await prompt(t, { cancelable: false, confirmLabel: 'Close' });
   assert.equal(await notice.getByRole('button').count(), 1);
   assert.equal(await notice.locator(':focus').textContent(), 'Close');
+});
+
+test('settings offers three keyboard-contained choices and Escape always cancels', async (t) => {
+  const page = await prompt(t, { title: 'Save your settings changes?', confirmLabel: 'Save changes', allowDiscard: true });
+  assert.deepEqual(await page.getByRole('button').allTextContents(), ['Cancel', 'Discard', 'Save changes']);
+  assert.equal(await page.locator(':focus').textContent(), 'Cancel');
+  for (const name of ['Discard', 'Save changes', 'Cancel']) {
+    await page.keyboard.press('Tab');
+    assert.equal(await page.locator(':focus').textContent(), name);
+  }
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.locator(':focus').textContent(), 'Save changes');
+  await page.keyboard.press('Escape');
+  assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision: 'cancel' } }]);
+});
+
+test('discard and save resolve distinct settings decisions without duplicate submissions', async (t) => {
+  for (const [button, decision] of [['Discard', 'discard'], ['Save changes', 'confirm']]) {
+    const page = await prompt(t, { confirmLabel: 'Save changes', allowDiscard: true });
+    await page.getByRole('button', { name: button, exact: true }).click();
+    assert.deepEqual(await page.evaluate(() => window.calls), [{ command: 'resolve_confirmation', args: { id: 'owned-operation', decision } }]);
+    assert.equal(await page.getByRole('button', { name: button, exact: true }).isDisabled(), true);
+  }
 });

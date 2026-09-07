@@ -4681,6 +4681,26 @@ fn confirm_destructive_action_impl(
     show_app_prompt(app, title, message, confirm_label, true)
 }
 
+#[tauri::command]
+async fn confirm_settings_changes(
+    window: Webview,
+    app: AppHandle,
+) -> Result<confirmation::Decision, String> {
+    require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        show_app_decision(
+            app,
+            "Save your settings changes?".into(),
+            "Save each changed section, discard your drafts, or keep editing.".into(),
+            "Save changes".into(),
+            true,
+            true,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn show_app_prompt(
     app: AppHandle,
     title: String,
@@ -4688,10 +4708,30 @@ fn show_app_prompt(
     confirm_label: String,
     cancelable: bool,
 ) -> Result<bool, String> {
+    show_app_decision(app, title, message, confirm_label, cancelable, false)
+        .map(|decision| decision == confirmation::Decision::Confirm)
+}
+
+fn show_app_decision(
+    app: AppHandle,
+    title: String,
+    message: String,
+    confirm_label: String,
+    cancelable: bool,
+    allow_discard: bool,
+) -> Result<confirmation::Decision, String> {
     let shell: State<Shell> = app.state();
     let id = operation_id("confirmation");
-    let receiver = shell.confirmations.begin(id.clone())?;
-    let result = create_confirmation_overlay(&app, &id, title, message, confirm_label, cancelable);
+    let receiver = shell.confirmations.begin(id.clone(), allow_discard)?;
+    let result = create_confirmation_overlay(
+        &app,
+        &id,
+        title,
+        message,
+        confirm_label,
+        cancelable,
+        allow_discard,
+    );
     if let Err(error) = result {
         shell.confirmations.cancel();
         close_confirmation_overlay(&app);
@@ -4709,13 +4749,14 @@ fn create_confirmation_overlay(
     message: String,
     confirm_label: String,
     cancelable: bool,
+    allow_discard: bool,
 ) -> Result<(), String> {
     let main = app
         .get_window("main")
         .ok_or("The app window is unavailable.")?;
     restore_dock_presence(app);
     main.show().map_err(|error| error.to_string())?;
-    let payload = json!({"id": id, "title": title, "message": message, "confirmLabel": confirm_label, "cancelable": cancelable});
+    let payload = json!({"id": id, "title": title, "message": message, "confirmLabel": confirm_label, "cancelable": cancelable, "allowDiscard": allow_discard});
     let builder = WebviewBuilder::new("confirmation", WebviewUrl::App("confirmation.html".into()))
         .auto_resize()
         .focused(true)
@@ -4751,7 +4792,7 @@ async fn resolve_confirmation(
     window: Webview,
     app: AppHandle,
     id: String,
-    confirmed: bool,
+    decision: confirmation::Decision,
 ) -> Result<(), String> {
     if window.label() != "confirmation"
         || !window
@@ -4760,12 +4801,27 @@ async fn resolve_confirmation(
     {
         return Err("Only the app confirmation can approve this action.".into());
     }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let shell: State<Shell> = handle.state();
+        let result = shell.confirmations.resolve(&id, decision, || {
+            window.close().map_err(|error| error.to_string())?;
+            if let Some(previous) = handle
+                .get_webview("control")
+                .or_else(|| handle.get_webview("main"))
+            {
+                let _ = previous.set_focus();
+            }
+            Ok(())
+        });
+        let _ = sender.send(result);
+    })
+    .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        // Close before releasing the waiter: a following action may open a new prompt.
-        let shell: State<Shell> = app.state();
-        shell.confirmations.validate(&id)?;
-        close_confirmation_overlay(&app);
-        shell.confirmations.resolve(&id, confirmed)
+        receiver
+            .recv()
+            .map_err(|_| "The confirmation closed without a decision.".to_string())?
     })
     .await
     .map_err(|error| error.to_string())?
@@ -7077,6 +7133,7 @@ fn main() {
             sharing_action,
             close_local_settings,
             confirm_destructive_action,
+            confirm_settings_changes,
             resolve_confirmation,
             open_developer_tools,
             local_recovery_options,

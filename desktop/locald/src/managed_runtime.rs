@@ -276,7 +276,7 @@ impl ManagedRuntimeController {
             32,
             "booting the app-owned Linux appliance",
         );
-        let status = self.runtime.start().inspect_err(|_error| {
+        self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
         })?;
         checkpoint()?;
@@ -326,6 +326,28 @@ impl ManagedRuntimeController {
                 let _ = self.runtime.stop();
                 return Err(error);
             }
+        }
+
+        checkpoint()?;
+        let status = self.runtime.health()?;
+        progress(
+            "private-connectivity",
+            "Connecting to local services",
+            61,
+            "checking this computer can reach the private database and cache",
+        );
+        // Guest health proves the services are running inside the VM. Host
+        // reachability is a separate gate, including when migrations are cached.
+        let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
+        if let Err(error) = wait_for_tcp_services(
+            host,
+            &PRIVATE_SERVICE_PORTS[..2],
+            Duration::from_secs(30),
+            &checkpoint,
+        ) {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            return Err(error);
         }
 
         // The auth service starts here and is *waited for* later, because the
@@ -429,7 +451,22 @@ impl ManagedRuntimeController {
         // The same check as before, in the same place in the sequence relative
         // to anything that uses these services -- only now the services had the
         // backend's boot to finish coming up in, so it usually finds them ready.
-        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+        let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
+        if let Err(error) = wait_for_tcp_services(
+            host,
+            &PRIVATE_SERVICE_PORTS,
+            Duration::from_secs(90),
+            || {
+                if self.cancellation.is_cancelled() {
+                    Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Local startup was cancelled.",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
             let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
             return Err(error);
@@ -923,53 +960,74 @@ fn wsl_distribution_for(_root: &Path) -> String {
     DEFAULT_WSL_DISTRIBUTION.to_string()
 }
 
-fn wait_for_private_services(status: &ManagedRuntimeStatus, timeout: Duration) -> io::Result<()> {
-    let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
-    wait_for_tcp_services(host, &PRIVATE_SERVICE_PORTS, timeout)
-}
-
 fn wait_for_tcp_services(
     host: Ipv4Addr,
     services: &[(&str, u16)],
     timeout: Duration,
+    checkpoint: impl Fn() -> io::Result<()>,
 ) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
-    let mut pending = services.to_vec();
-    let mut last_error = None;
+    let mut pending = services
+        .iter()
+        .map(|&(label, port)| (label, port, io::ErrorKind::TimedOut))
+        .collect::<Vec<_>>();
     while !pending.is_empty() {
-        pending.retain(|(_, port)| {
+        checkpoint()?;
+        let mut index = 0;
+        while index < pending.len() {
+            checkpoint()?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (_, port, kind) = &mut pending[index];
             let address = SocketAddr::from((host, *port));
-            match TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
-                Ok(_) => false,
+            match TcpStream::connect_timeout(&address, remaining.min(Duration::from_millis(200))) {
+                Ok(_) => {
+                    pending.remove(index);
+                }
                 Err(error) => {
-                    last_error = Some(error);
-                    true
+                    *kind = error.kind();
+                    index += 1;
                 }
             }
-        });
+        }
+        checkpoint()?;
         if pending.is_empty() {
             return Ok(());
         }
         if Instant::now() >= deadline {
             let pending = pending
                 .iter()
-                .map(|(label, port)| format!("{label} ({host}:{port})"))
+                .map(|(label, _, kind)| format!("{label}: {}", private_connection_reason(*kind)))
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "private runtime services did not become reachable within {} seconds: {pending}; last error: {}",
-                    timeout.as_secs(),
-                    last_error
-                        .map(|error| error.to_string())
-                        .unwrap_or_else(|| "connection timed out".into())
+                    "This computer could not connect to its private Lemma services ({pending}). Check local network permissions and firewall settings, then retry. Your stored data has not been reset."
                 ),
             ));
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100)),
+        );
     }
     Ok(())
+}
+
+fn private_connection_reason(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::PermissionDenied => "connection denied",
+        io::ErrorKind::HostUnreachable | io::ErrorKind::NetworkUnreachable => {
+            "network route unavailable"
+        }
+        io::ErrorKind::ConnectionRefused => "service not accepting connections",
+        io::ErrorKind::TimedOut => "connection timed out",
+        _ => "connection unavailable",
+    }
 }
 
 fn runtime_path_value(path: &Path) -> io::Result<String> {
@@ -1462,7 +1520,100 @@ mod tests {
             ("second", second.local_addr().unwrap().port()),
         ];
 
-        wait_for_tcp_services(Ipv4Addr::LOCALHOST, &services, Duration::from_millis(250)).unwrap();
+        wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &services,
+            Duration::from_millis(250),
+            || Ok(()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_service_gate_honors_cancellation_before_connecting() {
+        let service = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        service.set_nonblocking(true).unwrap();
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[("Redis", service.local_addr().unwrap().port())],
+            Duration::from_secs(30),
+            || Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled")),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            service.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn private_service_gate_cancellation_interrupts_an_unfinished_wait() {
+        use std::cell::Cell;
+        let service = crate::port_reservation::PortReservation::ephemeral().unwrap();
+        let port = service.port();
+        let checks = Cell::new(0);
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[("Redis", port)],
+            Duration::from_secs(30),
+            || {
+                checks.set(checks.get() + 1);
+                if checks.get() >= 3 {
+                    Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn private_service_gate_reports_only_unreachable_services() {
+        let ready = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let unavailable = crate::port_reservation::PortReservation::ephemeral().unwrap();
+        let unavailable_port = unavailable.port();
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[
+                ("PostgreSQL", ready.local_addr().unwrap().port()),
+                ("Redis", unavailable_port),
+            ],
+            Duration::from_secs(1),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        // A bound, non-listening socket can refuse or time out by platform.
+        assert!(error.to_string().contains("Redis:"), "{error}");
+        assert!(!error.to_string().contains("PostgreSQL"));
+        assert!(error.to_string().contains("stored data has not been reset"));
+    }
+
+    #[test]
+    fn private_connectivity_reasons_do_not_misdiagnose_route_failure_as_permission_denial() {
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::ConnectionRefused),
+            "service not accepting connections"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::PermissionDenied),
+            "connection denied"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::HostUnreachable),
+            "network route unavailable"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::NetworkUnreachable),
+            "network route unavailable"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::TimedOut),
+            "connection timed out"
+        );
     }
 
     /// The case that shipped broken: the Mac slept for eleven hours, so wall

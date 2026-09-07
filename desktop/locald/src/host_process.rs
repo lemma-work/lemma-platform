@@ -991,8 +991,11 @@ impl HostProcessManager {
     }
 
     pub fn restart_backend(&self) -> io::Result<()> {
+        // Suppress crash reconciliation with ownership, not the stop signal:
+        // health probes must still run and a real Stop must remain authoritative.
+        let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
+        self.check_running_request()?;
         self.health_ready.store(false, Ordering::Release);
-        self.desired_running.store(false, Ordering::Release);
         self.stop_process("backend")?;
         {
             let mut state = self.state.lock().expect("host process lock poisoned");
@@ -1001,18 +1004,30 @@ impl HostProcessManager {
             state.restart_history.remove("backend");
             state.restart_not_before.remove("backend");
         }
+        self.check_running_request()?;
         self.spawn_if_missing("backend")?;
         if let Some(health) = self.health_spec("backend") {
             if let Err(error) = self.wait_process_health("backend", &health) {
                 let _ = self.stop_process("backend");
-                return Err(io::Error::other(format!(
-                    "backend failed health gate after configuration: {error}"
-                )));
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("backend failed health gate after configuration: {error}"),
+                ));
             }
         }
         self.health_ready.store(true, Ordering::Release);
-        self.desired_running.store(true, Ordering::Release);
         Ok(())
+    }
+
+    fn check_running_request(&self) -> io::Result<()> {
+        if self.desired_running.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "service health check cancelled by stop",
+            ))
+        }
     }
 
     pub fn status(&self) -> Vec<HostProcessStatus> {
@@ -1421,12 +1436,7 @@ impl HostProcessManager {
         let mut healthy_since = None;
         let mut last_error = None;
         while Instant::now() < deadline {
-            if !self.desired_running.load(Ordering::Acquire) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "service health check cancelled by stop",
-                ));
-            }
+            self.check_running_request()?;
             if let Some(exit) = self.take_process_exit(id)? {
                 let excerpt = tail_log(&self.log_dir.join(format!("{id}.log")), 8 * 1024);
                 let suffix = excerpt
@@ -2720,23 +2730,58 @@ mod tests {
     /// rewrites every health spec's expected body to it, so what counts as
     /// healthy is not known until the generation exists.
     #[cfg(unix)]
+    struct HealthServer {
+        stop: std::sync::mpsc::Sender<()>,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+
+    #[cfg(unix)]
+    impl Drop for HealthServer {
+        fn drop(&mut self) {
+            let _ = self.stop.send(());
+            if let Some(worker) = self.worker.take() {
+                crate::join_within(worker, "the disposable health endpoint");
+            }
+        }
+    }
+
+    #[cfg(unix)]
     fn slow_response(
         delay_ms: u64,
         body: Arc<Mutex<String>>,
-    ) -> (
-        HttpHealthSpec,
-        Arc<Mutex<Option<Instant>>>,
-        thread::JoinHandle<()>,
-    ) {
+    ) -> (HttpHealthSpec, Arc<Mutex<Option<Instant>>>, HealthServer) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let served = Arc::clone(&body);
         let healthy_at = Arc::new(Mutex::new(None));
         let observed = Arc::clone(&healthy_at);
-        let server = thread::spawn(move || {
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
             let mut ready_at = None;
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
+            loop {
+                if !matches!(
+                    stopped.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ) {
+                    break;
+                }
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if !matches!(
+                            stopped.recv_timeout(Duration::from_millis(10)),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                        ) {
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(_) => break,
+                };
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
                 let ready =
                     *ready_at.get_or_insert(Instant::now() + Duration::from_millis(delay_ms));
                 if Instant::now() < ready {
@@ -2765,7 +2810,10 @@ mod tests {
                 stabilization_seconds: 0,
             },
             healthy_at,
-            server,
+            HealthServer {
+                stop,
+                worker: Some(worker),
+            },
         )
     }
 
@@ -3777,14 +3825,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn backend_config_restart_keeps_the_frontend_process_running() {
+        let body = Arc::new(Mutex::new(String::new()));
+        let (health, _, _server) = slow_response(0, Arc::clone(&body));
         let mut backend = service("backend", &[]);
         backend.command = long_running_command();
+        backend.health = Some(health);
         let mut frontend = service("frontend", &["backend"]);
         frontend.command = long_running_command();
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
         let manager = manager_in(&root, value);
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
         manager.start_all().unwrap();
         assert!(manager.backend_restart_available());
         manager.mark_dependency_unavailable("private runtime is cold".into());
@@ -3814,7 +3866,97 @@ mod tests {
         let after = pids(&manager, "after the restart");
         assert_ne!(before["backend"], after["backend"]);
         assert_eq!(before["frontend"], after["frontend"]);
+        assert_eq!(manager.status_event(None)["ready"], true);
         manager.stop_all().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_config_restart_does_not_reverse_a_stop_request() {
+        let root = tempdir().unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        manager.start_all().unwrap();
+        let before = process_status(&manager, "backend").pid;
+        manager.request_stop();
+        let result = manager.restart_backend();
+        let after = process_status(&manager, "backend").pid;
+        manager.stop_all().unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(before, after);
+        assert!(!manager.desired_running.load(Ordering::Acquire));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_config_restart_can_recover_after_a_failed_health_gate() {
+        let root = tempdir().unwrap();
+        let body = Arc::new(Mutex::new(String::new()));
+        let (mut health, _, _server) = slow_response(0, Arc::clone(&body));
+        health.timeout_seconds = 1;
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.health = Some(health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        let generation = manager.prepare_runtime_generation().unwrap();
+        *body.lock().unwrap() = generation.clone();
+        manager.start_all().unwrap();
+        let frontend_pid = process_status(&manager, "frontend").pid;
+        *body.lock().unwrap() = "wrong-runtime".into();
+        assert!(manager.restart_backend().is_err());
+        assert_eq!(manager.status_event(None)["ready"], false);
+        assert!(!process_status(&manager, "backend").running);
+        *body.lock().unwrap() = generation;
+        manager.restart_backend().unwrap();
+        assert_eq!(manager.status_event(None)["ready"], true);
+        assert_eq!(process_status(&manager, "frontend").pid, frontend_pid);
+        manager.stop_all().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_config_restart_health_wait_can_be_stopped() {
+        let root = tempdir().unwrap();
+        let body = Arc::new(Mutex::new(String::new()));
+        let (health, probed, _server) = slow_response(0, Arc::clone(&body));
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        backend.health = Some(health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
+        manager.start_all().unwrap();
+        *body.lock().unwrap() = "not-ready".into();
+        *probed.lock().unwrap() = None;
+        let restarting = Arc::clone(&manager);
+        let worker = thread::spawn(move || restarting.restart_backend());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while probed.lock().unwrap().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let saw_probe = probed.lock().unwrap().is_some();
+        manager.request_stop();
+        let result = worker.join().unwrap();
+        manager.stop_all().unwrap();
+        assert!(
+            saw_probe,
+            "the restarted backend never reached its health gate"
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(!manager.desired_running.load(Ordering::Acquire));
+        assert!(manager.status().iter().all(|service| !service.running));
     }
 
     #[cfg(unix)]
