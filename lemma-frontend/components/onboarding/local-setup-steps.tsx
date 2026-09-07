@@ -33,7 +33,6 @@ import {
     Plus,
     RefreshCw,
     Share2,
-    Sparkles,
     TerminalSquare,
 } from "@/components/ui/icons";
 import { HarnessProfileDialog, type HarnessDialogTarget } from "@/components/agents/harness-profile-dialog";
@@ -60,8 +59,6 @@ import { StepLoader } from "@/components/brand/loader";
 import { Skeleton } from "@/components/shared/loading";
 import {
     RECHECK_SETTLE_MS,
-    discoveryHeadline,
-    discoveryLines,
     discoveryPhase,
     discoveryStatusLine,
     harnessRowStates,
@@ -70,7 +67,7 @@ import { agentHostBridge } from "@/lib/desktop/agent-host-bridge";
 import { useLocalProviderSetup, type ProviderPreset as Preset } from "@/lib/desktop/provider-setup";
 import { isReadyLocalAgent } from "@/lib/desktop/local-agent-default";
 import { RuntimeProfileKind } from "lemma-sdk";
-import { SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
+import { SetupChoicesPage, SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
 import type { SetupStep } from "./account-onboarding-helpers";
 
 type StepChrome = {
@@ -215,7 +212,6 @@ export function LocalIntelligenceStep({
     organizationId,
     onContinue,
     onBack,
-    steps,
 }: StepChrome & {
     organizationId: string | null;
     onContinue: (outcome: "ready" | "deferred") => void;
@@ -330,17 +326,9 @@ export function LocalIntelligenceStep({
     const configured = hasAgent || aiStatus === "ready";
 
     return (
-        <SetupSplitPanel
+        <SetupChoicesPage
             title="What should answer in your chats?"
-            subtitle={`A coding agent already on ${computerNoun}, an API provider, or both. Nothing here has AI until one of them is set.`}
-            preview={
-                <LocalPreview
-                    icon={<Sparkles className="size-5" />}
-                    headline={connectionError ? "This computer needs attention" : discoveryHeadline(phase, foundCount, computerNoun)}
-                    lines={connectionError ? [connectionError] : discoveryLines(phase, foundCount, computerNoun)}
-                    working={working}
-                />
-            }
+            subtitle={`Use an agent on ${computerNoun}, connect a model provider, or set up both.`}
             onBack={onBack}
             footer={(
                 <div className="flex flex-wrap items-center gap-3">
@@ -360,15 +348,9 @@ export function LocalIntelligenceStep({
                     ) : null}
                 </div>
             )}
-            currentStep="intelligence"
-            steps={steps}
         >
-            {/* max-w-xl, matching the title's measure above it — the panel sets
-                that on the heading but leaves children full width, so a wider
-                block here sits visibly proud of the text it belongs to. */}
-            <div className="w-full max-w-xl space-y-5 text-left">
+            <div className="min-w-0">
                 {!hasBridge ? <BridgeUnavailableNote /> : null}
-
                 <section className="space-y-2">
                     <div className="flex items-center justify-between">
                         <p className="text-xs font-medium text-[var(--text-tertiary)]">
@@ -387,12 +369,6 @@ export function LocalIntelligenceStep({
                         </Button>
                     </div>
 
-                    {/*
-                     * Here rather than only in the preview, which is `hidden
-                     * lg:flex` -- so on a narrow window the screen said nothing
-                     * at all for the whole minute a first probe takes, next to
-                     * four grey rows and a disabled button.
-                     */}
                     {connectionError ? (
                         <div role="alert" className="space-y-2 rounded-md border border-[var(--border-subtle)] p-3">
                             <p className="text-sm">{connectionError}</p>
@@ -414,13 +390,6 @@ export function LocalIntelligenceStep({
                         </p>
                     ) : null}
 
-                    {/*
-                     * Every agent Lemma can drive, from the first frame, each
-                     * resolving on its own. The previous version showed an empty
-                     * panel with one sentence in it for the whole minute a first
-                     * probe takes — which reads as broken rather than busy — and
-                     * then had the list appear out of nothing.
-                     */}
                     {rows.map((row) => {
                         if (row.state !== "found") {
                             return (
@@ -436,6 +405,7 @@ export function LocalIntelligenceStep({
                             <HarnessRow
                                 key={row.harness.id}
                                 harness={row.harness}
+                                compact
                                 hostOnline={hostOnline}
                                 savedProfile={saved ? { name: saved.name, archived: saved.archived } : null}
                                 onRecheck={recheck}
@@ -504,28 +474,30 @@ export function LocalIntelligenceStep({
                     ) : null}
                 </section>
 
+                <p className="mt-3 text-xs text-[var(--text-tertiary)]">Agents use their own sign-in. No API key needed.</p>
+            </div>
+            <div className="min-w-0 md:border-l md:border-[var(--border-subtle)] md:pl-8">
                 <section className="space-y-3">
                     <p className="text-xs font-medium text-[var(--text-tertiary)]">
-                        Or connect a model provider
+                        Model providers
                     </p>
-                    <div className="flex flex-wrap gap-2">
+                    {!preset ? <div className="grid grid-cols-2 gap-2">
                         {presets(computerNoun).map((candidate) => (
                             <button
                                 key={candidate.id}
                                 type="button"
-                                data-active={preset?.id === candidate.id}
                                 disabled={applying}
                                 onClick={() => selectPreset(candidate)}
-                                className={[
-                                    "setup-path-choice flex min-w-[7.5rem] flex-col gap-0.5 px-3 py-2 text-left",
-                                    preset?.id === candidate.id ? "is-active" : "",
-                                ].join(" ")}
+                                className="setup-path-choice flex min-w-[7.5rem] flex-col gap-0.5 px-3 py-2 text-left"
                             >
                                 <span className="text-sm font-medium text-[var(--text-primary)]">{candidate.title}</span>
                                 <span className="text-xs text-[var(--text-tertiary)]">{candidate.hint}</span>
                             </button>
                         ))}
-                    </div>
+                    </div> : <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{preset.title}</span>
+                        <Button type="button" variant="quiet" size="sm" disabled={applying} onClick={() => selectPreset(null)}>Choose another provider</Button>
+                    </div>}
 
                     {providerError ? <p role="alert" className="text-sm text-[var(--state-error)]">{providerError}</p> : null}
                     {preset ? (
@@ -592,12 +564,9 @@ export function LocalIntelligenceStep({
                     ) : null}
                 </section>
 
-                <p className="text-xs text-[var(--text-tertiary)]">
-                    A provider is this installation&apos;s single default — one profile, not one per
-                    person. If you later open Lemma to your network or the web, that key answers for
-                    everyone. A coding agent stays on {computerNoun} and uses its own credentials.
+                <p className="mt-3 text-xs text-[var(--text-tertiary)]">
+                    The provider is shared by this local installation. Prompts and tool results can be sent to the service you choose.
                 </p>
-
 
             </div>
 
@@ -615,7 +584,7 @@ export function LocalIntelligenceStep({
                     }}
                 />
             ) : null}
-        </SetupSplitPanel>
+        </SetupChoicesPage>
     );
 }
 

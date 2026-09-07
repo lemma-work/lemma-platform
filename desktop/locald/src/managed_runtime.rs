@@ -525,6 +525,10 @@ impl ManagedRuntimeController {
         }
     }
 
+    pub fn check_guest_kernel(&self) -> io::Result<()> {
+        self.runtime.check_guest_kernel()
+    }
+
     pub fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
         let status = self.status().ok_or_else(|| {
             io::Error::new(

@@ -33,6 +33,20 @@ function setup() {
 }
 
 describe("provider setup", () => {
+    it("returning to provider choices clears the credential and ignores pending discovery", async () => {
+        const pending = deferred<string[]>();
+        vi.mocked(discoverProviderModels).mockReturnValue(pending.promise);
+        const { result } = setup();
+        let listing!: Promise<void>;
+        act(() => { listing = result.current.listModels(); });
+        act(() => result.current.selectPreset(null));
+        await act(async () => { pending.resolve(["old-model"]); await listing; });
+        expect(result.current.preset).toBeNull();
+        expect(result.current.apiKey).toBe("");
+        expect(result.current.models).toEqual([]);
+        expect(result.current.listing).toBe(false);
+        expect(result.current.error).toBeNull();
+    });
     it("discards a model list from a provider the user switched away from", async () => {
         const old = deferred<string[]>();
         vi.mocked(discoverProviderModels).mockReturnValueOnce(old.promise).mockResolvedValueOnce(["second-model"]);

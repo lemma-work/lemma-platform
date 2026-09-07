@@ -287,3 +287,4 @@ mod console_window_policy {
         }
     }
 }
+mod credential_vault;

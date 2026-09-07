@@ -11,6 +11,9 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(any(target_os = "macos", test))]
+mod kernel_health;
+
 const CAPABILITY_BYTES: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Spawn a child without flashing up a console window.
@@ -211,6 +214,10 @@ impl ManagedRuntime {
                 "invalid guest operation",
             ));
         }
+        #[cfg(target_os = "macos")]
+        if operation != "system.shutdown" && !operation.starts_with("diagnostics.") {
+            self.check_guest_kernel()?;
+        }
         let request = json!({
             "version": 1,
             "operation": operation,
@@ -232,8 +239,12 @@ impl ManagedRuntime {
             budget,
             MAX_RESPONSE_BYTES,
             cancellation,
-        )
-        .map_err(|error| match error {
+        );
+        #[cfg(target_os = "macos")]
+        if operation != "system.shutdown" && !operation.starts_with("diagnostics.") {
+            self.check_guest_kernel()?;
+        }
+        let output = output.map_err(|error| match error {
             lemma_desktop_process::SetupProcessError::TimedOut => io::Error::new(
                 io::ErrorKind::TimedOut,
                 "runtime bridge exceeded its request deadline",
@@ -326,6 +337,8 @@ impl ManagedRuntime {
     /// succeeded: the VM or WSL distribution may disappear while the native
     /// backend and frontend processes remain alive.
     pub fn health(&self) -> io::Result<ManagedRuntimeStatus> {
+        #[cfg(target_os = "macos")]
+        self.check_guest_kernel()?;
         #[cfg(target_os = "macos")]
         if let Some(error) = self.macos_exit_error()? {
             return Err(error);
@@ -484,10 +497,18 @@ impl ManagedRuntime {
             .map(|(_, reason)| reason.trim().to_owned())
     }
 
+    pub fn check_guest_kernel(&self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        kernel_health::check_console(&self.config.local_root.join("runtime/macos/console.log"))?;
+        Ok(())
+    }
+
     fn wait_ready(&self) -> io::Result<ManagedRuntimeStatus> {
         let deadline = Instant::now() + Duration::from_secs(120);
         let mut last_error = None;
         while Instant::now() < deadline {
+            #[cfg(target_os = "macos")]
+            self.check_guest_kernel()?;
             #[cfg(target_os = "macos")]
             if let Some(error) = self.macos_exit_error()? {
                 return Err(error);
@@ -1428,6 +1449,40 @@ mod tests {
     }
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kernel_fault_blocks_work_before_dispatch_but_not_recovery_or_next_boot() {
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("missing-bridge"),
+            vz_executable: root.path().join("missing-vz"),
+        })
+        .unwrap();
+        let console = runtime.config.local_root.join("runtime/macos/console.log");
+        fs::create_dir_all(console.parent().unwrap()).unwrap();
+        fs::write(&console, "Internal error: Oops: 0000000096000004\n").unwrap();
+        for error in [
+            runtime.health().unwrap_err(),
+            runtime.request("container.start", json!({})).unwrap_err(),
+            runtime.wait_ready().unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("guest kernel crashed"), "{error}");
+        }
+        for operation in ["system.shutdown", "diagnostics.logs"] {
+            let error = runtime.request(operation, json!({})).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        }
+        rotate_log(&console, 0).unwrap();
+        runtime.check_guest_kernel().unwrap();
+        assert_eq!(
+            runtime.request("container.start", json!({})).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
 
     #[test]
     fn an_exit_is_explained_by_the_last_complaint_not_the_first_boot_retry() {

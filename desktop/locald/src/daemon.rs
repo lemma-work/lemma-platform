@@ -1948,7 +1948,12 @@ impl Daemon {
                 "component": component,
                 "log_source": log_source,
             }));
-        }, || self.lifecycle.checkpoint())?;
+        }, || self.lifecycle.checkpoint()).or_else(|error| {
+            if let Some(runtime) = self.managed_runtime.as_ref() {
+                runtime.check_guest_kernel()?;
+            }
+            Err(error)
+        })?;
         // The auth service was started before the backend and is only now
         // waited for, so it came up alongside it rather than in front of it.
         // Nothing may report ready until it answers: a workspace whose first
@@ -2522,7 +2527,9 @@ fn validate_canonical_origin(origin: &str) -> io::Result<()> {
 }
 
 fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
-    if message.contains("restart to finish enabling WSL 2") {
+    if message.contains("Linux guest kernel crashed") {
+        "guest-kernel-failed"
+    } else if message.contains("restart to finish enabling WSL 2") {
         "wsl-reboot-required"
     } else if message.contains("WSL 2 is required") {
         "wsl-required"
@@ -2540,7 +2547,9 @@ fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'stat
 
 fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
     let message = message.to_ascii_lowercase();
-    if message.contains("migration") || message.contains("alembic") {
+    if message.contains("guest kernel") {
+        ("infrastructure", "infrastructure")
+    } else if message.contains("migration") || message.contains("alembic") {
         ("migrations", "migrations")
     } else if message.contains("frontend") || message.contains("eaddrinuse") {
         ("frontend", "frontend")
@@ -2872,6 +2881,15 @@ mod tests {
 
     #[test]
     fn startup_errors_select_the_relevant_diagnostic_log() {
+        let kernel_error = "backend health gate: Linux guest kernel crashed";
+        assert_eq!(
+            error_diagnostic_source(kernel_error),
+            ("infrastructure", "infrastructure")
+        );
+        assert_eq!(
+            runtime_operation_error_code(kernel_error, "host-operation-failed"),
+            "guest-kernel-failed"
+        );
         assert_eq!(
             error_diagnostic_source("frontend failed: EADDRINUSE"),
             ("frontend", "frontend")

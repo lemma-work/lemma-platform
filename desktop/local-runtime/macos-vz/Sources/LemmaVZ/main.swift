@@ -103,7 +103,7 @@ private func configuration(
     configuration.cpuCount = min(4, max(2, processors / 2))
     let physical = ProcessInfo.processInfo.physicalMemory
     // VZ allocates guest memory on demand, so expose enough headroom for the
-    // core services and one bounded the sandbox runtime without asking users to manage a
+    // core services and a bounded sandbox runtime without asking users to manage a
     // Podman-style reservation. Keep at least half of an 8 GiB Mac for macOS,
     // then scale automatically on larger machines.
     let adaptiveMemory = max(UInt64(4 * 1_024 * 1_024 * 1_024), physical / 3)
@@ -175,49 +175,9 @@ private func configuration(
     return configuration
 }
 
-/// Hands idle guest memory back to macOS, without asking the guest to do it all
-/// at once and without mistaking "not started yet" for "finished".
-///
-/// This crashed a guest. `active_sandboxes == 0` was read as idle, which is true
-/// once the stack has run something and false during first setup, when there are
-/// no sandboxes because nothing has started. Sixty seconds into the very first
-/// boot — with Postgres mid-`initdb` and migrations running — it asked the guest
-/// to give back 4.5 of its 6 GiB in a single step. The kernel began mass page
-/// migration to comply and took an Oops in `migrate_pages`:
-///
-///     BUG: Bad rss-counter state mm:… type:MM_ANONPAGES val:9      (t+4.5s)
-///     Unable to handle kernel paging request at … kcompactd0       (t+65s)
-///
-/// Setup then failed with every vsock connect reset and migrations timing out
-/// after 300s, none of which named memory.
-///
-/// ## Why it fired then, of all times
-///
-/// The balloon was driven by the *arrival* of health responses: `observe` is
-/// called from `annotate`, which only runs on a `health` reply, and each idle
-/// reply restarted the countdown. locald polls health every 5 seconds — but it
-/// skips the poll entirely while a long local operation is running, which first
-/// setup is. So the only way the countdown ever completed was for the polling to
-/// stop, and the thing that stops it is the guest being busy with work the
-/// sandbox count cannot see. The balloon was not merely wrong about setup; it
-/// was anti-correlated with idleness, and could never have fired on a genuinely
-/// idle machine.
-///
-/// So the clock is its own now. `observe` records what it saw and when;
-/// a repeating timer decides. Silence is read as *unknown*, which is the honest
-/// reading — nobody has told us anything — and unknown is never grounds to
-/// reclaim.
-///
-/// The other two changes: it steps down instead of jumping, so the guest is
-/// never asked to migrate gigabytes in one go; and it holds off for
-/// `bootGraceSeconds` after start rather than until the first sandbox ever runs.
-/// A grace period covers first setup, which is what the crash needed, without
-/// also covering forever — "has never run a sandbox" is a state a machine can
-/// legitimately sit in for its whole life, and such a machine used to keep its
-/// full ceiling permanently while reporting `starting`.
-///
-/// A correct kernel should not Oops however rudely it is ballooned. We can only
-/// stop provoking it.
+/// Reclaim incrementally only after boot grace and fresh idle observations.
+/// Missing health observations mean unknown activity, so they must not cause
+/// memory reclamation while startup or another long operation is running.
 private final class MemoryController {
     private let device: VZVirtioTraditionalMemoryBalloonDevice?
     private let ceiling: UInt64

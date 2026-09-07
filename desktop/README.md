@@ -296,7 +296,7 @@ export APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)"
 
 Without it an otherwise Developer ID build ends up with an ad-hoc daemon, and
 that has a user-visible cost rather than just a Gatekeeper one. locald keeps the
-operator's secrets in the OS credential vault, which ties each stored item to
+credential-file encryption key in the OS credential vault, which ties the item to
 the code identity of whoever created it. An ad-hoc designated requirement is a
 bare `cdhash`, so every rebuild is a new program as far as the vault is
 concerned and the user is asked to re-authorise access on the next launch. A
@@ -310,8 +310,17 @@ Verify with:
 codesign -d -r- desktop/binaries/lemma-locald-aarch64-apple-darwin
 ```
 
-A `designated => cdhash H"..."` line means the vault will re-prompt. A line
-naming `identifier "work.lemma.locald"` means it will not.
+A `designated => cdhash H"..."` line means a rebuild changes the vault identity.
+A Developer ID requirement must bind both `work.lemma.locald` and the expected
+signing team. A stable identifier alone is insufficient. The signed upgrade
+qualification must verify access to an existing credential file without new
+prompts; a locked keychain or changed identity can still require authorization.
+
+Credentials are encrypted in `locald/credentials.enc`; the OS vault retains its
+encryption key. Existing per-secret vault entries migrate on first access and
+remain available for recovery until explicit removal or full cleanup. Do not
+delete that key or the encrypted file to resolve a startup problem. Missing keys
+and failed decryption preserve the file and report an error.
 
 To run Desktop local mode against the code you are editing:
 

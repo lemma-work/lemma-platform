@@ -22,7 +22,8 @@ before(async () => {
     esbuild: { jsx: 'automatic' },
     server: { middlewareMode: true, watch: null },
   });
-  const { SetupShell, SetupSplitPanel, SetupPrimaryButton, SetupStandalonePage, SetupPanel } = await renderer.ssrLoadModule('/components/onboarding/account-onboarding-chrome.tsx');
+  const { SetupShell, SetupSplitPanel, SetupPrimaryButton, SetupStandalonePage, SetupPanel, SetupChoicesPage } = await renderer.ssrLoadModule('/components/onboarding/account-onboarding-chrome.tsx');
+  const { HarnessRow } = await renderer.ssrLoadModule('/components/agents/harness-row.tsx');
   const h = React.createElement;
   const fields = Array.from({ length: 30 }, (_, i) => h('label', { key: i, className: 'block py-3' },
     `Setup field ${i}`, h('input', { className: 'block', 'aria-label': `Setup field ${i}` })));
@@ -36,6 +37,26 @@ before(async () => {
       preview: h('p', {}, 'Your local agents'),
     }, h('div', {}, fields)))));
   }
+  const agents = ['Claude Code', 'Codex', 'OpenCode', 'Cursor'].map((name, index) => h(HarnessRow, {
+    key: name, compact: true, className: 'border border-[var(--border-subtle)]',
+    harness: { harness_key: `qa-agent-${index}`, display_name: name, adapter_version: '1',
+      health: index === 3 ? 'PROBE_FAILED' : 'READY',
+      stale_reason: index === 3 ? 'The agent executable is missing. Install it, then rescan.' : null,
+      config_options: [{ category: 'model', options: [{ value: 'model', name: 'Model' }] }],
+    },
+    action: usable => usable ? h('button', { className: 'px-2 py-1 text-sm' }, 'Use in chats') : null,
+  }));
+  markup.set('choices', renderToStaticMarkup(h(SetupShell, { fullBleed: true }, h(SetupChoicesPage, {
+    title: 'What should answer in your chats?',
+    subtitle: 'Use an agent on this computer, connect a model provider, or set up both.',
+    footer: h(SetupPrimaryButton, {}, 'Continue'),
+  },
+  h('section', { className: 'space-y-2' }, h('p', { className: 'py-2 text-xs' }, 'Agents on this computer'), ...agents,
+    h('p', { className: 'mt-3 text-xs' }, 'Agents use their own sign-in. No API key needed.')),
+  h('section', { className: 'space-y-3 md:border-l md:pl-8' }, h('p', { className: 'text-xs' }, 'Model providers'),
+    h('div', { className: 'grid grid-cols-2 gap-2' }, ...['Ollama', 'LM Studio', 'OpenAI', 'Anthropic', 'OpenRouter'].map(name => h('button', { key: name, className: 'setup-path-choice flex flex-col px-3 py-2 text-left' }, h('span', { className: 'text-sm' }, name), h('span', { className: 'text-xs' }, 'API key or local server')))),
+    h('p', { className: 'mt-3 text-xs' }, 'The provider is shared by this local installation. Prompts and tool results can be sent to the service you choose.'))
+  ))));
   const source = `${frontend}/app/globals.css`;
   const css = await postcss([tailwind({ base: frontend })]).process(await readFile(source, 'utf8'), { from: source });
   for (const [name, content] of markup) pages.set(name, `<!doctype html><html><head><style>${css.css}</style></head><body>${content}</body></html>`);
@@ -72,4 +93,19 @@ for (const [width, height, textSize] of [[980, 650, 16], [1280, 828, 16], [980, 
   });
 }
 
+}
+
+for (const [width, height] of [[980, 650], [1273, 828], [1511, 870]]) {
+  test(`agent and provider choices fit without scrolling at ${width}x${height}`, async t => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    t.after(() => page.close());
+    await page.setContent(pages.get('choices'));
+    await page.evaluate(() => document.fonts.ready);
+    assert.equal(await page.getByTestId('setup-content').evaluate(el => el.scrollHeight > el.clientHeight), false);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click({ trial: true });
+    await page.getByRole('button', { name: /OpenRouter/ }).click({ trial: true });
+    if (process.env.LEMMA_LAYOUT_SCREENSHOT && width === 1273) {
+      await page.screenshot({ path: process.env.LEMMA_LAYOUT_SCREENSHOT });
+    }
+  });
 }

@@ -106,6 +106,24 @@ export function SetupChrome({ intro = false }: { intro?: boolean }) {
   );
 }
 
+export function SetupChoicesPage({ title, subtitle, children, footer, onBack }: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+  onBack?: () => void;
+}) {
+  return (
+    <SetupStandalonePage onBack={onBack} meta="Local setup" footer={footer}>
+      <div className="mx-auto w-full max-w-5xl py-2 text-left">
+        <h1 className="text-xl font-semibold tracking-tight text-[var(--text-primary)]">{title}</h1>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">{subtitle}</p>
+        <div className="mt-5 grid gap-6 md:grid-cols-2 md:gap-8">{children}</div>
+      </div>
+    </SetupStandalonePage>
+  );
+}
+
 export function SetupPanel({
   title,
   subtitle,

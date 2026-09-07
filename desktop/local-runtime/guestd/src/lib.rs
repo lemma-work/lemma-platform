@@ -458,6 +458,7 @@ pub struct GuestService<E: Engine> {
     dynamic_endpoint_host: bool,
     host_gateway: String,
     capability: Option<String>,
+    kernel_taint_path: Option<PathBuf>,
 }
 
 impl GuestService<NerdctlEngine> {
@@ -489,6 +490,7 @@ impl GuestService<NerdctlEngine> {
         // online. The host must always receive the address currently assigned
         // to the guest, rather than the address observed when guestd started.
         service.dynamic_endpoint_host = dynamic_endpoint_host;
+        service.kernel_taint_path = Some(PathBuf::from("/proc/sys/kernel/tainted"));
         Ok(service)
     }
 }
@@ -517,6 +519,7 @@ impl<E: Engine + 'static> GuestService<E> {
             dynamic_endpoint_host: false,
             host_gateway,
             capability,
+            kernel_taint_path: None,
         })
     }
 
@@ -551,6 +554,10 @@ impl<E: Engine + 'static> GuestService<E> {
                     status_code: 401,
                 });
             }
+        }
+        if request.operation != "system.shutdown" && !request.operation.starts_with("diagnostics.")
+        {
+            self.check_kernel_health()?;
         }
         match request.operation.as_str() {
             "health" => self.health(),
@@ -822,6 +829,7 @@ impl<E: Engine + 'static> GuestService<E> {
     }
 
     fn health_at(&self, now: SystemTime) -> Result<Value, GuestError> {
+        self.check_kernel_health()?;
         let marker = self.cache_reset_marker();
         let repair_due = marker
             .metadata()
@@ -856,6 +864,27 @@ impl<E: Engine + 'static> GuestService<E> {
                 .map(|since| since.as_secs())
                 .unwrap_or_default(),
         }))
+    }
+
+    fn check_kernel_health(&self) -> Result<(), GuestError> {
+        let Some(path) = &self.kernel_taint_path else {
+            return Ok(());
+        };
+        let taint = fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .ok_or_else(|| GuestError::engine("Could not read Linux guest kernel health"))?;
+        // Linux taint bits: machine check, bad page, and kernel Oops/DIE.
+        // An unsigned module or a warning alone is not evidence of this failure.
+        if taint & ((1 << 4) | (1 << 5) | (1 << 7)) != 0 {
+            return Err(GuestError {
+                code: "guest_kernel_failed".into(),
+                message: "Lemma's Linux guest kernel crashed. Quit and reopen Lemma to restart the local runtime. Your stored data has not been reset. If this repeats, repair the runtime from Updates and recovery.".into(),
+                retryable: false,
+                status_code: 503,
+            });
+        }
+        Ok(())
     }
 
     fn running_sandbox_count(&self) -> Result<usize, GuestError> {
@@ -4580,6 +4609,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(health["clock_epoch"], 1_787_249_481_u64);
+    }
+
+    #[test]
+    fn kernel_faults_block_health_and_new_work_before_engine_dispatch() {
+        let (root, mut service) = clock_test_service();
+        let taint = root.path().join("tainted");
+        service.kernel_taint_path = Some(taint.clone());
+        for bits in [16, 32, 128, 128 | 512] {
+            fs::write(&taint, format!("{bits}\n")).unwrap();
+            for operation in ["health", "core.ensure", "sandbox.ensure"] {
+                let response = service.handle(GuestRequest {
+                    version: PROTOCOL_VERSION,
+                    capability: None,
+                    operation: operation.into(),
+                    parameters: json!({}),
+                });
+                assert!(!response.ok);
+                let error = response.error.unwrap();
+                assert_eq!(error.code, "guest_kernel_failed");
+                assert!(!error.retryable);
+                assert_eq!(error.status_code, 503);
+                assert!(!error.message.contains(DATA_RESET_MARKER));
+            }
+        }
+        // Clearing the fault on a fresh boot restores normal engine health.
+        fs::write(&taint, "0\n").unwrap();
+        assert_eq!(service.health().unwrap()["status"], "ready");
+    }
+
+    #[test]
+    fn kernel_warnings_are_not_crashes_and_unreadable_health_is_not_ready() {
+        let (root, mut service) = clock_test_service();
+        let taint = root.path().join("tainted");
+        service.kernel_taint_path = Some(taint.clone());
+        assert!(service.health().is_err());
+        fs::write(&taint, "invalid\n").unwrap();
+        assert!(service.health().is_err());
+        fs::write(&taint, "512\n").unwrap();
+        assert_eq!(service.health().unwrap()["status"], "ready");
     }
 
     /// Returns the temporary root with the service: dropping it early would

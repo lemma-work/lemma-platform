@@ -24,9 +24,6 @@ vi.mock('@/lib/hooks/use-agent-runtime', () => ({
     useManagedAgentRuntimes: () => ({ data: { items: [] } }),
     useRestoreAgentRuntime: () => ({ mutateAsync: vi.fn() }),
 }));
-vi.mock('@/lib/desktop/provider-setup', () => ({
-    useLocalProviderSetup: () => ({ preset: null, models: [], apiKey: '', model: '', error: null }),
-}));
 import { LocalIntelligenceStep } from './local-setup-steps';
 
 let root: Root;
@@ -48,6 +45,18 @@ async function render() {
 }
 
 describe('local agent onboarding recovery', () => {
+    it('uses the provider column for the selected form and can return to the choices', async () => {
+        await render();
+        const button = (label: string) => [...container.querySelectorAll('button')].find((item) => item.textContent?.startsWith(label));
+        expect(button('Ollama')).toBeDefined();
+        await act(async () => button('OpenAI')!.click());
+        expect(container.querySelector('input[aria-label="OpenAI API key"]')).not.toBeNull();
+        expect(button('Ollama')).toBeUndefined();
+        expect(button('Continue')).toBeDefined();
+        await act(async () => button('Choose another provider')!.click());
+        expect(container.querySelector('input[type="password"]')).toBeNull();
+        expect(button('Ollama')).toBeDefined();
+    });
     it.each(['error', 'connectError'] as const)('shows a %s failure and retries from the setup screen', async (field) => {
         connection[field] = 'The local agent host could not connect';
         await render();

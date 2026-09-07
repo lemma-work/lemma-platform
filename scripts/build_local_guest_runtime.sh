@@ -6,10 +6,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 target=""
 output=""
 guestd=""
-kata_version="3.17.0"
-kata_kernel_version="6.12.28-153"
-kata_archive_sha256="647c7612e6edf789d5e14698c48c99d8bac15ad139ffaa1c8bb7d229f748d181"
-kata_archive_url="https://github.com/kata-containers/kata-containers/releases/download/${kata_version}/kata-static-${kata_version}-arm64.tar.xz"
+kata_version="3.32.0"
+kata_kernel_version="6.18.35-197-debug"
+kata_archive_sha256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"
+kata_archive_url="https://github.com/kata-containers/kata-containers/releases/download/${kata_version}/kata-static-${kata_version}-arm64.tar.zst"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -72,7 +72,7 @@ if [[ "$target" == "macos-aarch64" ]]; then
   # Virtualization.framework runtime. Keep the archive and exact kernel version
   # immutable: distro kernel metapackages have regressed both virtio-vsock and
   # cgroup/runc workloads in clean Lemma appliance boots.
-  kata_archive="$work_dir/kata-static-${kata_version}-arm64.tar.xz"
+  kata_archive="$work_dir/kata-static-${kata_version}-arm64.tar.zst"
   kata_root="$work_dir/kata"
   mkdir -p "$kata_root"
   if [[ -n "${LEMMA_KATA_KERNEL_ARCHIVE:-}" ]]; then
@@ -100,7 +100,7 @@ actual = hashlib.sha256(path.read_bytes()).hexdigest()
 if actual != sys.argv[2]:
     raise SystemExit(f"Kata kernel archive checksum mismatch: {actual}")
 PY
-  tar -xJf "$kata_archive" -C "$kata_root" \
+  tar -xf "$kata_archive" -C "$kata_root" \
     "./opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}"
   cp "$kata_root/opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}" \
     "$artifact/vmlinuz"

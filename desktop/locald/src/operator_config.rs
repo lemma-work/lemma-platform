@@ -169,13 +169,13 @@ impl OperatorConfig {
     }
 }
 
-trait SecretVault: Send + Sync {
+pub(crate) trait SecretVault: Send + Sync {
     fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>>;
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()>;
     fn delete(&self, install_id: &str, name: &str) -> io::Result<()>;
 }
 
-struct PlatformVault;
+pub(crate) struct PlatformVault;
 
 impl PlatformVault {
     fn entry(install_id: &str, name: &str) -> io::Result<keyring::v1::Entry> {
@@ -212,19 +212,9 @@ impl SecretVault for PlatformVault {
     }
 }
 
-/// Every read of one secret, answered from the first one.
-///
-/// macOS authorizes keychain access per item, per reading process, and an
-/// ad-hoc-signed build is not remembered between reads at all -- so a second
-/// read of the same item is a second modal password prompt. `backend_environment`
-/// alone is called from seven places on the daemon's start and restart paths and
-/// reads two items each time, which is how a single first-run setup put fourteen
-/// prompts in front of the user before the workspace had even opened.
-///
-/// The items themselves do not change underneath us: this process is the only
-/// writer, so `set` and `delete` update the cache rather than clearing it. No
-/// secret is held here that locald was not already holding to hand to the
-/// backend as an environment variable.
+/// Cache successful OS-vault reads for this daemon's lifetime. The encrypted
+/// credential file uses this for its wrapping key and legacy migration; set and
+/// delete must update cached values so settings changes take effect immediately.
 struct CachingVault {
     inner: Arc<dyn SecretVault>,
     seen: Mutex<HashMap<(String, String), Option<String>>>,
@@ -317,9 +307,13 @@ impl OperatorConfigStore {
     /// The public entry point takes the vault as an implementation detail; only
     /// tests substitute one.
     pub fn load_reporting(path: PathBuf, healed: &mut Vec<String>) -> io::Result<Arc<Self>> {
+        let vault = crate::credential_vault::EncryptedVault::new(
+            path.with_file_name("credentials.enc"),
+            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
+        );
         Self::load_healing(
             path,
-            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
+            Arc::new(vault),
             Arc::new(HttpModelProviderProbe),
             healed,
         )
@@ -993,9 +987,20 @@ const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
 /// Try every key and return failures so recovery can retain the installation
 /// identity until a later retry has removed the remaining entries.
 pub fn purge_secrets(install_id: &str) -> Vec<String> {
-    let vault = PlatformVault;
+    purge_vault_secrets(&PlatformVault, install_id)
+}
+
+fn purge_vault_secrets(vault: &dyn SecretVault, install_id: &str) -> Vec<String> {
     let mut failures = Vec::new();
-    for name in SECRET_NAMES {
+    for name in SECRET_NAMES.into_iter().chain(["secret.encryption_keyset"]) {
+        if let Err(error) = vault.delete(install_id, name) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    // A failed reset retains local data. Keep its decryption key until every
+    // legacy item has been removed, so an aborted cleanup remains recoverable.
+    if failures.is_empty() {
+        let name = crate::credential_vault::MASTER_KEY_NAME;
         if let Err(error) = vault.delete(install_id, name) {
             failures.push(format!("{name}: {error}"));
         }
@@ -1465,17 +1470,20 @@ pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<(
 ///
 /// Anything that is not a regular file still fails: a symlink or a directory
 /// here is not a permissions accident, and following one would be the bug.
-fn ensure_private_file(path: &Path) -> io::Result<()> {
+pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "private configuration is not a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("operator config is not a regular file: {}", path.display()),
-            ));
-        }
         if metadata.mode() & 0o077 != 0 {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
@@ -1507,6 +1515,36 @@ impl ModelProviderProbe for EchoModelProviderProbe {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn aborted_cleanup_preserves_the_encrypted_vault_key_until_retry_succeeds() {
+        struct PurgeVault {
+            denied: bool,
+            deleted: Mutex<Vec<String>>,
+        }
+        impl SecretVault for PurgeVault {
+            fn get(&self, _: &str, _: &str) -> io::Result<Option<String>> {
+                unreachable!()
+            }
+            fn set(&self, _: &str, _: &str, _: &str) -> io::Result<()> {
+                unreachable!()
+            }
+            fn delete(&self, _: &str, name: &str) -> io::Result<()> {
+                if self.denied && name == "secret.encryption_keyset" {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                self.deleted.lock().unwrap().push(name.into());
+                Ok(())
+            }
+        }
+        let mut vault = PurgeVault { denied: true, deleted: Mutex::new(Vec::new()) };
+        let master = crate::credential_vault::MASTER_KEY_NAME;
+        assert_eq!(purge_vault_secrets(&vault, "installation").len(), 1);
+        assert!(!vault.deleted.lock().unwrap().iter().any(|name| name == master));
+        vault.denied = false;
+        assert!(purge_vault_secrets(&vault, "installation").is_empty());
+        assert_eq!(vault.deleted.lock().unwrap().last().unwrap(), master);
+    }
 
     #[test]
     fn section_updates_isolate_fields_and_credential_actions() {

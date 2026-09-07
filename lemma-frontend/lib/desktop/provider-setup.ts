@@ -35,7 +35,7 @@ export function useLocalProviderSetup() {
         setError(null);
     };
 
-    const selectPreset = (next: ProviderPreset) => {
+    const selectPreset = (next: ProviderPreset | null) => {
         if (applyingNow.current) return;
         invalidate();
         setPreset(next);

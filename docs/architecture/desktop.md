@@ -404,6 +404,10 @@ Redaction covers passwords, secrets, tokens, bearer values, API keys, cookies,
 and credential-bearing URLs. locald also redacts child-log excerpts before
 placing them in lifecycle errors. Guest console is captured and rotated before
 the VM is discarded so infrastructure failures remain diagnosable.
+Kernel Oops, bad-page and machine-check failures reject new guest work and
+health checks. The host also inspects the current boot's bounded console tail
+when guestd cannot answer. Recovery restarts or repairs the runtime; a kernel
+crash does not request a data reset.
 
 Logs are append-only with bounded rotation. The UI provides source tabs, live
 refresh, timestamps, copy, and Open logs folder without covering action
@@ -421,7 +425,13 @@ Desktop injects a local context before application scripts. Local mode:
 
 Hosted mode retains browser handoff and production auth policy.
 
-Operator configuration is schema validated. Secrets are stored in the OS vault.
+Operator configuration is schema validated. Operator secrets and the backend
+encryption keyset live in `locald/credentials.enc`, encrypted with AES-256-GCM
+and bound to the installation identity. One random encryption key is kept in
+the OS credential vault and loaded once per daemon process. Legacy per-secret
+vault items migrate on access; migration failures preserve the existing items.
+Explicit removal clears both stores. A missing key or damaged encrypted file
+blocks access rather than minting a replacement key or overwriting credentials.
 The desktop shell serializes its own configuration writes, replaces the file
 atomically, and refuses to overwrite malformed saved configuration. Window and
 navigation updates cannot erase a concurrently saved runtime binding. Recovery
