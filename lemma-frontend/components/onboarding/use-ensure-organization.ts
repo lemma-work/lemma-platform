@@ -1,16 +1,10 @@
 "use client";
 
 import { useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import {
-  useCreateOrganization,
-  useJoinSuggestedOrganization,
-} from "@/lib/hooks/use-organizations";
-import { OrganizationJoinPolicy } from "@/lib/types";
-import { normalizeEmailDomain, workDomainFromEmail } from "@/lib/utils/organization-slugs";
+import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import type { OnboardingEntryKind } from "@/lib/analytics/onboarding";
-
-import { organizationNameCandidate } from "./account-onboarding-helpers";
 
 export interface EnsuredOrganization {
   organizationId: string;
@@ -31,51 +25,53 @@ export interface EnsuredOrganization {
  * in an empty account; the importer is about to create a pod of its own, and a
  * spare one beside it is clutter rather than a welcome.
  *
- * Ids in and an id out, deliberately: the caller here holds a full
- * `Organization`, the importer holds the slimmer navigation shape, and an id is
- * the only thing either of them actually needs from this.
+ * The decision itself now lives in the backend. It used to live here — find an
+ * organization, prefer one that already claimed the email domain, otherwise
+ * invent a name and create one — but chat surfaces onboard people who never load
+ * this app at all, so the same reasoning had to exist there. Two copies of
+ * "which organization does this person belong to" drift from each other inside a
+ * release, and the half that drifts is the half nobody is looking at.
+ *
+ * Raw `fetch`, like the other onboarding mechanics under `/auth/...`: the
+ * endpoint is deliberately outside the published spec, so it is not in the SDK.
  */
 export function useEnsureOrganization() {
-  const createOrganization = useCreateOrganization();
-  const joinSuggestedOrganization = useJoinSuggestedOrganization();
+  const queryClient = useQueryClient();
 
   return useCallback(
     async ({
-      email,
       organizationIds,
-      suggestedOrganizationId,
     }: {
-      email?: string | null;
       organizationIds: string[];
-      suggestedOrganizationId?: string | null;
     }): Promise<EnsuredOrganization | null> => {
+      // Already known to belong somewhere: the backend would answer `existing`,
+      // and this saves the round trip on the common path.
       const existing = organizationIds[0];
       if (existing) return { organizationId: existing, entryKind: "new_org" };
 
-      if (suggestedOrganizationId) {
-        // A colleague already claimed this domain. Joining them beats
-        // fragmenting the company across two workspaces.
-        const joined = await joinSuggestedOrganization.mutateAsync(
-          suggestedOrganizationId,
-        );
-        return joined?.id
-          ? { organizationId: joined.id, entryKind: "domain_join" }
-          : null;
-      }
-
-      const workDomain = normalizeEmailDomain(workDomainFromEmail(email || ""));
-      const created = await createOrganization.mutateAsync({
-        name: organizationNameCandidate({ email: email || "", workDomain }),
-        join_policy: workDomain
-          ? OrganizationJoinPolicy.EMAIL_DOMAIN
-          : OrganizationJoinPolicy.INVITE_ONLY,
-        email_domain: workDomain || null,
-        resolve_name_conflicts: true,
+      const response = await fetch(buildApiUrl("/users/me/first-workspace"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ with_pod: false }),
       });
-      return created?.id
-        ? { organizationId: created.id, entryKind: "new_org" }
-        : null;
+      if (!response.ok) return null;
+
+      const workspace = (await response.json()) as {
+        organization_id?: string;
+        entry?: string;
+      };
+      if (!workspace.organization_id) return null;
+
+      await queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      return {
+        organizationId: workspace.organization_id,
+        // `existing` and `surface_join` cannot reach here — the first is
+        // short-circuited above and the second only happens on a chat surface —
+        // so the analytics vocabulary needs no widening.
+        entryKind: workspace.entry === "domain_join" ? "domain_join" : "new_org",
+      };
     },
-    [createOrganization, joinSuggestedOrganization],
+    [queryClient],
   );
 }

@@ -99,9 +99,7 @@ export function useFirstPodProvisioning({
         const workDomain = normalizeEmailDomain(workDomainFromEmail(email));
 
         const ensured = await ensureOrganization({
-          email,
           organizationIds: organizations.map((org) => org.id),
-          suggestedOrganizationId: suggestedOrganization?.id ?? null,
         });
 
         if (!ensured) {
