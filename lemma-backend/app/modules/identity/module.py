@@ -13,6 +13,9 @@ def _routers():
     from app.modules.identity.api.controllers.organization_navigation_controller import (
         router as organization_navigation,
     )
+    from app.modules.identity.api.controllers.first_workspace_controller import (
+        router as first_workspace,
+    )
     from app.modules.identity.api.controllers.auth_controller import router as auth
     from app.modules.identity.api.controllers.cli_auth_controller import (
         router as cli_auth,
@@ -25,6 +28,10 @@ def _routers():
     # otherwise be captured by ``/{organization_id}`` in the organization
     # router, which FastAPI matches in registration order.
     return [
+        # Before the user router: its ``/users/me/first-workspace`` is a literal
+        # path, and a router registered later cannot claim it back from a
+        # parameterised route already matched above.
+        first_workspace,
         user,
         organization_navigation,
         organization,
