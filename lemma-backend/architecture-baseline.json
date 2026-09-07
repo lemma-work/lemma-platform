@@ -76,15 +76,15 @@
     "workflow:total": 59
   },
   "core_module_imports": {
-    "core->agent": 2,
-    "core->apps": 2,
+    "core->agent": 1,
+    "core->apps": 1,
     "core->connectors": 4,
-    "core->datastore": 3,
-    "core->function": 2,
+    "core->datastore": 2,
+    "core->function": 1,
     "core->identity": 2,
-    "core->pod": 2,
-    "core->schedule": 2,
-    "core->workflow": 2
+    "core->pod": 1,
+    "core->schedule": 1,
+    "core->workflow": 1
   },
   "forbidden_imports": {
     "agent->connectors": 4,
@@ -135,9 +135,9 @@
     "connectors:count": 70,
     "connectors:max": 40,
     "connectors:total": 484,
-    "core:count": 42,
+    "core:count": 43,
     "core:max": 44,
-    "core:total": 228,
+    "core:total": 232,
     "datastore:count": 48,
     "datastore:max": 20,
     "datastore:total": 245,
