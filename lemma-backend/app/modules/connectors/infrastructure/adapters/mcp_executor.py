@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from typing import Any, Callable, Protocol
 
 import httpx
+import httpx2
 from fastmcp.exceptions import FastMCPError, McpError, ToolError
 
 from lemma_connectors.core.results import BinaryContentResult
@@ -40,14 +41,23 @@ logger = get_logger(__name__)
 # to debug with, not enough to be a payload dump.
 _UPSTREAM_MESSAGE_LIMIT = 2000
 
+
 # What a call to a remote MCP server can realistically fail with: the server
-# rejecting it (fastmcp/mcp), the connection failing (httpx/OSError), or our own
-# deadline firing. Anything outside this set is a bug in this process and should
-# surface as one rather than being reported as an upstream fault.
+# rejecting it (fastmcp/mcp), the connection failing (httpx/httpx2/OSError), or
+# our own deadline firing. Anything outside this set is a bug in this process
+# and should surface as one rather than being reported as an upstream fault.
+#
+# Both http trees, because fastmcp 4's client speaks httpx2 and the two share
+# no base class: `httpx2.ConnectError` is neither an `httpx.ConnectError` nor
+# an `OSError`, and `httpx2.ReadTimeout` is not a `TimeoutError`. Listing only
+# one of them turned a refused connection and an expired deadline into
+# unhandled 500s. `usage/infrastructure/provider_retries.py` pairs them the
+# same way, for the same reason.
 _MCP_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     FastMCPError,
     McpError,
     httpx.HTTPError,
+    httpx2.HTTPError,
     OSError,
     TimeoutError,
     ValueError,
@@ -353,20 +363,28 @@ def _content_blocks(result: Any) -> list[Any]:
     return list(blocks or [])
 
 
+def _mime_type(block: object) -> str | None:
+    """The block's media type under either spelling the mcp package has used.
+
+    Renamed to `mime_type` in mcp 2.0; a lookup for only one of the two reads as
+    a server that sent no media type, which is the same shape as success and so
+    goes unnoticed. `_structured_output` above already asks both ways.
+    """
+    return getattr(block, "mime_type", None) or getattr(block, "mimeType", None)
+
+
 def _binary_from_block(block: Any) -> BinaryContentResult | None:
     """Decode a block that carries bytes, or return None if it carries text."""
     btype = getattr(block, "type", None)
     if btype in ("image", "audio") or getattr(block, "data", None):
         raw = base64.b64decode(getattr(block, "data", "") or "")
-        return BinaryContentResult.from_bytes(
-            raw, media_type=getattr(block, "mimeType", None)
-        )
+        return BinaryContentResult.from_bytes(raw, media_type=_mime_type(block))
     if btype == "resource":
         resource = getattr(block, "resource", None)
         blob = getattr(resource, "blob", None)
         if blob:
             return BinaryContentResult.from_bytes(
-                base64.b64decode(blob), media_type=getattr(resource, "mimeType", None)
+                base64.b64decode(blob), media_type=_mime_type(resource)
             )
     return None
 
