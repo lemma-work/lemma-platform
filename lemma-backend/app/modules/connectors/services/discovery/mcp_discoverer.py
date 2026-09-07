@@ -58,8 +58,17 @@ async def discover_mcp(
         tool_name = getattr(tool, "name", None)
         if not tool_name:
             continue
-        input_schema = getattr(tool, "inputSchema", None) or {"type": "object"}
-        output_schema = getattr(tool, "outputSchema", None)
+        # Both spellings: mcp 2.0 renamed these to snake_case, and reading only
+        # the old one turns every tool into an untyped `{"type": "object"}`
+        # without failing anything.
+        input_schema = (
+            getattr(tool, "input_schema", None)
+            or getattr(tool, "inputSchema", None)
+            or {"type": "object"}
+        )
+        output_schema = getattr(tool, "output_schema", None) or getattr(
+            tool, "outputSchema", None
+        )
         operations.append(
             DiscoveredOperation(
                 name=normalize_operation_name(tool_name),

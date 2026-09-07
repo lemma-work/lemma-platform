@@ -353,20 +353,28 @@ def _content_blocks(result: Any) -> list[Any]:
     return list(blocks or [])
 
 
+def _mime_type(block: object) -> str | None:
+    """The block's media type under either spelling the mcp package has used.
+
+    Renamed to `mime_type` in mcp 2.0; a lookup for only one of the two reads as
+    a server that sent no media type, which is the same shape as success and so
+    goes unnoticed. `_structured_output` above already asks both ways.
+    """
+    return getattr(block, "mime_type", None) or getattr(block, "mimeType", None)
+
+
 def _binary_from_block(block: Any) -> BinaryContentResult | None:
     """Decode a block that carries bytes, or return None if it carries text."""
     btype = getattr(block, "type", None)
     if btype in ("image", "audio") or getattr(block, "data", None):
         raw = base64.b64decode(getattr(block, "data", "") or "")
-        return BinaryContentResult.from_bytes(
-            raw, media_type=getattr(block, "mimeType", None)
-        )
+        return BinaryContentResult.from_bytes(raw, media_type=_mime_type(block))
     if btype == "resource":
         resource = getattr(block, "resource", None)
         blob = getattr(resource, "blob", None)
         if blob:
             return BinaryContentResult.from_bytes(
-                base64.b64decode(blob), media_type=getattr(resource, "mimeType", None)
+                base64.b64decode(blob), media_type=_mime_type(resource)
             )
     return None
 
