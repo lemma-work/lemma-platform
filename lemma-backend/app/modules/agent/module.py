@@ -68,8 +68,28 @@ def _event_routers():
     return [router, notification_settled_router]
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.agent.infrastructure.models import AgentModel
+
+    return (
+        (
+            ResourceType.AGENT,
+            ResourceNameTable(AgentModel.id, AgentModel.pod_id, AgentModel.name),
+        ),
+    )
+
+
 module = LemmaModule(
     name="agent",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_report_system_model_pricing,),

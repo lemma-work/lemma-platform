@@ -41,8 +41,16 @@ def _event_routers():
     return [router]
 
 
+def _pod_liveness():
+    """The reader core's enumeration guard asks; see `contracts/liveness.py`."""
+    from app.modules.pod.contracts.liveness import pod_is_live
+
+    return pod_is_live
+
+
 module = LemmaModule(
     name="pod",
+    pod_liveness=_pod_liveness,
     routers=_routers,
     event_routers=_event_routers,
     stream_groups=(("pod_events", "pod-join-request-events"),),
