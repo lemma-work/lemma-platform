@@ -15,13 +15,20 @@ class Accounting:
     def __init__(self) -> None:
         self.starts = 0
         self.used = Decimal(0)
+        self.in_flight_flags: list[bool] = []
         self.receipts: dict[UUID, RequestReceipt] = {}
         self.lose_ack = False
         self.ack_error: Exception = ConnectionError("Commit acknowledgement lost")
 
     async def begin(
-        self, request_id: UUID, now: datetime, *, priceable: bool = True
+        self,
+        request_id: UUID,
+        now: datetime,
+        *,
+        priceable: bool = True,
+        in_flight: bool = False,
     ) -> bool:
+        self.in_flight_flags.append(in_flight)
         if self.used >= Decimal(1):
             raise UsageLimitExceededError()
         self.starts += 1
@@ -137,3 +144,22 @@ async def test_settlement_timeout_does_not_repeat_provider_request(
         )
     finally:
         UsageService._SYSTEM_MODEL_PRICING.pop(model_name, None)
+
+
+@pytest.mark.asyncio
+async def test_a_run_already_under_way_is_not_refused_mid_answer() -> None:
+    """The first request of a run may be refused. A continuation may not.
+
+    Whether a request is priceable depends on the shape of its messages, and
+    that changes mid-run: the opening prompt is priceable, the continuation
+    carrying a tool's non-JSON result is not. Refusing the continuation ended
+    the run partway through, after the earlier requests had already been
+    spent and billed.
+    """
+    gateway = Accounting()
+    meter = RequestMeter(gateway)
+
+    await meter.before(priceable=True)
+    await meter.before(priceable=False)
+
+    assert gateway.in_flight_flags == [False, True]

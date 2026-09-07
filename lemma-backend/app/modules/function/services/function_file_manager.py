@@ -80,6 +80,22 @@ class FunctionFileManager:
         except ObstoreNotFoundError:
             return
 
+    async def list_prefix(self, prefix: str) -> tuple[str, ...]:
+        """Every path under ``prefix``, oldest page first.
+
+        Async listing for `delete_prefix`'s reason: the sync ListStream blocks
+        the event loop on each page fetch against a cloud store.
+        """
+        normalized_prefix = prefix.rstrip("/") or None
+        paths: list[str] = []
+        async for chunk in self.store.list_async(prefix=normalized_prefix):
+            paths.extend(
+                str(item["path"])
+                for item in chunk
+                if isinstance(item, dict) and item.get("path")
+            )
+        return tuple(paths)
+
     async def delete_prefix(self, prefix: str) -> None:
         """Delete everything under ``prefix``.
 

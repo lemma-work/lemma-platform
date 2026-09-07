@@ -143,6 +143,11 @@ class FunctionStoragePort(FunctionStorageDeletionPort, Protocol):
 
     async def write_file(self, path: str, content: bytes | str) -> None: ...
 
+    #: Paths under ``prefix``. The one caller is the runtime gateway locating a
+    #: staged artifact whose generation it was not told; see
+    #: `FunctionArtifact.staged_artifact_prefix`.
+    async def list_prefix(self, prefix: str) -> tuple[str, ...]: ...
+
 
 class FunctionStorageFactoryPort(Protocol):
     def __call__(self, function_id: UUID) -> FunctionStoragePort: ...

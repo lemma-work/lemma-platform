@@ -59,12 +59,39 @@ class PostgresRequestAccountingGateway:
         ]
 
     async def begin(
-        self, request_id: UUID, now: datetime, *, priceable: bool = True
+        self,
+        request_id: UUID,
+        now: datetime,
+        *,
+        priceable: bool = True,
+        in_flight: bool = False,
     ) -> bool:
+        """Admit one request, and say whether a monetary limit applies to it.
+
+        Under a monetary limit a request that cannot be priced cannot be
+        enforced, so it is refused. `in_flight` is what stops that refusal
+        landing in the wrong place. Whether a request is priceable depends on
+        the shape of the messages, and the shape changes mid-run: the first
+        request of a run is an ordinary prompt and priceable, and the
+        continuation carrying a tool's non-JSON result is not. Refusing there
+        ended the run partway through, after the tokens for the earlier
+        requests had already been spent and billed, and presented it as a limit
+        the account had hit.
+
+        A run that is already under way is therefore admitted. Its request is
+        recorded unpriced, which is what `metered_model` turns into
+        `require_reconciliation` -- so the run is stopped at the next request
+        boundary rather than in the middle of answering, and the spend that
+        could not be priced is still visible in the ledger.
+        """
         async with self.factory() as uow:
             windows = self._windows(await self._limits(uow), now)
             limited = bool(windows)
-            if limited and (not priceable or not self.pricing.priceable):
+            if (
+                limited
+                and (not priceable or not self.pricing.priceable)
+                and not in_flight
+            ):
                 raise UsageLimitExceededError(
                     "This request needs supported usage reporting and a known price to run with monetary limits",
                     reason="configuration",

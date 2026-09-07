@@ -525,6 +525,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'function.function_dispatcher.execution_failed': EventSpec('warning', frozenset({'error', 'error_type', 'run_id'})),
     'function.function_revision_retention.revisions_pruned': EventSpec('info', frozenset({'function_id', 'pruned_count'})),
     'function.function_revision_service.revision_promoted': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_number', 'schema_changed'})),
+    'function.function_runtime_gateway.artifact_generation_recovered': EventSpec('info', frozenset({'candidate_count', 'function_id', 'revision_hash'})),
     'function.handlers.cron.failed': EventSpec('error', frozenset({'task_name'})),
     'function.handlers.function_run_job.propagated': EventSpec('debug', frozenset({'run_id'})),
     'function.handlers.prune_function_runs.observed': EventSpec('debug', frozenset({'deleted_count'})),

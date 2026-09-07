@@ -50,14 +50,31 @@ class FunctionArtifact(BaseModel):
     revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     generation: UUID | None = None
 
+    #: Every generation-scoped artifact lives under this one prefix, so a
+    #: reader that knows the digest but not the generation can still find it.
+    STAGED_PREFIX: ClassVar[str] = "artifact-uploads"
+
+    @property
+    def artifact_filename(self) -> str:
+        return f"{self.revision_hash.removeprefix('sha256:')}.zip"
+
     @property
     def artifact_path(self) -> str:
         digest = self.revision_hash.removeprefix("sha256:")
         return (
-            f"artifact-uploads/{self.generation}/{digest}.zip"
+            f"{self.STAGED_PREFIX}/{self.generation}/{digest}.zip"
             if self.generation
             else f"artifacts/{digest}.zip"
         )
+
+    def matches_staged_path(self, path: str) -> bool:
+        """Whether ``path`` is some generation's copy of exactly this artifact.
+
+        Only the filename is compared, and the filename is the content digest --
+        so a match cannot be the wrong bytes, and the caller verifies the hash
+        after reading anyway.
+        """
+        return path.rsplit("/", 1)[-1] == self.artifact_filename
 
     @property
     def code_path(self) -> str:
