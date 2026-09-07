@@ -63,7 +63,7 @@ reqwest = { version = "=0.13.4", default-features = false, features = [
     "native-tls",
     "system-proxy",
 ] }
-sha2 = "=0.10.9"
+sha2 = "=0.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
