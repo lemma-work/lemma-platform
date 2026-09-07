@@ -30,9 +30,9 @@ async def test_calling_it_twice_does_not_make_a_second_workspace(
     first = await authenticated_client.post("/users/me/first-workspace")
     second = await authenticated_client.post("/users/me/first-workspace")
     assert first.status_code == second.status_code == 200
-    assert (
-        first.json()["organization_id"] == second.json()["organization_id"]
-    ), "a repeat call must return the same organization"
+    assert first.json()["organization_id"] == second.json()["organization_id"], (
+        "a repeat call must return the same organization"
+    )
     assert second.json()["entry"] == "existing"
 
 

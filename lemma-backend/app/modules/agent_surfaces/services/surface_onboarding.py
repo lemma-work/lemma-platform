@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -35,6 +35,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_onboarding_store i
     PendingOnboarding,
     SurfaceOnboardingStore,
     code_attempts_exhausted,
+    turns_exhausted,
 )
 
 logger = get_logger(__name__)
@@ -96,6 +97,15 @@ def looks_like_code(message_text: str | None) -> str | None:
     return found
 
 
+@dataclass(frozen=True, slots=True)
+class _Step:
+    """What to say, and what the exchange should remember afterwards."""
+
+    turn: OnboardingTurn | None
+    #: ``None`` clears the record: the exchange is finished, one way or another.
+    pending: PendingOnboarding | None
+
+
 async def advance_onboarding(
     *,
     store: SurfaceOnboardingStore,
@@ -103,6 +113,12 @@ async def advance_onboarding(
     send_code_email,
 ) -> OnboardingTurn | None:
     """Take the next step with this sender, or None if there is nothing to say.
+
+    Every reply costs a turn, and the counting happens here rather than in the
+    branches. Each branch says what it wants remembered and this writes it once
+    -- so a branch that replies without persisting anything cannot quietly
+    escape the budget, which is exactly how "that doesn't look like an email"
+    would have become an unbounded reply generator.
 
     ``send_code_email`` is passed in rather than imported so this stays testable
     without a mail server, and so the one place that decides an address is worth
@@ -116,42 +132,55 @@ async def advance_onboarding(
     pending = await store.get(platform=platform, sender_external_user_id=sender)
 
     if pending is None:
+        step = _Step(
+            turn=OnboardingTurn(
+                message=(
+                    "I don't know you yet. What's your email address? "
+                    "I'll send a code to check it's yours."
+                )
+            ),
+            pending=PendingOnboarding(step="awaiting_email"),
+        )
+    elif turns_exhausted(pending.turns):
+        # Silence rather than another line. Each reply is an outbound message on
+        # a number every pod shares, and an exchange this long is somebody
+        # typing at the number rather than answering it. The record is left to
+        # expire on its own, so coming back later is a fresh start rather than
+        # an instant refusal.
+        logger.info("agent_surfaces.onboarding.turns_exhausted", platform=platform)
+        return None
+    elif pending.step == "awaiting_email":
+        step = await _take_email(
+            platform=platform,
+            event=event,
+            send_code_email=send_code_email,
+            code_hash=store.hash_code,
+        )
+    else:
+        step = await _take_code(event=event, pending=pending, code_hash=store.hash_code)
+
+    if step.pending is None:
+        await store.clear(platform=platform, sender_external_user_id=sender)
+    else:
         await store.put(
             platform=platform,
             sender_external_user_id=sender,
-            pending=PendingOnboarding(step="awaiting_email"),
+            pending=replace(step.pending, turns=(pending.turns if pending else 0) + 1),
         )
-        return OnboardingTurn(
-            message=(
-                "I don't know you yet. What's your email address? "
-                "I'll send a code to check it's yours."
-            )
-        )
-
-    if pending.step == "awaiting_email":
-        return await _take_email(
-            store=store,
-            platform=platform,
-            sender=sender,
-            event=event,
-            send_code_email=send_code_email,
-        )
-
-    return await _take_code(
-        store=store, platform=platform, sender=sender, event=event, pending=pending
-    )
+    return step.turn
 
 
-async def _take_email(
-    *, store, platform: str, sender: str, event, send_code_email
-) -> OnboardingTurn:
+async def _take_email(*, platform: str, event, send_code_email, code_hash) -> _Step:
     email = find_email(event.message_text)
     if not email:
-        return OnboardingTurn(
-            message=(
-                "That doesn't look like an email address. "
-                "Send just the address and I'll check it's yours."
-            )
+        return _Step(
+            turn=OnboardingTurn(
+                message=(
+                    "That doesn't look like an email address. "
+                    "Send just the address and I'll check it's yours."
+                )
+            ),
+            pending=PendingOnboarding(step="awaiting_email"),
         )
 
     code = mint_code()
@@ -162,73 +191,70 @@ async def _take_email(
         # Never claim a code is on its way when it is not: somebody would sit
         # watching an inbox that is never going to show anything.
         logger.warning("agent_surfaces.onboarding.code_email_failed", platform=platform)
-        return OnboardingTurn(
-            message=(
-                f"I couldn't send a code to {email}. "
-                "Check the address and send it again."
-            )
+        return _Step(
+            turn=OnboardingTurn(
+                message=(
+                    f"I couldn't send a code to {email}. "
+                    "Check the address and send it again."
+                )
+            ),
+            pending=PendingOnboarding(step="awaiting_email"),
         )
 
-    await store.put(
-        platform=platform,
-        sender_external_user_id=sender,
+    return _Step(
+        turn=OnboardingTurn(
+            message=f"Sent a code to {email}. Send it back here and I'll know it's you."
+        ),
         pending=PendingOnboarding(
-            step="awaiting_code", email=email, code_hash=store.hash_code(code)
+            step="awaiting_code", email=email, code_hash=code_hash(code)
         ),
     )
-    return OnboardingTurn(
-        message=(f"Sent a code to {email}. Send it back here and I'll know it's you.")
-    )
 
 
-async def _take_code(
-    *, store, platform: str, sender: str, event, pending: PendingOnboarding
-) -> OnboardingTurn:
+async def _take_code(*, event, pending: PendingOnboarding, code_hash) -> _Step:
     code = looks_like_code(event.message_text)
-    if code and pending.code_hash and store.hash_code(code) == pending.code_hash:
-        await store.clear(platform=platform, sender_external_user_id=sender)
-        return OnboardingTurn(
-            message="That's you. Setting you up now.", proven_email=pending.email
+    if code and pending.code_hash and code_hash(code) == pending.code_hash:
+        return _Step(
+            turn=OnboardingTurn(
+                message="That's you. Setting you up now.", proven_email=pending.email
+            ),
+            pending=None,
         )
 
     # A second address instead of a code: they mistyped the first one. Start
     # that half over rather than making them fail three codes first.
     resent = find_email(event.message_text)
     if resent and resent != pending.email:
-        await store.put(
-            platform=platform,
-            sender_external_user_id=sender,
+        return _Step(
+            turn=OnboardingTurn(
+                message=f"Using {resent} instead — send that address again to confirm."
+            ),
             pending=PendingOnboarding(step="awaiting_email"),
-        )
-        return OnboardingTurn(
-            message=f"Using {resent} instead — send that address again to confirm."
         )
 
     # Nothing code-shaped at all: they said something else, which is not a wrong
     # guess. Burning a try for "please" would spend somebody's three on chatter.
     if code is None:
-        return OnboardingTurn(
-            message="Send me the code from that email and I'll know it's you."
+        return _Step(
+            turn=OnboardingTurn(
+                message="Send me the code from that email and I'll know it's you."
+            ),
+            pending=pending,
         )
 
     attempts = pending.attempts + 1
     if code_attempts_exhausted(attempts):
-        await store.clear(platform=platform, sender_external_user_id=sender)
-        return OnboardingTurn(
-            message=(
-                "That code didn't match, and I've run out of tries. "
-                "Say hello again to start over."
-            )
+        return _Step(
+            turn=OnboardingTurn(
+                message=(
+                    "That code didn't match, and I've run out of tries. "
+                    "Say hello again to start over."
+                )
+            ),
+            pending=None,
         )
 
-    await store.put(
-        platform=platform,
-        sender_external_user_id=sender,
-        pending=PendingOnboarding(
-            step="awaiting_code",
-            email=pending.email,
-            code_hash=pending.code_hash,
-            attempts=attempts,
-        ),
+    return _Step(
+        turn=OnboardingTurn(message="That code didn't match. Try again."),
+        pending=replace(pending, attempts=attempts),
     )
-    return OnboardingTurn(message="That code didn't match. Try again.")

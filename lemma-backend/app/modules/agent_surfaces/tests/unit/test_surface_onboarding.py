@@ -161,6 +161,59 @@ async def test_chatter_while_waiting_for_a_code_does_not_cost_a_try() -> None:
     assert pending is not None and pending.attempts == 0
 
 
+async def test_an_exchange_going_nowhere_eventually_goes_quiet() -> None:
+    """Onboarding is exempt from the stranger window, so it bounds itself.
+
+    Every reply is an outbound message on a number every pod shares, and
+    somebody typing at it forever must not be able to make us answer forever.
+    A real signup spends three or four turns; this spends them on nothing.
+    """
+    store = _Store()
+    send, sent = _sends_ok()
+
+    replies = 0
+    for _ in range(20):
+        turn = await advance_onboarding(
+            store=store, event=_message("still not an email"), send_code_email=send
+        )
+        if turn is None:
+            break
+        replies += 1
+
+    assert replies < 20, "the exchange must stop answering at some point"
+    assert sent == [], "and never mailed anybody, since no address was ever given"
+
+    # Silence, not a refusal message -- there is nothing useful left to say.
+    assert (
+        await advance_onboarding(
+            store=store, event=_message("hello?"), send_code_email=send
+        )
+        is None
+    )
+
+
+async def test_a_real_signup_fits_inside_the_budget() -> None:
+    """The bound has to be generous enough for somebody doing it properly."""
+    store = _Store()
+    send, sent = _sends_ok()
+
+    await advance_onboarding(store=store, event=_message("hi"), send_code_email=send)
+    # A typo, a correction, then the code: an ordinary slightly-fumbled signup.
+    await advance_onboarding(
+        store=store, event=_message("ada@acme"), send_code_email=send
+    )
+    await advance_onboarding(
+        store=store, event=_message("ada@acme.com"), send_code_email=send
+    )
+    await advance_onboarding(
+        store=store, event=_message("hang on"), send_code_email=send
+    )
+    done = await advance_onboarding(
+        store=store, event=_message(sent[0]["code"]), send_code_email=send
+    )
+    assert done is not None and done.proven_email == "ada@acme.com"
+
+
 async def test_a_second_address_is_taken_as_a_correction_not_a_wrong_code() -> None:
     """Mistyping an address should not cost somebody their three tries."""
     store = _Store()

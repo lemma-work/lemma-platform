@@ -36,6 +36,12 @@ OnboardingStep = Literal["awaiting_email", "awaiting_code"]
 #: Wrong codes allowed before the attempt is burned and has to be restarted.
 _MAX_CODE_ATTEMPTS = 3
 
+#: Replies one exchange may spend before it is written off. A real signup takes
+#: three or four; anything past this is somebody typing at the number rather
+#: than answering it, and each reply is an outbound message on a number every
+#: pod shares.
+_MAX_TURNS = 8
+
 
 @dataclass(frozen=True, slots=True)
 class PendingOnboarding:
@@ -43,6 +49,7 @@ class PendingOnboarding:
     email: str | None = None
     code_hash: str | None = None
     attempts: int = 0
+    turns: int = 0
 
 
 class SurfaceOnboardingStore:
@@ -97,6 +104,7 @@ class SurfaceOnboardingStore:
             email=fields.get("email"),
             code_hash=fields.get("code_hash"),
             attempts=int(fields.get("attempts") or 0),
+            turns=int(fields.get("turns") or 0),
         )
 
     async def put(
@@ -123,6 +131,7 @@ class SurfaceOnboardingStore:
                     "email": pending.email,
                     "code_hash": pending.code_hash,
                     "attempts": pending.attempts,
+                    "turns": pending.turns,
                 }
             ),
             ex=self._ttl_seconds,
@@ -144,6 +153,11 @@ class SurfaceOnboardingStore:
 def code_attempts_exhausted(attempts: int) -> bool:
     """Whether this many wrong codes has burned the attempt."""
     return attempts >= _MAX_CODE_ATTEMPTS
+
+
+def turns_exhausted(turns: int) -> bool:
+    """Whether this exchange has spent its budget of replies."""
+    return turns >= _MAX_TURNS
 
 
 _onboarding_store: SurfaceOnboardingStore | None = None
