@@ -959,9 +959,13 @@ impl HostProcessManager {
         Ok(())
     }
 
-    pub fn stop_all(&self) -> io::Result<()> {
+    pub fn request_stop(&self) {
         self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
+    }
+
+    pub fn stop_all(&self) -> io::Result<()> {
+        self.request_stop();
         let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
         let mut first_error = None;
         for id in self.ordered_ids.iter().rev() {
@@ -3551,6 +3555,37 @@ mod tests {
         assert!(child.try_wait().unwrap().is_none());
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_request_interrupts_an_inflight_service_health_wait() {
+        let root = tempdir().unwrap();
+        let mut backend = service("backend", &[]);
+        backend.command = long_running_command();
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = long_running_command();
+        let mut value = manifest(vec![backend, frontend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = manager_in(&root, value);
+        manager.start_all().unwrap();
+        let (mut health, server) = one_response(503, "not ready");
+        health.timeout_seconds = 30;
+        let waiting = Arc::clone(&manager);
+        let (finished, outcome) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _ = finished.send(waiting.wait_process_health("backend", &health));
+        });
+        server.join().unwrap();
+        manager.request_stop();
+        let result = outcome.recv_timeout(Duration::from_secs(5));
+        manager.stop_all().unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            result.unwrap().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(manager.status().iter().all(|service| !service.running));
     }
 
     #[cfg(unix)]

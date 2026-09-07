@@ -227,7 +227,8 @@ export function LocalIntelligenceStep({
     const computerNoun = useThisComputer();
     // Connects itself. Nobody is asked to press anything for a machine that is
     // already this workspace's own computer.
-    const { status } = useAutoConnectThisComputer();
+    const { status, error: statusError, connectError, retryConnect, refetch } = useAutoConnectThisComputer();
+    const connectionError = connectError ?? statusError ?? status?.last_error ?? null;
     // This workspace's pairing, not the first one on the machine. `targets[0]`
     // is whichever pairing happens to sort first, so a Mac already paired to
     // another workspace showed that host's agents on this one's setup screen.
@@ -269,7 +270,7 @@ export function LocalIntelligenceStep({
     });
     const rows = useMemo(() => harnessRowStates(detected, phase), [detected, phase]);
     const foundCount = rows.filter((row) => row.state === "found").length;
-    const working = phase !== "settled" && phase !== "unavailable";
+    const working = !connectionError && phase !== "settled" && phase !== "unavailable";
     // A clock, only while there is something to time. Probing spawns every agent
     // on the machine, and how long that takes is the one thing the screen knows
     // and the user does not -- but a wait is only worth explaining once it has
@@ -335,12 +336,30 @@ export function LocalIntelligenceStep({
             preview={
                 <LocalPreview
                     icon={<Sparkles className="size-5" />}
-                    headline={discoveryHeadline(phase, foundCount, computerNoun)}
-                    lines={discoveryLines(phase, foundCount, computerNoun)}
+                    headline={connectionError ? "This computer needs attention" : discoveryHeadline(phase, foundCount, computerNoun)}
+                    lines={connectionError ? [connectionError] : discoveryLines(phase, foundCount, computerNoun)}
                     working={working}
                 />
             }
             onBack={onBack}
+            footer={(
+                <div className="flex flex-wrap items-center gap-3">
+                    <SetupPrimaryButton
+                        type="button"
+                        onClick={() => onContinue(configured ? "ready" : "deferred")}
+                        className="!mx-0 !mt-0"
+                    >
+                        Continue
+                        <ArrowRight className="h-4 w-4" />
+                    </SetupPrimaryButton>
+                    {configured ? (
+                        <span className="flex items-center gap-1.5 text-xs text-[var(--state-success)]">
+                            <Check className="size-3.5" />
+                            Ready
+                        </span>
+                    ) : null}
+                </div>
+            )}
             currentStep="intelligence"
             steps={steps}
         >
@@ -374,7 +393,17 @@ export function LocalIntelligenceStep({
                      * at all for the whole minute a first probe takes, next to
                      * four grey rows and a disabled button.
                      */}
-                    {statusLine ? (
+                    {connectionError ? (
+                        <div role="alert" className="space-y-2 rounded-md border border-[var(--border-subtle)] p-3">
+                            <p className="text-sm">{connectionError}</p>
+                            <Button type="button" variant="quiet" size="sm" onClick={() => {
+                                retryConnect();
+                                void refetch();
+                            }}>
+                                Retry connection
+                            </Button>
+                        </div>
+                    ) : statusLine ? (
                         <p
                             role="status"
                             aria-live="polite"
@@ -569,31 +598,7 @@ export function LocalIntelligenceStep({
                     everyone. A coding agent stays on {computerNoun} and uses its own credentials.
                 </p>
 
-                {/*
-                  * `pt-9` and `!mt-0` together, because `SetupPrimaryButton`
-                  * carries `mx-auto mt-8` of its own. This row already cancelled
-                  * the centring; leaving the top margin meant `items-center`
-                  * centred the button's *margin* box while the "Ready" pip
-                  * centred on the line, so the pip sat visibly above the middle
-                  * of the button. The 2rem moves to the container, where it
-                  * applies to the whole row.
-                  */}
-                <div className="flex flex-wrap items-center gap-3 pt-9">
-                    <SetupPrimaryButton
-                        type="button"
-                        onClick={() => onContinue(configured ? "ready" : "deferred")}
-                        className="!mx-0 !mt-0"
-                    >
-                        Continue
-                        <ArrowRight className="h-4 w-4" />
-                    </SetupPrimaryButton>
-                    {configured ? (
-                        <span className="flex items-center gap-1.5 text-xs text-[var(--state-success)]">
-                            <Check className="size-3.5" />
-                            Ready
-                        </span>
-                    ) : null}
-                </div>
+
             </div>
 
             {organizationId ? (
@@ -696,6 +701,21 @@ export function LocalSharingStep({
                 />
             }
             onBack={onBack}
+            footer={(
+                <div className="pt-1">
+                    <SetupPrimaryButton
+                        type="button"
+                        onClick={() => void handleContinue()}
+                        disabled={
+                            isCreating || (selected !== "this_computer" && !hasBridge)
+                        }
+                        className="!mx-0"
+                    >
+                        {isCreating ? "Creating your pod" : "Continue"}
+                        <ArrowRight className="h-4 w-4" />
+                    </SetupPrimaryButton>
+                </div>
+            )}
             currentStep="sharing"
             steps={steps}
         >
@@ -745,19 +765,7 @@ export function LocalSharingStep({
 
                 {hasBridge || selected === "this_computer" ? null : <BridgeUnavailableNote />}
 
-                <div className="pt-1">
-                    <SetupPrimaryButton
-                        type="button"
-                        onClick={() => void handleContinue()}
-                        disabled={
-                            isCreating || (selected !== "this_computer" && !hasBridge)
-                        }
-                        className="!mx-0"
-                    >
-                        {isCreating ? "Creating your pod" : "Continue"}
-                        <ArrowRight className="h-4 w-4" />
-                    </SetupPrimaryButton>
-                </div>
+
             </div>
         </SetupSplitPanel>
     );

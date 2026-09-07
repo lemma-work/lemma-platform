@@ -1212,6 +1212,7 @@ desktop-agent-host-e2e:
 desktop-agent-host-browser-e2e:
 	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
 	@npm --prefix lemma-typescript run build
+	@node --test desktop/ui-tests/drivers/setup-layout.mjs
 	@cd lemma-backend && CORS_ORIGIN_REGEX='^http://127[.]0[.]0[.]1:[0-9]+$$' \
 		uv run pytest app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
 		-m agent_host_browser --no-showlocals

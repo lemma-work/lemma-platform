@@ -18,14 +18,14 @@ export function SetupShell({
     <main
       className={[
         "setup-shell relative flex min-h-screen overflow-hidden text-[var(--text-primary)]",
-        fullBleed ? "" : "items-center justify-center px-4 py-8",
+        fullBleed ? "h-dvh min-h-0" : "items-center justify-center px-4 py-8",
       ].join(" ")}
     >
       <div className="setup-shell-bottom-glow absolute inset-x-0 bottom-0 h-72" />
       <div
         className={[
           "relative flex w-full",
-          fullBleed ? "" : "items-center justify-center",
+          fullBleed ? "min-h-0" : "items-center justify-center",
         ].join(" ")}
       >
         {children}
@@ -34,18 +34,31 @@ export function SetupShell({
   );
 }
 
+function SetupFooter({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <footer
+      aria-label="Setup actions"
+      className={cn("relative shrink-0 border-t border-[var(--border-subtle)] py-4 [&_.setup-primary-action]:!mt-0", className)}
+    >
+      {children}
+    </footer>
+  );
+}
+
 export function SetupStandalonePage({
   children,
   onBack,
   meta,
+  footer,
 }: {
   children: React.ReactNode;
   onBack?: () => void;
   meta?: React.ReactNode;
+  footer?: React.ReactNode;
 }) {
   return (
-    <div className="relative flex min-h-screen w-full flex-col">
-      <header className="grid min-h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 px-5 py-4 sm:px-8 lg:px-10">
+    <div className="relative flex h-dvh min-h-0 w-full flex-col">
+      <header className="grid shrink-0 min-h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 px-5 py-4 sm:px-8 lg:px-10">
         <div className="justify-self-start">
           {onBack ? (
             <Button
@@ -65,9 +78,14 @@ export function SetupStandalonePage({
           <ThemeToggle variant="icon" />
         </div>
       </header>
-      <div className="relative flex flex-1 px-5 pb-10 pt-2 sm:px-8 lg:px-10">
+      <div data-testid="setup-content" className="relative flex min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-2 sm:px-8 lg:px-10">
         {children}
       </div>
+      {footer ? (
+        <SetupFooter className="px-5">
+          <div className="mx-auto w-full max-w-lg">{footer}</div>
+        </SetupFooter>
+      ) : null}
     </div>
   );
 }
@@ -92,17 +110,20 @@ export function SetupPanel({
   title,
   subtitle,
   children,
+  footer,
   titleClassName = "",
   subtitleClassName = "",
 }: {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
+  footer?: React.ReactNode;
   titleClassName?: string;
   subtitleClassName?: string;
 }) {
   return (
-    <div className="m-auto w-full max-w-4xl px-6 py-10 text-center">
+    <div className={cn("mx-auto flex w-full max-w-4xl flex-col px-6 text-center", footer ? "h-dvh min-h-0" : "my-auto py-10")}>
+      <div data-testid="setup-content" className={footer ? "min-h-0 flex-1 overflow-y-auto overscroll-contain py-6" : ""}>
       <h1
         className={[
           "setup-panel-title mx-auto max-w-4xl font-normal tracking-normal text-[var(--text-primary)]",
@@ -122,6 +143,8 @@ export function SetupPanel({
         </p>
       ) : null}
       {children}
+      </div>
+      {footer ? <SetupFooter>{footer}</SetupFooter> : null}
     </div>
   );
 }
@@ -137,6 +160,7 @@ export function SetupSplitPanel({
   subtitle,
   children,
   preview,
+  footer,
   onBack,
   currentStep,
   steps,
@@ -145,15 +169,16 @@ export function SetupSplitPanel({
   subtitle?: string;
   children: React.ReactNode;
   preview: React.ReactNode;
+  footer?: React.ReactNode;
   onBack?: () => void;
   currentStep: SetupStep;
   steps?: SetupStep[];
 }) {
   return (
-    <div className="grid w-full flex-1 lg:grid-cols-2">
-      <div className="relative flex flex-col overflow-hidden px-6 py-6 sm:px-10 lg:px-16 lg:py-10">
+    <div className="grid h-dvh min-h-0 w-full flex-1 lg:grid-cols-2">
+      <div className="relative flex min-h-0 flex-col overflow-hidden px-6 pt-5 sm:px-10 lg:px-12">
         <div className="setup-split-glow absolute inset-0" aria-hidden="true" />
-        <div className="flex items-center justify-between">
+        <div className="relative flex shrink-0 items-center justify-between">
           {onBack ? (
             <Button
               type="button"
@@ -173,10 +198,10 @@ export function SetupSplitPanel({
             title/subtitle/form length, so it sits in the same spot on every
             step instead of drifting with the vertically-centered content
             below it. */}
-        <div className="mt-6 w-full max-w-xl">
+        <div className="relative my-4 w-full max-w-xl shrink-0">
           <SetupProgressBar currentStep={currentStep} steps={steps} />
         </div>
-        <div className="flex flex-1 flex-col justify-center">
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5" data-testid="setup-content">
           <div className="w-full max-w-xl text-left">
             <h1 className="setup-split-title text-[var(--text-primary)]">
               {title}
@@ -187,10 +212,11 @@ export function SetupSplitPanel({
               </p>
             ) : null}
           </div>
-          <div className="mt-8 w-full">{children}</div>
+          <div className="mt-5 w-full">{children}</div>
         </div>
+        {footer ? <SetupFooter>{footer}</SetupFooter> : null}
       </div>
-      <div className="setup-preview-pane hidden lg:flex lg:flex-col">
+      <div className="setup-preview-pane min-h-0 overflow-y-auto hidden lg:flex lg:flex-col">
         <div className="setup-path-pane-content flex h-full flex-col p-8 xl:p-10">
           {preview}
         </div>

@@ -442,11 +442,15 @@ Acceptance flow:
    Confirm the marketing landing page never appears — not before signup, not
    after signing out, and not in a LAN browser (step 10).
 5. Confirm the workspace does not return to the installer after Ready.
-6. Walk local onboarding: it must ask for a provider, then agents on this
-   computer, then who can reach this installation, in that order. Confirm the
-   provider step states that the model is the installation's single default,
-   that **Set this up later** advances without claiming success, and that
-   completing a provider in Local settings advances the step on its own.
+6. Walk local onboarding: choose an installed coding agent, an API provider,
+   or a local model server, then choose who can reach this installation. An
+   API provider is optional when a coding agent is ready. Continuing without
+   either must not claim that AI is ready. At the minimum window size and with
+   enlarged text, confirm every step's Continue/Create action is fully visible
+   without scrolling. Tab through the form: content may scroll, actions stay
+   put. The shared layout regression runs with
+   `node --test desktop/ui-tests/drivers/setup-layout.mjs` and is included in
+   `make desktop-agent-host-browser-e2e`.
 7. Open **Local settings** from the workspace footer, close it with Escape,
    reopen it from the tray, and confirm the underlying workspace state was not
    remounted or lost. It must look like the rest of the product: warm paper,
@@ -456,16 +460,15 @@ Acceptance flow:
    the list — typing a model name must not be required. Apply it and verify
    thinking and structured tool calls. Also verify an API provider can replace
    them, and that a model the provider does not serve is refused.
-9. From the onboarding agents step, and again from **Models**, press
-   confirm the computer pairs on its own -- no code, no terminal, and no
-   button to press.
+9. From the onboarding agents step, and again from **Models**, confirm the
+   computer pairs on its own. A failed start or pairing must display the
+   failure and offer **Retry connection**, without remaining on a loading row.
    Add a detected agent with **Use in chat**, pick it in a chat, run a
    prompt, and approve a permission. Confirm the tray reads
-   `Agent Host: connected`, that turning it off from either the tray or the card
-   stops the process and survives an app restart, and that a full quit stops it
-   without turning it off. A machine with no coding agents installed must say so
-   in one line and still let the step continue. Repeat in hosted mode: no locald
-   appears until the Agent Host is enabled, and no host pack is downloaded.
+   `Agent Host: connected`. Closing the window keeps it running; Quit stops it,
+   and reopening restores the paired host. A machine with no coding agents
+   installed must say so and still let the step continue. Repeat in hosted
+   mode: the Agent Host connects without downloading the complete local stack.
 10. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
     second browser, create/sign into an account, and verify streamed chat, a
     tool call, and a file transfer. Confirm that browser is offered the account

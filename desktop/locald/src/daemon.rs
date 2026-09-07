@@ -280,7 +280,11 @@ impl Daemon {
                         let runtime_expected =
                             runtime.status().is_some() || manager.desired_running();
                         if runtime_expected {
-                            match runtime.probe() {
+                            let probe = runtime.probe();
+                            if daemon.lifecycle.checkpoint().is_err() {
+                                return;
+                            }
+                            match probe {
                                 Ok(_) => {
                                     manager.mark_dependency_ready();
                                     runtime_failure_reported = false;
@@ -795,9 +799,10 @@ impl Daemon {
                 }
                 _ => daemon.agent_host.refresh(),
             };
-            match result {
-                Ok(()) => {
-                    let status = daemon.agent_host.detailed_status();
+            let outcome = result.map(|()| daemon.agent_host.detailed_status());
+            daemon.agent_lifecycle.finish();
+            match outcome {
+                Ok(status) => {
                     daemon.send_direct(
                         &client,
                         json!({
@@ -827,7 +832,6 @@ impl Daemon {
                     ),
                 ),
             }
-            daemon.agent_lifecycle.finish();
         });
     }
 
@@ -1455,6 +1459,9 @@ impl Daemon {
         }
         self.lifecycle.request_shutdown();
         self.agent_lifecycle.request_shutdown();
+        if let Some(manager) = self.host_processes.as_ref() {
+            manager.request_stop();
+        }
         if let Some(runtime) = self.managed_runtime.as_ref() {
             runtime.cancel_pending_requests();
         }

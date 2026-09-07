@@ -1859,6 +1859,10 @@ where
 }
 
 fn connect_locald() -> Result<LocaldConnection, String> {
+    connect_locald_with_mode(false)
+}
+
+fn connect_locald_with_mode(nonblocking: bool) -> Result<LocaldConnection, String> {
     let root = locald_root();
     let token_path = root.join("control.token");
     if std::fs::metadata(&token_path).is_ok_and(|meta| meta.len() > 4096) {
@@ -1890,7 +1894,7 @@ fn connect_locald() -> Result<LocaldConnection, String> {
         return Err("incompatible lemma-locald handshake".into());
     }
     stream
-        .set_nonblocking(false)
+        .set_nonblocking(nonblocking)
         .map_err(|error| error.to_string())?;
     let (receive, send) = stream.split();
     Ok(LocaldConnection {
@@ -2211,27 +2215,35 @@ fn emit_log(app: &AppHandle, line: &str) {
     }
 }
 
+fn locald_event_operation_id(event: &Value) -> Option<&str> {
+    event
+        .get("operation_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            matches!(event["event"].as_str(), Some("ack" | "done" | "error"))
+                .then(|| event.get("id").and_then(Value::as_str))
+                .flatten()
+        })
+}
+
+fn event_applies_during_shutdown(event: &Value) -> bool {
+    match event["event"].as_str().unwrap_or_default() {
+        "log" => true,
+        "status" | "state" | "ready" | "runtime.prepared" => false,
+        _ => locald_event_operation_id(event).is_some(),
+    }
+}
+
 fn handle_locald_event(app: &AppHandle, event: &Value) {
     if std::env::var("LEMMA_DESKTOP_DEBUG").as_deref() == Ok("1") {
         eprintln!("[locald] {event}");
     }
     let shell: State<Shell> = app.state();
     let kind = event["event"].as_str().unwrap_or_default();
-    if shell.quit_after_stop.load(Ordering::Acquire)
-        && matches!(kind, "status" | "state" | "ready" | "runtime.prepared")
-    {
+    if shell.quit_after_stop.load(Ordering::Acquire) && !event_applies_during_shutdown(event) {
         return;
     }
-    let event_operation_id = event
-        .get("operation_id")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            if matches!(kind, "ack" | "done") || kind == "error" {
-                event.get("id").and_then(Value::as_str)
-            } else {
-                None
-            }
-        });
+    let event_operation_id = locald_event_operation_id(event);
     if let Some(event_operation_id) = event_operation_id {
         let mut ui = shell.ui.lock().unwrap();
         if !ui.active_operation_id.is_empty() && ui.active_operation_id != event_operation_id {
@@ -4064,7 +4076,7 @@ fn agent_host_action_impl(app: AppHandle, action: String) -> Result<(), String> 
         return Err(format!("unknown Agent Host action {action:?}"));
     }
     ensure_agent_host_daemon(&app)?;
-    send_to_locald(
+    agent_host_request(
         &app,
         json!({
             "cmd": format!("agent-host.{action}"),
@@ -4155,16 +4167,18 @@ async fn agent_host_status(_window: Webview, app: AppHandle) -> Result<Value, St
 
 fn agent_host_status_impl(app: AppHandle) -> Result<Value, String> {
     ensure_agent_host_daemon(&app)?;
-    // Ask for a fresh reading, then answer with the newest one already in hand.
-    // locald replies on the event stream rather than to this call, so waiting
-    // for it here would mean holding a second socket open for every poll.
-    let _ = send_to_locald(
-        &app,
+    let response = locald_request(
         json!({"cmd": "agent-host.status", "id": operation_id("agent-host-status")}),
-    );
+        Duration::from_secs(15),
+    )?;
+    let status = response
+        .get("agent_host")
+        .filter(|value| value.is_object())
+        .ok_or("Lemma returned an invalid Agent Host status")?
+        .clone();
     let shell: State<Shell> = app.state();
-    let status = shell.agent_host_status.lock().unwrap().clone();
-    Ok(status.unwrap_or(Value::Null))
+    *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+    Ok(status)
 }
 
 #[tauri::command]
@@ -4190,7 +4204,7 @@ async fn agent_host_start(window: Webview, app: AppHandle) -> Result<(), String>
 
 fn agent_host_start_impl(app: AppHandle) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
-    send_to_locald(
+    agent_host_request(
         &app,
         json!({
             "cmd": "agent-host.start",
@@ -4226,7 +4240,7 @@ fn agent_host_pair_impl(
         return Err("pairing needs a workspace URL and a pairing code".into());
     }
     ensure_agent_host_daemon(&app)?;
-    send_to_locald(
+    agent_host_request(
         &app,
         json!({
             "cmd": "agent-host.pair",
@@ -4258,7 +4272,7 @@ async fn agent_host_refresh(window: Webview, app: AppHandle) -> Result<(), Strin
 
 fn agent_host_refresh_impl(app: AppHandle) -> Result<(), String> {
     ensure_agent_host_daemon(&app)?;
-    send_to_locald(
+    agent_host_request(
         &app,
         json!({
             "cmd": "agent-host.refresh",
@@ -4465,58 +4479,25 @@ fn apply_operator_config_impl(app: AppHandle, id: String, payload: Value) -> Res
 /// connection and read until their own id comes back, so the caller gets a
 /// value and a real error message instead of having to guess from a poll.
 fn locald_request(command: Value, timeout: Duration) -> Result<Value, String> {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let _ = sender.send(locald_request_blocking(command));
-    });
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|_| "Lemma did not answer in time".to_string())?
-}
-
-fn locald_request_blocking(command: Value) -> Result<Value, String> {
     let id = command
         .get("id")
         .and_then(Value::as_str)
-        .ok_or("request needs an id")?
-        .to_owned();
-    let mut connection = connect_locald()?;
+        .ok_or("request needs an id")?;
+    let mut connection = connect_locald_with_mode(true)?;
     writeln!(connection.writer, "{command}")
         .and_then(|_| connection.writer.flush())
         .map_err(|error| format!("could not reach Lemma: {error}"))?;
+    ipc_read::response(&mut connection.reader, id, timeout)
+}
 
-    loop {
-        let mut line = String::new();
-        let bytes = connection
-            .reader
-            .read_line(&mut line)
-            .map_err(|error| format!("could not read Lemma's answer: {error}"))?;
-        if bytes == 0 {
-            return Err("Lemma closed the connection".into());
-        }
-        if line.len() > 4 * 1024 * 1024 {
-            return Err("Lemma's answer was too large".into());
-        }
-        let Ok(event) = serde_json::from_str::<Value>(line.trim_end()) else {
-            continue;
-        };
-        if event.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-            continue;
-        }
-        match event.get("event").and_then(Value::as_str) {
-            // Acknowledgements say the work started, not that it finished.
-            Some("ack") => continue,
-            Some("error") => {
-                return Err(event
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Lemma could not complete that")
-                    .to_string())
-            }
-            Some(_) => return Ok(event),
-            None => continue,
-        }
+fn agent_host_request(app: &AppHandle, command: Value) -> Result<(), String> {
+    let response = locald_request(command, Duration::from_secs(190))?;
+    if let Some(status) = response.get("agent_host").filter(|value| value.is_object()) {
+        let shell: State<Shell> = app.state();
+        *shell.agent_host_status.lock().unwrap() = Some(status.clone());
+        refresh_agent_host_tray(app, status);
     }
+    Ok(())
 }
 
 /// List a candidate provider's models so the page can offer a picker.
@@ -8388,6 +8369,25 @@ mod tests {
             reserve_ui_operation(&mut ui, "start", "late-start"),
             Err(LOCALD_BUSY.into())
         );
+    }
+
+    #[test]
+    fn shutdown_keeps_its_progress_when_a_background_health_probe_fails() {
+        assert!(!event_applies_during_shutdown(&json!({
+            "event": "error", "code": "managed-runtime-lost", "message": "health deadline",
+        })));
+        assert!(!event_applies_during_shutdown(&json!({
+            "event": "ready", "operation_id": "old-start",
+        })));
+        assert!(event_applies_during_shutdown(&json!({
+            "event": "phase", "operation_id": "quit", "label": "Stopping Lemma",
+        })));
+        assert!(event_applies_during_shutdown(&json!({
+            "event": "error", "id": "quit", "code": "shutdown-failed",
+        })));
+        assert!(event_applies_during_shutdown(&json!({
+            "event": "done", "id": "quit", "cmd": "shutdown-daemon", "ok": true,
+        })));
     }
 
     #[test]
