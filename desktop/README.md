@@ -351,6 +351,22 @@ An explicitly selected Apple Development certificate and `--allow-development`
 support local QA. They do not qualify a release. Changing an old ad-hoc build to
 a certificate-backed build can still require one approval for the new identity.
 
+The actual packaged daemon also has an opt-in native credential check. It uses
+uniquely named test entries in the current OS credential store, checks creation,
+replacement and removal, and starts a disposable daemon twice to verify encrypted
+state and shutdown. It removes only those test entries and that test root. If
+cleanup fails, the root is retained so its installation identity is recoverable.
+The macOS stable and nightly workflows run this against their packaged daemon:
+
+```bash
+LEMMA_NATIVE_CREDENTIAL_TEST_BINARY="candidate/Lemma.app/Contents/MacOS/lemma-locald" \
+LEMMA_SIGNING_TEST_TEAM="$APPLE_TEAM_ID" \
+  uv run --no-project python -m unittest discover -s desktop/scripts -p test_native_credentials.py
+```
+
+For a locally signed development candidate, explicitly add
+`LEMMA_NATIVE_CREDENTIAL_ALLOW_DEVELOPMENT=1`.
+
 Credentials are encrypted in `locald/credentials.enc`; the OS vault retains its
 encryption key. Existing per-secret vault entries migrate on first access and
 remain available for recovery until explicit removal or full cleanup. Do not

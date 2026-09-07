@@ -315,13 +315,20 @@ zero opacity can leave usable controls in the accessibility tree while the
 window looks blank. Native qualification checks both the visible page and its
 accessibility tree, including opening settings before deployment setup.
 
-Native credential reads have a bounded caller deadline and admit at most one
-outstanding OS read. If Keychain or Credential Manager stops answering, setup
-reports an error while retaining stored credentials and application data.
-Retry does not accumulate blocked native calls. A read that completes after
-its caller times out cannot populate the cache; a concurrent replacement or
-removal also takes precedence over an older read. Writes are not abandoned on
-a read deadline, because their eventual outcome must remain known.
+Native credential reads, writes and removals run in a short-lived copy of
+`lemma-locald`, retaining its signed identity. A bounded supervisor owns and
+reaps that process on timeout; retry cannot accumulate blocked native calls.
+The helper also enforces its own deadline and exits if its Unix parent dies;
+Windows uses the supervisor's owned Job Object.
+Requests and credential values use private stdin/stdout pipes, never command
+arguments, files or logs. Malformed input fails before accessing the store;
+native errors are reported without their potentially sensitive details.
+The encrypted vault serializes unlock and migration. A timed-out read cannot
+populate its cache. A timed-out mutation reports an uncertain outcome rather
+than success: pending empty-vault initialization remains recoverable, and the
+user must recheck or retry the change. No timeout resets application data.
+Destructive credential cleanup stops on the first failure and retains the
+installation identity and wrapping key for a deliberate retry.
 
 The first screen recommends Lemma Cloud, with team collaboration, hosted
 integrations, and cloud agents that can run while this computer is off. Its

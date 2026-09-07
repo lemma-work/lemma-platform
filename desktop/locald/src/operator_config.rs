@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -13,7 +13,7 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 19] = [
+pub(crate) const SECRET_NAMES: [&str; 19] = [
     "ai.api_key",
     "integrations.deepgram_api_key",
     "integrations.composio_api_key",
@@ -178,37 +178,30 @@ pub(crate) trait SecretVault: Send + Sync {
 pub(crate) struct PlatformVault;
 
 impl PlatformVault {
-    fn entry(install_id: &str, name: &str) -> io::Result<keyring::v1::Entry> {
+    pub(crate) fn entry(install_id: &str, name: &str) -> io::Result<keyring::v1::Entry> {
         keyring::v1::Entry::new(VAULT_SERVICE, &format!("{install_id}:{name}")).map_err(vault_error)
     }
 }
 
 impl SecretVault for PlatformVault {
     fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
-        static READS: OnceLock<crate::vault_reads::VaultReads> = OnceLock::new();
-        let install_id = install_id.to_owned();
-        let name = name.to_owned();
-        READS.get_or_init(Default::default).read(
-            Duration::from_secs(15),
-            move || match Self::entry(&install_id, &name)?.get_password() {
-                Ok(value) => Ok(Some(value)),
-                Err(keyring::v1::Error::NoEntry) => Ok(None),
-                Err(error) => Err(vault_error(error)),
-            },
-        )
+        crate::vault_process::invoke(install_id, name, crate::vault_process::Operation::Get)
     }
 
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
-        Self::entry(install_id, name)?
-            .set_password(value)
-            .map_err(vault_error)
+        crate::vault_process::invoke(
+            install_id,
+            name,
+            crate::vault_process::Operation::Set {
+                value: value.into(),
+            },
+        )
+        .map(|_| ())
     }
 
     fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
-        match Self::entry(install_id, name)?.delete_credential() {
-            Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
-            Err(error) => Err(vault_error(error)),
-        }
+        crate::vault_process::invoke(install_id, name, crate::vault_process::Operation::Delete)
+            .map(|_| ())
     }
 }
 
@@ -984,8 +977,7 @@ const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
 /// shell is a different program as far as the vault is concerned, and would
 /// prompt or fail.
 ///
-/// Try every key and return failures so recovery can retain the installation
-/// identity until a later retry has removed the remaining entries.
+/// Retain the installation identity until every credential has been removed.
 pub fn purge_secrets(install_id: &str) -> Vec<String> {
     purge_vault_secrets(&PlatformVault, install_id)
 }
@@ -995,6 +987,9 @@ fn purge_vault_secrets(vault: &dyn SecretVault, install_id: &str) -> Vec<String>
     for name in SECRET_NAMES.into_iter().chain(["secret.encryption_keyset"]) {
         if let Err(error) = vault.delete(install_id, name) {
             failures.push(format!("{name}: {error}"));
+            // A denied or stalled store must not produce another consent prompt
+            // for every remaining item. Recovery can retry the idempotent sweep.
+            break;
         }
     }
     // A failed reset retains local data. Keep its decryption key until every
@@ -1517,6 +1512,26 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn failed_cleanup_stops_prompting_and_keeps_remaining_credentials() {
+        struct Denied(Mutex<Vec<String>>);
+        impl SecretVault for Denied {
+            fn get(&self, _: &str, _: &str) -> io::Result<Option<String>> {
+                unreachable!()
+            }
+            fn set(&self, _: &str, _: &str, _: &str) -> io::Result<()> {
+                unreachable!()
+            }
+            fn delete(&self, _: &str, name: &str) -> io::Result<()> {
+                self.0.lock().unwrap().push(name.into());
+                Err(io::ErrorKind::TimedOut.into())
+            }
+        }
+        let vault = Denied(Mutex::new(Vec::new()));
+        assert_eq!(purge_vault_secrets(&vault, "installation").len(), 1);
+        assert_eq!(*vault.0.lock().unwrap(), vec!["ai.api_key"]);
+    }
+
+    #[test]
     fn aborted_cleanup_preserves_the_encrypted_vault_key_until_retry_succeeds() {
         struct PurgeVault {
             denied: bool,
@@ -1739,6 +1754,7 @@ mod tests {
     #[test]
     fn delayed_native_read_cannot_undo_a_saved_replacement_or_removal() {
         use std::sync::mpsc;
+        use std::time::Duration;
         struct DelayedVault {
             inner: MemoryVault,
             started: mpsc::Sender<()>,

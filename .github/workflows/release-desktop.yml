@@ -308,10 +308,9 @@ jobs:
 
       - name: Build online DMG
         working-directory: desktop
-        # The updater overlay is merged only here. `tauri build` runs from five
-        # other places with no signing key -- CI's build check, the Windows
-        # check, both nightly jobs and `make desktop-dmg` -- and every one of
-        # them would fail if the base config demanded updater artifacts.
+        # The updater overlay is merged only for update-capable builds. CI's
+        # build checks and `make desktop-dmg` have no updater signing key and
+        # would fail if the base config demanded one.
         run: |
           set -euo pipefail
           npx -y "$TAURI_CLI" build \
@@ -468,6 +467,12 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify native credentials with the packaged release daemon
+        env:
+          LEMMA_NATIVE_CREDENTIAL_TEST_BINARY: desktop/target/release/bundle/macos/Lemma.app/Contents/MacOS/lemma-locald
+          LEMMA_SIGNING_TEST_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 -m unittest discover -s desktop/scripts -p test_native_credentials.py
 
       # Tauri notarizes and staples the .app, then tars it. That ordering is
       # believed, not documented -- and an update payload that is not notarized

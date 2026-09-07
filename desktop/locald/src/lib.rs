@@ -16,7 +16,7 @@ pub mod reset;
 pub mod sharing;
 pub mod state;
 pub mod telemetry;
-mod vault_reads;
+pub mod vault_process;
 
 pub const PROTOCOL_VERSION: u64 = 1;
 

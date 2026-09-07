@@ -1150,6 +1150,12 @@ jobs:
           test -n "$LEMMA_SIGNING_TEST_TEAM"
           python3 -m unittest discover -s desktop/scripts -p test_check_macos_signing.py
 
+      - name: Verify native credentials with the packaged nightly daemon
+        env:
+          LEMMA_NATIVE_CREDENTIAL_TEST_BINARY: desktop/target/release/bundle/macos/Lemma.app/Contents/MacOS/lemma-locald
+          LEMMA_SIGNING_TEST_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 -m unittest discover -s desktop/scripts -p test_native_credentials.py
+
       - name: Attach the DMG to the nightly prerelease
         shell: bash
         env:

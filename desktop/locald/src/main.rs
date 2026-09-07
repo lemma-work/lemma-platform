@@ -18,6 +18,7 @@ fn run() -> io::Result<()> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref().unwrap_or("serve") {
         "serve" => serve(),
+        "credential-vault" if arguments.next().is_none() => lemma_locald::vault_process::serve(),
         // Deliberately never constructs a Daemon: this is what a user reaches
         // for when the daemon is the thing that will not start.
         "reset" => {
