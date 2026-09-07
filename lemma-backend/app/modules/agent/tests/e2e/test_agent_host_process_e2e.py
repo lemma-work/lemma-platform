@@ -542,18 +542,27 @@ async def test_browser_chat_replays_json_acp_and_retains_results_after_reload(
     backend_server: dict[str, str],
     worker: object,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     action: Literal[
         "approve", "deny", "stream", "crash", "disconnect", "cancel", "parallel"
     ],
 ) -> None:
     del worker
     await scenario.create_org_with_pod(name_prefix="Browser ACP")
+    if action == "stream":
+        # Exercise a valid URL-safe token that CLI parsers can mistake for a flag.
+        monkeypatch.setattr(
+            "app.modules.agent.api.controllers.agent_host_controller.generate_pairing_code",
+            lambda: "-" + uuid4().hex,
+        )
     minted = await scenario.owner_client.post(
         "/me/runtime/agent-host-pairings",
         json={"display_name": "isolated browser host"},
     )
     assert minted.is_success, minted.text
     pairing = PairingCode.model_validate(minted.json())
+    if action == "stream":
+        assert pairing.pairing_code.get_secret_value().startswith("-")
     base_url = backend_server["host_base_url"]
     async with running_host(
         tmp_path,
