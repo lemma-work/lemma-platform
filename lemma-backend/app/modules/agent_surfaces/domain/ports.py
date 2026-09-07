@@ -401,6 +401,21 @@ class SurfaceEventDedupStorePort(Protocol):
         external_message_id: str | None,
     ) -> bool: ...
 
+    async def claim_stranger_reply(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str | None,
+    ) -> bool:
+        """Whether a sender we cannot place may be told how to get access now.
+
+        True once per sender per window. Message-level claims stop redeliveries;
+        this stops repetition -- unsolicited messages from a shared number, and
+        the same public nudge every time one person speaks in a channel.
+        """
+        ...
+
     async def release_message(
         self,
         *,

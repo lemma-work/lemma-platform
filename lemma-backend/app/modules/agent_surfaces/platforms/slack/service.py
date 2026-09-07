@@ -63,6 +63,15 @@ logger = get_logger(__name__)
 type SlackMessagePayload = dict[str, object]
 
 
+def _ephemeral_target(metadata: dict[str, object] | None) -> str:
+    """Who a reply should be shown to alone, or "" for the whole channel.
+
+    Set only by the fallback path, which answers a newcomer in a channel
+    without making the channel read it.
+    """
+    return str((metadata or {}).get("ephemeral_to") or "").strip()
+
+
 class SlackPlatformService(SlackChannelReadsMixin):
     def __init__(self, *, credentials: dict[str, Any], parser=None) -> None:
         if parser is None:
@@ -87,9 +96,22 @@ class SlackPlatformService(SlackChannelReadsMixin):
         reading the first part of something the system had written off. Uses
         the same ``with_retry`` seam Telegram does, so there is one retry
         policy across the platforms rather than two.
+
+        Carrying an ``ephemeral_user`` sends it to that one person instead, for
+        the fallback path answering a newcomer in a channel the rest of which
+        should not have to read it. An ephemeral is not a stored message -- it
+        does not survive a reload and Slack does not guarantee it was shown --
+        which is the right trade for telling somebody how to get access and the
+        wrong one for anything that has to be answered later.
         """
+        user = str(payload.pop("ephemeral_user", "") or "")
+        send = (
+            (lambda: client.chat_postEphemeral(user=user, **payload))
+            if user
+            else (lambda: client.chat_postMessage(**payload))
+        )
         await with_retry(
-            lambda: client.chat_postMessage(**payload),
+            send,
             policy=self._retry_policy,
             classify=classify_slack_error,
             retry_after=slack_retry_after,
@@ -178,6 +200,8 @@ class SlackPlatformService(SlackChannelReadsMixin):
         # long answer becomes several messages rather than one truncated one.
         chunks = chunk_text(message, limit=MARKDOWN_BLOCK_CHAR_LIMIT) or [message]
         feedback_callback_id = str((metadata or {}).get("feedback_callback_id") or "")
+        # Empty for a normal channel post; `_post_message` decides on it.
+        ephemeral_user = _ephemeral_target(metadata)
         try:
             for index, chunk in enumerate(chunks):
                 blocks: list[dict[str, Any]] = [markdown_block(chunk)]
@@ -193,6 +217,7 @@ class SlackPlatformService(SlackChannelReadsMixin):
                 if thread_ts:
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
+                payload["ephemeral_user"] = ephemeral_user
                 await self._post_message(client, payload)
         except Exception:
             logger.debug(
