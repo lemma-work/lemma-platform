@@ -41,7 +41,7 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
             return None
         try:
             return UserPreferences.model_validate(raw).default_surface_for(platform)
-        except Exception:
+        except ValidationError:
             return None
 
     async def clear_user_default_surface_id(self, user_id: UUID, platform: str) -> None:
@@ -54,7 +54,7 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
                 if user.preferences
                 else UserPreferences()
             )
-        except Exception:
+        except ValidationError:
             return
         updated = preferences.without_default_surface(platform)
         # Reassign the JSONB value so SQLAlchemy tracks the change; the uow commit

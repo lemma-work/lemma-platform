@@ -484,11 +484,19 @@ impl AgentHostSupervisor {
     /// Failing to record is not failing to start. The sidecar is up either
     /// way; all that is lost is the next daemon's ability to reclaim it, which
     /// is where this started.
+    ///
+    /// `settled_process_identity` rather than a bare `process_identity`, and
+    /// for the reason this record exists at all: a child that has forked but
+    /// not yet finished `exec` still reports its parent's binary, so recording
+    /// the moment `spawn` returns writes down the wrong executable -- and a
+    /// record whose executable does not match is one `reclaim_leftover`
+    /// declines to signal. The window is small and entirely load-dependent,
+    /// which is the worst size for it to be.
     fn record_running(&self, child: &mut Child) {
         let Some(installation_id) = self.installation_id.clone() else {
             return;
         };
-        let Ok(identity) = crate::host_process::process_identity(child.id()) else {
+        let Ok(identity) = crate::host_process::settled_process_identity(child) else {
             return;
         };
         let record = AgentHostRecord {

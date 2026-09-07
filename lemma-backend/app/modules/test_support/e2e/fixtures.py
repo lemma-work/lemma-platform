@@ -19,6 +19,7 @@ db_manager = e2e_base.db_manager
 test_app = e2e_base.test_app
 db_session = e2e_base.db_session
 async_client = e2e_base.async_client
+e2e_process_clients = e2e_base.e2e_process_clients
 fixed_test_user = e2e_base.fixed_test_user
 authenticated_client = e2e_base.authenticated_client
 fixed_test_org = e2e_base.fixed_test_org
@@ -29,6 +30,7 @@ __all__ = [
     "async_client",
     "db_manager",
     "db_session",
+    "e2e_process_clients",
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",

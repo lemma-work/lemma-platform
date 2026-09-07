@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -126,3 +127,30 @@ class UsageLimitsResponse(BaseModel):
     user_weekly: UsageLimitScopeResponse
     user_monthly: UsageLimitScopeResponse
     allowed: bool
+
+
+class UsageAllowanceResponse(BaseModel):
+    key: str
+    label: str
+    used_percent: float
+    allowed: bool
+    reset_at: datetime
+
+
+class MyUsageLimitsResponse(BaseModel):
+    organization_id: UUID | None
+    plan_type: Literal["PERSONAL", "TEAM"] | None
+    plan_name: str | None
+    windows: list[UsageAllowanceResponse]
+    allowed: bool
+    warning_percent: float
+
+
+class MyUsageQueryParams(BaseModel):
+    organization_id: UUID | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    days: int = Field(default=30, ge=1, le=365)
+    limit: int = Field(default=50, ge=1, le=1000)
+    agent_run_id: UUID | None = None
+    conversation_id: UUID | None = None

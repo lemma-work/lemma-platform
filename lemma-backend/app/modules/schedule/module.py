@@ -119,8 +119,36 @@ async def _schedule_poller(context):
             await task
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    return (
+        (
+            ResourceType.SCHEDULE,
+            ResourceNameTable(
+                Schedule.id,
+                Schedule.pod_id,
+                Schedule.name,
+                # Internal schedules are not name-addressable: they are created
+                # by the platform, not named by a person, and a grant must not
+                # be able to reach one.
+                (Schedule.is_internal.is_(False),),
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="schedule",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,

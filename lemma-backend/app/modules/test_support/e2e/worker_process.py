@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 import redis.asyncio as redis
 
+from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import system_lemma_env_overlay
 
@@ -96,7 +97,10 @@ async def production_worker_process(
         # race that pinned the `agent` shard to one xdist worker.
         "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
         "EMAIL_TRANSPORT": "filesystem",
-        "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
+        # `settings` rather than the `e2e_settings` parameter: the same object,
+        # but only this spelling is one `check_settings_attrs.py` can follow to a
+        # field. See the longer note at the sibling read in `e2e_base.py`.
+        "EMAIL_OUTPUT_DIR": settings.email_output_dir,
         "GCS_STORAGE_BUCKET": "",
         "STORAGE_BUCKET": "",
         "PUBLIC_BUCKET_NAME": "",

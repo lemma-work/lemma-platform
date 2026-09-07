@@ -98,6 +98,7 @@ export default function ProfilePage() {
             contentClassName="pb-16 sm:pb-20"
         >
             <SettingsStack className="office-arrive">
+                <Link href="/profile/usage" className="text-sm text-[var(--action-primary)]">View my usage →</Link>
                 {/* The one thing on this page that is not a setting: who you are.
                     It stays a bare identity strip rather than a card, the way a
                     resource page's identity sits above its panels. */}

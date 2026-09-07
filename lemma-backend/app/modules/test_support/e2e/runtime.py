@@ -433,9 +433,16 @@ def function_image(e2e_settings) -> Generator[str, None, None]:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def backend_server(test_app) -> AsyncGenerator[dict[str, str], None]:
+async def backend_server(
+    test_app, e2e_process_clients
+) -> AsyncGenerator[dict[str, str], None]:
     """Run a real backend HTTP server for Docker workspace callbacks."""
 
+    # `e2e_process_clients` is not used here -- it is requested so that pytest
+    # finalises it after this fixture, which is what keeps the per-test client
+    # shutdown from cancelling the lifespan this server is still running. Its
+    # docstring has the whole story.
+    del e2e_process_clients
     # The production worker used by queued-function E2E is session-scoped and
     # captures its explicitly configured callback URL at startup. Rebind the
     # function-scoped backend to that stable port instead of silently relying on

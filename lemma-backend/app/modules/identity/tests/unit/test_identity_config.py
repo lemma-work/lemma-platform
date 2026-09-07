@@ -4,7 +4,7 @@ The field set is exact and every default is asserted, for the same reason the
 datastore and agent versions of this file are: these came out of
 `app/core/config.py`, and a value drifting in the move is the failure mode that
 looks like nothing. Transcribed from `Settings` before the move and checked
-against it -- all 25 came across unchanged.
+against it -- all 27 came across unchanged.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ EXPECTED = [
     ),
     ("desktop_auth_create_limit", "DESKTOP_AUTH_CREATE_LIMIT", 100),
     ("desktop_auth_create_window_seconds", "DESKTOP_AUTH_CREATE_WINDOW_SECONDS", 60),
+    ("google_client_id", "GOOGLE_CLIENT_ID", None),
+    ("google_client_secret", "GOOGLE_CLIENT_SECRET", None),
     ("microsoft_client_id", "MICROSOFT_CLIENT_ID", None),
     ("microsoft_client_secret", "MICROSOFT_CLIENT_SECRET", None),
     ("microsoft_tenant_id", "MICROSOFT_TENANT_ID", None),
@@ -144,6 +146,7 @@ def test_the_two_configured_predicates_moved_with_their_fields():
 SECRET_FIELDS = (
     "auth_altcha_hmac_key",
     "auth_bounce_webhook_secret",
+    "google_client_secret",
     "microsoft_client_secret",
     "telegram_oidc_client_secret",
 )

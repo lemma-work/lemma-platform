@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, TypeVar
 from urllib.parse import urlparse
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.modules.agent_surfaces.domain.entities import (
@@ -326,7 +326,7 @@ def _normalize_attachments(
         elif isinstance(raw, dict):
             try:
                 attachment = SurfaceFileAttachment.model_validate(raw)
-            except Exception:
+            except ValidationError:
                 continue
         else:
             continue
