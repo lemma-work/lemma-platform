@@ -11,6 +11,7 @@ use serde::Serialize;
 mod config_store;
 mod confirmation;
 mod ipc_read;
+mod native_assets;
 mod recovery;
 mod shutdown;
 mod update_policy;
@@ -44,7 +45,7 @@ use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 /// Port `cargo tauri dev` serves `frontendDist` on. A packaged build has no
-/// equivalent — it serves the same files from `tauri://localhost`.
+/// equivalent — Tauri serves the bundled files through its native asset protocol.
 const DEV_ASSET_PORT: u16 = 1430;
 const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
@@ -2733,20 +2734,10 @@ fn main_window_needs_workspace(app: &AppHandle, workspace: &str) -> bool {
 
 /// Where a bundled page lives for the build we are actually running.
 ///
-/// A packaged app serves its own assets from `tauri://localhost`. Under
-/// `cargo tauri dev` there is no such origin: the CLI serves `frontendDist`
-/// over a loopback asset server on a fixed port, which is why
-/// `trusted_control_url` and `trusted_native_asset_url` below both carry the
-/// same development exception. The splash needs it too — navigating to
-/// `tauri://localhost/index.html` in a dev build lands on nothing, so the
-/// window sits white until the workspace URL replaces it a minute later, and
-/// every startup and install stage the splash exists to show is invisible.
+/// Navigation and privileged IPC must agree with the asset origin Tauri serves:
+/// Windows rewrites the custom protocol to HTTP; development uses its own port.
 fn native_asset_url(path: &str) -> String {
-    if cfg!(debug_assertions) {
-        format!("http://127.0.0.1:{DEV_ASSET_PORT}/{path}")
-    } else {
-        format!("tauri://localhost/{path}")
-    }
+    native_assets::url(path, cfg!(debug_assertions).then_some(DEV_ASSET_PORT))
 }
 
 fn native_splash_url(url: &tauri::Url) -> bool {
@@ -3511,15 +3502,7 @@ fn trusted_control_url(url: &tauri::Url) -> bool {
 }
 
 fn trusted_native_asset_url(url: &tauri::Url) -> bool {
-    let bundled = url.scheme() == "tauri" && matches!(url.host_str(), None | Some("localhost"));
-    // WebviewUrl::App is served by Tauri's fixed loopback asset server during
-    // `cargo tauri dev`. Keep this narrow exception out of release builds and
-    // accept only the exact asset host and port used by the dev runner.
-    let development = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-        && url.port() == Some(DEV_ASSET_PORT);
-    bundled || development
+    native_assets::is_trusted(url, cfg!(debug_assertions).then_some(DEV_ASSET_PORT))
 }
 
 fn require_control_window(window: &Webview) -> Result<(), String> {
@@ -10309,7 +10292,7 @@ mod tests {
     #[test]
     fn local_settings_navigation_is_restricted_to_trusted_packaged_and_dev_assets() {
         assert!(control_navigation_allowed(
-            &tauri::Url::parse("tauri://localhost/control.html").unwrap()
+            &tauri::Url::parse(&native_assets::url("control.html", None)).unwrap()
         ));
         assert!(control_navigation_allowed(
             &tauri::Url::parse("http://127.0.0.1:1430/control.html").unwrap()
@@ -10321,7 +10304,7 @@ mod tests {
             &tauri::Url::parse("http://127.0.0.1:1430/index.html").unwrap()
         ));
         assert!(!control_navigation_allowed(
-            &tauri::Url::parse("tauri://localhost/index.html").unwrap()
+            &tauri::Url::parse(&native_assets::url("index.html", None)).unwrap()
         ));
         assert!(!control_navigation_allowed(
             &tauri::Url::parse("https://example.com/control.html").unwrap()
@@ -10331,16 +10314,16 @@ mod tests {
     #[test]
     fn ready_auto_navigation_only_treats_the_native_installer_as_splash() {
         assert!(native_splash_url(
-            &tauri::Url::parse("tauri://localhost/index.html").unwrap()
+            &tauri::Url::parse(&native_assets::url("index.html", None)).unwrap()
         ));
         assert!(native_splash_url(
-            &tauri::Url::parse("tauri://localhost/").unwrap()
+            &tauri::Url::parse(&native_assets::url("", None)).unwrap()
         ));
         assert!(!native_splash_url(
             &tauri::Url::parse("http://app.lemma.localhost:3711/").unwrap()
         ));
         assert!(!native_splash_url(
-            &tauri::Url::parse("tauri://localhost/control.html").unwrap()
+            &tauri::Url::parse(&native_assets::url("control.html", None)).unwrap()
         ));
     }
 
@@ -10363,7 +10346,10 @@ mod tests {
         if cfg!(debug_assertions) {
             assert_eq!(splash.port(), Some(DEV_ASSET_PORT));
         } else {
-            assert_eq!(splash.scheme(), "tauri");
+            assert_eq!(
+                splash.scheme(),
+                if cfg!(windows) { "http" } else { "tauri" }
+            );
         }
     }
 

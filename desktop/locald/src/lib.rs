@@ -15,6 +15,7 @@ pub mod provider_probe;
 pub mod reset;
 pub mod sharing;
 pub mod state;
+mod tcp_forwarder;
 pub mod telemetry;
 pub mod vault_process;
 

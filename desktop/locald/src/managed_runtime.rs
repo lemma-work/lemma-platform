@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ use serde_json::json;
 use crate::host_process::ManagedRuntimeSpec;
 use crate::native_host_pack::ManagedManifestMaterial;
 use crate::paths::LocalPaths;
+use crate::tcp_forwarder::TcpForwarder;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -977,114 +978,6 @@ fn runtime_path_value(path: &Path) -> io::Result<String> {
     })
 }
 
-struct TcpForwarder {
-    stop: Arc<AtomicBool>,
-    local_address: SocketAddr,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl TcpForwarder {
-    fn start(label: &'static str, bind: SocketAddr, target: SocketAddr) -> io::Result<Self> {
-        let listener = bind_forwarder_listener(bind).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("could not bind managed {label} route at {bind}: {error}"),
-            )
-        })?;
-        let local_address = listener.local_addr()?;
-        listener.set_nonblocking(true)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = Arc::clone(&stop);
-        let worker = thread::spawn(move || {
-            while !thread_stop.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        if let Err(error) = stream.set_nonblocking(false) {
-                            eprintln!(
-                                "managed {label} route could not configure accepted socket: {error}"
-                            );
-                            continue;
-                        }
-                        thread::spawn(move || {
-                            if let Err(error) = proxy_connection(stream, target) {
-                                eprintln!("managed {label} route to {target} failed: {error}");
-                            }
-                        });
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        Ok(Self {
-            stop,
-            local_address,
-            thread: Some(worker),
-        })
-    }
-}
-
-#[cfg(unix)]
-fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
-    use socket2::{Domain, Protocol, Socket, Type};
-
-    let socket = Socket::new(
-        Domain::for_address(address),
-        Type::STREAM,
-        Some(Protocol::TCP),
-    )?;
-    // The forwarder is always bound to Lemma's private guest-to-host gateway.
-    // Reuse permits an immediate controlled restart after a real callback
-    // connection leaves TCP state behind; it does not relax locald's separate
-    // ownership checks for host loopback application ports.
-    socket.set_reuse_address(true)?;
-    socket.bind(&address.into())?;
-    socket.listen(128)?;
-    Ok(socket.into())
-}
-
-#[cfg(not(unix))]
-fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
-    TcpListener::bind(address)
-}
-
-impl Drop for TcpForwarder {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        // The listener is nonblocking and observes `stop` within 25 ms. Do not
-        // wake it with a synthetic TCP connection: that connection can enter
-        // TIME_WAIT and prevent an immediate restart from reclaiming the exact
-        // callback port on macOS.
-        if let Some(worker) = self.thread.take() {
-            if worker.join().is_err() {
-                eprintln!(
-                    "managed callback forwarder at {} stopped unexpectedly",
-                    self.local_address
-                );
-            }
-        }
-    }
-}
-
-fn proxy_connection(mut inbound: TcpStream, target: SocketAddr) -> io::Result<()> {
-    let mut outbound = TcpStream::connect_timeout(&target, Duration::from_secs(5))?;
-    let mut inbound_writer = inbound.try_clone()?;
-    let mut outbound_reader = outbound.try_clone()?;
-    let upload = thread::spawn(move || {
-        let result = io::copy(&mut inbound, &mut outbound);
-        let _ = outbound.shutdown(Shutdown::Write);
-        result
-    });
-    let download = io::copy(&mut outbound_reader, &mut inbound_writer);
-    let _ = inbound_writer.shutdown(Shutdown::Write);
-    let upload = upload
-        .join()
-        .map_err(|_| io::Error::other("managed TCP route worker panicked"))?;
-    upload.and(download).map(|_| ())
-}
-
 fn validate_spec(spec: &ManagedRuntimeSpec) -> io::Result<()> {
     for (name, image) in [
         ("postgres", &spec.images.postgres),
@@ -1300,6 +1193,7 @@ fn bundled_executable(variable: &str, sibling_name: &str) -> io::Result<PathBuf>
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::net::TcpListener;
     use std::sync::mpsc;
     use tempfile::tempdir;
 
@@ -1354,6 +1248,80 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn stopping_forwarder_closes_idle_connections_in_both_directions() {
+        assert_forwarder_shutdown(false);
+    }
+
+    #[test]
+    fn stopping_forwarder_cancels_backpressured_connections() {
+        assert_forwarder_shutdown(true);
+    }
+
+    fn assert_forwarder_shutdown(backpressured: bool) {
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        target.set_nonblocking(true).unwrap();
+        let forwarder = TcpForwarder::start(
+            "idle-shutdown-test",
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            target.local_addr().unwrap(),
+        )
+        .unwrap();
+        let mut client = TcpStream::connect(forwarder.local_address).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut upstream = loop {
+            match target.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "relay did not connect upstream");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("upstream accept failed: {error}"),
+            }
+        };
+        upstream.set_nonblocking(false).unwrap();
+        for stream in [&client, &upstream] {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+        }
+
+        if backpressured {
+            client.set_nonblocking(true).unwrap();
+            let bytes = [0_u8; 64 * 1024];
+            let mut sent = 0;
+            loop {
+                match client.write(&bytes) {
+                    Ok(count) => {
+                        assert!(count > 0);
+                        sent += count;
+                        assert!(
+                            sent < 32 * 1024 * 1024,
+                            "idle upstream must exert backpressure"
+                        );
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("writing to relay failed: {error}"),
+                }
+            }
+            client.set_nonblocking(false).unwrap();
+        }
+
+        drop(forwarder);
+
+        let mut byte = [0_u8; 1];
+        match client.read(&mut byte) {
+            Ok(count) => assert_eq!(count, 0, "client must see EOF"),
+            // Closing TCP with unread inbound data sends RST, not FIN. Both
+            // prove cancellation; a timeout would leave the connection alive.
+            Err(error) if backpressured && error.kind() == io::ErrorKind::ConnectionReset => {}
+            Err(error) => panic!("client remained open or failed unexpectedly: {error}"),
+        }
+        // Drain already accepted bytes; EOF must arrive without either peer
+        // having to close first, including when a copy was blocked on writing.
+        io::copy(&mut upstream, &mut io::sink()).unwrap();
     }
 
     #[test]
@@ -1422,7 +1390,7 @@ mod tests {
         // Half-close, then read to EOF: the relay passing the upstream hang-up
         // back down is the observable proof that it finished both directions,
         // which is what makes the release check below race-free.
-        client.shutdown(Shutdown::Write).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
         let mut trailing = Vec::new();
         client.read_to_end(&mut trailing).unwrap();
         assert!(trailing.is_empty());

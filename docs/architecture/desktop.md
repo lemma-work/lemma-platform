@@ -246,6 +246,11 @@ The native host-pack renderer derives:
 - `FUNCTION_RUNTIME_GATEWAY_URL`;
 - `host.lemma.internal`.
 
+Guest-to-host callback relays own their connections in one asynchronous runtime
+per listener. Admission is bounded; stopping a relay cancels and joins its
+connection tasks, including idle and backpressured streams, before releasing
+the runtime. An upstream half-close still allows the other direction to finish.
+
 The same `app.lemma.localhost` hostname is used for frontend and API on
 different ports to satisfy WKWebView cookie behavior. The CLI obtains endpoints
 from locald status/state.
@@ -291,7 +296,11 @@ full-client-size `control` child webview on demand. Creation always begins on a
 worker thread before `add_child`, avoiding Tauri's synchronous child-webview
 deadlock on Windows. Auto-resize follows the parent.
 
-The child loads only `tauri://localhost/control.html` in release builds. Debug
+The child loads only the bundled `control.html` in release builds, served at
+`tauri://localhost/control.html` on macOS and
+`http://tauri.localhost/control.html` on Windows by Tauri's protocol handler.
+Navigation and privileged IPC use the same platform-specific origin check;
+lookalike domains, other ports and credential-bearing URLs are denied. Debug
 builds additionally accept the exact Tauri asset server URL
 `http://127.0.0.1:1430/control.html`; other hosts, ports, and paths remain
 denied. Privileged commands verify both webview label and current URL.
