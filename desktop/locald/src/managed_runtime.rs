@@ -569,7 +569,10 @@ impl ManagedRuntimeController {
             // developer checkout or rewrite a localhost URL.
             ("LEMMA_GUEST_CAPABILITY_FILE".into(), capability_file),
             ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
-            ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
+            (
+                "LEMMA_WSL_DISTRIBUTION".into(),
+                self.runtime.wsl_distribution().into(),
+            ),
         ]))
     }
 
@@ -1699,7 +1702,7 @@ mod tests {
         let root = tempdir().unwrap();
         let controller = ManagedRuntimeController {
             runtime: ManagedRuntime::new(ManagedRuntimeConfig {
-                wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+                wsl_distribution: "LemmaRuntime-separate-installation".to_string(),
                 local_root: root.path().join("local"),
                 artifact_root: root.path().join("artifacts"),
                 bridge_executable: root.path().join("lemma-runtime"),
@@ -1757,7 +1760,10 @@ mod tests {
         assert!(
             Path::new(&environment["LEMMA_GUEST_CONTROL_SOCKET"]).ends_with("local/run/guest.sock")
         );
-        assert_eq!(environment["LEMMA_WSL_DISTRIBUTION"], "LemmaRuntime");
+        assert_eq!(
+            environment["LEMMA_WSL_DISTRIBUTION"],
+            "LemmaRuntime-separate-installation"
+        );
         assert!(!environment.values().any(|value| value.contains(":55432")));
     }
 }

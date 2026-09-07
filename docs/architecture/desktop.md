@@ -251,6 +251,10 @@ per listener. Admission is bounded; stopping a relay cancels and joins its
 connection tasks, including idle and backpressured streams, before releasing
 the runtime. An upstream half-close still allows the other direction to finish.
 
+The backend bridge receives the runtime manager's configured WSL distribution
+alongside the installation's control socket and capability file. It must not
+fall back to the default distribution for a separate installation.
+
 The same `app.lemma.localhost` hostname is used for frontend and API on
 different ports to satisfy WKWebView cookie behavior. The CLI obtains endpoints
 from locald status/state.

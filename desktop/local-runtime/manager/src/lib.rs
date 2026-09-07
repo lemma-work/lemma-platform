@@ -306,7 +306,7 @@ impl ManagedRuntime {
             let output = self.wsl_allowing_failure(
                 &[
                     "--distribution",
-                    self.distribution(),
+                    self.wsl_distribution(),
                     "--user",
                     "root",
                     "--exec",
@@ -443,7 +443,7 @@ impl ManagedRuntime {
             let _ = self.request("system.shutdown", json!({}));
             let output = Command::new(&self.config.wsl_executable)
                 .no_console_window()
-                .args(["--terminate", self.distribution()])
+                .args(["--terminate", self.wsl_distribution()])
                 .output()?;
             if !output.status.success() {
                 return Err(io::Error::other(wsl_message(&output.stderr)));
@@ -729,8 +729,7 @@ impl ManagedRuntime {
         ))))
     }
 
-    #[cfg(windows)]
-    fn distribution(&self) -> &str {
+    pub fn wsl_distribution(&self) -> &str {
         &self.config.wsl_distribution
     }
 
@@ -851,7 +850,7 @@ impl ManagedRuntime {
              cannot be upgraded in place, because your workspaces and databases \
              live inside it. Open Local settings and reset the Windows runtime \
              to rebuild it from this release ({}).",
-            self.distribution()
+            self.wsl_distribution()
         )))
     }
 
@@ -877,9 +876,13 @@ impl ManagedRuntime {
         };
         // An unavailable WSL service is not evidence that the distribution is
         // absent. Preserve its registration and cleanup records on ambiguity.
-        if registered_guest(output.status.success(), &output.stdout, self.distribution())? {
-            let _ = self.wsl_allowing_failure(&["--terminate", self.distribution()], None);
-            self.wsl(&["--unregister", self.distribution()], None)?;
+        if registered_guest(
+            output.status.success(),
+            &output.stdout,
+            self.wsl_distribution(),
+        )? {
+            let _ = self.wsl_allowing_failure(&["--terminate", self.wsl_distribution()], None);
+            self.wsl(&["--unregister", self.wsl_distribution()], None)?;
         }
         let _ = fs::remove_file(self.guest_release_marker());
         Ok(())
@@ -902,7 +905,7 @@ impl ManagedRuntime {
             .map(|output| {
                 decode_wsl_output(&output.stdout)
                     .lines()
-                    .any(|line| line.trim() == self.distribution())
+                    .any(|line| line.trim() == self.wsl_distribution())
             })
             .unwrap_or(false)
     }
@@ -937,7 +940,7 @@ impl ManagedRuntime {
             self.wsl(
                 &[
                     "--import",
-                    self.distribution(),
+                    self.wsl_distribution(),
                     &install_path,
                     &rootfs_path,
                     "--version",
@@ -954,7 +957,7 @@ impl ManagedRuntime {
         self.wsl(
             &[
                 "--distribution",
-                self.distribution(),
+                self.wsl_distribution(),
                 "--user",
                 "root",
                 "--exec",
@@ -967,7 +970,7 @@ impl ManagedRuntime {
         self.wsl(
             &[
                 "--distribution",
-                self.distribution(),
+                self.wsl_distribution(),
                 "--user",
                 "root",
                 "--exec",
