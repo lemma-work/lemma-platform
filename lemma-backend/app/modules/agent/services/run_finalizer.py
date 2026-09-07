@@ -59,7 +59,7 @@ def is_usage_limit_error(exc: BaseException) -> bool:
     """
     if isinstance(exc, BaseExceptionGroup):
         return any(is_usage_limit_error(child) for child in exc.exceptions)
-    return isinstance(exc, UsageLimitExceededError)
+    return isinstance(exc, UsageLimitExceededError) and exc.reason == "exhausted"
 
 
 def run_failure_message(exc: BaseException) -> str:
@@ -76,7 +76,7 @@ def run_failure_message(exc: BaseException) -> str:
             (child for child in exc.exceptions if isinstance(child, DomainError)), None
         )
         return run_failure_message(domain_error or exc.exceptions[0])
-    if isinstance(exc, UsageLimitExceededError):
+    if is_usage_limit_error(exc):
         return (
             "This run cannot continue because the workspace has used its "
             "available usage allowance. Usage resets with the billing period, "
@@ -106,6 +106,32 @@ def run_failure_message(exc: BaseException) -> str:
     if not isinstance(exc, Exception):
         return "Agent run was interrupted (timeout or shutdown)"
     return "Agent run failed. Please check the agent runtime configuration."
+
+
+def run_failure_code(exc: BaseException) -> str | None:
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return "USAGE_LIMIT_EXCEEDED"
+        return next(
+            (code for child in exc.exceptions if (code := run_failure_code(child))),
+            None,
+        )
+    return exc.code if isinstance(exc, DomainError) else None
+
+
+def run_failure_reason(exc: BaseException) -> str | None:
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return "exhausted"
+        return next(
+            (
+                reason
+                for child in exc.exceptions
+                if (reason := run_failure_reason(child))
+            ),
+            None,
+        )
+    return exc.reason if isinstance(exc, UsageLimitExceededError) else None
 
 
 async def finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
@@ -153,6 +179,8 @@ class RunFinalizer:
         status: AgentRunStatus,
         conversation_status: ConversationStatus | None = None,
         error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
         output_data: JsonValue | None = None,
         usage_data: AgentRunUsage | None = None,
     ) -> None:
@@ -165,6 +193,8 @@ class RunFinalizer:
                     status=status,
                     conversation_status=conversation_status,
                     error=error,
+                    error_code=error_code,
+                    error_reason=error_reason,
                     output_data=output_data,
                 )
                 if finish_result is not None and finish_result.updated:
@@ -207,7 +237,12 @@ class RunFinalizer:
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
                     run.conversation_id,
-                    error_payload(run.agent_run_id, error or "Agent run failed"),
+                    error_payload(
+                        run.agent_run_id,
+                        error or "Agent run failed",
+                        code=error_code,
+                        reason=error_reason,
+                    ),
                 )
             await publish_conversation_event(
                 run.conversation_id,

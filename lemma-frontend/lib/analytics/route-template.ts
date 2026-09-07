@@ -78,6 +78,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/pods",
     "/privacy",
     "/profile",
+    "/profile/usage",
     "/remix",
     "/s/[kind]/[...path]",
     "/signup",

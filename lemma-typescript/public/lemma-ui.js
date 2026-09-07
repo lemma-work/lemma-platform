@@ -288,7 +288,9 @@ var LemmaUI = (() => {
     if (eventType === "error") {
       return {
         status: "FAILED",
-        error: (_c = extractErrorMessage(payload)) != null ? _c : "Agent run failed."
+        error: (_c = extractErrorMessage(payload)) != null ? _c : "Agent run failed.",
+        errorCode: typeof value.error_code === "string" ? value.error_code : void 0,
+        errorReason: typeof value.error_reason === "string" ? value.error_reason : void 0
       };
     }
     return {};

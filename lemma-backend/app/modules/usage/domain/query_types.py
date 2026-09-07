@@ -18,13 +18,10 @@ class UsageFilters(TypedDict, total=False):
     usage_kind: str | None
     source_type: str | None
     status: str | None
+    exclude_organization_ids: tuple[UUID, ...]
 
 
-class UsageStatsQuery(TypedDict):
-    start: datetime
-    end: datetime
-    granularity: NotRequired[str]
-    group_by: NotRequired[str | None]
+class UsageReportFilters(TypedDict, total=False):
     pod_id: NotRequired[UUID | None]
     user_id: NotRequired[UUID | None]
     agent_id: NotRequired[UUID | None]
@@ -36,6 +33,17 @@ class UsageStatsQuery(TypedDict):
     usage_kind: NotRequired[str | None]
     source_type: NotRequired[str | None]
     status: NotRequired[str | None]
+    exclude_organization_ids: NotRequired[tuple[UUID, ...]]
+
+
+class UsageReportQuery(UsageReportFilters):
+    start: datetime
+    end: datetime
+
+
+class UsageStatsQuery(UsageReportQuery):
+    granularity: NotRequired[str]
+    group_by: NotRequired[str | None]
 
 
 class UsageStatsBucket(TypedDict):

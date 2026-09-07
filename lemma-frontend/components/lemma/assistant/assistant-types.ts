@@ -111,6 +111,7 @@ export interface AssistantExperienceCustomizationProps {
   headerLeadingActions?: ReactNode;
   headerActions?: ReactNode;
   composerModelControl?: ReactNode;
+  composerTrailingControls?: ReactNode;
   placeholder?: string;
   emptyState?: ReactNode;
   emptyStateSuggestions?: EmptyStateSuggestion[];
