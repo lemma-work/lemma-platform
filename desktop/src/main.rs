@@ -49,7 +49,7 @@ const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
 // public release number.
-const REQUIRED_LOCALD_API_REVISION: u64 = 4;
+const REQUIRED_LOCALD_API_REVISION: u64 = 5;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -2145,21 +2145,26 @@ fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
 const LOCALD_BUSY: &str =
     "Lemma is still finishing another operation. Wait for that to finish, then try again.";
 
+fn reserve_ui_operation(ui: &mut UiState, command: &str, id: &str) -> Result<(), String> {
+    if !ui.active_operation_id.is_empty() && command != "shutdown-daemon" {
+        return Err(LOCALD_BUSY.to_string());
+    }
+    if command == "shutdown-daemon" && !ui.active_operation_id.is_empty() {
+        ui.completed_operation_ids
+            .push(ui.active_operation_id.clone());
+        if ui.completed_operation_ids.len() > 16 {
+            ui.completed_operation_ids.remove(0);
+        }
+    }
+    ui.active_operation_id = id.to_owned();
+    Ok(())
+}
+
 fn send_local_operation(app: &AppHandle, mut request: Value, id: String) -> Result<(), String> {
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
-        if !ui.active_operation_id.is_empty() {
-            // This used to return Ok(()) and drop the request. The daemon takes
-            // one operation at a time, so that is a real condition -- but
-            // reporting it as success made every caller believe a command had
-            // been sent that never was. A menu click did nothing at all, and
-            // `stop_then_quit` armed `quit_after_stop` and then waited forever
-            // for the completion of an operation it had not started, which is
-            // how Cmd-Q could leave the app running.
-            return Err(LOCALD_BUSY.to_string());
-        }
-        ui.active_operation_id = id.clone();
+        reserve_ui_operation(&mut ui, request["cmd"].as_str().unwrap_or_default(), &id)?;
     }
     request["id"] = Value::String(id.clone());
     if let Err(error) = send_to_locald(app, request) {
@@ -2212,13 +2217,16 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     }
     let shell: State<Shell> = app.state();
     let kind = event["event"].as_str().unwrap_or_default();
+    if shell.quit_after_stop.load(Ordering::Acquire)
+        && matches!(kind, "status" | "state" | "ready" | "runtime.prepared")
+    {
+        return;
+    }
     let event_operation_id = event
         .get("operation_id")
         .and_then(Value::as_str)
         .or_else(|| {
-            if matches!(kind, "ack" | "done")
-                || (kind == "error" && event["code"].as_str() == Some("busy"))
-            {
+            if matches!(kind, "ack" | "done") || kind == "error" {
                 event.get("id").and_then(Value::as_str)
             } else {
                 None
@@ -2567,14 +2575,11 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         }
     }
     let quit_after_stop = kind == "done"
-        && event["cmd"].as_str() == Some("stop")
+        && event["cmd"].as_str() == Some("shutdown-daemon")
         && event["ok"].as_bool() == Some(true)
         && shell.quit_after_stop.swap(false, Ordering::AcqRel);
     if quit_after_stop {
-        // The services are down; the supervisor is not. Reaching the same exit
-        // as every other quit is what keeps that true -- see
-        // `leave_nothing_running`.
-        finish_quit(app);
+        finish_quit_after_daemon(app);
         return;
     }
     if schedule_terminal_recovery {
@@ -3060,6 +3065,10 @@ async fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> R
 }
 
 fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+    if app.state::<Shell>().quit_confirmed.load(Ordering::Acquire) {
+        stop_then_quit(&app);
+        return Ok(());
+    }
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
@@ -6602,7 +6611,7 @@ fn quit_impact(app: &AppHandle) -> Vec<String> {
     let shell: State<Shell> = app.state();
     let stack_up = local && {
         let ui = shell.ui.lock().unwrap();
-        ui.ready || ui.running
+        ui.ready || ui.running || !ui.active_operation_id.is_empty()
     };
     let agent_host = shell.agent_host_status.lock().unwrap().clone();
     let sharing = if local {
@@ -6684,19 +6693,17 @@ fn quit_prompt_body(impact: &[String]) -> String {
 /// and the backend running with no owner on screen at all.
 fn request_quit(app: &AppHandle) {
     {
-        // A second ⌘Q while a confirmed stop is still running is someone saying
-        // "go away now". Honour it instead of asking again: the daemon is
-        // durable, so whatever has not finished stopping outlives the shell
-        // either way, and this is the escape hatch if a stop ever wedges.
+        // Repeated shortcuts must not silently interrupt a migration. A slow
+        // shutdown offers its explicit fallback in the app instead.
         let shell: State<Shell> = app.state();
         if shell.quit_confirmed.load(Ordering::Acquire) {
-            finish_quit(app);
             return;
         }
     }
     let impact = quit_impact(app);
     if impact.is_empty() {
-        finish_quit(app);
+        let handle = app.clone();
+        std::thread::spawn(move || stop_then_quit(&handle));
         return;
     }
     let handle = app.clone();
@@ -6733,14 +6740,23 @@ fn request_quit(app: &AppHandle) {
 const QUIT_STOP_BUDGET: Duration = Duration::from_secs(45);
 
 fn stop_then_quit(app: &AppHandle) {
-    if current_mode(app) != "local" {
-        finish_quit(app);
-        return;
-    }
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
     shell.quit_after_stop.store(true, Ordering::Release);
-    if let Err(error) = stop_impl(app.clone(), Some(true)) {
+    if shell.locald_writer.lock().unwrap().is_none() {
+        match connect_locald() {
+            Ok(connection) => install_locald_connection(app, connection),
+            Err(_) => {
+                finish_quit(app);
+                return;
+            }
+        }
+    }
+    if let Err(error) = send_local_operation(
+        app,
+        json!({"cmd": "shutdown-daemon"}),
+        operation_id("shell-quit"),
+    ) {
         shell.quit_after_stop.store(false, Ordering::Release);
         shell.quit_confirmed.store(false, Ordering::Release);
         // Confirming "Stop and Quit" and then getting neither, silently, is the
@@ -6749,6 +6765,7 @@ fn stop_then_quit(app: &AppHandle) {
         report_action_failure(app, "Stop Lemma and quit", &error);
         return;
     }
+    show_splash_with_intent(app, "quit");
     // Nothing else bounds this. `quit_after_stop` is consumed only by a `done`
     // event that says the stop succeeded, so any other outcome -- including no
     // outcome -- leaves the app running with the user's quit unanswered.
@@ -6756,7 +6773,7 @@ fn stop_then_quit(app: &AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(QUIT_STOP_BUDGET);
         let shell: State<Shell> = handle.state();
-        if !shell.quit_after_stop.swap(false, Ordering::AcqRel) {
+        if !shell.quit_after_stop.load(Ordering::Acquire) {
             return; // The stop finished and the app is already gone.
         }
         append_install_log(&format!(
@@ -6766,8 +6783,9 @@ fn stop_then_quit(app: &AppHandle) {
         let quit_anyway = confirm_destructive_action_impl(
             handle.clone(),
             "Lemma is taking longer than usual to stop.".into(),
-            "Its private runtime has not confirmed shutting down. You can quit \
-             now and Lemma will tidy up the next time it starts, or keep waiting."
+            "Lemma is waiting for local work to stop safely. Keep waiting while \
+             a database migration or installation finishes. Quit Anyway may interrupt \
+             that work and require recovery when Lemma next starts."
                 .into(),
             "Quit Anyway".into(),
         )
@@ -6790,6 +6808,22 @@ fn finish_quit(app: &AppHandle) {
     let exiting = app.clone();
     shell.shutdown.start(
         move || shut_down_gracefully(&worker),
+        move || exiting.exit(0),
+        QUIT_DAEMON_BUDGET,
+    );
+}
+
+fn finish_quit_after_daemon(app: &AppHandle) {
+    let worker = app.clone();
+    let exiting = app.clone();
+    app.state::<Shell>().shutdown.start(
+        move || {
+            // The daemon has already closed sharing and reaped services. Do
+            // not send another release transaction while it flushes its reply.
+            if wait_for_locald_exit(QUIT_DAEMON_GRACE_ATTEMPTS, "quitting").is_err() {
+                leave_nothing_running(&worker);
+            }
+        },
         move || exiting.exit(0),
         QUIT_DAEMON_BUDGET,
     );
@@ -7335,6 +7369,10 @@ fn main() {
                     api.prevent_exit();
                     return;
                 }
+                if shell.shutdown.may_exit() {
+                    return;
+                }
+                api.prevent_exit();
                 if shell.quit_confirmed.load(Ordering::Acquire) {
                     return;
                 }
@@ -7346,11 +7384,9 @@ fn main() {
                     // Quit sat "not responding" for several seconds before the
                     // window went away. `finish_quit` does the same work on a
                     // worker and exits when it is done.
-                    api.prevent_exit();
-                    finish_quit(app);
+                    request_quit(app);
                     return;
                 }
-                api.prevent_exit();
                 request_quit(app);
             }
             tauri::RunEvent::Exit => {
@@ -8338,20 +8374,19 @@ mod tests {
 
     #[test]
     fn a_busy_daemon_refuses_an_operation_rather_than_dropping_it() {
-        // locald runs one operation at a time, so "busy" is a real answer. It
-        // used to be reported as Ok(()), which told every caller a command had
-        // been sent that never was: menu items did nothing at all, and
-        // stop_then_quit armed the quit flags and then waited forever for the
-        // completion of an operation it had not started.
-        let source = include_str!("main.rs").replace("\r\n", "\n");
-        let body = function_body(&source, "fn send_local_operation(");
-        assert!(
-            body.contains("return Err(LOCALD_BUSY.to_string());"),
-            "a busy daemon must refuse the operation"
+        let mut ui = UiState::default();
+        reserve_ui_operation(&mut ui, "start", "starting").unwrap();
+        assert_eq!(
+            reserve_ui_operation(&mut ui, "restart", "retry"),
+            Err(LOCALD_BUSY.into())
         );
-        assert!(
-            !body.contains("return Ok(());"),
-            "no path may report an unsent operation as sent"
+        assert_eq!(ui.active_operation_id, "starting");
+        reserve_ui_operation(&mut ui, "shutdown-daemon", "quitting").unwrap();
+        assert_eq!(ui.active_operation_id, "quitting");
+        assert!(ui.completed_operation_ids.iter().any(|id| id == "starting"));
+        assert_eq!(
+            reserve_ui_operation(&mut ui, "start", "late-start"),
+            Err(LOCALD_BUSY.into())
         );
     }
 

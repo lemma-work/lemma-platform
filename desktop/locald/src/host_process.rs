@@ -313,6 +313,7 @@ pub struct HostProcessManager {
     generation_prepared: AtomicBool,
     process_ledger_path: PathBuf,
     process_ledger_lock: Mutex<()>,
+    reconcile_lock: Mutex<()>,
     installation_id: String,
     #[cfg(windows)]
     windows_job: usize,
@@ -407,6 +408,7 @@ impl HostProcessManager {
             generation_prepared: AtomicBool::new(false),
             process_ledger_path,
             process_ledger_lock: Mutex::new(()),
+            reconcile_lock: Mutex::new(()),
             installation_id,
             #[cfg(windows)]
             windows_job,
@@ -547,7 +549,15 @@ impl HostProcessManager {
         self.start_all_with_progress(|_| {})
     }
 
-    pub fn start_all_with_progress(&self, mut progress: impl FnMut(&str)) -> io::Result<()> {
+    pub fn start_all_with_progress(&self, progress: impl FnMut(&str)) -> io::Result<()> {
+        self.start_all_cancellable(progress, || Ok(()))
+    }
+
+    pub fn start_all_cancellable(
+        &self,
+        mut progress: impl FnMut(&str),
+        checkpoint: impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
         if self
             .startup_in_progress
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -558,7 +568,13 @@ impl HostProcessManager {
                 "host process startup is already running",
             ));
         }
-        let result = self.start_all_inner(&mut progress);
+        let result = self.start_all_inner(&mut progress, &checkpoint);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::Interrupted)
+        {
+            let _ = self.stop_all();
+        }
         self.startup_in_progress.store(false, Ordering::Release);
         result
     }
@@ -608,7 +624,12 @@ impl HostProcessManager {
             == self.ordered_ids.len()
     }
 
-    fn start_all_inner(&self, progress: &mut dyn FnMut(&str)) -> io::Result<()> {
+    fn start_all_inner(
+        &self,
+        progress: &mut dyn FnMut(&str),
+        checkpoint: &dyn Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        checkpoint()?;
         self.inspect_exits();
         if self.stack_is_fully_up() {
             self.desired_running.store(true, Ordering::Release);
@@ -652,8 +673,12 @@ impl HostProcessManager {
             state.restart_not_before.clear();
         }
 
+        checkpoint()?;
         progress("migrations");
         self.run_setups()?;
+        // A migration finishes with a known outcome before cancellation takes
+        // effect. No application process may start after that stopping point.
+        checkpoint()?;
         self.desired_running.store(true, Ordering::Release);
 
         // Spawn first, gate afterwards.
@@ -677,6 +702,7 @@ impl HostProcessManager {
         // one that could not start because of it.
         let mut spawn_failure = None;
         for id in &self.ordered_ids {
+            checkpoint()?;
             progress(id);
             self.release_idle_port_for(id);
             if let Err(error) = self.spawn_if_missing(id) {
@@ -738,6 +764,7 @@ impl HostProcessManager {
             let _ = self.stop_all();
             return Err(error);
         }
+        checkpoint()?;
         self.health_ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -935,6 +962,7 @@ impl HostProcessManager {
     pub fn stop_all(&self) -> io::Result<()> {
         self.health_ready.store(false, Ordering::Release);
         self.desired_running.store(false, Ordering::Release);
+        let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
         let mut first_error = None;
         for id in self.ordered_ids.iter().rev() {
             if let Err(error) = self.stop_process(id) {
@@ -1290,6 +1318,7 @@ impl HostProcessManager {
     }
 
     fn reconcile_crashes(&self) {
+        let _reconcile = self.reconcile_lock.lock().expect("reconcile lock poisoned");
         self.inspect_exits();
         if !self.desired_running.load(Ordering::Acquire)
             || self.startup_in_progress.load(Ordering::Acquire)
@@ -1388,6 +1417,12 @@ impl HostProcessManager {
         let mut healthy_since = None;
         let mut last_error = None;
         while Instant::now() < deadline {
+            if !self.desired_running.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "service health check cancelled by stop",
+                ));
+            }
             if let Some(exit) = self.take_process_exit(id)? {
                 let excerpt = tail_log(&self.log_dir.join(format!("{id}.log")), 8 * 1024);
                 let suffix = excerpt
@@ -3091,6 +3126,66 @@ mod tests {
             route.join().unwrap(),
             "run_setups should have connected to the database route it was told to wait for"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_finishes_migration_but_does_not_launch_services() {
+        let root = tempdir().unwrap();
+        let completed = root.path().join("migration-completed");
+        let mut value = manifest(vec![
+            service("backend", &[]),
+            service("frontend", &["backend"]),
+        ]);
+        value.setup[0].command = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf committed > \"$1\"".into(),
+            "migration".into(),
+            completed.to_string_lossy().into_owned(),
+        ];
+        let manager = manager_in(&root, value);
+        let lifecycle = crate::lifecycle::Lifecycle::default();
+        lifecycle.begin().unwrap();
+        let error = manager
+            .start_all_cancellable(
+                |stage| {
+                    if stage == "migrations" {
+                        lifecycle.request_shutdown();
+                    }
+                },
+                || lifecycle.checkpoint(),
+            )
+            .unwrap_err();
+        lifecycle.finish();
+        lifecycle.wait_idle();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(fs::read_to_string(completed).unwrap(), "committed");
+        assert!(manager.status().iter().all(|process| !process.running));
+        assert!(!manager.desired_running());
+        assert!(lifecycle.begin().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_before_start_does_not_run_migrations() {
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![
+            service("backend", &[]),
+            service("frontend", &["backend"]),
+        ]);
+        value.setup[0].command = vec!["/usr/bin/false".into()];
+        let manager = manager_in(&root, value);
+        let lifecycle = crate::lifecycle::Lifecycle::default();
+        lifecycle.request_shutdown();
+        let error = manager
+            .start_all_cancellable(
+                |_| panic!("cancelled startup cannot enter a stage"),
+                || lifecycle.checkpoint(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(manager.status().iter().all(|process| !process.running));
     }
 
     #[cfg(unix)]

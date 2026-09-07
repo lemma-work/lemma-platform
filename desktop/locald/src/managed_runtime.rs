@@ -130,6 +130,8 @@ impl ManagedRuntimeBootstrap {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
         }))
     }
 }
@@ -240,6 +242,8 @@ pub struct ManagedRuntimeController {
     /// See `start_with_progress`. Joined by `await_private_services` before
     /// anything reports ready, so this is a reordering and not a weakening.
     pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
+    pending_images: Mutex<Option<thread::JoinHandle<()>>>,
+    cancellation: lemma_desktop_process::Cancellation,
 }
 
 impl ManagedRuntimeController {
@@ -253,8 +257,17 @@ impl ManagedRuntimeController {
 
     pub fn start_with_progress(
         self: &Arc<Self>,
-        mut progress: impl FnMut(&str, &str, u64, &str),
+        progress: impl FnMut(&str, &str, u64, &str),
     ) -> io::Result<()> {
+        self.start_cancellable(progress, || Ok(()))
+    }
+
+    pub fn start_cancellable(
+        self: &Arc<Self>,
+        mut progress: impl FnMut(&str, &str, u64, &str),
+        checkpoint: impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        checkpoint()?;
         validate_spec(&self.spec)?;
         progress(
             "vm",
@@ -265,6 +278,7 @@ impl ManagedRuntimeController {
         let status = self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
         })?;
+        checkpoint()?;
         // Before PostgreSQL, Redis or the auth service exist in there. `start`
         // only boots a guest that is not already running, and a reused guest
         // keeps whatever clock it drifted to while the Mac was asleep -- so the
@@ -300,8 +314,13 @@ impl ManagedRuntimeController {
                 "preparing local streams, cache, and pub/sub",
             ),
         ] {
+            checkpoint()?;
             progress(component, label, percentage, detail);
-            if let Err(error) = self.runtime.request(operation, parameters.clone()) {
+            if let Err(error) = self.runtime.request_cancellable(
+                operation,
+                parameters.clone(),
+                self.cancellation.clone(),
+            ) {
                 let _ = self.runtime.capture_diagnostics();
                 let _ = self.runtime.stop();
                 return Err(error);
@@ -325,6 +344,7 @@ impl ManagedRuntimeController {
         // its accept loop, so this request occupies that channel either way.
         // What it must not also occupy is *this* thread, which is what the
         // daemon needs back in order to start the backend at all.
+        checkpoint()?;
         progress(
             "supertokens",
             "Starting local authentication",
@@ -339,7 +359,11 @@ impl ManagedRuntimeController {
                 .spawn(move || {
                     controller
                         .runtime
-                        .request("core.supertokens", parameters)
+                        .request_cancellable(
+                            "core.supertokens",
+                            parameters,
+                            controller.cancellation.clone(),
+                        )
                         .map(|_| ())
                 })?
         };
@@ -454,9 +478,30 @@ impl ManagedRuntimeController {
         // nothing behind it. Today the process exits immediately afterwards and
         // nobody notices; the first caller to use this for a soft stop would
         // inherit a thread that never ends.
+        self.cancel_pending_requests();
         self.stop_clock_keeper();
+        if let Some(auth) = self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned")
+            .take()
+        {
+            let _ = auth.join();
+        }
+        if let Some(images) = self
+            .pending_images
+            .lock()
+            .expect("pending images lock poisoned")
+            .take()
+        {
+            let _ = images.join();
+        }
         self.clear_forwarders();
         self.runtime.stop()
+    }
+
+    pub fn cancel_pending_requests(&self) {
+        self.cancellation.cancel();
     }
 
     pub fn status(&self) -> Option<ManagedRuntimeStatus> {
@@ -547,21 +592,32 @@ impl ManagedRuntimeController {
         self: &Arc<Self>,
         report: impl Fn(&SandboxImageStatus) + Send + 'static,
     ) {
+        let mut pending = self
+            .pending_images
+            .lock()
+            .expect("pending images lock poisoned");
+        if self.cancellation.is_cancelled() {
+            return;
+        }
         let Some(started) = self.claim_sandbox_image_warmup() else {
             return;
         };
         report(&started);
 
         let controller = Arc::clone(self);
-        thread::spawn(move || {
+        if let Some(previous) = pending.take() {
+            let _ = previous.join();
+        }
+        *pending = Some(thread::spawn(move || {
             let parameters = json!({
                 "images": controller.spec.images,
                 "credentials": controller.spec.credentials,
             });
-            let status = match controller
-                .runtime
-                .request("core.sandbox_images", parameters)
-            {
+            let status = match controller.runtime.request_cancellable(
+                "core.sandbox_images",
+                parameters,
+                controller.cancellation.clone(),
+            ) {
                 Ok(_) => {
                     SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
                 }
@@ -574,7 +630,7 @@ impl ManagedRuntimeController {
                 }
             };
             controller.publish_sandbox_images(status, &report);
-        });
+        }));
     }
 
     /// Take the warm-up, or decline because one is already running.
@@ -1457,6 +1513,8 @@ mod tests {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
@@ -1504,6 +1562,19 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_prevents_late_image_warmup_from_starting() {
+        let (_root, controller) = test_controller();
+        let controller = Arc::new(controller);
+        controller.cancel_pending_requests();
+        controller.warm_sandbox_images(|_| panic!("shutdown must not admit a download"));
+        assert!(controller.pending_images.lock().unwrap().is_none());
+        assert_eq!(
+            controller.sandbox_image_status().state,
+            SANDBOX_IMAGES_PENDING
+        );
+    }
+
+    #[test]
     fn host_processes_use_private_guest_services_without_published_infra_ports() {
         let root = tempdir().unwrap();
         let controller = ManagedRuntimeController {
@@ -1543,6 +1614,8 @@ mod tests {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),

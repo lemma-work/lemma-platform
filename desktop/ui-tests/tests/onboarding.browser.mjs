@@ -9,7 +9,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null } = {}) {
+async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, intent = '' } = {}) {
   const context = await browser.newContext({
     viewport,
     reducedMotion: 'reduce',
@@ -54,7 +54,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
       } },
     };
   }, initialState);
-  await page.goto('https://desktop.test/index.html');
+  await page.goto(`https://desktop.test/index.html?intent=${encodeURIComponent(intent)}`);
   if (!initialState) await page.locator('#choose').waitFor({ state: 'visible' });
   return page;
 }
@@ -63,6 +63,25 @@ async function deploymentCalls(page) {
   return page.evaluate(() => window.__fixture.calls.filter(call =>
     ['set_connection_mode', 'start', 'reset_local_data', 'reset_full_reinstall'].includes(call.command)));
 }
+
+test('shutdown ignores stale startup readiness and retries shutdown without starting services', async t => {
+  const page = await onboarding(t, { intent: 'quit', initialState: {
+    mode: 'local', phaseKey: 'supertokens', status: 'Starting authentication', running: true,
+  } });
+  await page.getByText('Stopping Lemma.', { exact: true }).waitFor();
+  await page.evaluate(() => window.__fixture.renderState({
+    mode: 'local', phaseKey: 'ready', ready: true, running: true,
+  }));
+  assert.equal(await page.locator('#open-app').count(), 1);
+  assert.equal(await page.locator('#open-app').isVisible(), false);
+  await page.evaluate(() => window.__fixture.renderState({
+    mode: 'local', phaseKey: 'stopping', error: true, status: 'The runtime did not stop',
+  }));
+  await page.getByRole('button', { name: 'Retry shutdown', exact: true }).click();
+  const calls = await page.evaluate(() => window.__fixture.calls.filter(call =>
+    ['stop', 'start', 'open_app', 'set_connection_mode'].includes(call.command)));
+  assert.deepEqual(calls, [{ command: 'stop', args: { includeInfra: true } }]);
+});
 
 test('opening or reloading the splash never duplicates shell-owned startup', async t => {
   for (const phaseKey of ['boot', 'stopped']) {

@@ -487,10 +487,14 @@ Acceptance flow:
     remain available from the tray. Then press ⌘Q with sharing on, the Agent
     Host paired, and the stack up: the prompt must name all three, offer closing
     the window as the alternative, and say data stays on this Mac. Cancel, and
-    confirm nothing stopped. Quit again and confirm it stops everything, takes
-    its window off screen immediately rather than leaving a black one, and that
+    confirm nothing stopped. Quit again and confirm it stops everything, shows
+    responsive in-app shutdown progress rather than a black window, and that
     Dock → Quit is asked in the same way. With the stack stopped, no Agent Host
     and no shared link, ⌘Q must exit without asking anything.
+    Repeat during startup and a blocked setup stage: Quit must be admitted,
+    no later startup stage may launch after its cancellation checkpoint, and a
+    migration must reach a known outcome before cleanup. Repeated ⌘Q must not
+    force interruption; the slow-shutdown fallback must explain the recovery risk.
 16. Restart and confirm ports and data persist, but LAN/Public mode does not
     resume automatically. The restart must reopen the pod you were last on with
     no installer splash; check **Diagnostics → Launch timing** and confirm the

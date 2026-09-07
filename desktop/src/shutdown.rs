@@ -8,8 +8,13 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct Shutdown {
     started: AtomicBool,
+    exit_ready: std::sync::Arc<AtomicBool>,
 }
 impl Shutdown {
+    pub fn may_exit(&self) -> bool {
+        self.exit_ready.load(Ordering::Acquire)
+    }
+
     pub fn start(
         &self,
         work: impl FnOnce() + Send + 'static,
@@ -24,9 +29,12 @@ impl Shutdown {
         let (finished, waiting) = mpsc::sync_channel(1);
         let worker_exit = Arc::clone(&exit);
         let worker_exited = Arc::clone(&exited);
+        let worker_ready = Arc::clone(&self.exit_ready);
+        let watchdog_ready = Arc::clone(&self.exit_ready);
         std::thread::spawn(move || {
             work();
             if !worker_exited.swap(true, Ordering::AcqRel) {
+                worker_ready.store(true, Ordering::Release);
                 worker_exit();
             }
             let _ = finished.send(());
@@ -34,6 +42,7 @@ impl Shutdown {
         std::thread::spawn(move || {
             let _ = waiting.recv_timeout(budget);
             if !exited.swap(true, Ordering::AcqRel) {
+                watchdog_ready.store(true, Ordering::Release);
                 exit();
             }
         });
@@ -65,9 +74,33 @@ mod tests {
             Duration::ZERO
         ));
         result.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(state.may_exit());
         release.send(()).unwrap();
         assert!(result.recv_timeout(Duration::from_millis(50)).is_err());
     }
+    #[test]
+    fn confirmed_quit_does_not_authorize_os_exit_until_cleanup_finishes() {
+        let state = Shutdown::default();
+        let (release, wait) = mpsc::channel();
+        let (entered, working) = mpsc::channel();
+        let (exited, result) = mpsc::channel();
+        state.start(
+            move || {
+                entered.send(()).unwrap();
+                let _ = wait.recv();
+            },
+            move || {
+                let _ = exited.send(());
+            },
+            Duration::from_secs(60),
+        );
+        working.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!state.may_exit());
+        release.send(()).unwrap();
+        result.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(state.may_exit());
+    }
+
     #[test]
     fn completed_cleanup_exits_without_waiting_out_the_budget() {
         let (exit, result) = mpsc::channel();

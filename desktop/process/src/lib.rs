@@ -89,13 +89,23 @@ pub fn run_with_input(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Output, SetupProcessError> {
-    run_with_optional_input(
+    run_with_input_cancellable(
         command,
-        Some(input),
+        input,
         timeout,
         output_limit,
         Cancellation::default(),
     )
+}
+
+pub fn run_with_input_cancellable(
+    command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    output_limit: usize,
+    cancellation: Cancellation,
+) -> Result<Output, SetupProcessError> {
+    run_with_optional_input(command, Some(input), timeout, output_limit, cancellation)
 }
 
 fn run_with_optional_input(
@@ -274,13 +284,32 @@ mod tests {
 
     #[test]
     fn cancellation_reaps_an_active_installation_and_its_descendants() {
+        assert_cancelled_tree(false);
+    }
+
+    #[test]
+    fn cancellation_reaps_a_request_with_blocked_stdin_and_its_descendants() {
+        assert_cancelled_tree(true);
+    }
+
+    fn assert_cancelled_tree(with_input: bool) {
         let root = tempfile::tempdir().unwrap();
         let mut command = fixture_command("tree-timeout");
         command.env("LEMMA_SETUP_TEST_DIRECTORY", root.path());
         let cancellation = Cancellation::default();
         let owned_cancellation = cancellation.clone();
         let worker = std::thread::spawn(move || {
-            run_cancellable(command, Duration::from_secs(10), 4096, owned_cancellation)
+            if with_input {
+                run_with_input_cancellable(
+                    command,
+                    vec![b'x'; 1024 * 1024],
+                    Duration::from_secs(10),
+                    4096,
+                    owned_cancellation,
+                )
+            } else {
+                run_cancellable(command, Duration::from_secs(10), 4096, owned_cancellation)
+            }
         });
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while !root.path().join("started").exists() && std::time::Instant::now() < deadline {

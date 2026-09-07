@@ -2,6 +2,7 @@ pub mod agent_host;
 pub mod config_operations;
 pub mod daemon;
 pub mod host_process;
+mod lifecycle;
 pub mod local_domain;
 pub mod managed_runtime;
 pub mod native_host_pack;

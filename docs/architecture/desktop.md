@@ -156,8 +156,21 @@ authentication token is corrupt.
 Confirmations and menu errors use a bundled app overlay, with a single pending
 operation and a dedicated IPC capability. Escape, Enter on the default Cancel,
 and window close cancel the operation; old responses cannot authorize a later
-operation. Closing the main window keeps services and the tray running. Quit
-stops work on a worker with a bounded exit deadline; the final event-loop exit
+operation. Closing the main window keeps services and the tray running. Confirmed
+Quit closes daemon lifecycle admission even during startup. Startup checks for
+cancellation between stages; a running migration finishes before cancellation
+prevents application services from starting. Shutdown waits for active lifecycle
+and Agent Host operations before stopping services, and recovery cannot admit new
+work once shutdown starts. The Agent Host's desired-running preference is retained.
+Background authentication and image requests use cancellable, owned bridge
+processes; shutdown cancels their requests and joins their workers before stopping
+the private VM. Service reconciliation and Stop are serialized so a restart cannot
+leave a replacement child behind cleanup.
+
+The shell observes shutdown under its own operation ID and ignores superseded
+startup events. Slow shutdown offers an in-app choice to keep waiting or quit
+with an explicit interruption/recovery warning. Repeating the Quit shortcut does
+not silently take that fallback. Cleanup runs on a worker; the final event-loop exit
 handler never waits on daemon I/O or process cleanup. A daemon handshake has both
 a deadline and an allocation limit, including Windows named pipes.
 The exit watchdog must exceed the combined sharing, handshake, graceful stop,

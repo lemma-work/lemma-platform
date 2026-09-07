@@ -844,6 +844,7 @@
     stopped:    ["Asleep.", "services stopped"],
   };
   const READY_LINE = "It's ready. Opening Lemma.";
+  const openIntent = new URLSearchParams(location.search).get("intent");
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
@@ -987,6 +988,23 @@
   }
   function renderState(s) {
     if (!s) return;
+    if (openIntent === "quit") {
+      clearTimeout(readyOpenTimer);
+      stopWhispers();
+      hideConnectionChoice();
+      switchModeBtn.hidden = true;
+      openBtn.hidden = true;
+      prepareWindowsBtn.hidden = true;
+      showRecoveryButtons(false, false);
+      say(s.error ? "Lemma could not finish stopping." : "Stopping Lemma.");
+      truth.textContent = s.phaseKey === "stopping" ? s.status : "Waiting for local work to stop safely";
+      errwrap.hidden = !s.error;
+      errdetail.textContent = s.error ? s.status : "";
+      retryBtn.textContent = "Retry shutdown";
+      retryBtn.hidden = !s.error;
+      progressEl.classList.toggle("active", !s.error);
+      return;
+    }
     // Neither of these may return silently. This function is the only thing that
     // draws the screen and the only thing that schedules the move to the
     // workspace, so a state it declines to handle leaves the bare static logo up
@@ -1298,6 +1316,17 @@
     }
   });
   retryBtn.addEventListener("click", async () => {
+    if (openIntent === "quit") {
+      retryBtn.disabled = true;
+      try {
+        await window.lemmaDesktop.stop(true);
+      } catch (error) {
+        errdetail.textContent = String(error);
+      } finally {
+        retryBtn.disabled = false;
+      }
+      return;
+    }
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
@@ -1461,10 +1490,10 @@
   // The shell owns launch and connection-mode startup. Loading a document is
   // only observation: an automatic start here races the shell's request.
   // Explicit Start and Retry buttons still send their own user actions.
-  const openIntent = new URLSearchParams(location.search).get("intent");
-
   window.lemmaDesktop.getState().then((s) => {
-    if (s && s.mode === "undecided") {
+    if (openIntent === "quit") {
+      renderState(s);
+    } else if (s && s.mode === "undecided") {
       showChooser();
     } else if (openIntent === "stop") {
       // Say what is actually happening, and never offer to start what the

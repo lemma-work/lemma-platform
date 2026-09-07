@@ -188,6 +188,19 @@ impl ManagedRuntime {
     }
 
     pub fn request(&self, operation: &str, parameters: Value) -> io::Result<Value> {
+        self.request_cancellable(
+            operation,
+            parameters,
+            lemma_desktop_process::Cancellation::default(),
+        )
+    }
+
+    pub fn request_cancellable(
+        &self,
+        operation: &str,
+        parameters: Value,
+        cancellation: lemma_desktop_process::Cancellation,
+    ) -> io::Result<Value> {
         if operation.is_empty()
             || !operation
                 .bytes()
@@ -213,22 +226,27 @@ impl ManagedRuntime {
             .env("LEMMA_GUEST_CONTROL_SOCKET", &self.control_socket)
             .env("LEMMA_WSL_DISTRIBUTION", &self.config.wsl_distribution);
         let budget = guest_request_budget(operation);
-        let output =
-            lemma_desktop_process::run_with_input(command, encoded, budget, MAX_RESPONSE_BYTES)
-                .map_err(|error| match error {
-                    lemma_desktop_process::SetupProcessError::TimedOut => io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "runtime bridge exceeded its request deadline",
-                    ),
-                    lemma_desktop_process::SetupProcessError::OutputLimit => io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "runtime bridge exceeded its output limit",
-                    ),
-                    lemma_desktop_process::SetupProcessError::Io(error) => error,
-                    lemma_desktop_process::SetupProcessError::Cancelled => {
-                        io::Error::new(io::ErrorKind::Interrupted, "runtime command was cancelled")
-                    }
-                })?;
+        let output = lemma_desktop_process::run_with_input_cancellable(
+            command,
+            encoded,
+            budget,
+            MAX_RESPONSE_BYTES,
+            cancellation,
+        )
+        .map_err(|error| match error {
+            lemma_desktop_process::SetupProcessError::TimedOut => io::Error::new(
+                io::ErrorKind::TimedOut,
+                "runtime bridge exceeded its request deadline",
+            ),
+            lemma_desktop_process::SetupProcessError::OutputLimit => io::Error::new(
+                io::ErrorKind::InvalidData,
+                "runtime bridge exceeded its output limit",
+            ),
+            lemma_desktop_process::SetupProcessError::Io(error) => error,
+            lemma_desktop_process::SetupProcessError::Cancelled => {
+                io::Error::new(io::ErrorKind::Interrupted, "runtime command was cancelled")
+            }
+        })?;
         if output.stdout.is_empty() {
             let detail = first_diagnostic(&output.stderr, "private guest did not respond");
             return Err(io::Error::new(

@@ -67,18 +67,55 @@ async fn run_with_deadline(
 }
 
 fn configured_agents() -> Vec<String> {
-    let agents: Vec<String> = std::env::var("LEMMA_REAL_AGENT_E2E_AGENTS")
-        .unwrap_or_else(|_| "codex,claude-code,opencode".to_owned())
+    parse_agents(
+        &std::env::var("LEMMA_REAL_AGENT_E2E_AGENTS")
+            .unwrap_or_else(|_| "codex,claude-code,opencode".to_owned()),
+    )
+    .unwrap_or_else(|error| panic!("invalid live agent selection: {error}"))
+}
+
+fn parse_agents(selection: &str) -> anyhow::Result<Vec<String>> {
+    let agents: Vec<String> = selection
         .split(',')
         .map(str::trim)
         .filter(|agent| !agent.is_empty())
         .map(str::to_owned)
         .collect();
-    assert!(
+    anyhow::ensure!(
         !agents.is_empty(),
         "select at least one live agent to qualify"
     );
-    agents
+    let manifest = AdapterManifest::builtin()?;
+    let valid: Vec<&str> = manifest
+        .adapters
+        .iter()
+        .map(|adapter| adapter.key.as_str())
+        .collect();
+    for (index, agent) in agents.iter().enumerate() {
+        anyhow::ensure!(
+            valid.contains(&agent.as_str()),
+            "unknown agent {agent:?}; choose from {}",
+            valid.join(", ")
+        );
+        anyhow::ensure!(
+            !agents[..index].contains(agent),
+            "agent {agent:?} was selected more than once"
+        );
+    }
+    Ok(agents)
+}
+
+#[test]
+fn live_agent_selection_rejects_typoes_empty_and_duplicate_runs_before_startup() {
+    let error = parse_agents("claude").unwrap_err().to_string();
+    assert!(error.contains("unknown agent"));
+    assert!(error.contains("claude-code"));
+    assert!(parse_agents(" , ").is_err());
+    assert!(parse_agents("codex,codex").is_err());
+    assert_eq!(
+        parse_agents(" codex,claude-code, opencode ").unwrap(),
+        ["codex", "claude-code", "opencode"]
+    );
 }
 
 fn agent_host_data_directory() -> PathBuf {
