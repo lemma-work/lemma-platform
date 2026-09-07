@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from functools import partial
 from io import BytesIO
 import json
@@ -24,9 +25,7 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-# Fallbacks for invalid retry settings. Connection failures use bounded backoff;
-# timeouts are re-driven later to avoid duplicating accepted extraction work.
-# Request-schema 400/422 responses alone use the compatibility-config fallback.
+# Retry connection failures; defer timeouts; only schema errors try a legacy config.
 _TRANSIENT_RETRY_ATTEMPTS = 3
 _TRANSIENT_RETRY_BASE_DELAY_SECONDS = 1.0
 
@@ -44,16 +43,17 @@ class KreuzbergCompatibilityError(RuntimeError):
 
 
 class KreuzbergHelper:
-    def __init__(self):
+    def __init__(
+        self, *, sleep: Callable[[float], Awaitable[None]] | None = None
+    ) -> None:
+        self._sleep = sleep or asyncio.sleep
         self.base_url = (
             datastore_settings.kreuzberg_url.rstrip("/")
             if datastore_settings.kreuzberg_url
             else None
         )
-        # A long `total` covers a connected-but-slow OCR of a large PDF, but
-        # `connect`/`sock_connect` make a DOWN endpoint fail within seconds
-        # instead of hanging to the full total (which was the 180s-per-attempt
-        # stall that pinned worker slots during a Kreuzberg outage).
+        # Separate connect and total deadlines let slow OCR finish while
+        # refusing unreachable endpoints promptly.
         self.request_timeout = aiohttp.ClientTimeout(
             total=datastore_settings.kreuzberg_request_timeout_seconds,
             connect=datastore_settings.kreuzberg_connect_timeout_seconds,
@@ -511,7 +511,7 @@ class KreuzbergHelper:
                         "datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic",
                         max_attempts=max_attempts,
                     )
-                    await asyncio.sleep(delay)
+                    await self._sleep(delay)
                     continue
                 raise KreuzbergTransientError(
                     "Kreuzberg extract connection failed"

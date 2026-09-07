@@ -5,7 +5,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from pydantic_ai import UsageLimits
+    from pydantic_ai.capabilities import AgentCapability
+    from pydantic_ai.toolsets import AbstractToolset
+    from pydantic_ai.output import OutputSpec
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,7 +23,6 @@ JsonPrimitive = str | int | float | bool | None
 JsonValue = object
 JsonObject = dict[str, object]
 
-ConversationAgentValue = TypeVar("ConversationAgentValue")
 ResolvedConversationAgentValue = TypeVar("ResolvedConversationAgentValue")
 
 
@@ -141,7 +146,7 @@ class ConnectorAccessConfig(BaseModel):
     def validate_mode(cls, value: object) -> ConnectorMode:
         return ConnectorMode.normalize(value)
 
-    def __init__(self, **data):
+    def __init__(self, **data: object) -> None:
         super().__init__(**data)
         if self.mode == ConnectorMode.AGENT_OWNED and not self.account_id:
             raise ValueError("AGENT_OWNED mode requires account_id to be specified")
@@ -156,7 +161,7 @@ class ConnectorAccessConfig(BaseModel):
         return result
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ConnectorAccessConfig":
+    def from_dict(cls, data: JsonObject) -> "ConnectorAccessConfig":
         account_id = data.get("account_id")
         if account_id:
             account_id = UUID(account_id) if isinstance(account_id, str) else account_id
@@ -455,7 +460,7 @@ class ConversationAgentScope(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationAgentSelection(Generic[ConversationAgentValue]):
+class ConversationAgentSelection[ConversationAgentValue]:
     """A validated conversation-list selection before or after name resolution."""
 
     scope: ConversationAgentScope
@@ -519,17 +524,15 @@ class AgentEvent(BaseModel):
 
 
 @dataclass(slots=True)
-class HarnessOptions:
+class HarnessOptions[DepsT = object]:
     """Dependency-injected options for one harness execution."""
 
     model_name: str
-    toolsets: list[object] = field(default_factory=list)
-    # Pydantic AI capabilities (current-time, prompt-caching, tool-search, todo,
-    # deferred extra-tools-over-MCP). Built only for the in-process LEMMA harness;
-    # ignored by remote harnesses (Codex/Claude-Code), which use the MCP server.
-    capabilities: list[object] = field(default_factory=list)
-    usage_limits: object | None = None
-    output_type: object | None = None
+    toolsets: list[AbstractToolset[DepsT]] = field(default_factory=list)
+    # Remote harnesses use MCP; only the in-process harness consumes capabilities.
+    capabilities: list[AgentCapability[DepsT]] = field(default_factory=list)
+    usage_limits: UsageLimits | None = None
+    output_type: OutputSpec[object] | None = None
     model_settings: JsonObject | None = None
     history_summarization_enabled: bool = True
     history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT

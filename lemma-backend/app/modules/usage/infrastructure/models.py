@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, Index, String
+from sqlalchemy import DateTime, Float, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.usage.domain.accounting import money
+from app.modules.usage.domain.entities import UsageKind, UsageProfileScope
 from app.modules.usage.domain.entities import UsageRecord as UsageRecordEntity
+
+__all__ = ["UsageLimitCounter", "UsageRecord"]
 
 
 class UsageRecord(UUIDAuditBase):
@@ -46,8 +50,12 @@ class UsageRecord(UUIDAuditBase):
     output_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
     units: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    request_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 9), nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    cache_write_tokens: Mapped[int | None] = mapped_column(nullable=True)
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    record_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+    record_metadata: Mapped[dict[str, object] | None] = mapped_column(
         "metadata",
         JSONB,
         default=dict,
@@ -63,6 +71,12 @@ class UsageRecord(UUIDAuditBase):
     )
 
     __table_args__ = (
+        Index(
+            "uq_usage_request_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
+        ),
         Index("ix_usage_org_time", "organization_id", "occurred_at"),
         Index("ix_usage_pod_time", "pod_id", "occurred_at"),
         Index("ix_usage_user_time", "user_id", "occurred_at"),
@@ -109,6 +123,9 @@ class UsageRecord(UUIDAuditBase):
             output_tokens=self.output_tokens,
             units=self.units,
             cost_usd=self.cost_usd,
+            cost_amount=self.cost_amount,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_write_tokens=self.cache_write_tokens,
             status=self.status,
             metadata=self.record_metadata or {},
             occurred_at=self.occurred_at,
@@ -118,12 +135,12 @@ class UsageRecord(UUIDAuditBase):
     def from_entity(cls, entity: UsageRecordEntity) -> "UsageRecord":
         usage_kind = (
             entity.usage_kind.value
-            if hasattr(entity.usage_kind, "value")
+            if isinstance(entity.usage_kind, UsageKind)
             else str(entity.usage_kind)
         )
         profile_scope = (
             entity.profile_scope.value
-            if hasattr(entity.profile_scope, "value")
+            if isinstance(entity.profile_scope, UsageProfileScope)
             else str(entity.profile_scope)
         )
         return cls(
@@ -147,6 +164,15 @@ class UsageRecord(UUIDAuditBase):
             output_tokens=entity.output_tokens,
             units=entity.units,
             cost_usd=entity.cost_usd,
+            cost_amount=(
+                money(entity.cost_amount)
+                if entity.cost_amount is not None
+                else money(entity.cost_usd)
+                if entity.cost_usd is not None
+                else None
+            ),
+            cached_input_tokens=entity.cached_input_tokens,
+            cache_write_tokens=entity.cache_write_tokens,
             status=entity.status,
             record_metadata=entity.metadata,
             occurred_at=entity.occurred_at,
@@ -167,8 +193,16 @@ class UsageLimitCounter(UUIDAuditBase):
     window_end: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    used_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    reserved_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    limit_usd: Mapped[Decimal | None] = mapped_column(Numeric(24, 9), nullable=True)
+    warning_emitted: Mapped[bool] = mapped_column(
+        default=False, server_default="false", nullable=False
+    )
+    used_usd: Mapped[Decimal] = mapped_column(
+        Numeric(24, 9), nullable=False, default=Decimal(0)
+    )
+    reserved_usd: Mapped[Decimal] = mapped_column(
+        Numeric(24, 9), nullable=False, default=Decimal(0)
+    )
 
     __table_args__ = (
         Index(

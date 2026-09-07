@@ -42,6 +42,8 @@ class UsageSummaryResponse:
         total_tokens (int):
         total_units (float):
         agent_id (None | Unset | UUID):
+        agent_run_id (None | Unset | UUID):
+        conversation_id (None | Unset | UUID):
         organization_id (None | Unset | UUID):
         pod_id (None | Unset | UUID):
         user_id (None | Unset | UUID):
@@ -59,6 +61,8 @@ class UsageSummaryResponse:
     total_tokens: int
     total_units: float
     agent_id: None | Unset | UUID = UNSET
+    agent_run_id: None | Unset | UUID = UNSET
+    conversation_id: None | Unset | UUID = UNSET
     organization_id: None | Unset | UUID = UNSET
     pod_id: None | Unset | UUID = UNSET
     user_id: None | Unset | UUID = UNSET
@@ -94,6 +98,22 @@ class UsageSummaryResponse:
             agent_id = str(self.agent_id)
         else:
             agent_id = self.agent_id
+
+        agent_run_id: None | str | Unset
+        if isinstance(self.agent_run_id, Unset):
+            agent_run_id = UNSET
+        elif isinstance(self.agent_run_id, UUID):
+            agent_run_id = str(self.agent_run_id)
+        else:
+            agent_run_id = self.agent_run_id
+
+        conversation_id: None | str | Unset
+        if isinstance(self.conversation_id, Unset):
+            conversation_id = UNSET
+        elif isinstance(self.conversation_id, UUID):
+            conversation_id = str(self.conversation_id)
+        else:
+            conversation_id = self.conversation_id
 
         organization_id: None | str | Unset
         if isinstance(self.organization_id, Unset):
@@ -138,6 +158,10 @@ class UsageSummaryResponse:
         )
         if agent_id is not UNSET:
             field_dict["agent_id"] = agent_id
+        if agent_run_id is not UNSET:
+            field_dict["agent_run_id"] = agent_run_id
+        if conversation_id is not UNSET:
+            field_dict["conversation_id"] = conversation_id
         if organization_id is not UNSET:
             field_dict["organization_id"] = organization_id
         if pod_id is not UNSET:
@@ -205,6 +229,40 @@ class UsageSummaryResponse:
 
         agent_id = _parse_agent_id(d.pop("agent_id", UNSET))
 
+        def _parse_agent_run_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                agent_run_id_type_0 = UUID(data)
+
+                return agent_run_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        agent_run_id = _parse_agent_run_id(d.pop("agent_run_id", UNSET))
+
+        def _parse_conversation_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                conversation_id_type_0 = UUID(data)
+
+                return conversation_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        conversation_id = _parse_conversation_id(d.pop("conversation_id", UNSET))
+
         def _parse_organization_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -269,6 +327,8 @@ class UsageSummaryResponse:
             total_tokens=total_tokens,
             total_units=total_units,
             agent_id=agent_id,
+            agent_run_id=agent_run_id,
+            conversation_id=conversation_id,
             organization_id=organization_id,
             pod_id=pod_id,
             user_id=user_id,

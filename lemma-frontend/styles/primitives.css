@@ -1063,6 +1063,17 @@ button:focus-visible .lemma-product-icon-glyph {
   align-items: center;
 }
 
+/* The mark says who answered, the pip says what the run is doing, and this
+   says where the conversation came from — the trailing edge, because the
+   gutter is spoken for and a source is the least urgent of the three. Sized
+   under the mark so it reads as an annotation on the row, not a second face.
+   Only ever drawn for a conversation that arrived from a surface. */
+.workspace-sidebar-conversation-source {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  opacity: 0.75;
+}
+
 /* The mark says who; the pip says what this run is doing. A resting
    conversation gets no pip — the old gutter drew a hollow ring at 2.3:1 that
    read as dust, and "nothing is happening" is better said with nothing. */

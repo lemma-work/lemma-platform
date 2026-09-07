@@ -1,6 +1,9 @@
 """PydanticAI harness implementation."""
 
 from __future__ import annotations
+from pydantic_ai.models import Model
+from pydantic_ai.run import AgentRun
+from contextlib import AbstractAsyncContextManager
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -56,8 +59,10 @@ from app.modules.agent.infrastructure.harnesses.provider_error_log import (
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
+from app.modules.usage.contracts.metering import with_external_stream_retries
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
+    provider_model_settings,
 )
 from app.modules.agent.services.summarization_model import (
     resolve_summarization_model,
@@ -115,17 +120,17 @@ class PydanticAIHarness:
 
     kind = HarnessKind.LEMMA
 
-    def __init__(self, *, emit_tokens: bool = True):
+    def __init__(self, *, emit_tokens: bool = True) -> None:
         self.emit_tokens = emit_tokens
 
-    async def run(
+    async def run[DepsT: AgentContext](
         self,
         *,
         agent: Agent,
         conversation: Conversation,
         messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
+        ctx: DepsT,
+        options: HarnessOptions[DepsT],
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         # Every tool this run announces, until its result is recorded. A run
@@ -239,14 +244,14 @@ class PydanticAIHarness:
         # the events that close it.
         yield terminal
 
-    async def _execute(
+    async def _execute[DepsT: AgentContext](
         self,
         *,
         agent: Agent,
         conversation: Conversation,
         messages: Sequence[Message],
-        ctx: AgentContext,
-        options: HarnessOptions,
+        ctx: DepsT,
+        options: HarnessOptions[DepsT],
         agent_run_id: UUID,
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
@@ -258,54 +263,12 @@ class PydanticAIHarness:
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
         if is_mock_llm_enabled():
-            model = build_mock_model(conversation)
+            model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)
-        agent_kwargs: dict[str, object] = {
-            # Per-toolset prompt fragments (e.g. web search) are contributed by the
-            # matching capabilities, so they're suppressed here to avoid duplication.
-            "instructions": _instructions(
-                agent=agent,
-                conversation=conversation,
-                ctx=ctx,
-            ),
-            # A single invalid tool call must not kill the run: give the model room
-            # to self-correct from validation feedback before giving up.
-            "retries": DEFAULT_TOOL_RETRIES,
-            # A TASK conversation returns through the final_answer output tool.
-            # Under the "early" strategy a normal tool emitted in the same model
-            # response (notably request_approval and ask_user) is skipped once
-            # final_answer validates — so the pause never happens, the approval
-            # is never persisted, and the run silently completes instead of
-            # waiting for the user. Graceful executes that sibling tool, which
-            # is what raises AgentInputRequired and pauses the run.
-            #
-            # Pinned rather than load-bearing *today*: "graceful" became the
-            # pydantic-ai default after this was written against 1.x, where the
-            # default was "early" and this kwarg was the fix. It stays explicit
-            # because a default is not a promise, and the bug it prevents is
-            # silent — the run reports success and nobody is ever asked.
-            #
-            # It is also not the reason the pause survives. What outranks a
-            # co-emitted answer is that the pause RAISES: an exception abandons
-            # the run outright. pydantic-ai's native deferral (`CallDeferred`,
-            # or a tool declared `requires_approval=True`) cannot do that —
-            # `_tool_execution._finalize_deferred` resolves deferred calls only
-            # `if not self.final_result`, and a validated `final_answer` sets
-            # one, so the deferral is discarded under every end strategy.
-            #
-            # Precisely: an output *tool* in the same response wins. Text-based
-            # output (NativeOutput/PromptedOutput) does not preempt a deferral,
-            # because `_agent_graph` short-circuits on `if tool_calls:` before
-            # consulting the text processor. Switching `final_answer` to that
-            # shape would make native deferral viable — and would discard the
-            # status lifecycle TASK conversations drive through it, and still
-            # do nothing for the Agent Host harness, which is not pydantic-ai.
-            # See test_pause_beats_final_answer.py.
-            "end_strategy": "graceful",
-        }
-        if options.toolsets:
-            agent_kwargs["toolsets"] = options.toolsets
+        # The graph driver owns stream resets, history recovery and retry limits.
+        # Retrying inside the model would hide connection drops from that driver.
+        model = with_external_stream_retries(model)
         # History processors ride as ProcessHistory capabilities (the
         # history_processors= kwarg is deprecated in pydantic-ai).
         with run_phase("summarization_model"):
@@ -316,6 +279,7 @@ class PydanticAIHarness:
                 user_id=conversation.user_id,
                 fallback=model,
             )
+            summarization_model = _meter_compaction_model(summarization_model, options)
         history_processors = build_history_processors(
             options,
             summarization_model=summarization_model,
@@ -324,43 +288,32 @@ class PydanticAIHarness:
         capabilities.extend(
             ProcessHistory(processor) for processor in history_processors
         )
-        if options.output_type is not None:
-            agent_kwargs["output_type"] = options.output_type
-        if options.model_settings is not None:
-            agent_kwargs["model_settings"] = options.model_settings
-        if capabilities:
-            agent_kwargs["capabilities"] = capabilities
+        pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
+            model,
+            instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),
+            deps_type=type(ctx),
+            retries=DEFAULT_TOOL_RETRIES,
+            # A final answer must not skip a sibling approval tool that pauses the run.
+            end_strategy="graceful",
+            toolsets=options.toolsets,
+            output_type=options.output_type if options.output_type is not None else str,
+            model_settings=provider_model_settings(options.model_settings),
+            capabilities=capabilities,
+        )
 
-        pydantic_agent = PydanticAIAgent(model, **agent_kwargs)
-
-        def _new_run_context(resume_history: list[object] | None):
-            """Start the graph, either fresh or resuming from recorded messages.
-
-            On a resume the user prompt is deliberately omitted: it is already the
-            last message in ``resume_history``, and passing it again would append a
-            duplicate turn. pydantic-ai supports resuming without a prompt — the
-            same path the approval flow uses.
-            """
-            iter_kwargs: dict[str, object] = {
-                "message_history": (
-                    resume_history if resume_history is not None else (history or None)
-                ),
-                "deps": ctx,
-                "usage_limits": options.usage_limits,
-                # Our conversation id, not pydantic-ai's. Left unset, pydantic-ai
-                # takes the most recent conversation id off `message_history` --
-                # and we rebuild history from the database every run, so there is
-                # never one to inherit and it mints a fresh UUID7 per run instead.
-                # That id becomes `gen_ai.conversation.id`, which the
-                # OpenInference instrumentation maps onto `session.id`, which is
-                # the only thing Phoenix groups a session by. So every turn
-                # became its own single-trace session: 648 traces, 648 sessions,
-                # exactly one-to-one, on the deployment where this was found.
-                "conversation_id": str(conversation.id),
-            }
-            if resume_history is not None or user_prompt is None:
-                return pydantic_agent.iter(**iter_kwargs)
-            return pydantic_agent.iter(user_prompt, **iter_kwargs)
+        def _new_run_context(
+            resume_history: list[ModelMessage] | None,
+        ) -> AbstractAsyncContextManager[AgentRun[DepsT, object]]:
+            # Resuming already carries the user prompt in its message history.
+            return pydantic_agent.iter(
+                None if resume_history is not None else user_prompt,
+                message_history=resume_history
+                if resume_history is not None
+                else (history or None),
+                deps=ctx,
+                usage_limits=options.usage_limits,
+                conversation_id=str(conversation.id),
+            )
 
         # pydantic-ai's agent.iter() enters anyio cancel scopes that are bound to
         # the TASK they're created in. We drive the whole iteration in a CHILD
@@ -519,7 +472,7 @@ class PydanticAIHarness:
         return final_answer_text(data, fallback=fallback)
 
 
-def _runtime_profile_protocol(options: HarnessOptions) -> str | None:
+def _runtime_profile_protocol[DepsT](options: HarnessOptions[DepsT]) -> str | None:
     """Which provider family this run's model belongs to, if it says.
 
     Read for one reason: whether a stored thought can be replayed to it. See
@@ -534,13 +487,40 @@ def _runtime_profile_protocol(options: HarnessOptions) -> str | None:
     return protocol if isinstance(protocol, str) and protocol else None
 
 
-def _runtime_profile_model(options: HarnessOptions):
+def _runtime_profile_model[DepsT](options: HarnessOptions[DepsT]) -> Model:
+    profile = options.extra.get("runtime_profile")
+    credentials = options.extra.get("runtime_credentials")
     return require_pydantic_ai_model_from_runtime_profile(
-        runtime_profile=options.extra.get("runtime_profile"),
-        runtime_credentials=options.extra.get("runtime_credentials"),
+        runtime_profile=profile if isinstance(profile, Mapping) else None,
+        runtime_credentials=credentials if isinstance(credentials, Mapping) else None,
         fallback_model_name=options.model_name,
     )
 
 
 # Every usage field the harness reports, in one place so a retry can carry all of
 # them forward without the accumulator and the emitter drifting apart.
+
+
+def _meter_mock_model[DepsT](
+    conversation: Conversation, options: HarnessOptions[DepsT]
+) -> Model:
+    from app.modules.usage.contracts.metering import meter_model
+
+    model = build_mock_model(conversation)
+    profile = options.extra.get("runtime_profile")
+    return meter_model(model, profile) if isinstance(profile, dict) else model
+
+
+def _meter_compaction_model[DepsT](
+    model: Model | str, options: HarnessOptions[DepsT]
+) -> Model | str:
+    from app.modules.usage.contracts.metering import meter_model
+
+    if isinstance(model, Model):
+        profile = options.extra.get("runtime_profile")
+        return meter_model(
+            model,
+            profile if isinstance(profile, Mapping) else {},
+            source="history_compaction",
+        )
+    return model

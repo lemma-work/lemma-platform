@@ -89,8 +89,6 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
     monkeypatch.setattr(
         cts, "require_pydantic_ai_model_from_runtime_profile", lambda **_: object()
     )
-    monkeypatch.setattr(cts, "reserve_usage_for_runtime", _noop_reserve)
-    monkeypatch.setattr(cts, "record_pydantic_ai_result_usage", _noop_record)
 
 
 async def _create_pod(authenticated_client, fixed_test_org) -> str:

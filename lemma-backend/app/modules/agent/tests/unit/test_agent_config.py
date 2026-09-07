@@ -74,6 +74,39 @@ def _clear(monkeypatch):
         monkeypatch.delenv(env, raising=False)
 
 
+# Moved out of `app/core/config.py`. Listed here for the same reason as
+# everything above: the field set is exact, so a field arriving or leaving
+# has to be a decision. Defaults transcribed from core before the move and
+# checked against it -- all nine came across unchanged.
+#
+# `lemma_openai_api_key` and `lemma_openai_base_url` are NOT here: core
+# embeddings, datastore's reranker and a catalog script read them too, so
+# they are shared credentials rather than the agent module's.
+MOVED_FROM_CORE = [
+    ("lemma_anthropic_api_key", "LEMMA_ANTHROPIC_API_KEY", None),
+    (
+        "lemma_anthropic_base_url",
+        "LEMMA_ANTHROPIC_BASE_URL",
+        "https://api.anthropic.com",
+    ),
+    (
+        "lemma_anthropic_default_model",
+        "LEMMA_ANTHROPIC_DEFAULT_MODEL",
+        "claude-sonnet-4-5",
+    ),
+    (
+        "lemma_anthropic_model_names",
+        "LEMMA_ANTHROPIC_MODEL_NAMES",
+        "claude-sonnet-4-5,claude-haiku-4-5",
+    ),
+    ("lemma_default_model_type", "LEMMA_DEFAULT_MODEL_TYPE", "openai_compat"),
+    ("lemma_llm_caching_enabled", "LEMMA_LLM_CACHING_ENABLED", False),
+    ("lemma_openai_default_model", "LEMMA_OPENAI_DEFAULT_MODEL", ""),
+    ("lemma_openai_model_names", "LEMMA_OPENAI_MODEL_NAMES", ""),
+    ("lemma_openai_vision_model_names", "LEMMA_OPENAI_VISION_MODEL_NAMES", ""),
+]
+
+
 def test_agent_settings_defaults():
     # Declared defaults only — immune to a developer's local .env / os.environ.
     for field, _env, default in EXPECTED:
@@ -83,6 +116,7 @@ def test_agent_settings_defaults():
 def test_agent_settings_field_set_is_exact():
     assert set(AgentSettings.model_fields) == {
         *(f for f, _e, _d in EXPECTED),
+        *(f for f, _e, _d in MOVED_FROM_CORE),
         *FACTORY_FIELDS,
     }
 

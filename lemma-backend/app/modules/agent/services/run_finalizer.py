@@ -25,7 +25,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
 )
-from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunUsage,
@@ -57,7 +57,9 @@ def is_usage_limit_error(exc: BaseException) -> bool:
     the module that already classifies run failures is the one that should have
     it. Callers ask the question; they do not need the type.
     """
-    return isinstance(exc, UsageLimitExceededError)
+    if isinstance(exc, BaseExceptionGroup):
+        return any(is_usage_limit_error(child) for child in exc.exceptions)
+    return isinstance(exc, UsageLimitExceededError) and exc.reason == "exhausted"
 
 
 def run_failure_message(exc: BaseException) -> str:
@@ -67,9 +69,16 @@ def run_failure_message(exc: BaseException) -> str:
     are both "the run failed", but only one of them is worth investigating, and
     neither is fixed by checking the runtime configuration.
     """
-    if isinstance(exc, UsageLimitExceededError):
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return run_failure_message(UsageLimitExceededError())
+        domain_error = next(
+            (child for child in exc.exceptions if isinstance(child, DomainError)), None
+        )
+        return run_failure_message(domain_error or exc.exceptions[0])
+    if is_usage_limit_error(exc):
         return (
-            "This run was not started because the workspace has used its "
+            "This run cannot continue because the workspace has used its "
             "available usage allowance. Usage resets with the billing period, "
             "or the plan limit can be raised."
         )
@@ -97,6 +106,32 @@ def run_failure_message(exc: BaseException) -> str:
     if not isinstance(exc, Exception):
         return "Agent run was interrupted (timeout or shutdown)"
     return "Agent run failed. Please check the agent runtime configuration."
+
+
+def run_failure_code(exc: BaseException) -> str | None:
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return "USAGE_LIMIT_EXCEEDED"
+        return next(
+            (code for child in exc.exceptions if (code := run_failure_code(child))),
+            None,
+        )
+    return exc.code if isinstance(exc, DomainError) else None
+
+
+def run_failure_reason(exc: BaseException) -> str | None:
+    if isinstance(exc, BaseExceptionGroup):
+        if is_usage_limit_error(exc):
+            return "exhausted"
+        return next(
+            (
+                reason
+                for child in exc.exceptions
+                if (reason := run_failure_reason(child))
+            ),
+            None,
+        )
+    return exc.reason if isinstance(exc, UsageLimitExceededError) else None
 
 
 async def finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
@@ -144,6 +179,8 @@ class RunFinalizer:
         status: AgentRunStatus,
         conversation_status: ConversationStatus | None = None,
         error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
         output_data: JsonValue | None = None,
         usage_data: AgentRunUsage | None = None,
     ) -> None:
@@ -156,6 +193,8 @@ class RunFinalizer:
                     status=status,
                     conversation_status=conversation_status,
                     error=error,
+                    error_code=error_code,
+                    error_reason=error_reason,
                     output_data=output_data,
                 )
                 if finish_result is not None and finish_result.updated:
@@ -183,6 +222,14 @@ class RunFinalizer:
                         started_at=run.started_at,
                     )
                     uow.collect_events([event])
+            if finish_result is not None:
+                # A retry must repair receipts even when the run is terminal.
+                # The stored outcome wins over a retry's fallback failure status.
+                await self.usage_recorder.finalize_metered(
+                    agent_run_id=run.agent_run_id,
+                    runtime_profile=run.runtime_profile,
+                    status=finish_result.status.value,
+                )
             if finish_result is None or not finish_result.updated:
                 await self.usage_recorder.release(run.usage_reservation)
                 return
@@ -190,7 +237,12 @@ class RunFinalizer:
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
                     run.conversation_id,
-                    error_payload(run.agent_run_id, error or "Agent run failed"),
+                    error_payload(
+                        run.agent_run_id,
+                        error or "Agent run failed",
+                        code=error_code,
+                        reason=error_reason,
+                    ),
                 )
             await publish_conversation_event(
                 run.conversation_id,

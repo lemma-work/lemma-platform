@@ -6,6 +6,9 @@ name the agent that answers, and identify who sent it. Nothing here writes.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.platforms.common import (
+    PLATFORM_TRANSPORT_ERRORS,
+)
 from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -220,7 +223,7 @@ class SurfaceRoutingMixin:
           a manually typed name that produced no entity).
 
         Best-effort; returns the event unchanged on any failure."""
-        with suppress(Exception):
+        with suppress(*PLATFORM_TRANSPORT_ERRORS, ImportError):
             from app.modules.agent_surfaces.platforms.telegram.service import (
                 TelegramPlatformService,
             )

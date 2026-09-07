@@ -314,9 +314,11 @@ class AgentContextBriefBuilder:
             if not rows:
                 return [
                     "\n## Granted Resources",
-                    "- (none) — you have no resource grants yet. If a tool returns "
-                    "a permission error (403), call request_approval so the user "
-                    "can grant access or run it for you.",
+                    (
+                        "- (none) — you have no resource grants yet. If a tool returns "
+                        "a permission error (403), call request_approval so the user "
+                        "can grant access or run it for you."
+                    ),
                 ]
 
             refs: list[tuple[ResourceType, UUID]] = []
@@ -361,10 +363,12 @@ class AgentContextBriefBuilder:
 
         lines = [
             "\n## Granted Resources",
-            "These are pre-authorized for you — read, query, and act on them "
-            "directly without asking for approval. Only call request_approval if a "
-            "tool returns a permission error (403), or for an explicitly "
-            "destructive action.",
+            (
+                "These are pre-authorized for you — read, query, and act on them "
+                "directly without asking for approval. Only call request_approval if a "
+                "tool returns a permission error (403), or for an explicitly "
+                "destructive action."
+            ),
         ]
         granted = list(perms_by_ref.items())
         # Truncating a section headed "These are pre-authorized for you" without
@@ -403,8 +407,10 @@ def _more_note(shown: int, total: object, noun: str) -> list[str]:
     if not isinstance(total, int) or total <= shown:
         return []
     return [
-        f"- … and {total - shown} more {noun} not listed here "
-        f"(showing {shown}). Use your tools to list them all."
+        (
+            f"- … and {total - shown} more {noun} not listed here "
+            f"(showing {shown}). Use your tools to list them all."
+        )
     ]
 
 

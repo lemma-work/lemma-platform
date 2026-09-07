@@ -204,6 +204,8 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         "assistant_threads_setStatus",
         fake_assistant_threads_set_status,
     )
+    set_title = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(AsyncWebClient, "assistant_threads_setTitle", set_title)
 
     surface = AgentSurfaceEntity(
         id=uuid4(),
@@ -249,6 +251,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     await service.execute_chat(context)
 
     conversations.start_surface_turn.assert_awaited_once()
+    set_title.assert_awaited_once()
     message_kwargs = conversations.start_surface_turn.await_args.kwargs
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]

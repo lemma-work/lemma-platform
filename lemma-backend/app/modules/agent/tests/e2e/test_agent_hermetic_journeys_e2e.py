@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.modules.agent.config import agent_settings
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.test_support.e2e.scripted_model import (
     script_model_error,
@@ -1477,8 +1478,10 @@ async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_
             "write_todos",
             {
                 "todos": [
-                    "<todos><item>Draft the proposal</item>"
-                    "<item>Send the invoice - done</item></todos>"
+                    (
+                        "<todos><item>Draft the proposal</item>"
+                        "<item>Send the invoice - done</item></todos>"
+                    )
                 ]
             },
             tool_call_id="todo-flattened-plan-1",
@@ -2517,8 +2520,8 @@ async def test_a_server_key_without_model_names_still_lists_and_names_the_settin
     monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
     monkeypatch.setattr(settings, "lemma_openai_api_key", "key-without-models")
-    monkeypatch.setattr(settings, "lemma_openai_model_names", "")
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "")
+    monkeypatch.setattr(agent_settings, "lemma_openai_model_names", "")
+    monkeypatch.setattr(agent_settings, "lemma_openai_default_model", "")
 
     listed = await authenticated_client.get(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",

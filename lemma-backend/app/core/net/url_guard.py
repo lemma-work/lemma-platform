@@ -83,9 +83,7 @@ class GuardPolicy:
     def from_settings(cls) -> "GuardPolicy":
         # Self-hosted deployments legitimately run connectors against their own
         # private network; opting in is explicit and off by default.
-        allow_private = bool(
-            getattr(settings, "connector_allow_private_network_targets", False)
-        )
+        allow_private = settings.connector_allow_private_network_targets
         is_dev = settings.environment in ("local", "testing")
         return cls(
             allow_private=allow_private,

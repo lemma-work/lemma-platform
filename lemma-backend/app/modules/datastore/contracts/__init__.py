@@ -10,6 +10,7 @@ from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreFileNotFoundError,
     DatastoreTableNotFoundError,
+    DatastoreValidationError,
 )
 from app.modules.datastore.domain.events import (
     DATASTORE_EVENTS_STREAM,
@@ -36,6 +37,11 @@ __all__ = [
     "DatastoreAccessDeniedError",
     "DatastoreConflictError",
     "DatastoreFileNotFoundError",
+    # Exported so a caller normalising a name can catch the one error
+    # `normalize_datastore_name` raises. Without it the only reachable spelling
+    # from another module was `except Exception`, which also swallows the
+    # TypeError from handing it the wrong thing.
+    "DatastoreValidationError",
     # Exported so a consumer asking "does this table exist" can catch the one
     # error that means "no" instead of everything. `get_table` checks
     # authorization *after* the lookup, so a broad catch there turns a denial

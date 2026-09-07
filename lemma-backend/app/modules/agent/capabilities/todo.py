@@ -265,16 +265,17 @@ def _todo_result(todos: list[JsonObject]) -> JsonObject:
     return result
 
 
-class TodoCapability(AbstractCapability[object]):
+class TodoCapability[DepsT](AbstractCapability[DepsT]):
     """The todo tool plus its usage instructions."""
 
-    def __init__(self, toolset: AbstractToolset[object]) -> None:
+    def __init__(self, toolset: AbstractToolset[DepsT]) -> None:
         self._toolset = toolset
 
-    def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
+    @classmethod
+    def get_serialization_name(cls) -> str | None:  # pragma: no cover - metadata
         return "todo"
 
-    def get_toolset(self) -> AbstractToolset[object]:
+    def get_toolset(self) -> AbstractToolset[DepsT]:
         return self._toolset
 
     def get_instructions(self) -> str:

@@ -700,7 +700,7 @@ fn download_artifact(
             "artifact download ended early and can be resumed",
         ));
     }
-    if downloaded != artifact.size || format!("{:x}", digest.finalize()) != artifact.sha256 {
+    if downloaded != artifact.size || hex::encode(digest.finalize()) != artifact.sha256 {
         let _ = fs::remove_file(&partial);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -812,7 +812,7 @@ fn copy_artifact_file(
         }
     }
     output.sync_all()?;
-    if downloaded != artifact.size || format!("{:x}", digest.finalize()) != artifact.sha256 {
+    if downloaded != artifact.size || hex::encode(digest.finalize()) != artifact.sha256 {
         let _ = fs::remove_file(&partial);
         return Err(invalid(
             "local artifact SHA-256 did not match the test manifest",
@@ -878,7 +878,7 @@ fn file_sha256(path: &Path) -> io::Result<String> {
         }
         digest.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 fn hash_prefix(path: &Path, bytes: u64, digest: &mut Sha256) -> io::Result<()> {
@@ -1743,7 +1743,7 @@ mod tests {
         hasher.update(bytes);
         serde_json::json!({
             "url": reqwest::Url::from_file_path(path).unwrap().to_string(),
-            "sha256": format!("{:x}", hasher.finalize()),
+            "sha256": hex::encode(hasher.finalize()),
             "size": bytes.len() as u64,
             "expanded_size": expanded,
             "format": "zip",

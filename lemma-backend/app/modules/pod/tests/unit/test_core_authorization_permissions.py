@@ -31,7 +31,7 @@ from app.core.authorization.permissions import (
     equivalent_permission_ids,
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
-from app.core.authorization.service import Authorizer
+from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import BadRequestError
 
 
@@ -980,7 +980,7 @@ def test_document_and_folder_grants_are_authorization_aliases():
 async def test_default_pod_agent_destructive_action_requires_approval(monkeypatch):
     """The user-mirror never includes DESTRUCTIVE_ACTIONS: without a session
     approval the default pod agent is denied even though the user could."""
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     async def no_approval(**kwargs):
         return False
@@ -1012,7 +1012,7 @@ async def test_default_pod_agent_destructive_action_requires_approval(monkeypatc
 async def test_default_pod_agent_destructive_action_allowed_with_session_approval(
     monkeypatch,
 ):
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     seen: list[dict] = []
 
@@ -1056,7 +1056,7 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
     run — a schedule fires as its owner — so the invoker ceiling applies here
     like anywhere else, and that owner holds the permission below.
     """
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     async def no_approval(**kwargs):
         return False
@@ -1105,7 +1105,7 @@ async def test_named_workload_destructive_explicit_grant_is_standing_authority(
 async def test_named_workload_destructive_without_grant_needs_session_approval(
     monkeypatch, approved, expected_allowed, expected_reason
 ):
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     async def approval(**kwargs):
         return approved
@@ -1153,7 +1153,7 @@ async def test_a_session_approval_does_not_lift_the_invoker_ceiling(monkeypatch)
     delete a table clicks "allow for this session" and the workload deletes it
     for them.
     """
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     async def approved(**kwargs):
         return True
@@ -1194,7 +1194,7 @@ async def test_a_session_approval_does_not_lift_the_invoker_ceiling(monkeypatch)
 @pytest.mark.asyncio
 async def test_user_actor_destructive_action_is_ungated(monkeypatch):
     """Human users never hit the destructive gate."""
-    from app.core.authorization import service as service_module
+    from app.core.authorization import authorizer as service_module
 
     async def fail_if_approval_checked(**kwargs):
         raise AssertionError("USER actors must not consult session approvals")

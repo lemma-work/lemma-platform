@@ -15,6 +15,7 @@ because every test that reads the *settings* agreed with itself.
 from __future__ import annotations
 
 import httpx
+import httpcore
 import pytest
 
 from app.modules.agent.config import agent_settings
@@ -27,21 +28,24 @@ def client() -> httpx.AsyncClient:
     return factory._build_provider_client({})
 
 
-def _pool(client: httpx.AsyncClient):
+def _pool(client: httpx.AsyncClient) -> httpcore.AsyncConnectionPool:
     """Walk down to the connection pool the requests actually go through."""
     transport = client._transport
     assert isinstance(transport, ModelStreamBudgetTransport)
-    return transport.wrapped.wrapped._pool  # tenacity -> AsyncHTTPTransport
+    assert isinstance(transport.wrapped, httpx.AsyncHTTPTransport)
+    return transport.wrapped._pool
 
 
-def test_the_configured_pool_ceiling_reaches_the_pool(client) -> None:
+def test_the_configured_pool_ceiling_reaches_the_pool(
+    client: httpx.AsyncClient,
+) -> None:
     """The setting was inert: read it off the live pool, not off the config."""
     assert _pool(client)._max_connections == (
         agent_settings.agent_model_http_max_connections
     )
 
 
-def test_the_configured_keepalive_reaches_the_pool(client) -> None:
+def test_the_configured_keepalive_reaches_the_pool(client: httpx.AsyncClient) -> None:
     """Keepalive was httpx's 20/5s, not the 100/30s written beside it.
 
     Worth its own test rather than an extra assertion above: the ceiling
@@ -55,14 +59,9 @@ def test_the_configured_keepalive_reaches_the_pool(client) -> None:
     assert pool._keepalive_expiry == 30.0
 
 
-def test_the_stream_budget_is_installed_outside_the_retry_layer(client) -> None:
-    """Order is load-bearing, not cosmetic.
-
-    Tenacity retries ``handle_async_request``, which is finished once the
-    headers arrive — nothing inside it is still watching while the body
-    streams. A budget installed underneath it would never see the trickle it
-    exists to catch.
-    """
+def test_the_stream_budget_covers_the_provider_response(
+    client: httpx.AsyncClient,
+) -> None:
     transport = client._transport
     assert isinstance(transport, ModelStreamBudgetTransport)
     assert transport._total_seconds == (
@@ -73,7 +72,7 @@ def test_the_stream_budget_is_installed_outside_the_retry_layer(client) -> None:
     )
 
 
-def test_the_per_chunk_read_timeout_still_applies(client) -> None:
+def test_the_per_chunk_read_timeout_still_applies(client: httpx.AsyncClient) -> None:
     """The budget adds a bound; it does not replace the one already there.
 
     A custom transport does *not* discard timeouts the way it discards limits —

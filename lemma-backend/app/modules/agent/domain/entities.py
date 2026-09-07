@@ -171,6 +171,8 @@ class Conversation(Entity):
     # can explain a failure without separately fetching runs.
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
+    last_run_error_code: str | None = None
+    last_run_error_reason: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
     messages: list[Message] = Field(default_factory=list)

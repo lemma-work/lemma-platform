@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from uuid import UUID
+from pydantic_ai.toolsets import AbstractToolset
+from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import Conversation
@@ -45,16 +47,16 @@ _TOOLSET_BUILDERS = {
 class SurfacePlatformToolFactory:
     """Build platform-scoped toolsets for external agent conversations."""
 
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
     async def build_toolsets(
         self,
         *,
         conversation: Conversation,
-    ) -> list:
+    ) -> list[AbstractToolset[ConversationContext]]:
         metadata = conversation.metadata or {}
-        surface_type = metadata.get("surface_platform")
+        surface_type = str(metadata.get("surface_platform") or "")
         builder = _TOOLSET_BUILDERS.get(str(surface_type or "").upper())
         if builder is None:
             return []
@@ -83,7 +85,9 @@ class SurfacePlatformToolFactory:
                 return []
             allow_send = surface.config.send_policy.allow_send
 
-        toolsets = [builder(credentials=credentials)]
+        toolsets: list[AbstractToolset[ConversationContext]] = [
+            builder(credentials=credentials)
+        ]
         # The current-user surface_send_message tool, opt-in per surface and only
         # on chat surfaces (email replies go through the email reply tool).
         caps = get_platform_capabilities(surface.surface_type.value)

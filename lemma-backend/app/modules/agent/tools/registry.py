@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pydantic_ai.toolsets import AbstractToolset
+from app.modules.agent.tools.context import ConversationContext
 
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
@@ -47,7 +49,7 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     AgentToolset.MEMORY,
 )
 
-_TOOLSET_BY_NAME: dict[AgentToolset, object] = {
+_TOOLSET_BY_NAME: dict[AgentToolset, AbstractToolset[ConversationContext]] = {
     AgentToolset.WORKSPACE_CLI: workspace_cli_toolset,
     AgentToolset.SKILLS: skills_toolset,
     AgentToolset.WEB_SEARCH: web_search_toolset,
@@ -97,21 +99,21 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.MESSAGING,
     AgentToolset.SNOOZE,
 )
-EXTRA_TOOLSET_OBJECTS: tuple[object, ...] = tuple(
+EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS
 )
 
 
 def resolve_agent_toolsets(
     selected_toolsets: Iterable[AgentToolset],
-) -> list[object]:
+) -> list[AbstractToolset[ConversationContext]]:
     """Resolve the given toolset enums to Pydantic AI toolset instances.
 
     Resolves exactly what is passed (deduplicated, order-preserving). Callers
     decide the set — there are no implicit defaults. Capability-only toolsets
     (e.g. TODO) are skipped here and assembled separately as capabilities.
     """
-    resolved: list[object] = []
+    resolved: list[AbstractToolset[ConversationContext]] = []
     seen: set[AgentToolset] = set()
     for toolset_name in selected_toolsets:
         if toolset_name in seen or toolset_name in _CAPABILITY_ONLY_TOOLSETS:

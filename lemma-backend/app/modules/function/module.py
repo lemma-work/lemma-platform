@@ -41,8 +41,30 @@ async def _close_runtime_http_clients(context):
         await close_function_runtime_http_clients()
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.function.infrastructure.models import FunctionModel
+
+    return (
+        (
+            ResourceType.FUNCTION,
+            ResourceNameTable(
+                FunctionModel.id, FunctionModel.pod_id, FunctionModel.name
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="function",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_close_runtime_http_clients,),

@@ -5,6 +5,8 @@
 export type UsageRecordResponse = {
     agent_id?: (string | null);
     agent_run_id?: (string | null);
+    cache_write_tokens?: (number | null);
+    cached_input_tokens?: (number | null);
     conversation_id?: (string | null);
     cost_usd?: (number | null);
     created_at: string;

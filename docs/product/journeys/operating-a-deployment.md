@@ -36,12 +36,16 @@ rather than degrading in a way that only shows up as confused users.
   report it without requiring administrative access.
 - The system shall keep one person's usage from revealing another's.
 
-**Contracts:** `usage.organization.me.summary.get`
+- Members can inspect their own activity without organization reporting privileges. Shared allowance percentages do not grant access to shared dollar totals or other members' records.
+
+**Contracts:** `usage.organization.me.summary.get`, `usage.me.summary.get`, `usage.me.events.list`, `usage.me.stats.get`
 
 ### PS-OPS-003 — Usage records are a ledger, not a cache
 **Status:** covered
 
-- The system shall keep a usage record unchanged once written.
+- The system shall keep settled usage unchanged. A pending request journal
+  entry may be completed when its provider receipt arrives; replaying that
+  receipt shall not charge it again.
 - The system shall attribute every record to the run, the model, and the person
   or workload behind it.
 - The system shall record a run's usage whether it succeeded or failed, because
@@ -61,26 +65,36 @@ rather than degrading in a way that only shows up as confused users.
 - Where a deployment sets no limit, the system shall say so plainly rather than
   reporting a limit of zero or an absent one.
 
-**Contracts:** `usage.organization.limits.get`
+- Chat exposes allowances on demand with percent used and reset times. It shows the applicable plan, including all windows enforced by that plan. Personal allowances exclude organization-funded activity.
+- Unknown or loading usage is never displayed as zero or unlimited. In-flight overshoot remains visible even when the progress bar is full.
 
-### PS-OPS-011 — A missing price never blocks work
+**Contracts:** `usage.organization.limits.get`, `usage.me.limits.get`
+
+### PS-OPS-011 — Unpriced work remains available without monetary limits
 **Status:** covered
 
-- Where the system cannot price a model, it shall allow the run and record it
-  unpriced.
-- The system shall never refuse work because its own pricing table is
-  incomplete.
+- Where no monetary limit applies, the system shall allow an unpriceable model
+  and record its usage as unpriced.
+- Where a monetary limit applies, the system shall require a price and supported
+  usage reporting before spending, and explain what configuration is missing.
 
 **Contracts:** `usage.organization.limits.get`, `agent_run.completed`
 
 ### PS-OPS-012 — Exceeding a limit is refused clearly, not degraded
 **Status:** covered
 
-- If work would exceed a configured limit, then the system shall refuse it and
-  shall say which limit was reached.
+- If recorded usage has reached a configured limit, then the system shall refuse
+  a new run or provider request and explain that the allowance is exhausted.
 - The system shall not silently downgrade a model, shorten a run, or drop work
   to stay inside a limit.
 - When a limit resets, the system shall allow work again without intervention.
+- Ongoing runs shall check current shared usage before each model request and
+  record actual usage immediately afterward. Requests already admitted may
+  finish and overshoot the limit, including concurrent requests. Their full
+  reported costs shall be recorded and successful responses preserved.
+- An interrupted request without a final usage receipt shall remain identifiable
+  as pending or unconfirmed. The system shall not invent its cost or report it
+  as confirmed free work.
 
 **Contracts:** `usage.organization.limits.get`
 

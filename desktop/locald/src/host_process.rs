@@ -1855,12 +1855,17 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
 /// still cost the whole settle budget before reporting the one thing worth
 /// knowing about it — that it had already died, and with what status.
 #[cfg(unix)]
-fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
+pub(crate) fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
     let pid = child.id().to_string();
+    // Read once, outside the loop: it cannot change, and it is a syscall.
+    let own_image = std::env::current_exe().ok();
     let deadline = Instant::now() + IDENTITY_SETTLE_TIMEOUT;
     loop {
-        if let Some(identity) = query_process_identity(&pid)? {
-            return Ok(identity);
+        match query_process_identity(&pid)? {
+            Some(identity) if !names_our_own_image(&identity, own_image.as_deref()) => {
+                return Ok(identity);
+            }
+            _ => {}
         }
         if child.try_wait()?.is_some() {
             return Err(io::Error::new(
@@ -1878,10 +1883,34 @@ fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
     }
 }
 
+/// Whether a just-spawned child is still reporting *this* process's binary.
+///
+/// Between `fork` and `exec` a child is a copy of its parent, so on Linux
+/// `/proc/<pid>/exe` names this daemon rather than the binary the child was
+/// spawned to run -- there is no bracketed placeholder to give the window away,
+/// only a plausible path that happens to be the wrong one. An identity read
+/// there records the wrong executable, and the reclaim path declines to signal
+/// a record whose executable no longer matches. So the leftover that record was
+/// written to catch survives every future launch: exactly the failure the
+/// ownership record exists to prevent, reached through the moment it is
+/// written. It is how
+/// `a_sidecar_that_outlived_its_daemon_is_reclaimed_before_the_next_spawn`
+/// fails on a loaded Linux runner -- the leftover is never signalled and the
+/// test waits out the full `sleep 30`.
+///
+/// This is the Linux counterpart of the `(sh)` that `ps` reports on macOS: both
+/// mean "not settled yet", and both are waited out rather than recorded. A
+/// daemon that genuinely spawned a copy of itself would wait out the whole
+/// settle budget and then record anyway -- slower, and still correct.
+#[cfg(unix)]
+fn names_our_own_image(identity: &ProcessIdentity, own_image: Option<&Path>) -> bool {
+    own_image.is_some_and(|own| Path::new(identity.executable.as_str()) == own)
+}
+
 /// Windows names a process's image at creation, so there is no window to wait
 /// out and nothing a live child can report that a query would miss.
 #[cfg(windows)]
-fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
+pub(crate) fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
     process_identity(child.id())
 }
 

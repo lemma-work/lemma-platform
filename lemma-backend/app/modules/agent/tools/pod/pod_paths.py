@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.datastore.services.files.paths import normalize_datastore_path
+from app.modules.datastore.contracts import normalize_datastore_path
 
 
 def to_me_path(path: str | None, user_id: Any) -> str:

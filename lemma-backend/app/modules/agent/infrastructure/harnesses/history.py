@@ -21,6 +21,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models import Model
+from pydantic_ai._history_processor import HistoryProcessor
+
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import HarnessOptions
@@ -90,7 +94,7 @@ def _is_synthetic(message: object) -> bool:
     return True
 
 
-def _with_pinned(messages: Sequence[object], start: int) -> list[object]:
+def _with_pinned(messages: Sequence[ModelMessage], start: int) -> list[ModelMessage]:
     """The tail from ``start``, with the pinned messages before it kept in front.
 
     Safe to reorder this way because a pinned message is self-contained -- a user
@@ -102,7 +106,7 @@ def _with_pinned(messages: Sequence[object], start: int) -> list[object]:
     ] + list(messages[start:])
 
 
-def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
+def find_safe_cutoff(messages: Sequence[ModelMessage], start: int) -> int:
     """Move a cutoff forward until it does not split a tool call from its result.
 
     Providers reject a history whose tool results have no matching call — so a
@@ -117,8 +121,8 @@ def find_safe_cutoff(messages: Sequence[object], start: int) -> int:
 
 
 def enforce_token_ceiling(
-    messages: Sequence[object], *, ceiling: int, known_size: int | None = None
-) -> list[object]:
+    messages: Sequence[ModelMessage], *, ceiling: int, known_size: int | None = None
+) -> list[ModelMessage]:
     """Bring a history under the ceiling, and say so when it could not.
 
     The backstop, not the strategy: it runs when compaction was skipped or
@@ -138,7 +142,7 @@ def enforce_token_ceiling(
     return _with_drop_notice(trimmed, dropped=dropped) if dropped > 0 else trimmed
 
 
-def _fit_within(working: list[object], ceiling: int) -> list[object]:
+def _fit_within(working: list[ModelMessage], ceiling: int) -> list[ModelMessage]:
     """The largest suffix that fits, giving up the least valuable thing first.
 
     Three stages, in order of what they cost. Cut the unpinned middle; then give
@@ -184,7 +188,9 @@ def _fit_within(working: list[object], ceiling: int) -> list[object]:
     return candidate
 
 
-def _with_drop_notice(messages: list[object], *, dropped: int) -> list[object]:
+def _with_drop_notice(
+    messages: list[ModelMessage], *, dropped: int
+) -> list[ModelMessage]:
     """Tell the model what this cost it.
 
     Every other cap on this branch announces itself; this was the largest one
@@ -224,8 +230,8 @@ def _with_drop_notice(messages: list[object], *, dropped: int) -> list[object]:
 
 
 def _trim_to_ceiling(
-    messages: Sequence[object], ceiling: int
-) -> tuple[int, list[object] | None, int]:
+    messages: Sequence[ModelMessage], ceiling: int
+) -> tuple[int, list[ModelMessage] | None, int]:
     """``(size_before, trimmed, size_after)``; ``trimmed`` is None when nothing
     was needed.
 
@@ -240,13 +246,13 @@ def _trim_to_ceiling(
     return before, trimmed, count_model_message_tokens(trimmed)
 
 
-def build_history_processors(
-    options: HarnessOptions,
+def build_history_processors[DepsT](
+    options: HarnessOptions[DepsT],
     *,
-    summarization_model: object,
-) -> list[object]:
+    summarization_model: Model | str,
+) -> list[HistoryProcessor[DepsT]]:
     """The history processors this run should apply, in order."""
-    processors: list[object] = []
+    processors: list[HistoryProcessor[DepsT]] = []
     ceiling = options.history_hard_token_ceiling
 
     # First: detach images the model has already had several turns to read.
@@ -256,7 +262,9 @@ def build_history_processors(
         strip_stale_images,
     )
 
-    async def _detach_stale_images(messages: Sequence[object]) -> list[object]:
+    async def _detach_stale_images(
+        messages: Sequence[ModelMessage],
+    ) -> list[ModelMessage]:
         return strip_stale_images(list(messages))
 
     processors.append(_detach_stale_images)
@@ -280,8 +288,8 @@ def build_history_processors(
         )
 
     async def _ensure_leading_user_message(
-        messages: Sequence[object],
-    ) -> list[object]:
+        messages: Sequence[ModelMessage],
+    ) -> list[ModelMessage]:
         """Guarantee the history opens with something a provider will accept.
 
         Anthropic requires the first message to be a user turn. Trimming and
@@ -326,7 +334,9 @@ def build_history_processors(
         # swallows its own failures and returns the ORIGINAL history with
         # `skip_reason="failed"`, which is safe for the data and fatal for the
         # request that follows.
-        async def _ceiling_guard(messages: Sequence[object]) -> list[object]:
+        async def _ceiling_guard(
+            messages: Sequence[ModelMessage],
+        ) -> list[ModelMessage]:
             # The whole check runs on a worker thread: the halving loop below
             # re-tokenizes on each pass, so this is the most CPU-hungry thing on
             # the request path and the last place it should hold the event loop.

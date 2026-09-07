@@ -129,8 +129,10 @@ def bulk_returning_statement(
         tuples.append(f"({', '.join(placeholders)})")
 
     return (
-        f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" ({columns_sql}) '
-        f"VALUES {', '.join(tuples)}{conflict_sql} RETURNING *",
+        (
+            f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" ({columns_sql}) '
+            f"VALUES {', '.join(tuples)}{conflict_sql} RETURNING *"
+        ),
         params,
     )
 
@@ -174,10 +176,12 @@ def build_update_statement(
     alias = previous_image_alias(ctx)
     primary_key = ctx.primary_key_column
     return (
-        f"UPDATE {table} AS t SET {sets} "
-        f"FROM (SELECT * FROM {table} WHERE {where_sql} FOR UPDATE) AS prev "
-        f'WHERE t."{primary_key}" = prev."{primary_key}" '
-        f'RETURNING t.*, to_jsonb(prev)::text AS "{alias}"',
+        (
+            f"UPDATE {table} AS t SET {sets} "
+            f"FROM (SELECT * FROM {table} WHERE {where_sql} FOR UPDATE) AS prev "
+            f'WHERE t."{primary_key}" = prev."{primary_key}" '
+            f'RETURNING t.*, to_jsonb(prev)::text AS "{alias}"'
+        ),
         alias,
     )
 

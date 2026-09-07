@@ -217,7 +217,9 @@ async def test_delete_path_in_process_cleanup_runs_after_release(monkeypatch):
 
     # e2e-style: no datastore worker, so the offload is skipped and cleanup runs
     # in-process — but still only after the UoW (connection) has been released.
-    monkeypatch.setattr(ucmod.settings, "e2e_disable_worker_file_autoindex", True)
+    monkeypatch.setattr(
+        ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", True
+    )
     enqueue_mock = AsyncMock(return_value=True)
     monkeypatch.setattr(ucmod, "enqueue_datastore_path_cleanup", enqueue_mock)
 
@@ -248,7 +250,9 @@ async def test_delete_path_offloads_cleanup_after_release(monkeypatch):
         enqueue_open_state["open"] = factory.state["open"]
         return True
 
-    monkeypatch.setattr(ucmod.settings, "e2e_disable_worker_file_autoindex", False)
+    monkeypatch.setattr(
+        ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", False
+    )
     monkeypatch.setattr(ucmod, "enqueue_datastore_path_cleanup", _enqueue)
 
     await _use_cases(factory, service).delete_path(

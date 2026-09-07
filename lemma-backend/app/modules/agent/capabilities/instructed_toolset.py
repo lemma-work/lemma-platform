@@ -15,12 +15,12 @@ from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.toolsets import AbstractToolset
 
 
-class InstructedToolsetCapability(AbstractCapability[object]):
+class InstructedToolsetCapability[DepsT](AbstractCapability[DepsT]):
     """Expose a toolset and append its usage-instructions fragment."""
 
     def __init__(
         self,
-        toolset: AbstractToolset[object],
+        toolset: AbstractToolset[DepsT],
         *,
         name: str,
         instructions_loader: Callable[[], str],
@@ -29,10 +29,16 @@ class InstructedToolsetCapability(AbstractCapability[object]):
         self._name = name
         self._instructions_loader = instructions_loader
 
-    def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
+    @property
+    def name(self) -> str:
         return self._name
 
-    def get_toolset(self) -> AbstractToolset[object]:
+    @classmethod
+    def get_serialization_name(cls) -> str | None:
+        # Toolset objects and prompt loaders cannot be reconstructed from a spec.
+        return None
+
+    def get_toolset(self) -> AbstractToolset[DepsT]:
         return self._toolset
 
     def get_instructions(self) -> str:

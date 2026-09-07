@@ -3,6 +3,7 @@
 import { CheckCircle2, Info } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { SurfaceMobileIdentity } from '@/components/surfaces/surface-mobile-identity';
 import { SurfaceReachCard, hasReachCard } from '@/components/surfaces/surface-reach-card';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import { useSetDefaultSurface, useUserSurfaces } from '@/lib/hooks/use-pod-surfaces';
@@ -80,6 +81,8 @@ export function SurfaceLiveStep({
                     </ul>
                 </div>
             ) : null}
+
+            <SurfaceMobileIdentity surface={surface} />
 
             <ReachableElsewhereNotice surface={surface} />
         </div>

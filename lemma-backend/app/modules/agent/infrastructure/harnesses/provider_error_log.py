@@ -37,6 +37,7 @@ from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
 )
 
+from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -102,6 +103,12 @@ def user_facing_error_message(exc: Exception) -> str:
     Never forward raw provider exception text (which may contain API keys,
     request headers, or model-internal details) into user-visible payloads.
     """
+    if isinstance(exc, DomainError):
+        if exc.code == "MODEL_PROVIDER_ATTEMPTS_EXHAUSTED" and isinstance(
+            exc.__cause__, ModelHTTPError
+        ):
+            return user_facing_error_message(exc.__cause__)
+        return exc.message
     if isinstance(exc, ModelHTTPError):
         # These three are all "the provider said no", but they need different
         # things from the reader: wait, top up, or fix the config. A single

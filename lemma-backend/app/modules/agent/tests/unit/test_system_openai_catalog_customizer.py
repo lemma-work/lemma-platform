@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -117,11 +118,10 @@ def test_continuous_usage_stats_never_reaches_the_request(openai_env):
 
 
 def test_pricing_catalog_is_empty_when_no_models_are_configured(monkeypatch):
-    from app.core.config import settings
 
     monkeypatch.setattr(system_profiles, "_load_runtime_env", lambda: None)
-    monkeypatch.setattr(settings, "lemma_openai_model_names", "")
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "")
+    monkeypatch.setattr(agent_settings, "lemma_openai_model_names", "")
+    monkeypatch.setattr(agent_settings, "lemma_openai_default_model", "")
     monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
 

@@ -103,9 +103,9 @@ def build_system_polish_fn(
         from app.modules.agent.contracts.model_runtime import resolve_system_runtime
         from app.modules.usage.contracts.execution import (
             UsageExecutionContext,
-            record_pydantic_ai_result_usage,
-            reserve_usage_for_runtime,
         )
+
+        from app.modules.usage.contracts.metering import metering_execution
 
         polish_limits = UsageLimits(
             request_limit=1,
@@ -125,33 +125,9 @@ def build_system_polish_fn(
             pod_id=pod_id,
             source_type="pod_bundle_readme",
         )
-        reservation = await reserve_usage_for_runtime(
-            organization_id=organization_id,
-            user_id=user_id,
-            runtime_profile=runtime.runtime_profile,
-        )
         agent = PydanticAIAgent(runtime.model, system_prompt=_PROMPT)
-        result = None
-        try:
+        async with metering_execution(usage_context):
             result = await agent.run(readme, usage_limits=runtime.usage_limits)
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="COMPLETED",
-                reservation=reservation,
-                metadata={"helper": "pod_bundle_readme"},
-            )
-        except Exception:
-            await record_pydantic_ai_result_usage(
-                ctx=usage_context,
-                runtime_profile=runtime.runtime_profile,
-                result=result,
-                status="FAILED",
-                reservation=reservation,
-                metadata={"helper": "pod_bundle_readme"},
-            )
-            raise
         return str(result.output)
 
     return _polish

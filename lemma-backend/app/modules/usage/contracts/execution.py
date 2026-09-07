@@ -21,6 +21,7 @@ from app.modules.usage.services.pydantic_ai_tracking import (
 )
 from app.modules.usage.services.usage_context import (
     UsageExecutionContext,
+    current_usage_context,
     usage_context_from_agent_context,
     usage_execution_context,
 )
@@ -32,6 +33,7 @@ from app.modules.usage.services.usage_service_factory import build_usage_service
 
 __all__ = [
     "UsageExecutionContext",
+    "current_usage_context",
     "UsageService",
     "assert_system_pricing_covers_catalog",
     "build_usage_service",

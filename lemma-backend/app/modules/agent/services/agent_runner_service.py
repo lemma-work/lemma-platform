@@ -6,13 +6,15 @@ from collections.abc import Sequence
 import time
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
+from pydantic_ai.output import OutputSpec
+from pydantic_ai.capabilities import AgentCapability
+from pydantic_ai.toolsets import AbstractToolset
 
 import anyio
 from pydantic_ai import UsageLimits
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import (
@@ -27,9 +29,7 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.errors import (
-    ConversationNotFoundError,
-)
+from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRuntimeConfig,
@@ -41,9 +41,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.domain.runtime_profiles import (
-    RuntimeProfileProtocol,
-)
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.repositories import (
@@ -74,6 +72,8 @@ from app.modules.agent.services.run_finalizer import (
     RunFinalizer,
     finalize_safely,
     run_failure_message,
+    run_failure_code,
+    run_failure_reason,
 )
 from app.modules.agent.services.run_observer_delivery import (
     notify_run_failed,
@@ -84,8 +84,8 @@ from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
-    usage_execution_context,
 )
+from app.modules.usage.contracts.metering import metering_execution
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
@@ -172,7 +172,7 @@ class AgentRunnerService:
         harness_registry: HarnessRegistry,
         fallback_model_name: str | None = None,
         fixed_usage_limits: UsageLimits | None = None,
-    ):
+    ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
@@ -253,8 +253,8 @@ class AgentRunnerService:
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
             # tools over MCP, layering current-time/caching/todo capabilities.
-            harness_toolsets: list[object] = full_toolsets
-            harness_capabilities: list[object] = []
+            harness_toolsets: list[AbstractToolset[ConversationContext]] = full_toolsets
+            harness_capabilities: list[AgentCapability[ConversationContext]] = []
             harness_model_settings: JsonObject | None = None
             if resolved_runtime.harness_kind == HarnessKind.LEMMA:
                 harness_model_settings = _profile_model_settings(
@@ -273,7 +273,7 @@ class AgentRunnerService:
                             RuntimeProfileProtocol.OPENAI_COMPATIBLE,
                             RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
                         )
-                        and settings.lemma_llm_caching_enabled
+                        and agent_settings.lemma_llm_caching_enabled
                     ),
                     protocol=resolved_runtime.profile.protocol,
                 )
@@ -338,10 +338,7 @@ class AgentRunnerService:
                         "gen_ai.request.model",
                         resolved_runtime.model_name_for_harness,
                     )
-                    # What a trace UI shows as the run's input and output. Without
-                    # them a session reads as a column of timestamps: the turns are
-                    # grouped correctly and every row is blank, so finding the run
-                    # you want means opening each one.
+                    # Trace summaries let operators identify a turn without opening it.
                     record_span_input(span, _run_input_text(messages))
                     observer_started = await notify_run_started(
                         observer, conversation, ctx, agent_run_id
@@ -352,7 +349,9 @@ class AgentRunnerService:
                             source_type="agent_run",
                             source_id=str(agent_run_id),
                         )
-                        with usage_execution_context(run_usage_context):
+                        async with metering_execution(
+                            run_usage_context, factory=self.uow_factory
+                        ):
                             await self.event_pump.drive(
                                 observe_first_output(
                                     harness.run(
@@ -381,11 +380,7 @@ class AgentRunnerService:
                             )
         except BaseException as exc:
             if is_usage_limit_error(exc):
-                # Not a crash: the organisation is out of plan quota. This was
-                # the single most common "error" in production (154 in a week),
-                # logged at ERROR with a stack trace and shown to the user as
-                # "check the agent runtime configuration" — which sent people
-                # debugging a system that was working exactly as designed.
+                # Exhaustion is an expected policy outcome, not a runtime crash.
                 logger.warning(
                     "agent.agent_runner_service.agent_run_quota_exhausted.degraded",
                     agent_run_id=agent_run_id,
@@ -439,6 +434,8 @@ class AgentRunnerService:
                             run=identity,
                             status=AgentRunStatus.FAILED,
                             error=run_failure_message(exc),
+                            error_code=run_failure_code(exc),
+                            error_reason=run_failure_reason(exc),
                         ),
                         agent_run_id=agent_run_id,
                     )
@@ -578,7 +575,7 @@ class AgentRunnerService:
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation
-    ) -> object | None:
+    ) -> OutputSpec[object] | None:
         # TASK conversations always get the final_answer tool: it drives the task
         # lifecycle (status WAITING/COMPLETED/FAILED), not just structured output.
         # The output *schema* is only applied when the agent configures one — see

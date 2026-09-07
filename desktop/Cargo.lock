@@ -2756,6 +2756,7 @@ name = "lemma-desktop"
 version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
+ "hex",
  "interprocess",
  "lemma-desktop-process",
  "libc",
@@ -2805,6 +2806,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "hex",
  "hyper 0.14.32",
  "if-addrs",
  "interprocess",

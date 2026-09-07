@@ -15,11 +15,11 @@ DEFAULT_AUTH_URL = "https://lemma.work/auth"
 DEFAULT_CONFIG_PATH = Path.home() / ".lemma" / "config.json"
 DEFAULT_SERVER_NAME = "lemma-cloud"
 ENV_SERVER_NAME = "env"
-LOCAL_SERVER_NAME = "local"
+_LOCAL_SERVER_NAME = "local"
 
 
 @dataclass(frozen=True)
-class CliRuntimeSettings:
+class _CliRuntimeSettings:
     base_url: str = DEFAULT_BASE_URL
     auth_url: str = DEFAULT_AUTH_URL
     token: str | None = None
@@ -28,7 +28,7 @@ class CliRuntimeSettings:
     config_file: Path = DEFAULT_CONFIG_PATH
 
     @classmethod
-    def from_env(cls, config_file: str | None = None) -> "CliRuntimeSettings":
+    def from_env(cls, config_file: str | None = None) -> "_CliRuntimeSettings":
         env_config_file = Path(
             config_file or os.getenv("LEMMA_CONFIG_FILE") or DEFAULT_CONFIG_PATH
         )
@@ -47,11 +47,7 @@ class CliRuntimeSettings:
         )
 
 
-def config_path_from_arg(config_file: str | None = None) -> Path:
-    return CliRuntimeSettings.from_env(config_file).config_file
-
-
-def load_json(raw: str) -> Any:
+def _load_json(raw: str) -> Any:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -106,7 +102,7 @@ def _fresh_root_config() -> dict[str, Any]:
 def load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         return _fresh_root_config()
-    data = load_json(path.read_text(encoding="utf-8"))
+    data = _load_json(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Invalid config file at {path}: expected object")
     data = _migrate_legacy_config(data)
@@ -225,8 +221,8 @@ def get_server_config(root_config: dict[str, Any], server: str) -> dict[str, Any
     if not isinstance(server_config, dict):
         raise ValueError(f"Invalid config file: server {normalized!r} must be object")
     servers[normalized] = _ensure_server_shape(server_config)
-    if normalized == LOCAL_SERVER_NAME:
-        discovered = discover_local_server_config()
+    if normalized == _LOCAL_SERVER_NAME:
+        discovered = _discover_local_server_config()
         if discovered is not None:
             # Desktop owns this endpoint contract. Refresh it on every load so
             # a safe port rotation cannot leave an older CLI registration
@@ -241,7 +237,7 @@ def get_server_config(root_config: dict[str, Any], server: str) -> dict[str, Any
     return servers[normalized]
 
 
-def discover_local_server_config() -> dict[str, Any] | None:
+def _discover_local_server_config() -> dict[str, Any] | None:
     """Read the Desktop-owned endpoint state without assuming fixed ports."""
     root_override = os.getenv("LEMMA_LOCALD_ROOT")
     if root_override:
@@ -401,7 +397,7 @@ def mask_token(token: str | None) -> str | None:
     return f"{token[:4]}...{token[-4:]}"
 
 
-def get_config_default(config: dict[str, Any], key: str) -> str | None:
+def _get_config_default(config: dict[str, Any], key: str) -> str | None:
     defaults = config.get("defaults") or {}
     value = defaults.get(key)
     if isinstance(value, str) and value:
@@ -409,7 +405,7 @@ def get_config_default(config: dict[str, Any], key: str) -> str | None:
     return None
 
 
-def resolve_config_default(
+def _resolve_config_default(
     *,
     explicit: str | None = None,
     env_keys: tuple[str, ...] = (),
@@ -422,14 +418,14 @@ def resolve_config_default(
         env_value = os.getenv(env_key)
         if env_value:
             return env_value
-    return get_config_default(config or {}, config_key)
+    return _get_config_default(config or {}, config_key)
 
 
 def resolve_org_id(
     explicit: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> str | None:
-    return resolve_config_default(
+    return _resolve_config_default(
         explicit=explicit,
         env_keys=("LEMMA_ORG_ID",),
         config=config,
@@ -441,7 +437,7 @@ def resolve_pod_id(
     explicit: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> str | None:
-    return resolve_config_default(
+    return _resolve_config_default(
         explicit=explicit,
         env_keys=("LEMMA_POD_ID",),
         config=config,
@@ -449,7 +445,7 @@ def resolve_pod_id(
     )
 
 
-def get_auth_session(config: dict[str, Any]) -> dict[str, Any] | None:
+def _get_auth_session(config: dict[str, Any]) -> dict[str, Any] | None:
     auth = config.get("auth")
     if isinstance(auth, dict):
         return auth
@@ -457,7 +453,7 @@ def get_auth_session(config: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def get_access_token_from_config(config: dict[str, Any]) -> str | None:
-    auth = get_auth_session(config)
+    auth = _get_auth_session(config)
     if auth:
         token = auth.get("access_token")
         if isinstance(token, str) and token:
@@ -469,7 +465,7 @@ def get_access_token_from_config(config: dict[str, Any]) -> str | None:
 
 
 def get_refresh_token_from_config(config: dict[str, Any]) -> str | None:
-    auth = get_auth_session(config)
+    auth = _get_auth_session(config)
     if auth:
         token = auth.get("refresh_token")
         if isinstance(token, str) and token:
@@ -520,7 +516,7 @@ def resolve_auth_url(
         )
     ):
         raise ValueError(str(config["_local_discovery_error"]))
-    auth = get_auth_session(config or {})
+    auth = _get_auth_session(config or {})
     return (
         explicit
         or (auth or {}).get("auth_url")
@@ -536,7 +532,7 @@ def resolve_token(
     *,
     use_env: bool = True,
 ) -> str:
-    settings = CliRuntimeSettings.from_env()
+    settings = _CliRuntimeSettings.from_env()
     token = (
         explicit
         or (settings.token if use_env else None)
@@ -550,11 +546,7 @@ def resolve_token(
 
 
 def resolve_verify_ssl(no_verify_ssl: bool = False) -> bool:
-    return not no_verify_ssl and CliRuntimeSettings.from_env().verify_ssl
-
-
-def should_use_managed_auth(explicit_token: str | None = None) -> bool:
-    return not explicit_token and not CliRuntimeSettings.from_env().token
+    return not no_verify_ssl and _CliRuntimeSettings.from_env().verify_ssl
 
 
 def upsert_auth_session(
@@ -575,38 +567,40 @@ def clear_auth_session(config: dict[str, Any]) -> dict[str, Any]:
     return next_config
 
 
-def resolve_sdk_token(token: str | None = None, config_path: Path | None = None) -> str:
-    settings = CliRuntimeSettings.from_env(str(config_path) if config_path else None)
-    if token:
-        return token
-    if settings.token:
-        return settings.token
-    root_config, server = normalize_server_config(
-        load_config(config_path or DEFAULT_CONFIG_PATH)
-    )
-    config = get_server_config(root_config, server)
-    resolved = get_access_token_from_config(config)
-    if not resolved:
-        raise ValueError(
-            "Missing token. Set LEMMA_TOKEN, run `lemma auth login`, or pass token explicitly."
-        )
-    return resolved
-
-
-def resolve_sdk_base_url(
-    api_url: str | None = None, config_path: Path | None = None
-) -> str:
-    settings = CliRuntimeSettings.from_env(str(config_path) if config_path else None)
-    if api_url:
-        return api_url.rstrip("/")
-    env_value = os.getenv("LEMMA_BASE_URL")
-    if env_value:
-        return env_value.rstrip("/")
-    root_config, server = normalize_server_config(
-        load_config(config_path or DEFAULT_CONFIG_PATH)
-    )
-    config = get_server_config(root_config, server)
-    return (
-        (config.get("base_url") if isinstance(config, dict) else None)
-        or settings.base_url
-    ).rstrip("/")
+#: The config surface, stated rather than inferred. Without this, a name
+#: became public by being defined at module scope and stayed public because
+#: nobody could tell whether anything imported it: four functions here had no
+#: caller at all, and seven more were implementation that only this module
+#: used. In a `py.typed` package that is a promise nobody meant to make.
+#:
+#: Every name below has a consumer -- the SDK's own `settings.py`, the CLI,
+#: or a test asserting on a documented default. Adding one means deciding to,
+#: which is the point.
+__all__ = [
+    "DEFAULT_AUTH_URL",
+    "DEFAULT_BASE_URL",
+    "DEFAULT_CONFIG_PATH",
+    "DEFAULT_SERVER_NAME",
+    "ENV_SERVER_NAME",
+    "build_env_server_config",
+    "clear_auth_session",
+    "config_lock",
+    "get_access_token_from_config",
+    "get_refresh_token_from_config",
+    "get_server_config",
+    "load_config",
+    "mask_token",
+    "normalize_server_config",
+    "normalize_server_name",
+    "put_server_config",
+    "resolve_auth_url",
+    "resolve_base_url",
+    "resolve_org_id",
+    "resolve_pod_id",
+    "resolve_token",
+    "resolve_verify_ssl",
+    "save_config",
+    "server_names",
+    "should_use_env_server",
+    "upsert_auth_session",
+]

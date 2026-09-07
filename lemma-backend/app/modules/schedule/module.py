@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, suppress
 
 from app.core.registry import LemmaModule
 from app.core.log.log import get_logger
+from app.modules.schedule.config import schedule_settings
 
 logger = get_logger(__name__)
 
@@ -90,7 +91,6 @@ async def _schedule_poller(context):
     crossing module boundaries is the job" -- true while core was the
     composition root, which was deleted in #613.
     """
-    from app.core.config import settings
     from app.core.request_context import create_background_task
     from app.modules.agent.contracts.timers import claim_due_snooze_waits
     from app.modules.schedule.services.schedule_poller import run_schedule_poller
@@ -100,7 +100,7 @@ async def _schedule_poller(context):
         run_schedule_poller(
             context.uow_factory,
             timer_claimers=(claim_due_workflow_waits, claim_due_snooze_waits),
-            interval_seconds=settings.schedule_poll_interval_seconds,
+            interval_seconds=schedule_settings.schedule_poll_interval_seconds,
         ),
         name="schedule-poller",
     )
@@ -119,8 +119,36 @@ async def _schedule_poller(context):
             await task
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    return (
+        (
+            ResourceType.SCHEDULE,
+            ResourceNameTable(
+                Schedule.id,
+                Schedule.pod_id,
+                Schedule.name,
+                # Internal schedules are not name-addressable: they are created
+                # by the platform, not named by a person, and a grant must not
+                # be able to reach one.
+                (Schedule.is_internal.is_(False),),
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="schedule",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
