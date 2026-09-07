@@ -1,9 +1,16 @@
 """Who a message on a chat surface is from, and what they chose to answer on.
 
-Five operations, not the `UserRepository` the composition root
+Six operations, not the `UserRepository` the composition root
 published. The port beside them on `contracts/__init__` would have been no
 better: `UserRepositoryPort` carries `create` and `update`, so handing it to a
 chat surface hands it the ability to make a user.
+
+`onboard_chat_sender` does make one, and does not contradict that. The objection
+was never to the outcome but to the *capability*: a repository lets a surface
+make any user at any time for any reason, while this makes exactly one, for an
+address the caller has already proved the sender controls, and does the linking
+and the workspace in the same breath so none of it can be half-done. What
+surfaces still cannot do is invent a user out of a phone number.
 
 The three lookups are one question asked three ways -- *which live person is
 this sender?* -- and "live" is the load-bearing word. Each one excludes
@@ -22,6 +29,10 @@ from uuid import UUID
 
 from app.modules.identity.domain.user_preferences import UserPreferences
 from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.modules.identity.services.chat_signup import (
+    ChatOnboarding,
+    onboard_proven_email,
+)
 
 
 async def live_user_id_by_email(uow, email: str) -> UUID | None:
@@ -63,10 +74,43 @@ async def set_user_preferences(
     await UserRepository(uow).set_preferences(user_id, preferences)
 
 
+async def onboard_chat_sender(
+    uow,
+    *,
+    email: str,
+    full_name: str | None = None,
+    mobile_number: str | None = None,
+    telegram_username: str | None = None,
+) -> ChatOnboarding:
+    """Give a proven sender an account, a workspace, and a linked identity.
+
+    ``email`` must already be proven -- a code read in that inbox, or a
+    `From:` the receiving mail service vouched for. Nothing here re-checks it,
+    because nothing here can: the proof happened on the surface.
+
+    The existing-account lookup is done here rather than by the caller so the
+    two cannot disagree about what counts as a live user; it is the same
+    `live_user_id_by_email` above.
+    """
+    from app.modules.identity.api.dependencies import get_organization_service
+
+    return await onboard_proven_email(
+        uow,
+        organization_service=get_organization_service(uow),
+        email=email,
+        existing_user_id=await live_user_id_by_email(uow, email),
+        full_name=full_name,
+        mobile_number=mobile_number,
+        telegram_username=telegram_username,
+    )
+
+
 __all__ = [
+    "ChatOnboarding",
     "live_user_id_by_email",
     "live_user_id_by_telegram_username",
     "live_user_ids_by_mobile_numbers",
+    "onboard_chat_sender",
     "set_user_preferences",
     "user_preferences",
 ]
