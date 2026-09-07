@@ -3,7 +3,7 @@
 # Kept in step with /.nvmrc and both package.json `engines`. This image is
 # what actually ships the frontend, and it was two majors ahead of every CI
 # job that validates it -- so production ran a Node nothing had tested.
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /lemma-typescript
 COPY lemma-typescript/package.json lemma-typescript/package-lock.json ./
@@ -56,7 +56,7 @@ RUN for attempt in 1 2 3; do \
         sleep $((attempt * 5)); \
     done
 
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
