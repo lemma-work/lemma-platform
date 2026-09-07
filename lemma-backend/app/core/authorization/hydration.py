@@ -26,6 +26,7 @@ from app.core.authorization.session_approvals import has_session_approval
 
 
 from app.core.authorization.resource_tables import (
+    FILE_COLUMNS,
     RESOURCE_TABLES,
 )
 from app.modules.connectors.infrastructure.models.account import Account
@@ -61,11 +62,6 @@ async def _session_approval(
     )
     ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
     return approved
-
-
-#: Datastore's file columns, via the one table that names them. `FOLDER` and
-#: `DOCUMENT` share a row, so either serves.
-_FILES = RESOURCE_TABLES[ResourceType.FOLDER]
 
 
 class ResourceHydrationMixin:
@@ -159,11 +155,11 @@ class ResourceHydrationMixin:
             return resource
 
         stmt = select(
-            _FILES.pod_column,
-            _FILES.owner_column,
-            _FILES.visibility_column,
-            _FILES.path_column,
-        ).where(_FILES.id_column == resource.resource_id)
+            FILE_COLUMNS.pod_column,
+            FILE_COLUMNS.owner_column,
+            FILE_COLUMNS.visibility_column,
+            FILE_COLUMNS.path_column,
+        ).where(FILE_COLUMNS.id_column == resource.resource_id)
         row = (await self.session.execute(stmt)).first()
         if row is None:
             return resource

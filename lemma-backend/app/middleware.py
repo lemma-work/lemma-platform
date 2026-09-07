@@ -309,6 +309,10 @@ class RequestBodyLimitMiddleware:
                     await self._send_too_large(scope, receive, send, request_id)
                     return
             except ValueError:
+                # A `Content-Length` that is not a number is not a size to
+                # enforce a limit against. The body is still read below and
+                # counted as it arrives, so an unparseable header costs the
+                # early rejection, not the limit itself.
                 pass
 
         received = 0
@@ -338,7 +342,3 @@ class RequestBodyLimitMiddleware:
             },
         )
         await response(scope, receive, send)
-
-
-#: The name this middleware had before it also bound correlation and origin.
-RequestIdMiddleware = RequestObserverMiddleware

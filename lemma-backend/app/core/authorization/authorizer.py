@@ -50,7 +50,6 @@ from app.core.authorization.permissions import (
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.workload_authority import authorize_delegated_workload
 from app.core.authorization.resource_tables import (
-    RESOURCE_TABLES,
     pod_is_unknowable,
 )
 
@@ -84,11 +83,6 @@ async def _session_approval(
     )
     ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
     return approved
-
-
-#: Datastore's file columns, via the one table that names them. `FOLDER` and
-#: `DOCUMENT` share a row, so either serves.
-_FILES = RESOURCE_TABLES[ResourceType.FOLDER]
 
 
 class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):

@@ -38,7 +38,7 @@ from app.core.authorization.permissions import (
     equivalent_permission_ids,
 )
 from app.core.authorization.resource_tables import (
-    RESOURCE_TABLES,
+    FILE_COLUMNS,
 )
 
 
@@ -71,11 +71,6 @@ async def _session_approval(
     )
     ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
     return approved
-
-
-#: Datastore's file columns, via the one table that names them. `FOLDER` and
-#: `DOCUMENT` share a row, so either serves.
-_FILES = RESOURCE_TABLES[ResourceType.FOLDER]
 
 
 class GrantResolutionMixin:
@@ -222,9 +217,9 @@ class GrantResolutionMixin:
         cached = self._folder_ids_by_paths.get(key)
         if cached is not None:
             return cached
-        stmt = select(_FILES.id_column).where(
-            _FILES.pod_column == pod_id,
-            _FILES.path_column.in_(candidate_paths),
+        stmt = select(FILE_COLUMNS.id_column).where(
+            FILE_COLUMNS.pod_column == pod_id,
+            FILE_COLUMNS.path_column.in_(candidate_paths),
         )
         resolved = list((await self.session.execute(stmt)).scalars().all())
         self._folder_ids_by_paths[key] = resolved
