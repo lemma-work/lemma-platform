@@ -115,7 +115,7 @@ pub struct ManagedRuntimeStatus {
 fn guest_request_budget(operation: &str) -> Duration {
     match operation {
         "system.shutdown" => Duration::from_secs(8),
-        "health" => Duration::from_secs(5),
+        "health" | "core.sandbox_images_status" => Duration::from_secs(5),
         _ => Duration::from_secs(8 * 60),
     }
 }

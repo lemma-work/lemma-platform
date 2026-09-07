@@ -617,11 +617,32 @@ impl ManagedRuntimeController {
                 "images": controller.spec.images,
                 "credentials": controller.spec.credentials,
             });
-            let status = match controller.runtime.request_cancellable(
-                "core.sandbox_images",
-                parameters,
-                controller.cancellation.clone(),
-            ) {
+            let result = if cfg!(target_os = "macos") {
+                poll_sandbox_image_warmup(
+                    &controller.cancellation,
+                    Duration::from_secs(8 * 60),
+                    Duration::from_secs(1),
+                    || {
+                        controller.runtime.request_cancellable(
+                            "core.sandbox_images_status",
+                            parameters.clone(),
+                            controller.cancellation.clone(),
+                        )
+                    },
+                )
+            } else {
+                // WSL launches a guest process per request. Background threads
+                // cannot outlive that process; its independent channel can wait.
+                controller
+                    .runtime
+                    .request_cancellable(
+                        "core.sandbox_images",
+                        parameters,
+                        controller.cancellation.clone(),
+                    )
+                    .map(|_| ())
+            };
+            let status = match result {
                 Ok(_) => {
                     SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
                 }
@@ -818,6 +839,44 @@ impl ManagedRuntimeController {
             .expect("forwarder lock poisoned")
             .clear();
         *self.status.lock().expect("managed runtime status poisoned") = None;
+    }
+}
+
+fn poll_sandbox_image_warmup(
+    cancellation: &lemma_desktop_process::Cancellation,
+    budget: Duration,
+    interval: Duration,
+    mut request: impl FnMut() -> io::Result<serde_json::Value>,
+) -> io::Result<()> {
+    let deadline = Instant::now() + budget;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "image preparation cancelled",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "image preparation timed out",
+            ));
+        }
+        let response = request()?;
+        if cancellation.is_cancelled() || Instant::now() >= deadline {
+            continue;
+        }
+        match response.get("ready").and_then(serde_json::Value::as_bool) {
+            Some(true) => return Ok(()),
+            Some(false) => {}
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "guest omitted image readiness",
+                ))
+            }
+        }
+        thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -1576,6 +1635,95 @@ mod tests {
             controller.sandbox_image_status().state,
             SANDBOX_IMAGES_PENDING
         );
+    }
+
+    #[test]
+    fn image_warmup_polls_until_ready_and_rejects_invalid_responses() {
+        let cancellation = lemma_desktop_process::Cancellation::default();
+        let mut calls = 0;
+        poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || {
+                calls += 1;
+                Ok(json!({"ready": calls == 3}))
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 3);
+        for response in [json!({}), json!({"ready": "true"})] {
+            let error = poll_sandbox_image_warmup(
+                &cancellation,
+                Duration::from_secs(5),
+                Duration::ZERO,
+                || Ok(response.clone()),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
+    }
+
+    #[test]
+    fn image_warmup_stops_on_cancellation_deadline_and_guest_failure() {
+        let cancellation = lemma_desktop_process::Cancellation::default();
+        let error =
+            poll_sandbox_image_warmup(&cancellation, Duration::ZERO, Duration::ZERO, || {
+                panic!("expired work must not dispatch")
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let error = poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || Err(io::Error::new(io::ErrorKind::ConnectionReset, "guest lost")),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+        let mut calls = 0;
+        let error = poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || {
+                calls += 1;
+                cancellation.cancel();
+                Ok(json!({"ready": false}))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn image_warmup_rejects_success_after_cancellation_or_deadline() {
+        for cancel in [false, true] {
+            let cancellation = lemma_desktop_process::Cancellation::default();
+            let budget = if cancel {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_millis(1)
+            };
+            let error = poll_sandbox_image_warmup(&cancellation, budget, Duration::ZERO, || {
+                if cancel {
+                    cancellation.cancel();
+                } else {
+                    thread::sleep(budget);
+                }
+                Ok(json!({"ready": true}))
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                if cancel {
+                    io::ErrorKind::Interrupted
+                } else {
+                    io::ErrorKind::TimedOut
+                }
+            );
+        }
     }
 
     #[test]

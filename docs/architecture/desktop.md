@@ -58,7 +58,8 @@ manifest.
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
-2. Sum expanded sizes and require that amount plus 4 GiB free.
+2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
+   working headroom before extraction.
 3. Reuse a verified archive or resume its `.part` file with a strict
    `Content-Range`.
 4. Hash the existing prefix and new bytes as they transfer.
@@ -83,6 +84,11 @@ On macOS, `lemma-vz` receives separate `--release` and `--runtime` roots.
 `vmlinuz`, `initrd`, and `disk.raw` remain in the immutable release directory.
 The disk is attached read-only and the kernel boots with `ro` plus volatile
 system state.
+
+Both disk attachments explicitly use host caching with full synchronization,
+so guest flushes retain their durability semantics. Automatic caching is
+avoided on Apple Silicon; see the same disk-cache workaround in
+[Lima's VZ driver](https://github.com/lima-vm/lima/blob/master/pkg/driver/vz/vm_darwin.go).
 
 `locald/runtime/macos/data.raw` is the sole sparse mutable disk. Guest mount
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
@@ -135,6 +141,17 @@ stabilization
 The guest operations are retained individually and `core.ensure` remains a
 compatibility aggregate. Successful image/archive work is cached between
 retries.
+
+After startup, macOS polls `core.sandbox_images_status` to prepare missing
+workspace and function images. Downloads, entrypoint checks, and image repair
+run outside the persistent control stream, allowing health and clock requests
+to continue. Each response reports
+`ready: false` until downloads and runtime-entrypoint checks complete. Polling
+has a deadline, honors shutdown cancellation, and reports failed preparation
+without restarting healthy infrastructure. A cache that remains corrupt after
+repair still requests the existing recovery restart. WSL retains the blocking
+`core.sandbox_images` request because its independent guest process exits with
+the response.
 
 The daemon watches each child during its health gate. Exit returns immediately
 with status and a redacted tail. Crash recovery retains the current runtime
@@ -306,10 +323,14 @@ its caller times out cannot populate the cache; a concurrent replacement or
 removal also takes precedence over an older read. Writes are not abandoned on
 a read deadline, because their eventual outcome must remain known.
 
-The first screen describes both deployment choices before sign-in: Lemma Cloud
-stores workspace data online and can use this computer's agents; Local Lemma
+The first screen recommends Lemma Cloud, with team collaboration, hosted
+integrations, and cloud agents that can run while this computer is off. Its
+primary button has initial keyboard focus; choosing a mode remains explicit.
+It describes both deployment choices before sign-in: Lemma Cloud stores
+workspace data online and can use this computer's agents; Local Lemma
 stores application data and runs services on this computer. Both can send
-requested data to configured providers and connectors. Local setup requires a
+requested data to configured providers and connectors. Agents executing on
+this computer require it to remain on in either mode. Local setup requires a
 separate install action; returning to the choices performs no installation.
 The shell owns automatic startup on launch and mode changes. Loading or
 reloading the splash only observes state, so it cannot race a second start

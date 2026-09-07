@@ -122,16 +122,18 @@ private func configuration(
     ].joined(separator: " ")
     configuration.bootLoader = bootLoader
 
+    // Explicit host caching avoids the automatic disk path's Apple Silicon
+    // corruption risk. Full synchronization still honors guest flushes.
     let diskAttachment = try VZDiskImageStorageDeviceAttachment(
         url: paths.disk,
         readOnly: true,
-        cachingMode: .automatic,
+        cachingMode: .cached,
         synchronizationMode: .full
     )
     let dataAttachment = try VZDiskImageStorageDeviceAttachment(
         url: paths.dataDisk,
         readOnly: false,
-        cachingMode: .automatic,
+        cachingMode: .cached,
         synchronizationMode: .full
     )
     configuration.storageDevices = [
