@@ -425,17 +425,7 @@ jobs:
           check "no legacy lemma-supervisor binary" test ! -e "${app}/Contents/MacOS/lemma-supervisor"
           check "no legacy bundled uv binary" test ! -e "${app}/Contents/MacOS/uv"
 
-          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          # 25 MiB didn't have room for lemma-agent-host (added as a Desktop
-          # sidecar after this budget was set) -- v0.7.1's bundle came in at
-          # 26,423,296 bytes, 208,896 bytes over. 30 MiB gives that real
-          # addition headroom without leaving the budget meaningless.
-          limit=$((30 * 1024 * 1024))
-          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 30 MiB)"
-          if [[ "${app_bytes}" -gt "${limit}" ]]; then
-            echo "::error::online app bundle is ${app_bytes} bytes, over the 30 MiB budget by $((app_bytes - limit)) bytes"
-            failed=1
-          fi
+          check "online application payload" python3 desktop/scripts/check_online_payload.py --macos-app "${app}"
 
           check "app bundle codesign verifies" codesign --verify --deep --strict --verbose=2 "${app}"
           check "app and helpers preserve the release team and identifiers" \
@@ -907,19 +897,7 @@ jobs:
       - name: Enforce small online application payload
         shell: pwsh
         run: |
-          $paths = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/lemma-local.json"
-          )
-          $bytes = ($paths | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          if ($bytes -gt 25MB) {
-            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
-          }
+          python desktop/scripts/check_online_payload.py --windows-root desktop
 
       # Deliberately an artifact, not a release asset. See the note at the top
       # of this file: Windows is experimental and is not published yet.

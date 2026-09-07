@@ -40,7 +40,10 @@ worker. Anything else falls back to the splash.
 ## Runtime packaging
 
 Public release apps bundle only `lemma-local.json` and native control helpers.
-The application must remain at or below 25 MiB installed. First launch
+The online application payload has a shared 40 MiB budget, enforced by
+`desktop/scripts/check_online_payload.py` across CI, stable and nightly builds.
+The check includes Agent Host and every configured Windows sidecar/resource;
+on macOS it measures the complete app bundle. First launch
 downloads:
 
 - `lemma-host-pack-<target>.zip`;
@@ -68,7 +71,7 @@ Current hard gates:
 - PR bundled application: 7 GiB;
 - expanded immutable runtime: 8 GiB;
 - macOS root disk before shrinking: 2 GiB;
-- public application: 25 MiB.
+- public application payload: 40 MiB.
 
 OCI infrastructure/sandbox images are not included. Public offline claims and
 offline release artifacts are intentionally removed.
@@ -423,11 +426,14 @@ none of those variables is read around it.
 
 ## Build a test installer
 
-CI's **Desktop workspace** and **Windows desktop build check** jobs do *not*
-produce installers. They prove the app compiles, lints, tests, and bundles;
-they build against a placeholder manifest with unresolvable URLs, so the
-resulting app refuses to install and says so. Their artifacts are named
-`lemma-desktop-macos-buildcheck-<sha>`.
+CI's **Desktop workspace** and **Windows desktop build check** jobs prove the
+app compiles, lints, tests, and bundles. The macOS artifact is named
+`lemma-desktop-macos-buildcheck-<sha>`. When Windows packaging runs, its unsigned
+NSIS installer is retained for 14 days as `desktop-windows-x64-buildcheck`,
+alongside a `candidate.json` recording the checked-out commit and installer
+SHA-256. These builds use a placeholder runtime manifest with unresolvable
+URLs. They support shell and installer checks, but cannot qualify Local Lemma
+installation or upgrades; those require the complete runtime build below.
 
 For a build someone else can install, cut a **Release Local Images** run with
 `share`:

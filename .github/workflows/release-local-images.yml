@@ -1134,6 +1134,7 @@ jobs:
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           python3 desktop/scripts/check_macos_signing.py "${app}" --team-id "$APPLE_TEAM_ID"
+          python3 desktop/scripts/check_online_payload.py --macos-app "${app}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
           test -n "$(plutil -extract NSLocalNetworkUsageDescription raw -o - "${app}/Contents/Info.plist")"
@@ -1406,20 +1407,7 @@ jobs:
       - name: Enforce small online application payload
         shell: pwsh
         run: |
-          $paths = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/lemma-local.json"
-          )
-          $bytes = ($paths | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          if ($bytes -gt 40MB) {
-            throw "Expanded online application payload is $bytes bytes; limit is 40 MiB"
-          }
+          python desktop/scripts/check_online_payload.py --windows-root desktop
 
       - name: Keep the Windows update for joint publication
         uses: actions/upload-artifact@v7
