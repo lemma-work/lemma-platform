@@ -76,3 +76,8 @@ markers = [
 
 [tool.ruff]
 line-length = 90
+
+# See lemma-backend/lemma-connectors/pyproject.toml: ruff's default selection
+# moves between releases, so this project names the rules it has been enforcing.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
