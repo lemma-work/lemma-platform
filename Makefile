@@ -976,6 +976,7 @@ desktop-test: _desktop-ensure-sidecars
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
 	@node --test desktop/ui-tests/tests/*.test.mjs
 	@uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+	@if [ "$$(uname -s)" = Darwin ]; then swift test --package-path desktop/local-runtime/macos-vz; fi
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.

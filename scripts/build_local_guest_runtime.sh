@@ -127,6 +127,7 @@ metadata = {
 }
 if sys.argv[2] == "macos-aarch64":
     metadata.update({
+        "service_transport_version": 1,
         "kernel_track": "ubuntu-" + (artifact / "kernel-release").read_text().strip(),
         "kernel_source": "Ubuntu archive: matching image, modules and initramfs",
         "packages_sha256": sha256(artifact / "packages.txt"),

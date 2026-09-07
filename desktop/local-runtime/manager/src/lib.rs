@@ -460,6 +460,13 @@ impl ManagedRuntime {
         &self.control_socket
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn service_socket(&self, port: u16) -> PathBuf {
+        self.config
+            .local_root
+            .join(format!("run/service-{port}.sock"))
+    }
+
     fn ensure_capability(&self) -> io::Result<()> {
         if self.capability_file.is_file() {
             let current = fs::read_to_string(&self.capability_file)?;
@@ -592,7 +599,10 @@ impl ManagedRuntime {
         } else {
             remove_if_present(&self.data_disk_fresh_marker)?;
         }
-        let _ = fs::remove_file(&self.control_socket);
+        remove_if_present(&self.control_socket)?;
+        for port in [5432, 6379, 3567] {
+            remove_if_present(&self.service_socket(port))?;
+        }
         let log_path = self.config.local_root.join("logs/vz.log");
         rotate_log(&log_path, 5 * 1024 * 1024)?;
         // Unconditionally, not at 5 MiB. `guest_needs_data_repair` scans this
@@ -1121,6 +1131,17 @@ fn validate_macos_release(source: &Path) -> io::Result<()> {
             ));
         }
     }
+    let metadata: Value = serde_json::from_slice(&fs::read(&source_marker)?)?;
+    if metadata
+        .get("service_transport_version")
+        .and_then(Value::as_u64)
+        != Some(1)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "This local runtime does not support the app's private service transport. Install the matching runtime update, then retry. Your stored data has not been changed.",
+        ));
+    }
     Ok(())
 }
 
@@ -1555,10 +1576,38 @@ mod tests {
         for name in ["vmlinuz", "initrd", "disk.raw"] {
             fs::write(release.join(name), format!("{name}-contents")).unwrap();
         }
-        fs::write(release.join("runtime.json"), b"release-two").unwrap();
+        fs::write(
+            release.join("runtime.json"),
+            br#"{"service_transport_version":1}"#,
+        )
+        .unwrap();
         validate_macos_release(&release).unwrap();
         fs::remove_file(release.join("disk.raw")).unwrap();
         assert!(validate_macos_release(&release).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn incompatible_service_transport_is_rejected_without_changing_the_release() {
+        let root = tempdir().unwrap();
+        for name in ["vmlinuz", "initrd", "disk.raw"] {
+            fs::write(root.path().join(name), b"keep").unwrap();
+        }
+        for metadata in [
+            r#"{}"#,
+            r#"{"service_transport_version":0}"#,
+            r#"{"service_transport_version":2}"#,
+        ] {
+            fs::write(root.path().join("runtime.json"), metadata).unwrap();
+            let error = validate_macos_release(root.path()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            assert!(error.to_string().contains("matching runtime update"));
+            assert_eq!(fs::read(root.path().join("disk.raw")).unwrap(), b"keep");
+            assert_eq!(
+                fs::read_to_string(root.path().join("runtime.json")).unwrap(),
+                metadata
+            );
+        }
     }
 
     /// Discarding the data disk must unlink it, never shrink it.

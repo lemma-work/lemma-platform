@@ -48,6 +48,18 @@ helpers to that standard target; it no longer replaces the distribution's boot
 sequence. The persistent-data unit waits for the control share before checking
 the host's fresh-disk marker.
 
+Mac service transport version 1 uses `lemma-service@5432.socket`,
+`lemma-service@6379.socket`, and `lemma-service@3567.socket`. systemd activates
+`systemd-socket-proxyd` for each virtual socket and forwards to guest loopback.
+The helper exposes private `service-PORT.sock` endpoints alongside its control
+socket. A zero byte acknowledges a connected guest socket; it is transport
+framing and must be consumed before sending database or HTTP traffic. The host
+backend uses locald's assigned loopback ports. It does not use the VM's NAT IP
+for database, Redis, or authentication connections. Networking remains necessary
+for downloads and sandbox callbacks. Test the helper with `swift test
+--package-path desktop/local-runtime/macos-vz`; `make desktop-check` includes it
+on macOS.
+
 The immutable OS image uses virtio block storage. The writable `data.raw` uses
 Apple's NVMe controller and appears as `/dev/nvme0n1` in Linux. The controller
 does not change the ext4 data format: an existing data file is checked and

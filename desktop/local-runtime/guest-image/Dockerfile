@@ -83,7 +83,9 @@ RUN chmod 0755 \
     && systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service \
     && if [ "$GUEST_PLATFORM" = macos-aarch64 ]; then \
          systemctl enable lemma-guestd.service lemma-data.service lemma-host-clock.service \
+           lemma-service@5432.socket lemma-service@6379.socket lemma-service@3567.socket \
            containerd.service systemd-logind.service \
+         && test -x /usr/lib/systemd/systemd-socket-proxyd \
          && systemctl set-default multi-user.target; \
        fi \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \

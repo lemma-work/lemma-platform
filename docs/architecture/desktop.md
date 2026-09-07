@@ -106,13 +106,24 @@ existing guest release is blocked until a data-preserving migration is available
 ## 4. Lifecycle protocol
 
 Guest readiness and host connectivity are separate startup gates. After the
-guest starts PostgreSQL and Redis, locald refreshes the guest endpoint and checks
-both TCP services from the host before launching migrations or the backend.
+guest starts PostgreSQL and Redis, locald checks their private service connections
+before launching migrations or the backend. On macOS, database, cache, and auth
+traffic uses Virtualization.framework's virtual sockets, independently of the
+guest's NAT address. systemd owns fixed guest service listeners and its standard
+socket proxy forwards each to the corresponding service. The VM helper exposes
+private Unix sockets; locald publishes the assigned loopback ports for the host
+backend. Each connection requires a guest acknowledgement before forwarding any
+application bytes. Connections and buffers are bounded, and shutdown closes and
+joins owned forwarding work. Sandbox callbacks and downloads still use normal
+networking. Windows retains the private WSL service route.
 This check also runs when migrations are cached. Authentication starts alongside
 the backend, and all private services must be reachable before reporting ready.
 Connectivity waits honor cancellation and their overall deadline. Failures name
 the unavailable service and distinguish a denied connection, missing route,
 refused connection, and timeout without presenting a backend traceback.
+The app rejects macOS runtime packs without the matching service transport
+version before launching or changing guest data; repair must install a compatible
+pack. There is no silent fallback to a guest IP for internal Mac services.
 
 Every mutating operation has an `operation_id`. Events include:
 

@@ -851,6 +851,9 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --locked
 
+      - name: Test native VM service transport
+        run: swift test --package-path desktop/local-runtime/macos-vz
+
       - name: Guest boot tooling tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
 

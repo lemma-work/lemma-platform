@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LemmaServiceBridge
 import Virtualization
 
 private let version = "0.1.0"
@@ -420,6 +421,11 @@ private func argument(_ name: String, in arguments: [String]) throws -> String {
     return arguments[index + 1]
 }
 
+private final class RuntimeBridges {
+    var control: GuestBridge?
+    var services: [ServiceBridge] = []
+}
+
 private func serve(arguments: [String]) throws -> Never {
     let runtimePaths = try RuntimePaths(
         release: argument("--release", in: arguments),
@@ -461,7 +467,7 @@ private func serve(arguments: [String]) throws -> Never {
         source.resume()
         signalSources.append(source)
     }
-    var bridge: GuestBridge?
+    let bridges = RuntimeBridges()
     vm.start { result in
         switch result {
         case .failure(let error):
@@ -473,18 +479,30 @@ private func serve(arguments: [String]) throws -> Never {
                 exit(EXIT_FAILURE)
             }
             do {
-                bridge = try GuestBridge(
+                for port: UInt32 in [5432, 6379, 3567] {
+                    let service = try ServiceBridge(
+                        path: socketParent.appendingPathComponent("service-\(port).sock").path
+                    ) { completed in
+                        socketDevice.connect(toPort: port) { result in
+                            completed(result.map { connection in
+                                GuestStream(descriptor: connection.fileDescriptor) { connection.close() }
+                            })
+                        }
+                    }
+                    bridges.services.append(service)
+                }
+                bridges.control = try GuestBridge(
                     socketDevice: socketDevice,
                     socketPath: socketPath
                 )
-                bridge?.serve()
+                bridges.control?.serve()
             } catch {
                 fputs("lemma-vz: control bridge failed: \(error.localizedDescription)\n", stderr)
                 exit(EXIT_FAILURE)
             }
         }
     }
-    withExtendedLifetime((vm, delegate, bridge, stopCoordinator, signalSources)) {
+    withExtendedLifetime((vm, delegate, bridges, stopCoordinator, signalSources)) {
         RunLoop.main.run(until: Date.distantFuture)
     }
     fatalError("unreachable")

@@ -7,6 +7,53 @@ use tokio::task::JoinSet;
 
 const MAX_CONNECTIONS: usize = 128;
 
+#[derive(Clone, Debug)]
+enum Upstream {
+    Tcp(SocketAddr),
+    #[cfg(target_os = "macos")]
+    Private(std::path::PathBuf),
+}
+
+impl Upstream {
+    async fn relay(&self, inbound: &mut tokio::net::TcpStream) -> io::Result<()> {
+        match self {
+            Self::Tcp(address) => {
+                let mut outbound = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::net::TcpStream::connect(address),
+                )
+                .await??;
+                tokio::io::copy_bidirectional(inbound, &mut outbound).await?;
+            }
+            #[cfg(target_os = "macos")]
+            Self::Private(path) => {
+                let mut outbound =
+                    tokio::time::timeout(Duration::from_secs(5), connect_private_service(path))
+                        .await??;
+                tokio::io::copy_bidirectional(inbound, &mut outbound).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn connect_private_service(
+    path: &std::path::Path,
+) -> io::Result<tokio::net::UnixStream> {
+    use tokio::io::AsyncReadExt;
+    let mut stream = tokio::net::UnixStream::connect(path).await?;
+    let mut ready = [0xff];
+    stream.read_exact(&mut ready).await?;
+    if ready != [0] {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid private service acknowledgement",
+        ));
+    }
+    Ok(stream)
+}
+
 pub(crate) struct TcpForwarder {
     shutdown: Option<oneshot::Sender<()>>,
     pub(crate) local_address: SocketAddr,
@@ -19,6 +66,19 @@ impl TcpForwarder {
         bind: SocketAddr,
         target: SocketAddr,
     ) -> io::Result<Self> {
+        Self::start_upstream(label, bind, Upstream::Tcp(target))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn start_private(
+        label: &'static str,
+        bind: SocketAddr,
+        path: std::path::PathBuf,
+    ) -> io::Result<Self> {
+        Self::start_upstream(label, bind, Upstream::Private(path))
+    }
+
+    fn start_upstream(label: &'static str, bind: SocketAddr, target: Upstream) -> io::Result<Self> {
         let listener = bind_listener(bind).map_err(|error| {
             io::Error::new(
                 error.kind(),
@@ -55,17 +115,10 @@ impl TcpForwarder {
                                     break;
                                 }
                             };
+                            let target = target.clone();
                             connections.spawn(async move {
-                                let result = async {
-                                    let mut outbound = tokio::time::timeout(
-                                        Duration::from_secs(5),
-                                        tokio::net::TcpStream::connect(target),
-                                    ).await??;
-                                    tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await?;
-                                    Ok::<(), io::Error>(())
-                                }.await;
-                                if let Err(error) = result {
-                                    eprintln!("managed {label} route to {target} failed: {error}");
+                                if let Err(error) = target.relay(&mut inbound).await {
+                                    eprintln!("managed {label} route to {target:?} failed: {error}");
                                 }
                             });
                         }
@@ -118,5 +171,131 @@ impl Drop for TcpForwarder {
                 );
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+
+    #[tokio::test]
+    async fn private_service_requires_a_valid_guest_acknowledgement() {
+        let root = tempfile::Builder::new()
+            .prefix("lemma-route-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = root.path().join("service.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        for byte in [0xff, 0] {
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                stream.write_all(&[byte]).await.unwrap();
+                stream
+            };
+            let (upstream, result) = tokio::join!(server, connect_private_service(&path));
+            if byte == 0 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+            }
+            drop(upstream);
+        }
+    }
+
+    #[tokio::test]
+    async fn accepting_a_private_socket_without_guest_ack_is_not_ready() {
+        let root = tempfile::Builder::new()
+            .prefix("lemma-route-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = root.path().join("service.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = async { listener.accept().await.unwrap().0 };
+        let (upstream, result) = tokio::join!(
+            server,
+            tokio::time::timeout(Duration::from_millis(50), connect_private_service(&path))
+        );
+        assert!(
+            result.is_err(),
+            "a listening helper is not proof of a guest connection"
+        );
+        drop(upstream);
+    }
+
+    #[tokio::test]
+    async fn private_forwarder_strips_ack_relays_half_close_and_releases_idle_connections() {
+        let root = tempfile::Builder::new()
+            .prefix("lemma-route-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = root.path().join("service.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let forwarder =
+            TcpForwarder::start_private("test-service", "127.0.0.1:0".parse().unwrap(), path)
+                .unwrap();
+        let exchange = async {
+            let mut client = tokio::net::TcpStream::connect(forwarder.local_address)
+                .await
+                .unwrap();
+            let (mut guest, _) = listener.accept().await.unwrap();
+            guest.write_all(&[0]).await.unwrap();
+            client.write_all(b"query").await.unwrap();
+            client.shutdown().await.unwrap();
+            let mut request = Vec::new();
+            guest.read_to_end(&mut request).await.unwrap();
+            assert_eq!(request, b"query");
+            guest.write_all(b"answer").await.unwrap();
+            guest.shutdown().await.unwrap();
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await.unwrap();
+            assert_eq!(
+                response, b"answer",
+                "transport acknowledgement must not reach the database client"
+            );
+            let client = tokio::net::TcpStream::connect(forwarder.local_address)
+                .await
+                .unwrap();
+            let (mut guest, _) = listener.accept().await.unwrap();
+            guest.write_all(&[0]).await.unwrap();
+            (client, guest)
+        };
+        let (mut client, mut guest) = tokio::time::timeout(Duration::from_secs(3), exchange)
+            .await
+            .unwrap();
+        drop(forwarder);
+        for result in [
+            tokio::time::timeout(Duration::from_secs(1), client.read_u8())
+                .await
+                .unwrap(),
+            tokio::time::timeout(Duration::from_secs(1), guest.read_u8())
+                .await
+                .unwrap(),
+        ] {
+            assert!(matches!(
+                result.unwrap_err().kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_guest_closes_the_client_without_a_false_success_byte() {
+        let root = tempfile::Builder::new()
+            .prefix("lemma-route-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = root.path().join("missing.sock");
+        let forwarder =
+            TcpForwarder::start_private("missing-service", "127.0.0.1:0".parse().unwrap(), path)
+                .unwrap();
+        let mut client = tokio::net::TcpStream::connect(forwarder.local_address)
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), client.read_u8())
+            .await
+            .unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
     }
 }

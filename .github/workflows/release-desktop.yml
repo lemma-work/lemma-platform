@@ -241,6 +241,9 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --locked
 
+      - name: Test native VM service transport
+        run: swift test --package-path desktop/local-runtime/macos-vz
+
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
         run: |

@@ -166,6 +166,11 @@ def check(
                 }
                 (evidence / f"result-{boot}.json").write_text(json.dumps(report, indent=2) + "\n")
                 print(json.dumps(report), flush=True)
+                # These endpoints belong to the child just reaped above. A
+                # crashed helper cannot unlink them, and the next boot must
+                # not mistake them for another live helper's listeners.
+                for port in (5432, 6379, 3567):
+                    (state / f"service-{port}.sock").unlink(missing_ok=True)
             if error or forced or fallback or process.returncode != 0:
                 raise RuntimeError(error or "Guest did not shut down cleanly")
         fresh.unlink(missing_ok=True)

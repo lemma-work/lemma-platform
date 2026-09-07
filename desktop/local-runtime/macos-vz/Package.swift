@@ -14,10 +14,13 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "LemmaVZ",
+            dependencies: ["LemmaServiceBridge"],
             linkerSettings: [.unsafeFlags([
                 "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT",
                 "-Xlinker", "__info_plist", "-Xlinker", identity,
             ])]
         ),
+        .target(name: "LemmaServiceBridge"),
+        .testTarget(name: "LemmaServiceBridgeTests", dependencies: ["LemmaServiceBridge"]),
     ]
 )
