@@ -5,14 +5,16 @@ The baseline records pre-existing debt, not exemptions for new code. CI fails
 when a new cross-module internal import/cycle appears, a broad catch is added,
 or a large/complex function grows. Shrinking the baseline is always allowed.
 
-Two of the metrics exist because the first version of this file could not see
-the thing it was written to stop. `module_cycles` read zero while thirteen of
-fifteen modules were mutually dependent, because every one of those cycles ran
-through `app/composition`, and a file there is excluded from the graph.
-`induced_module_cycles` inlines that hop and reports what the graph will be once
-the hop is deleted; `module_composition_imports` counts the 195 edges that make
-the composition root a shared middle layer rather than a root. Neither number
-was wrong before -- neither existed.
+Three metrics used to live here and no longer do. `composition_deep_imports`,
+`module_composition_imports` and `induced_module_cycles` all measured
+`app/composition`, a shared middle layer that thirteen of fifteen modules
+depended on. They did their job: the directory was emptied and deleted, all
+three read zero, and `_inline_composition` -- which existed to report what the
+graph would look like once the hop was gone -- had nothing left to inline, so
+`induced_module_cycles` was `module_cycles` computed twice.
+
+They are gone rather than kept at zero because a metric that cannot move is not
+a ratchet; it is a line in a report that a reader has to work out is dead.
 """
 
 from __future__ import annotations
@@ -62,9 +64,8 @@ def _python_files() -> list[Path]:
 def _source_module(path: Path) -> str:
     """Name the bucket a file's metrics are counted under.
 
-    `app/modules/agent/...` is `agent`; `app/core/...` is `core`;
-    `app/composition/...` is `composition`; a file directly under `app/` is
-    `app`. Keyed by package rather than by path depth so that a file moving
+    `app/modules/agent/...` is `agent`; `app/core/...` is `core`; a file
+    directly under `app/` is `app`. Keyed by package rather than by path depth so that a file moving
     between directories inside its own package does not churn the baseline.
     """
     parts = path.relative_to(APP_ROOT).parts
@@ -258,9 +259,6 @@ def snapshot() -> dict[str, Any]:
     complex_functions: dict[str, int] = {}
     broad_catches: dict[str, int] = {}
     untyped_escapes: dict[str, int] = {}
-    composition_deep_imports: dict[str, int] = defaultdict(int)
-    module_composition_imports: dict[str, int] = defaultdict(int)
-    composition_targets: set[str] = set()
     core_module_imports: dict[str, int] = defaultdict(int)
 
     for path in _python_files():
@@ -286,31 +284,9 @@ def snapshot() -> dict[str, Any]:
         for node in ast.walk(tree):
             for imported in _imported_modules(node):
                 parts = imported.split(".")
-                # A module reaching app/composition was counted nowhere at all:
-                # the loop below only looks at `app.modules.*`, so the 195 edges
-                # that make the composition root a shared middle layer were the
-                # one thing no metric could see.
-                if parts[:2] == ["app", "composition"] and source != "composition":
-                    # Counted for `app/core` too, not only for modules. The one
-                    # core edge -- `core/security.py` reaching an analytics
-                    # helper that imported no module at all -- was in neither
-                    # this metric nor `composition_deep_imports`, which only
-                    # looks the other way. Dependencies point inward; core
-                    # reaching the root is the sharpest version of not doing so.
-                    module_composition_imports[f"{source}->composition"] += 1
-                    continue
                 if len(parts) < 3 or parts[:2] != ["app", "modules"]:
                     continue
                 target = parts[2]
-                # The composition root is allowed to know every module -- that is
-                # its job -- but only through each module's published surface.
-                # Reaching into services, repositories or ORM models makes it a
-                # shared middle layer instead of a root.
-                if source == "composition" and not _allowed_cross_module_import(parts):
-                    composition_deep_imports[f"composition->{target}"] += 1
-                    # Only the internal reaches. A module the root touches
-                    # through its contracts is not a hop that carries a cycle.
-                    composition_targets.add(target)
                 if source == "core" and relative not in CORE_MODULE_IMPORT_EXEMPT:
                     core_module_imports[f"core->{target}"] += 1
                 if not in_modules or target == source:
@@ -329,18 +305,8 @@ def snapshot() -> dict[str, Any]:
 
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
-        "composition_deep_imports": dict(sorted(composition_deep_imports.items())),
-        "module_composition_imports": dict(sorted(module_composition_imports.items())),
         "core_module_imports": dict(sorted(core_module_imports.items())),
         "module_cycles": [list(cycle) for cycle in _cycles(dependency_graph)],
-        "induced_module_cycles": [
-            list(cycle)
-            for cycle in _cycles(
-                _inline_composition(
-                    dependency_graph, module_composition_imports, composition_targets
-                )
-            )
-        ],
         "oversized_files": dict(sorted(oversized.items())),
         "complex_functions": _aggregate_by_module(complex_functions),
         "broad_catches": _aggregate_by_module(broad_catches),
@@ -360,34 +326,6 @@ def _aggregate_by_module(values: dict[str, int]) -> dict[str, int]:
         result[f"{module}:total"] = sum(module_values)
         result[f"{module}:max"] = max(module_values)
     return result
-
-
-def _inline_composition(
-    graph: dict[str, set[str]],
-    inbound: dict[str, int],
-    composition_targets: set[str],
-) -> dict[str, set[str]]:
-    """The module graph as it will be once `app/composition` is gone.
-
-    `module_cycles` reads zero, and that is not because there are none: a file
-    under `app/composition` is excluded from the graph, so every cycle routed
-    through it is invisible. `app/composition/agent_notifications.py` says as
-    much in its own docstring -- agent must not import agent_surfaces "because
-    the dependency runs the other way" -- which is a cycle with a hop in it.
-
-    Inlining that hop is what the number has to measure, because the plan is to
-    delete the hop. Deleting it today collapses thirteen of fifteen modules into
-    one component; this is the metric that has to reach zero first.
-    """
-    induced: dict[str, set[str]] = {
-        source: set(targets) for source, targets in graph.items()
-    }
-    for edge in inbound:
-        source = edge.split("->", 1)[0]
-        induced.setdefault(source, set()).update(
-            target for target in composition_targets if target != source
-        )
-    return induced
 
 
 def _cycles(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
@@ -453,14 +391,7 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["forbidden_imports"], baseline.get("forbidden_imports", {})
     ).items():
         failures.append(f"forbidden import count grew: {name} ({before} -> {after})")
-    for label, key in (
-        ("composition reaching past contracts", "composition_deep_imports"),
-        (
-            "a module reaching through the composition root",
-            "module_composition_imports",
-        ),
-        ("app/core importing a module", "core_module_imports"),
-    ):
+    for label, key in (("app/core importing a module", "core_module_imports"),):
         for name, (before, after) in _growth(
             current[key], baseline.get(key, {})
         ).items():
@@ -469,17 +400,6 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         current["module_cycles"], baseline.get("module_cycles", [])
     ):
         failures.append(f"new module cycle: {' -> '.join(cycle)}")
-    known_knots = [set(cycle) for cycle in baseline.get("induced_module_cycles", [])]
-    for cycle in current["induced_module_cycles"]:
-        # A subset of a known knot is that knot with modules cut out of it,
-        # which is the whole point of the work. Only a component containing a
-        # module no recorded knot had is news.
-        members = set(cycle)
-        if any(members <= knot for knot in known_knots):
-            continue
-        failures.append(
-            f"new cycle once app/composition is inlined: {' -> '.join(cycle)}"
-        )
     for label, key in (
         ("oversized file", "oversized_files"),
         ("complex function", "complex_functions"),
@@ -513,15 +433,11 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
-    induced = current["induced_module_cycles"]
-    knot = max((len(cycle) for cycle in induced), default=0)
     print(
         "Architecture ratchet passed "
         f"({len(current['forbidden_imports'])} inherited import violations, "
-        f"{sum(current['module_composition_imports'].values())} imports through "
-        f"the composition root, "
-        f"{len(current['module_cycles'])} cycles"
-        + (f", {knot} modules knotted once composition is inlined)." if knot else ").")
+        f"{sum(current['core_module_imports'].values())} core->module imports, "
+        f"{len(current['module_cycles'])} cycles)."
     )
     return 0
 
