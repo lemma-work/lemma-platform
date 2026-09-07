@@ -3,7 +3,6 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   ResourceMetric,
   ResourceMetricStrip,
@@ -53,16 +52,9 @@ export function UsageOverview({
     self || (canReadOrganization && (scope !== "pod" || Boolean(podId)));
   const [days, setDays] = useState("30");
   const [limit, setLimit] = useState(50);
-  const [conversationId, setConversationId] = useState("");
-  const [agentRunId, setAgentRunId] = useState("");
-  const [applied, setApplied] = useState({
-    conversationId: "",
-    agentRunId: "",
-  });
   const filters = {
     days: Number(days),
     podId: scope === "pod" ? podId : undefined,
-    ...applied,
   };
   const summary = useUsageSummary(organizationId, filters, { enabled, self });
   const stats = useUsageStats(
@@ -144,42 +136,6 @@ export function UsageOverview({
               </SelectContent>
             </Select>
           </div>
-          <details>
-            <summary className="cursor-pointer text-sm text-[var(--text-secondary)]">
-              Filter by conversation or run
-            </summary>
-            <form
-              className="mt-3 flex flex-wrap items-end gap-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                setApplied({
-                  conversationId: conversationId.trim(),
-                  agentRunId: agentRunId.trim(),
-                });
-                setLimit(50);
-              }}
-            >
-              <label className="space-y-1 text-xs text-[var(--text-secondary)]">
-                Conversation ID
-                <Input
-                  value={conversationId}
-                  onChange={(event) => setConversationId(event.target.value)}
-                  placeholder="All conversations"
-                />
-              </label>
-              <label className="space-y-1 text-xs text-[var(--text-secondary)]">
-                Run ID
-                <Input
-                  value={agentRunId}
-                  onChange={(event) => setAgentRunId(event.target.value)}
-                  placeholder="All runs"
-                />
-              </label>
-              <Button type="submit" variant="secondary" size="sm">
-                Apply filters
-              </Button>
-            </form>
-          </details>
           <QuerySection
             loading={summary.isPending}
             error={summary.error}
@@ -294,8 +250,8 @@ export function UsageOverview({
             ) : null}
             {recent.data?.items.length === 1000 ? (
               <p className="mt-3 text-xs text-[var(--text-tertiary)]">
-                Showing the most recent 1,000 records. Narrow the period or
-                filter by conversation or run.
+                Showing the most recent 1,000 records. Choose a shorter date range
+                to narrow the results.
               </p>
             ) : null}
           </QuerySection>
