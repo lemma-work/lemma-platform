@@ -417,24 +417,36 @@ For a build someone else can install, cut a **Release Local Images** run with
 `share`:
 
 ```bash
-gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false -f share=true
+DESKTOP_VERSION=$(jq -r .version desktop/tauri.conf.json)
+gh workflow run release-local-images.yml -f version="$DESKTOP_VERSION" -f publish=false -f share=true
 ```
 
 That publishes the runtime archives and the manifest to a prerelease tagged
-`desktop-nightly-<short-sha>`, then builds the **online** DMG against it —
+`desktop-nightly-<short-sha>-<run>-<attempt>`, then builds the **online** DMG against it —
 signed with Developer ID, notarized and stapled — and attaches it there. The
 download link is printed to the job summary. Prereleases never become "Latest",
 so the version-tag release channel is untouched.
 
-The nightly channel is a **rolling window of the three most recent builds**, not
-an archive. Once a run has published a complete nightly — runtime assets and a
-notarized DMG — it deletes the older nightly prereleases and their tags. Without
-that they accumulated one per shared build, and by 0.7.0 there were twelve of
-them sitting above the newest real release on the releases page. So a nightly
-DMG is good for about three more shared builds: download it, install the runtime,
-and re-share when you need a newer one. Version tags are never touched — the
-prune re-checks the `desktop-nightly-` prefix immediately before deleting,
-because `--cleanup-tag` removes the tag along with the release.
+Both platforms use `<desktop-version>-nightly.<run>.<attempt>`, including a new
+version for a rerun. Their Tauri updater artifacts are signed with the same
+update key as stable builds. The Windows installer is also Authenticode signed
+when the Windows certificate secrets are configured; otherwise it is explicitly
+a test build without publisher signing and Windows may show SmartScreen warnings.
+An absent publisher certificate never disables update signature verification.
+
+After both builds succeed, one job publishes their immutable payloads and then
+`desktop-nightly/latest.json`. An older finishing run cannot replace a newer
+feed. Nightlies accept only newer nightlies; stable builds accept only newer
+stable versions. Local development builds do not self-update. Runtime and app
+assets are retained so an installed nightly is not stranded by automatic pruning.
+
+To qualify the update path, install nightly A, create representative local data,
+and publish nightly B with app/backend/frontend changes. Use Desktop settings →
+Updates to install B, reopen, and verify the version, credentials, data, services,
+and conversation continuity. Repeat with interrupted downloads and installation
+failure. Run this on macOS and Windows; feed publication alone is not upgrade
+qualification. Existing Windows local-data updates remain blocked until the
+data-preserving guest migration is available.
 
 It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
 and rejects everything inside: a bundled CPython and `node_modules` are not

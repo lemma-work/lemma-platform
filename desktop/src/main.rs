@@ -13,6 +13,7 @@ mod confirmation;
 mod ipc_read;
 mod recovery;
 mod shutdown;
+mod update_policy;
 use recovery::RecoveryOutcome;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -113,7 +114,7 @@ struct UiState {
 /// because a nightly and a release both report `0.7.0` with the same bundle
 /// identifier.
 ///
-/// Fails closed: anything unrecognised is `dev`, and only `stable` updates.
+/// Unrecognised stamps are development builds and cannot update themselves.
 fn release_channel() -> &'static str {
     channel_of(option_env!("LEMMA_RELEASE_CHANNEL"))
 }
@@ -137,10 +138,8 @@ fn build_commit() -> Option<&'static str> {
 
 /// Whether this build may update itself in place.
 ///
-/// Nightlies deliberately cannot. Their runtime lives in a prerelease that is
-/// pruned to the three most recent builds, so there is no durable feed for them
-/// to follow -- and the signing key is never given to the nightly workflow, so
-/// a nightly could not produce a valid update even if it tried.
+/// Stable and nightly release builds use separate feeds and the same signed
+/// update mechanism. Local development builds cannot replace themselves.
 fn updates_enabled() -> bool {
     updates_allowed(
         release_channel(),
@@ -3685,8 +3684,27 @@ impl LemmaUpdateMetadata {
 }
 
 fn lemma_update_metadata(raw: &Value) -> LemmaUpdateMetadata {
+    lemma_update_metadata_for(
+        raw,
+        if cfg!(windows) {
+            "windows-x86_64"
+        } else {
+            "darwin-aarch64"
+        },
+    )
+}
+
+fn lemma_update_metadata_for(raw: &Value, target: &str) -> LemmaUpdateMetadata {
     let Some(block) = raw.get("lemma") else {
         return LemmaUpdateMetadata::default();
+    };
+    let block = if let Some(platforms) = block.get("platforms") {
+        let Some(platform) = platforms.get(target) else {
+            return LemmaUpdateMetadata::default();
+        };
+        platform
+    } else {
+        block
     };
     LemmaUpdateMetadata {
         postgres_major: block.get("postgres_major").and_then(Value::as_u64),
@@ -7032,7 +7050,13 @@ fn main() {
         // exists to expose `relaunch` to JavaScript; the flow here is driven
         // from Rust and `AppHandle::restart()` is core, so adding it would
         // widen the ACL for nothing.
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .default_version_comparator(|current, update| {
+                    update_policy::candidate_allowed(release_channel(), &current, &update.version)
+                })
+                .build(),
+        )
         .manage({
             let shell = Shell::new(mode.clone());
             shell
@@ -7793,9 +7817,6 @@ mod tests {
         }
     }
 
-    /// The channel stamp fails closed, and only stable self-updates.
-    ///
-    /// A build with no stamp -- CI's build check, `make desktop-dmg`, a
     /// Each channel must read the feed that actually carries its builds.
     ///
     /// GitHub resolves `releases/latest` to the newest *non-prerelease*.
@@ -7928,6 +7949,28 @@ mod tests {
         }));
         assert_eq!(good.postgres_major, Some(18));
         assert_eq!(good.runtime_download_bytes, Some(531_000_000));
+    }
+
+    #[test]
+    fn update_metadata_uses_the_selected_platform_and_never_another_platforms_fallback() {
+        let feed = json!({"lemma": {
+            "postgres_major": 16, "runtime_download_bytes": 10,
+            "platforms": {
+                "darwin-aarch64": {"postgres_major": 18, "runtime_download_bytes": 20},
+                "windows-x86_64": {"postgres_major": 18, "runtime_download_bytes": 30}
+            }
+        }});
+        assert_eq!(
+            lemma_update_metadata_for(&feed, "darwin-aarch64").runtime_download_bytes,
+            Some(20)
+        );
+        let windows = lemma_update_metadata_for(&feed, "windows-x86_64");
+        assert_eq!(windows.runtime_download_bytes, Some(30));
+        assert_eq!(windows.postgres_major, Some(18));
+        assert_eq!(
+            lemma_update_metadata_for(&feed, "missing-target").postgres_major,
+            None
+        );
     }
 
     /// The updater is never reachable from a remote origin.

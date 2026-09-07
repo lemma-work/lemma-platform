@@ -2763,6 +2763,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

@@ -85,6 +85,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+semver = "1.0.28"
 interprocess = "2.4"
 hex = "0.4"
 reqwest = { workspace = true }
