@@ -9,10 +9,11 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, intent = '' } = {}) {
+async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, intent = '', colorScheme = 'light' } = {}) {
   const context = await browser.newContext({
     viewport,
     reducedMotion: 'reduce',
+    colorScheme,
     ...(windows ? { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } : {}),
   });
   t.after(() => context.close());
@@ -107,6 +108,42 @@ test('deployment choices disclose storage and execution before cloud sign-in', a
   assert.match(await chooser.innerText(), /providers.*connectors.*internet/);
   assert.deepEqual(await deploymentCalls(page), []);
   await page.getByRole('button', { name: 'Use Lemma Cloud', exact: true }).click();
+  assert.deepEqual(await deploymentCalls(page), [{ command: 'set_connection_mode', args: { mode: 'hosted' } }]);
+});
+
+for (const colorScheme of ['light', 'dark']) {
+  for (const viewport of [{ width: 980, height: 680 }, { width: 1280, height: 860 }]) {
+    test(`welcome fits ${viewport.width}×${viewport.height} in ${colorScheme} mode without scrolling`, async t => {
+      const page = await onboarding(t, { viewport, colorScheme });
+      await page.getByRole('heading', { name: 'Better work, together.' }).waitFor();
+      for (const name of ['Use Lemma Cloud', 'Use Local Lemma']) {
+        const button = page.getByRole('button', { name, exact: true });
+        const bounds = await button.boundingBox();
+        assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0);
+        assert.ok(bounds.x + bounds.width <= viewport.width);
+        assert.ok(bounds.y + bounds.height <= viewport.height, `${name} must be visible without scrolling`);
+        assert.equal(await button.isEnabled(), true);
+      }
+      assert.equal(await page.locator('#scene').evaluate(el => el.scrollHeight <= el.clientHeight), true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      assert.equal(await page.locator('#orb').isVisible(), false);
+      assert.equal(await page.locator('#whisper').isVisible(), false);
+      if (process.env.LEMMA_UI_SCREENSHOT_DIR) {
+        await page.screenshot({ path: `${process.env.LEMMA_UI_SCREENSHOT_DIR}/welcome-${viewport.width}-${colorScheme}.png` });
+      }
+    });
+  }
+}
+
+test('Cloud is the initial keyboard action and explains always-on work accurately', async t => {
+  const page = await onboarding(t);
+  assert.equal(await page.getByRole('button', { name: 'Use Lemma Cloud', exact: true }).evaluate(el => el === document.activeElement), true);
+  const copy = await page.locator('#choose').innerText();
+  assert.match(copy, /Cloud agents and schedules run even when your computer is off/);
+  assert.match(copy, /Local agents need this computer running/);
+  assert.match(copy, /Set up your own integrations and sharing/);
+  assert.deepEqual(await deploymentCalls(page), []);
+  await page.keyboard.press('Enter');
   assert.deepEqual(await deploymentCalls(page), [{ command: 'set_connection_mode', args: { mode: 'hosted' } }]);
 });
 
