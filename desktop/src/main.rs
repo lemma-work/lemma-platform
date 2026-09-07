@@ -6780,6 +6780,16 @@ const QUIT_STOP_BUDGET: Duration = Duration::from_secs(45);
 fn stop_then_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
+    // This worker must persist the live route before shutdown replaces it with
+    // the splash. A detached write can be lost when the daemon exits quickly.
+    if let Some(route) =
+        read_resume_target().and_then(|target| current_workspace_route(app, &target))
+    {
+        write_resume_route(&route);
+    }
+    if let Some(control) = app.get_webview("control") {
+        let _ = control.close();
+    }
     shell.quit_after_stop.store(true, Ordering::Release);
     if shell.locald_writer.lock().unwrap().is_none() {
         match connect_locald() {

@@ -217,6 +217,25 @@ rather than degrading in a way that only shows up as confused users.
 
 **Contracts:** *(native desktop IPC; see [Desktop architecture](../../architecture/desktop.md))*
 
+### PS-OPS-041 — Desktop reopens the last workspace page after Quit
+**Status:** manual
+
+- When a person confirms Quit while viewing a local workspace page, the system
+  shall remember that page before replacing it with shutdown progress.
+- When that installation next starts successfully on the same desktop release,
+  the system shall reopen the remembered workspace page.
+- The system shall not remember an installer, recovery page, or a page outside
+  that installation's workspace origin as the workspace resume destination.
+- When Settings is open over that page, confirmed Quit shall dismiss it so
+  shutdown progress remains visible.
+
+> **Verified by:** installed-app QA: open one conversation, close the window to
+> the tray, reopen it, navigate to a different conversation, and confirm Quit.
+> Verify owned processes stop. Launch again and verify the second conversation
+> opens with its durable transcript. Repeat with Settings open over that page.
+
+**Contracts:** *(native desktop lifecycle; see [Desktop architecture](../../architecture/desktop.md))*
+
 ## Not covered here
 
 | Concern | Where it lives |

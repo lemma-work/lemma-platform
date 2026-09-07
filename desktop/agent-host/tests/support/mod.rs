@@ -685,6 +685,7 @@ struct ControlState {
     /// keep the host in a `TempDir` that unwinding deletes, so by the time a
     /// panic reaches a human the log is already gone.
     host_log: Arc<Mutex<Option<PathBuf>>>,
+    scripted_traffic: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl ControlPlane {
@@ -722,6 +723,7 @@ impl ControlPlane {
             rejections: Arc::new(Mutex::new(Vec::new())),
             harness_ids: Arc::new(Mutex::new(BTreeMap::new())),
             host_log: Arc::new(Mutex::new(None)),
+            scripted_traffic: Arc::new(Mutex::new(None)),
         };
         let app = Router::new()
             .route("/agent-host/pairings/complete", post(pairing))
@@ -867,10 +869,11 @@ impl ControlPlane {
         let published = self.state.published.lock().unwrap().clone();
         panic!(
             "timed out waiting for {what}; published={published:?}, \
-             start_sent={}, events={kinds:?}{}{}",
+             start_sent={}, events={kinds:?}{}{}{}",
             self.state.start_sent.load(Ordering::SeqCst),
             self.rejection_summary(),
             self.host_log_tail(),
+            self.scripted_traffic_tail(),
         );
     }
 
@@ -918,6 +921,34 @@ impl ControlPlane {
         let lines = log.lines().collect::<Vec<_>>();
         let tail = lines[lines.len().saturating_sub(LINES)..].join("\n    ");
         format!("\n  last {LINES} lines of the host log:\n    {tail}")
+    }
+
+    fn scripted_traffic_tail(&self) -> String {
+        let path = self.state.scripted_traffic.lock().unwrap().clone();
+        let Some(path) = path else {
+            return String::new();
+        };
+        let log = std::fs::read_to_string(path).unwrap_or_default();
+        // Keep wire ordering after TempDir cleanup without including prompts,
+        // MCP credentials, or tool payloads in a test failure.
+        let messages = log.lines().rev().take(40).collect::<Vec<_>>();
+        let summary = messages
+            .into_iter()
+            .rev()
+            .filter_map(|line| {
+                let entry: Value = serde_json::from_str(line).ok()?;
+                let message = &entry["message"];
+                Some(json!({
+                    "direction": entry["direction"],
+                    "id": message["id"],
+                    "method": message["method"],
+                    "result": message.get("result").is_some(),
+                    "error_code": message["error"]["code"],
+                    "update": message["params"]["update"]["sessionUpdate"],
+                }))
+            })
+            .collect::<Vec<_>>();
+        format!("\n  scripted ACP wire summary: {summary:?}")
     }
 }
 
@@ -1286,6 +1317,7 @@ impl HostProcess {
         // unwinding deletes -- so without this the log is gone by the time
         // anybody reads the panic.
         control.watch_host_log(&stderr_path);
+        *control.state.scripted_traffic.lock().unwrap() = Some(shims.acp_log.clone());
         Self { child, stderr_path }
     }
 

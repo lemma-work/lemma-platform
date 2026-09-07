@@ -172,7 +172,7 @@ async fn two_concurrent_requests_stay_separately_parked_and_answerable() {
     // Scope note: this is the healthy shape, where each request names a
     // distinct `toolCall.toolCallId`. It does *not* discriminate the host's
     // fallback for requests that name no tool call — see
-    // `colliding_empty_tool_call_ids_...` below for why that path cannot be
+    // `blank_tool_call_ids_keep_parallel_requests_independent` below for why that path cannot be
     // reached from here.
     let (_directory, control, host) = run_scripted(
         "parallel-permission",
@@ -230,19 +230,13 @@ async fn two_concurrent_requests_stay_separately_parked_and_answerable() {
 }
 
 #[tokio::test]
-async fn colliding_empty_tool_call_ids_strand_one_request_and_merge_both_cards() {
+async fn blank_tool_call_ids_keep_parallel_requests_independent() {
     // A *missing* toolCallId cannot be reached from a real ACP agent:
     // `ToolCallUpdate.tool_call_id` is required by
     // agent-client-protocol-schema v1, so the SDK rejects such a request with
     // `Invalid params` before the host's handler runs. A *blank* one is the
     // reachable variant, and `tool_call_id()` now treats it as absent so each
     // request still gets its own gate key and its own approval card.
-    //
-    // What an adapter *can* send is a blank id, and that is not covered:
-    // `tool_call_id()` finds the key and returns `Some("")`, so the fallback
-    // never fires and both requests land on the key `(run, "")`. This test
-    // states the behaviour we want; today it fails, in two ways that are worth
-    // seeing separately.
     let directory = TempDir::new().unwrap();
     let shims = ShimmedAgents::install(directory.path(), "parallel-permission-empty-id");
     let control = ControlPlane::start(
@@ -265,8 +259,7 @@ async fn colliding_empty_tool_call_ids_strand_one_request_and_merge_both_cards()
         )
         .await;
 
-    // 1. Lemma cannot tell the two apart, so its UI overwrites one approval
-    //    card with the other and a decision names an ambiguous request.
+    // Distinct cards keep each decision bound to the request it answers.
     let ids = control
         .permission_requests()
         .iter()
@@ -278,8 +271,7 @@ async fn colliding_empty_tool_call_ids_strand_one_request_and_merge_both_cards()
         "both requests were reported under the same object_id: {ids:?}"
     );
 
-    // 2. Only one of them can ever be answered, so the other waits out the
-    //    thirty-minute permission timeout and the run never finishes.
+    // Both decisions must reach the agent; one stranded request prevents completion.
     control
         .wait_for(
             "the run to finish once both requests are answered",

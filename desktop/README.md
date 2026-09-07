@@ -577,9 +577,12 @@ Acceptance flow:
     migration must reach a known outcome before cleanup. Repeated ⌘Q must not
     force interruption; the slow-shutdown fallback must explain the recovery risk.
 16. Restart and confirm ports and data persist, but LAN/Public mode does not
-    resume automatically. The restart must reopen the pod you were last on with
-    no installer splash; check **Diagnostics → Launch timing** and confirm the
-    trace says `resume: hit` and reaches the window in well under a second.
+    resume automatically. Close one conversation to the tray, reopen, select a
+    different conversation and Quit. Launch again: the second conversation and
+    its durable transcript must reopen. Repeat with Settings over that page.
+    When the existing services are still healthy, check **Diagnostics → Launch
+    timing** for `resume: hit`. After a full Quit, show actual service startup
+    progress before restoring the remembered page.
 17. Inspect every Diagnostics source and exercise runtime repair.
 18. Quit and confirm the VM also releases its memory — `ps` must show no
     `lemma-vz`, and Activity Monitor no multi-GB helper, once the app is gone.

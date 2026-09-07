@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 160 |
 | `gap` | 0 |
-| `manual` | 5 |
+| `manual` | 6 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **165** |
+| **total** | **166** |
 
 Scenario tests declaring a promise: 387.
 
@@ -175,6 +175,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `manual` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
 | `PS-OPS-040` Desktop settings keep drafts until a deliberate decision | `manual` | — |
+| `PS-OPS-041` Desktop reopens the last workspace page after Quit | `manual` | — |
 
 ## [Packaging and reuse](journeys/packaging-and-reuse.md)
 
