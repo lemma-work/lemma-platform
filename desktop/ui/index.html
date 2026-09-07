@@ -1554,7 +1554,9 @@
   });
 
   // ---- boot ----------------------------------------------------------------
-  lineEl.textContent = VOICE.boot[0];
+  shownLine = openIntent === "quit" ? "Stopping Lemma."
+    : openIntent === "stop" ? VOICE.stopping[0] : VOICE.boot[0];
+  lineEl.textContent = shownLine;
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);

@@ -1361,10 +1361,12 @@ _desktop-verify-dist-app:
 	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
 		| grep -qF "com.apple.security.virtualization"; \
-	codesign -dvvv "$$app/Contents/MacOS/lemma-locald" 2>&1 \
-		| grep -qFx "Identifier=work.lemma.locald" || ( \
-		echo "  ✗ locald lost its embedded Info.plist identifier — the credential"; \
-		echo "    vault would treat every rebuild as a different program"; exit 1); \
+	for helper in locald agent-host runtime vz; do \
+		location="MacOS"; test "$$helper" != vz || location="Resources"; \
+		codesign -dvvv "$$app/Contents/$$location/lemma-$$helper" 2>&1 \
+			| grep -qFx "Identifier=work.lemma.$$helper" || ( \
+			echo "  ✗ $$helper lost its stable signing identifier"; exit 1); \
+	done; \
 	test "$$(jq -r .version "$$app/Contents/Resources/lemma-local.json")" = \
 		"$$(jq -r .version $(DESKTOP_DIR)/tauri.conf.json)" || ( \
 		echo "  ✗ the bundled runtime manifest and Desktop disagree on the version"; \

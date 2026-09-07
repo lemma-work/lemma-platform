@@ -85,13 +85,15 @@ echo "VZ helper: $OUT_DIR/lemma-vz-$TRIPLE"
 # identifier from the binary's contents, the credential vault treats the next
 # build as a different program, and the app re-prompts for access on launch --
 # all of which looks like working software until someone opens it.
-locald_identifier="$(codesign -dv "$OUT_DIR/lemma-locald-$TRIPLE" 2>&1 \
-  | sed -n 's/^Identifier=//p')"
-if [[ "${locald_identifier}" != "work.lemma.locald" ]]; then
-  echo "locald signed as '${locald_identifier}', expected work.lemma.locald" >&2
-  exit 1
-fi
-echo "locald: identifier ${locald_identifier}"
+for helper in locald agent-host runtime vz; do
+  identifier="$(codesign -dv "$OUT_DIR/lemma-$helper-$TRIPLE" 2>&1 \
+    | sed -n 's/^Identifier=//p')"
+  if [[ "${identifier}" != "work.lemma.$helper" ]]; then
+    echo "$helper signed as '${identifier}', expected work.lemma.$helper" >&2
+    exit 1
+  fi
+  echo "$helper: identifier ${identifier}"
+done
 "$OUT_DIR/lemma-agent-host-$TRIPLE" --version >/dev/null \
   && echo "agent host: smoke ok"
 "$OUT_DIR/lemma-runtime-$TRIPLE" --version >/dev/null && echo "runtime bridge: smoke ok"

@@ -9,7 +9,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, intent = '', colorScheme = 'light' } = {}) {
+async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, deferState = false, intent = '', colorScheme = 'light' } = {}) {
   const context = await browser.newContext({
     viewport,
     reducedMotion: 'reduce',
@@ -35,7 +35,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
       await route.abort();
     }
   });
-  await page.addInitScript(initialState => {
+  await page.addInitScript(({ initialState, deferState }) => {
     window.__fixture = { calls: [], rejectInstall: false };
     window.__TAURI__ = {
       event: { listen: async (name, listener) => {
@@ -43,6 +43,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
       } },
       core: { async invoke(command, args) {
         window.__fixture.calls.push({ command, args });
+        if (command === 'get_state' && deferState) return new Promise(() => {});
         if (command === 'get_state') return initialState || {
           mode: 'undecided', phaseKey: 'boot', status: 'waiting',
           running: false, ready: false, error: false, setup: true,
@@ -54,7 +55,7 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
         }
       } },
     };
-  }, initialState);
+  }, { initialState, deferState });
   await page.goto(`https://desktop.test/index.html?intent=${encodeURIComponent(intent)}`);
   if (!initialState) await page.locator('#choose').waitFor({ state: 'visible' });
   return page;
@@ -64,6 +65,15 @@ async function deploymentCalls(page) {
   return page.evaluate(() => window.__fixture.calls.filter(call =>
     ['set_connection_mode', 'start', 'reset_local_data', 'reset_full_reinstall'].includes(call.command)));
 }
+
+test('shutdown shows its purpose before the daemon supplies a snapshot', async t => {
+  for (const intent of ['quit', 'stop']) {
+    const page = await onboarding(t, { intent, initialState: {}, deferState: true });
+    assert.equal(await page.locator('#line').textContent(),
+      intent === 'quit' ? 'Stopping Lemma.' : 'Winding down.');
+    assert.deepEqual(await deploymentCalls(page), []);
+  }
+});
 
 test('shutdown ignores stale startup readiness and retries shutdown without starting services', async t => {
   const page = await onboarding(t, { intent: 'quit', initialState: {

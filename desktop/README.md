@@ -316,6 +316,41 @@ signing team. A stable identifier alone is insufficient. The signed upgrade
 qualification must verify access to an existing credential file without new
 prompts; a locked keychain or changed identity can still require authorization.
 
+All four macOS helpers embed fixed identifiers: `work.lemma.locald`,
+`work.lemma.agent-host`, `work.lemma.runtime`, and `work.lemma.vz`. Backend,
+frontend, and helper code may change without changing these identifiers or the
+release signing team. Release verification rejects ad-hoc signatures, a wrong
+team, and a missing or changed helper identity. To qualify an upgrade, retain
+the previous signed app and check the actual candidate against its designated
+requirements:
+
+```bash
+uv run --no-project python desktop/scripts/check_macos_signing.py candidate/Lemma.app \
+  --team-id "$APPLE_TEAM_ID" --previous-app previous/Lemma.app
+```
+
+This checks code trust, not Keychain consent or database migration. Also launch
+both builds against a disposable installation, store a test credential with the
+first, and verify the second reads it without another prompt, preserves local
+data, and reaches healthy services. Exercise locked, denied, and subsequently
+unlocked Keychain states without deleting the encrypted credential file.
+
+The signing tests build changed native binaries and evaluate their previous
+requirements using macOS itself. They also read a previous binary's credential
+from a disposable Keychain with consent dialogs disabled, and reject access
+after changing the helper identity. They do not use the login Keychain.
+The certificate-backed case is opt-in:
+
+```bash
+LEMMA_SIGNING_TEST_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+LEMMA_SIGNING_TEST_TEAM="$APPLE_TEAM_ID" \
+  uv run --no-project python -m unittest discover -s desktop/scripts -p test_check_macos_signing.py
+```
+
+An explicitly selected Apple Development certificate and `--allow-development`
+support local QA. They do not qualify a release. Changing an old ad-hoc build to
+a certificate-backed build can still require one approval for the new identity.
+
 Credentials are encrypted in `locald/credentials.enc`; the OS vault retains its
 encryption key. Existing per-secret vault entries migrate on first access and
 remain available for recovery until explicit removal or full cleanup. Do not

@@ -295,6 +295,17 @@ jobs:
             exit 1
           fi
 
+      - name: Verify credential access across signed helper updates
+        shell: bash
+        env:
+          LEMMA_SIGNING_TEST_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+          LEMMA_SIGNING_TEST_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "${LEMMA_SIGNING_TEST_IDENTITY}"
+          test -n "${LEMMA_SIGNING_TEST_TEAM}"
+          python3 -m unittest discover -s desktop/scripts -p test_check_macos_signing.py
+
       - name: Build online DMG
         working-directory: desktop
         # The updater overlay is merged only here. `tauri build` runs from five
@@ -428,6 +439,8 @@ jobs:
           fi
 
           check "app bundle codesign verifies" codesign --verify --deep --strict --verbose=2 "${app}"
+          check "app and helpers preserve the release team and identifiers" \
+            python3 desktop/scripts/check_macos_signing.py "${app}" --team-id "${APPLE_TEAM_ID}"
           check "locald codesign verifies" codesign --verify --strict --verbose=2 "${locald}"
           check "runtime bridge codesign verifies" codesign --verify --strict --verbose=2 "${runtime_bridge}"
           check "vz codesign verifies" codesign --verify --strict --verbose=2 "${vz}"
@@ -454,6 +467,7 @@ jobs:
           echo "All Desktop bundle verification checks passed."
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       # Tauri notarizes and staples the .app, then tars it. That ordering is
       # believed, not documented -- and an update payload that is not notarized
