@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from typing import Any, Callable, Protocol
 
 import httpx
+import httpx2
 from fastmcp.exceptions import FastMCPError, McpError, ToolError
 
 from lemma_connectors.core.results import BinaryContentResult
@@ -41,35 +42,22 @@ logger = get_logger(__name__)
 _UPSTREAM_MESSAGE_LIMIT = 2000
 
 
-def _httpx2_errors() -> tuple[type[BaseException], ...]:
-    """fastmcp 4's client speaks httpx2, whose exceptions are their own tree.
-
-    `httpx2.ConnectError` is not an `httpx.ConnectError`, not an `OSError`, and
-    `httpx2.ReadTimeout` is not a `TimeoutError` -- the two packages share no
-    base class at all. So a refused connection or an expired deadline stopped
-    being recognised as an upstream fault the moment fastmcp moved, and came
-    back as an unhandled 500 instead of a clean domain error.
-
-    Imported defensively rather than declared: httpx2 arrives through fastmcp,
-    and this file should keep classifying correctly on either side of that
-    move rather than failing to import on the older one.
-    """
-    try:
-        import httpx2
-    except ImportError:
-        return ()
-    return (httpx2.HTTPError,)
-
-
 # What a call to a remote MCP server can realistically fail with: the server
 # rejecting it (fastmcp/mcp), the connection failing (httpx/httpx2/OSError), or
 # our own deadline firing. Anything outside this set is a bug in this process
 # and should surface as one rather than being reported as an upstream fault.
+#
+# Both http trees, because fastmcp 4's client speaks httpx2 and the two share
+# no base class: `httpx2.ConnectError` is neither an `httpx.ConnectError` nor
+# an `OSError`, and `httpx2.ReadTimeout` is not a `TimeoutError`. Listing only
+# one of them turned a refused connection and an expired deadline into
+# unhandled 500s. `usage/infrastructure/provider_retries.py` pairs them the
+# same way, for the same reason.
 _MCP_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     FastMCPError,
     McpError,
     httpx.HTTPError,
-    *_httpx2_errors(),
+    httpx2.HTTPError,
     OSError,
     TimeoutError,
     ValueError,
