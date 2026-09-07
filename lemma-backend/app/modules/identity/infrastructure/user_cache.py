@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.identity.domain.ports import UserCachePort
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.config import identity_settings
 
 
 class RedisUserCache(UserCachePort):
@@ -48,7 +49,7 @@ def get_user_cache() -> RedisUserCache:
     if _user_cache is None or _user_cache._redis_url != settings.redis_url:
         _user_cache = RedisUserCache(
             redis_url=settings.redis_url,
-            ttl_seconds=settings.user_cache_ttl_seconds,
+            ttl_seconds=identity_settings.user_cache_ttl_seconds,
         )
     return _user_cache
 

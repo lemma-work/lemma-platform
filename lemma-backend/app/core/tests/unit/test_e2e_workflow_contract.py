@@ -48,9 +48,19 @@ def test_every_critical_module_is_covered_by_exactly_one_e2e_shard() -> None:
     one shard" stopped being true of a split module while every one of its
     tests still runs exactly once. The module-level claim survives as "by at
     least one shard"; the exactly-once claim moved down to the files.
+
+    Overlay shards are excluded from the count, not from the layout. An overlay
+    deliberately collects directories the packed lanes also hold and separates
+    from them by marker -- `indexing` and `not indexing` cannot both select the
+    same test -- so counting it here would report every datastore and pod file
+    as doubly-run when nothing runs twice. That every test really is selected
+    once is a stronger claim than this one and is checked where it can be:
+    `plan_e2e_shards.py --verify` collects the suite and asks each lane's
+    filter, which is the only way to see a marker, and therefore the only way
+    to see an overlay.
     """
     collectors = _load_planner()._collectors
-    shards = _shards()
+    shards = [shard for shard in _shards() if not shard.get("overlay")]
     backend = _REPO_ROOT / "lemma-backend"
 
     for path in (
@@ -362,14 +372,24 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
     """`make test-e2e-runtime` must select exactly what the protected job does.
 
     The two had drifted in three ways at once: the target selected `provider`
-    where the workflow says `not provider`, omitted `not mock_sandbox_only`, and
-    left `E2E_LLM_MODE` unset. So the one command a developer would reach for to
-    reproduce the protected lane failed on tests CI never runs and covered none
-    it does.
+    where the workflow says `not provider`, carried a marker the workflow did
+    not, and left `E2E_LLM_MODE` unset. So the one command a developer would
+    reach for to reproduce the protected lane failed on tests CI never runs and
+    covered none it does.
 
     That lane is worth being able to run. Its own workflow comment records that
     it silently did nothing for eleven days -- `--extra markitdown` had stopped
     existing -- and blocked every Desktop release while it did.
+
+    Two clauses have since come out of the filter, both because they selected
+    nothing. `not mock_sandbox_only` named two workflow tests that were excluded
+    here in #155 and given no other lane, so they ran nowhere for eight weeks --
+    and they pass in this lane's exact configuration, so the exclusion outlived
+    whatever it was for. `or surface_live` was inert by construction: that file
+    is `provider` at module level and this filter says `not provider`, so the
+    clause read like a lane and was one for nobody. Its `LEMMA_RUN_SURFACE_LIVE_E2E`
+    went with it; the smoke job in `e2e.yml` still sets it, which is where those
+    tests actually run.
     """
     makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
     workflow = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
@@ -377,8 +397,8 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
     target = makefile.split("\ntest-e2e-runtime:\n", 1)[1].split("\n\n", 1)[0]
 
     marker = (
-        "e2e and (slow or workspace or surface_live or indexing or local_cli "
-        "or protected) and not provider and not mock_sandbox_only"
+        "e2e and (slow or workspace or indexing or local_cli "
+        "or protected) and not provider"
     )
     assert marker in workflow, (
         "the protected workflow's marker filter changed; update this test and "
@@ -389,8 +409,34 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
     )
     # The environment is part of the selection: `E2E_LLM_MODE=mock` is what
     # keeps this lane real about Docker without needing a paid model key.
-    for setting in ("E2E_REAL=1", "E2E_LLM_MODE=mock", "LEMMA_RUN_SURFACE_LIVE_E2E=1"):
+    for setting in ("E2E_REAL=1", "E2E_LLM_MODE=mock"):
         assert setting in target, f"{setting} missing from the target"
+
+
+def test_the_two_non_shard_lanes_match_their_workflows() -> None:
+    """`--verify` decides coverage, so its copy of a lane must be the lane.
+
+    The shard lanes need no such check: the gate reads their filters straight
+    out of `.github/e2e-shards.json`, which is the file the workflow runs from.
+    The other two lanes are not in that file, so the planner holds a copy of
+    each -- and a stale copy would not fail loudly. It would report a test as
+    covered by a lane whose filter no longer selects it, which is the exact
+    shape of the bug the gate exists to catch, wearing the gate's own colours.
+    """
+    planner = _load_planner()
+    protected = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
+    e2e = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
+
+    assert planner.PROTECTED_MARKERS in protected, (
+        "plan_e2e_shards.PROTECTED_MARKERS no longer matches the protected "
+        "workflow; --verify would credit that lane with tests it deselects"
+    )
+    assert planner.SMOKE_PATH in e2e, (
+        "the surface-live smoke job no longer runs plan_e2e_shards.SMOKE_PATH"
+    )
+    assert f"-m {planner.SMOKE_MARKERS}" in e2e, (
+        "the surface-live smoke job's marker filter changed"
+    )
 
 
 #: Markers declared in `pytest.ini` that no test carries, and why that is

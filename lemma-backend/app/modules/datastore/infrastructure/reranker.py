@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import httpx
 
+from app.modules.datastore.config import datastore_settings
 from app.core.config import reveal_secret, settings
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
@@ -40,7 +41,7 @@ class LocalCrossEncoderReranker:
     sentence-transformers. The model is loaded lazily on first use."""
 
     def __init__(self, model_name: str | None = None):
-        self.model_name = model_name or settings.local_reranker_model
+        self.model_name = model_name or datastore_settings.local_reranker_model
         self._model = None
 
     def _load_model(self):
@@ -93,7 +94,7 @@ class OpenAICompatReranker:
     """
 
     def __init__(self, model: str | None = None):
-        self.model = model or settings.openai_compat_reranker_model
+        self.model = model or datastore_settings.openai_compat_reranker_model
 
     async def rerank(
         self,
@@ -143,7 +144,7 @@ class OpenAICompatReranker:
 
 def create_reranker():
     """Composition helper — pick the reranker adapter from ``RERANKER_MODE``."""
-    mode = settings.reranker_mode
+    mode = datastore_settings.reranker_mode
     if mode == "local":
         return LocalCrossEncoderReranker()
     if mode == "openai_compat":

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from app.modules.identity.config import identity_settings
+from app.modules.agent.config import agent_settings
+from app.modules.datastore.config import datastore_settings
 from app.modules.function.config import function_settings
 from app.modules.workspace.config import workspace_settings
 
@@ -35,6 +38,7 @@ from app.core.test_utils import (
     shared_postgres,
     shared_redis,
 )
+from app.modules.schedule.config import schedule_settings
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -213,9 +217,21 @@ async def _close_e2e_process_clients() -> None:
 
     ``httpx.ASGITransport`` intentionally does not run the application's
     lifespan. E2E requests can therefore initialize the same lazy singletons as
-    production without invoking their production shutdown hooks. Keep this
-    cleanup on the pytest async loop and call it from the canonical client
-    fixture after all dependent request fixtures have unwound.
+    production without invoking their production shutdown hooks.
+
+    Call it only through the ``e2e_process_clients`` fixture, which exists to
+    put it after every fixture that could still be using one of these -- see
+    that fixture for what goes wrong when it runs earlier.
+
+    The message bus is deliberately not in the list, and nothing else in the
+    harness closes it either. It is the one process-wide client an E2E request
+    cannot open: ``SqlAlchemyUnitOfWork`` stages domain events in the outbox
+    and a separate dispatcher publishes them, so no request path ever reaches
+    ``FastStreamRedisMessageBus._get_broker``. The only connect in this process
+    is ``app/app.py``'s lifespan, which closes it in the same ``finally``.
+    Measured rather than assumed: ``_get_broker`` is called 0 times across the
+    112 tests of ``app/modules/pod/tests/e2e``, and exactly as many times as
+    ``close`` on a suite that runs ``backend_server``.
     """
 
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
@@ -527,16 +543,15 @@ def _seed_system_model_pricing() -> None:
     """
     if os.environ.get("LEMMA_SYSTEM_MODEL_METADATA_JSON"):
         return
-    from app.core.config import settings
 
     # Every configured model, not just the default: one test deliberately runs
     # a NON-default one, to prove a model without a price entry cannot slip past
     # the usage limits by having its record dropped.
     names = os.environ.get("LEMMA_OPENAI_MODEL_NAMES") or (
-        settings.lemma_openai_model_names or ""
+        agent_settings.lemma_openai_model_names or ""
     )
     default = os.environ.get("LEMMA_OPENAI_DEFAULT_MODEL") or (
-        settings.lemma_openai_default_model
+        agent_settings.lemma_openai_default_model
     )
     models = {name.strip() for name in names.split(",") if name.strip()}
     if default:
@@ -563,7 +578,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     os.environ["SUPERTOKENS_ENV"] = "testing"
     settings.database_url = test_database_url
     base_url = test_database_url.rsplit("/", 1)[0]
-    settings.datastore_database_url = (
+    datastore_settings.datastore_database_url = (
         f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
     )
     settings.redis_url = test_redis_url
@@ -577,8 +592,8 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # assertions), so opt the e2e stack in explicitly, the same way `make init`
     # sets ``API_DOCS_ENABLED=true`` for the dev stack.
     settings.api_docs_enabled = True
-    settings.google_client_id = "test-google-client-id"
-    settings.google_client_secret = "test-google-client-secret"
+    identity_settings.google_client_id = "test-google-client-id"
+    identity_settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
     settings.auth_email_verification_required = True
     settings.auth_email_deliverability_checks_enabled = False
@@ -614,7 +629,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
         "WORKSPACE_E2E_DOCKER_API_URL",
         f"http://host.docker.internal:{callback_port}",
     )
-    settings.workspace_callback_api_url = callback_url
+    workspace_settings.workspace_callback_api_url = callback_url
     function_settings.function_runtime_gateway_url = callback_url
     os.environ["WORKSPACE_E2E_BACKEND_PORT"] = str(callback_port)
     os.environ["WORKSPACE_CALLBACK_API_URL"] = callback_url
@@ -677,7 +692,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # Disable the worker's auto-index-on-upload so it doesn't ALSO index every
     # uploaded file through the single shared Kreuzberg — that double load OOMs
     # the container under -n2. Inherited by the worker subprocess.
-    settings.e2e_disable_worker_file_autoindex = True
+    datastore_settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
     # The schedule poller is a real background loop in the worker subprocess,
@@ -689,7 +704,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # this process's settings singleton -- so set os.environ too, same as
     # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
     # env={**os.environ, ...} already inherits it, no extra Popen key needed.
-    settings.schedule_poll_interval_seconds = 0.5
+    schedule_settings.schedule_poll_interval_seconds = 0.5
     os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
 
     # The same argument as the schedule poller, for the other production
@@ -733,34 +748,6 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     db_session_module.reset_engine_state()
 
     return settings
-
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def cleanup_workspace_containers_session():
-    yield
-    # The message bus is a process-wide singleton with no per-test subscribe
-    # state (it's publish-only; the real FastStream consumers run in the
-    # separate streaq worker subprocess, unaffected by this connection's
-    # lifecycle) -- close it once per xdist worker here instead of
-    # reconnecting it on every single test's teardown via
-    # _close_e2e_process_clients.
-    from app.core.infrastructure.events.message_bus import close_message_bus
-
-    await _run_cleanup_step("close_message_bus", close_message_bus)
-    # Close exactly the contexts created by this pytest process. Broad sweeps
-    # by the shared label are unsafe even in a serial session because another
-    # independently invoked pytest process may be running at the same time.
-    _close_shared_contexts()
-
-
-@pytest_asyncio.fixture(scope="function", autouse=True)
-async def cleanup_workspace_containers_function():
-    yield
-    # Per-test: only reap this test's sandbox pods. Sweeping all lemma.e2e
-    # containers here would kill the shared session testcontainers and break every
-    # subsequent test.
-    _cleanup_e2e_workspace_containers(sandboxes_only=True)
-    await _close_e2e_process_clients()
 
 
 def _import_e2e_models() -> None:
@@ -835,7 +822,6 @@ async def sandbox_reachable_backend(e2e_settings):
     for the whole run, pointed at the port each test's backend rebinds.
     """
 
-    from app.core.config import settings
     from app.modules.test_support.e2e.runtime import _temporary_workspace_tunnel
 
     off_box = workspace_settings.provider.lower() == "e2b"
@@ -848,20 +834,20 @@ async def sandbox_reachable_backend(e2e_settings):
         key: os.environ.get(key)
         for key in ("WORKSPACE_CALLBACK_API_URL", "FUNCTION_RUNTIME_GATEWAY_URL")
     }
-    original_callback = settings.workspace_callback_api_url
+    original_callback = workspace_settings.workspace_callback_api_url
     original_gateway = function_settings.function_runtime_gateway_url
 
     async with _temporary_workspace_tunnel(
         f"http://127.0.0.1:{port}", wait_for_backend=False
     ) as public_url:
-        settings.workspace_callback_api_url = public_url
+        workspace_settings.workspace_callback_api_url = public_url
         function_settings.function_runtime_gateway_url = public_url
         os.environ["WORKSPACE_CALLBACK_API_URL"] = public_url
         os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = public_url
         try:
             yield public_url
         finally:
-            settings.workspace_callback_api_url = original_callback
+            workspace_settings.workspace_callback_api_url = original_callback
             function_settings.function_runtime_gateway_url = original_gateway
             for key, value in previous.items():
                 if value is None:
@@ -885,6 +871,8 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     """
     import asyncio
     import redis.asyncio as redis
+
+    from app.core.config import settings
 
     # Worker lifespans may reconcile persisted state before any function-scoped
     # db_manager fixture runs. Build the schema once before starting the
@@ -933,10 +921,12 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                     part for part in (".", os.environ.get("PYTHONPATH")) if part
                 ),
                 "DATABASE_URL": e2e_settings.database_url,
-                "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
+                "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
-                "WORKSPACE_CALLBACK_API_URL": (e2e_settings.workspace_callback_api_url),
+                "WORKSPACE_CALLBACK_API_URL": (
+                    workspace_settings.workspace_callback_api_url
+                ),
                 # `function_settings`, not `e2e_settings`: this field moved to
                 # `FunctionSettings`, and `e2e_settings` is core's. The two are
                 # separate objects, so reading it off the wrong one is an
@@ -957,7 +947,15 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
-                "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
+                # `settings`, not `e2e_settings`: they are the same object --
+                # the fixture mutates the core singleton and hands it back --
+                # but `check_settings_attrs.py` can only resolve a name it can
+                # follow to an import. A field read off a fixture parameter is
+                # invisible to it, which is how the harness set these by string
+                # key and nothing noticed until a sandbox was already running.
+                # The parameter stays in the signature: it is what orders this
+                # after the fixture has applied its overrides.
+                "EMAIL_OUTPUT_DIR": settings.email_output_dir,
                 "GCS_STORAGE_BUCKET": "",
                 "STORAGE_BUCKET": "",
                 "PUBLIC_BUCKET_NAME": "",
@@ -1165,17 +1163,52 @@ async def db_session(db_manager) -> AsyncGenerator:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
+async def e2e_process_clients() -> AsyncGenerator[None, None]:
+    """Own the shutdown of the process-wide clients a test may have opened.
+
+    A fixture rather than a `finally` inside `async_client`, because *when*
+    this runs is the whole point and only a dependency edge can state it.
+    Every fixture that can leave one of these singletons open depends on this
+    one, so pytest sets it up first and finalises it last -- after all of them.
+
+    It has to be last because the singletons are not all opened the same way.
+    `async_client` opens them lazily, one HTTPX ASGI request at a time, on the
+    pytest loop. `backend_server` opens them inside the application's own
+    lifespan, running on uvicorn's lifespan task -- and some carry an anyio
+    cancel scope bound to whichever task entered it. Closing the streaq queue
+    from the wrong task cancels that scope's *host*, which is uvicorn's
+    lifespan task parked in `receive()`: the application shutdown then unwinds
+    mid-cancellation, stops partway through `app/app.py`'s core closers, and
+    prints a cancel-scope `RuntimeError` from the MCP session manager's task
+    group on the way out. Green, loud, and directly under whatever else that
+    test printed -- which is how it was once read as the cause of an unrelated
+    failure.
+
+    The noise was the visible half. The closers that never ran were the other
+    one: every test with a `backend_server` leaked the redis connection and
+    socket that `close_redis_json_caches` was cancelled in the middle of, and
+    reported them as `ResourceWarning`s nobody connected to this.
+
+    Ordered after the server, the application's own lifespan closes what it
+    opened, on the task that opened it, and this is left with nothing to do.
+    """
+
+    yield
+    await _close_e2e_process_clients()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_client(
+    test_app, e2e_process_clients
+) -> AsyncGenerator["AsyncClient", None]:
     from httpx import ASGITransport, AsyncClient
 
+    del e2e_process_clients  # ordering only; see the fixture's docstring
     async with AsyncClient(
         transport=ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
-        try:
-            yield client
-        finally:
-            await _close_e2e_process_clients()
+        yield client
 
 
 @pytest_asyncio.fixture(scope="function")

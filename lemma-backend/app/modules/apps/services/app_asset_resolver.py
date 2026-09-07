@@ -26,6 +26,7 @@ from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.services import app_install_assets
 from app.modules.apps.services.app_storage_phase import _AssetReadInputs
+from app.modules.apps.config import apps_settings
 
 logger = structlog.get_logger()
 
@@ -112,7 +113,11 @@ class AppAssetResolver:
         public_url: str | None,
         is_entrypoint: bool,
     ) -> dict[str, str] | None:
-        if not is_entrypoint or not public_url or not settings.app_branding_enabled:
+        if (
+            not is_entrypoint
+            or not public_url
+            or not apps_settings.app_branding_enabled
+        ):
             return None
         if self.branding_entitlement is None:
             return runtime_config.build_app_branding(public_url)

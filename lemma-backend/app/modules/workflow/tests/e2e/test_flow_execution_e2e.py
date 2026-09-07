@@ -33,7 +33,15 @@ from app.modules.workflow.events import handlers as wf_handlers
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.services.run_resume_service import RunResumeService
 
-pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
+# `workspace` is deliberately not blanket-applied here. The root conftest adds
+# it to whichever tests actually ask for a workspace fixture, which in this file
+# is the twelve that take `configure_workspace_api_url` -- that fixture pulls in
+# `local_sandbox_server`, so those genuinely need the real Docker images and
+# belong in the protected lane. The other ten assert graph validation, pod-role
+# access and inbox behaviour over plain HTTP and need none of it. Marking the
+# module wall-to-wall put all twenty-two behind `not workspace`, so ten API
+# tests ran only in the weekly cron; they pass in 48s with no image at all.
+pytestmark = [pytest.mark.e2e]
 
 # Why some tests here take `worker` and most do not.
 #
@@ -640,7 +648,6 @@ async def _assigned_waits(
 
 
 @pytest.mark.asyncio
-@pytest.mark.mock_sandbox_only
 async def test_user_assigned_manual_workflow_runs_through_all_node_types(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
@@ -892,7 +899,6 @@ async def test_non_form_manual_workflow_runs_immediately(
 
 
 @pytest.mark.asyncio
-@pytest.mark.mock_sandbox_only
 async def test_scheduled_single_api_function_workflow_completes_inline(
     authenticated_client: AsyncClient,
     fixed_test_org,

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select
 
-from app.core.config import settings
+from app.modules.usage.config import usage_settings
 from app.core.infrastructure.db.manager import DatabaseManager
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
@@ -68,7 +68,7 @@ async def records_for(db_manager: DatabaseManager, user_id: UUID) -> list[UsageR
 async def test_crossing_receipt_commits_before_denial_and_replays_exactly_once(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     user_id, request_id = uuid4(), uuid4()
     now = datetime.now(timezone.utc)
     gateway = gateway_for(db_manager, user_id)
@@ -113,7 +113,7 @@ async def test_crossing_receipt_commits_before_denial_and_replays_exactly_once(
 async def test_all_inflight_actual_costs_persist_after_another_run_exhausts_budget(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     user_id = uuid4()
     now = datetime.now(timezone.utc)
     gateways = [gateway_for(db_manager, user_id) for _ in range(3)]
@@ -150,7 +150,7 @@ async def test_all_inflight_actual_costs_persist_after_another_run_exhausts_budg
 async def test_current_limit_rechecks_exact_historical_cost_and_legacy_fallback(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.300000002)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 0.300000002)
     user_id = uuid4()
     now = datetime.now(timezone.utc)
     async with db_manager.session_factory() as session, session.begin():
@@ -171,17 +171,17 @@ async def test_current_limit_rechecks_exact_historical_cost_and_legacy_fallback(
         )
     gateway = gateway_for(db_manager, user_id)
     await gateway.begin(uuid4(), now)
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.300000001)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 0.300000001)
     with pytest.raises(UsageLimitExceededError):
         await gateway.begin(uuid4(), now)
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.4)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 0.4)
     await gateway.begin(uuid4(), now)
 
 
 async def test_missing_provider_usage_is_audited_without_inventing_cost(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     user_id, request_id = uuid4(), uuid4()
     now = datetime.now(timezone.utc)
     gateway = gateway_for(db_manager, user_id)
@@ -208,7 +208,7 @@ async def test_missing_provider_usage_is_audited_without_inventing_cost(
 async def test_late_receipt_charges_dispatch_week_without_blocking_new_week(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     user_id, request_id = uuid4(), uuid4()
     dispatch_time = datetime(2026, 9, 6, 23, 59, 59, tzinfo=timezone.utc)
     next_week = datetime(2026, 9, 7, 0, 0, 1, tzinfo=timezone.utc)
@@ -236,7 +236,7 @@ async def test_late_receipt_charges_dispatch_week_without_blocking_new_week(
 async def test_request_identity_cannot_be_replayed_into_another_scope(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 1.0)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     owner_id, other_id, request_id = uuid4(), uuid4(), uuid4()
     now = datetime.now(timezone.utc)
     owner = gateway_for(db_manager, owner_id)
@@ -304,7 +304,7 @@ async def test_changing_global_scope_exclusions_rechecks_historical_spend(
 async def test_existing_ledger_writer_cannot_bypass_a_previously_checked_budget(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "usage_user_weekly_limit_usd", 0.1)
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 0.1)
     user_id = uuid4()
     now = datetime.now(timezone.utc)
     gateway = gateway_for(db_manager, user_id)

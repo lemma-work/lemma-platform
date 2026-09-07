@@ -112,6 +112,7 @@ export const useAccessiblePods = (options?: { enabled?: boolean }) => {
         },
         isLoading: navigationQuery.isLoading,
         isError: navigationQuery.isError,
+        refetch: navigationQuery.refetch,
         error: navigationQuery.error,
     };
 };

@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 
 from app.core.log.log import get_logger
+import aiohttp
+
 from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -317,7 +319,10 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
                     if response.status >= 400:
                         return None
                     data = await response.json()
-        except Exception:
+        # `ValueError` too: `response.json()` decodes the body, and a
+        # non-JSON 200 from the Bot Framework connector is a `JSONDecodeError`,
+        # which is not an `aiohttp.ClientError`.
+        except aiohttp.ClientError, TimeoutError, ValueError:
             logger.debug(
                 "agent_surfaces.adapter.teams_fetch_email_bf_connector.observed"
             )

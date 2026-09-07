@@ -18,7 +18,7 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.contracts import AuthProvider
 from app.modules.connectors.infrastructure.repositories.account_repository import (
     AccountRepository,
 )

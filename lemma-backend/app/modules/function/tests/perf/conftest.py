@@ -47,6 +47,7 @@ e2e_settings = e2e_fixtures.e2e_settings
 db_manager = e2e_fixtures.db_manager
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
+e2e_process_clients = e2e_fixtures.e2e_process_clients
 fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
@@ -607,6 +608,7 @@ async def _static_url(url: str) -> AsyncIterator[str]:
 
 
 __all__ = [
+    "e2e_process_clients",
     "authenticated_client",
     "backend_server",
     "db_manager",

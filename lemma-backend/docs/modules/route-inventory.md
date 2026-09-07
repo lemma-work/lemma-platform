@@ -282,6 +282,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/usage/me/events` | `usage.me.events.list` | My Events |
+| GET | `/usage/me/limits` | `usage.me.limits.get` | My Limits |
+| GET | `/usage/me/stats` | `usage.me.stats.get` | My Stats |
+| GET | `/usage/me/summary` | `usage.me.summary.get` | My Summary |
 | GET | `/usage/organizations/{organization_id}/events` | `usage.organization.events.list` | List Usage Events |
 | GET | `/usage/organizations/{organization_id}/limits` | `usage.organization.limits.get` | Get Usage Limits |
 | GET | `/usage/organizations/{organization_id}/me` | `usage.organization.me.summary.get` | Get My Usage |

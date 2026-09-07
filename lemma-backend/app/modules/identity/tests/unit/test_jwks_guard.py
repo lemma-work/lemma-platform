@@ -65,7 +65,9 @@ def test_the_negative_cache_expires_so_rotation_recovers(fetches, monkeypatch):
     """A key published after we rejected its id must become usable."""
     clock = {"t": 0.0}
     monkeypatch.setattr(jwks_guard.time, "monotonic", lambda: clock["t"])
-    monkeypatch.setattr(jwks_guard.settings, "auth_jwks_unknown_kid_ttl_seconds", 60.0)
+    monkeypatch.setattr(
+        jwks_guard.identity_settings, "auth_jwks_unknown_kid_ttl_seconds", 60.0
+    )
 
     with pytest.raises(Exception):
         jwks_guard._guarded_get_latest_keys(object(), "rotating")
@@ -92,7 +94,9 @@ def test_a_successful_fetch_clears_the_negative_cache(fetches):
 
 def test_the_negative_cache_is_bounded(fetches, monkeypatch):
     """The sender picks the ids, so an unbounded map just moves the damage."""
-    monkeypatch.setattr(jwks_guard.settings, "auth_jwks_unknown_kid_cache_size", 8)
+    monkeypatch.setattr(
+        jwks_guard.identity_settings, "auth_jwks_unknown_kid_cache_size", 8
+    )
 
     for index in range(40):
         with pytest.raises(Exception):

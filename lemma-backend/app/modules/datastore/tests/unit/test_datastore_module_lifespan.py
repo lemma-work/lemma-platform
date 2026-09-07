@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
 from app.modules.datastore.composition import (
     DatastoreComposition,
@@ -22,8 +23,8 @@ async def test_embedding_preload_runs_for_enabled_local_worker(monkeypatch):
     embedder = SimpleNamespace(embed=AsyncMock(return_value=[0.0, 1.0]))
     monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "embedding_provider", "local")
-    monkeypatch.setattr(settings, "local_embedding_preload", True)
-    monkeypatch.setattr(settings, "local_embedding_startup_mode", "blocking")
+    monkeypatch.setattr(datastore_settings, "local_embedding_preload", True)
+    monkeypatch.setattr(datastore_settings, "local_embedding_startup_mode", "blocking")
     monkeypatch.setattr(settings, "embedding_dimension", 2)
     previous = install_datastore_composition(
         DatastoreComposition(embedder_provider=lambda: embedder)
@@ -71,8 +72,10 @@ async def test_background_embedding_preload_does_not_block_startup(monkeypatch):
     embedder = SimpleNamespace(embed=AsyncMock(side_effect=embed))
     monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "embedding_provider", "local")
-    monkeypatch.setattr(settings, "local_embedding_preload", True)
-    monkeypatch.setattr(settings, "local_embedding_startup_mode", "background")
+    monkeypatch.setattr(datastore_settings, "local_embedding_preload", True)
+    monkeypatch.setattr(
+        datastore_settings, "local_embedding_startup_mode", "background"
+    )
     monkeypatch.setattr(settings, "embedding_dimension", 2)
     monkeypatch.setattr(datastore_module, "_embedding_init_task", None)
     previous = install_datastore_composition(
@@ -95,8 +98,10 @@ async def test_background_embedding_failure_degrades_without_raising(monkeypatch
     embedder = SimpleNamespace(embed=AsyncMock(side_effect=ConnectionError("offline")))
     monkeypatch.setattr(settings, "environment", "local")
     monkeypatch.setattr(settings, "embedding_provider", "local")
-    monkeypatch.setattr(settings, "local_embedding_preload", True)
-    monkeypatch.setattr(settings, "local_embedding_startup_mode", "background")
+    monkeypatch.setattr(datastore_settings, "local_embedding_preload", True)
+    monkeypatch.setattr(
+        datastore_settings, "local_embedding_startup_mode", "background"
+    )
     monkeypatch.setattr(datastore_module, "_embedding_init_task", None)
     previous = install_datastore_composition(
         DatastoreComposition(embedder_provider=lambda: embedder)

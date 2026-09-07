@@ -13,6 +13,8 @@ import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getConversationStatusView, isConversationRunningStatus } from '@/lib/utils/conversations';
+import { readSource, sourceHeadline } from '@/lib/assistant/conversation-source';
+import { SourceGlyph } from '@/components/lemma/assistant/conversation-source-marks';
 import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 /** Titles vary, so the placeholders do — equal bars read as a table, not a list.
@@ -137,6 +139,10 @@ export function PodConversationList({
             {items.map((conversation) => {
                 const statusView = getConversationStatusView(conversation.status);
                 const showStatus = statusView.state !== 'completed' && statusView.state !== 'unknown';
+                // Null for everything typed here. This row already has a
+                // metadata line, so the source can be a word on it rather than
+                // a glyph competing with the title.
+                const source = readSource(conversation);
 
                 return (
                     <ResourceRow
@@ -157,6 +163,12 @@ export function PodConversationList({
                                 </span>
                                 <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--text-tertiary)]">
                                     <span>{formatDistanceToNow(new Date(conversation.updated_at || conversation.created_at), { addSuffix: true })}</span>
+                                    {source ? (
+                                        <span className="flex min-w-0 items-center gap-1.5">
+                                            <SourceGlyph source={source} />
+                                            <span className="truncate">{sourceHeadline(source)}</span>
+                                        </span>
+                                    ) : null}
                                     {showStatus ? (
                                         <span
                                             className={cn(

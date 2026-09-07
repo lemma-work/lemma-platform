@@ -46,6 +46,7 @@ export default defineConfig({
             // modules rather than becoming a glob over components.
             'components/onboarding/local-setup.{test,spec}.ts',
             'lib/**/*.{test,spec}.ts',
+            'components/usage/*.{test,spec}.ts',
         ],
     },
 });

@@ -20,6 +20,8 @@ from app.modules.identity.services.telegram_oidc import (
     normalize_e164,
     safe_return_to,
 )
+from app.modules.identity.config import TELEGRAM_OIDC_ISSUER
+from app.modules.identity.config import identity_settings
 
 
 class _FakeRedis:
@@ -67,12 +69,12 @@ def test_safe_return_to_allows_only_lemma_origins(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_oidc_transaction_is_pkce_backed_bound_and_single_use(monkeypatch):
-    monkeypatch.setattr(settings, "telegram_oidc_client_id", "telegram-client")
+    monkeypatch.setattr(identity_settings, "telegram_oidc_client_id", "telegram-client")
     monkeypatch.setattr(
-        settings, "telegram_oidc_client_secret", SecretStr("telegram-secret")
+        identity_settings, "telegram_oidc_client_secret", SecretStr("telegram-secret")
     )
     monkeypatch.setattr(
-        settings,
+        identity_settings,
         "telegram_oidc_redirect_uri",
         "https://api.lemma.test/auth/telegram/callback",
     )
@@ -102,12 +104,12 @@ async def test_oidc_transaction_is_pkce_backed_bound_and_single_use(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_oidc_id_token_validates_signature_nonce_and_verified_phone(monkeypatch):
-    monkeypatch.setattr(settings, "telegram_oidc_client_id", "telegram-client")
+    monkeypatch.setattr(identity_settings, "telegram_oidc_client_id", "telegram-client")
     monkeypatch.setattr(
-        settings, "telegram_oidc_client_secret", SecretStr("telegram-secret")
+        identity_settings, "telegram_oidc_client_secret", SecretStr("telegram-secret")
     )
     monkeypatch.setattr(
-        settings,
+        identity_settings,
         "telegram_oidc_redirect_uri",
         "https://api.lemma.test/auth/telegram/callback",
     )
@@ -119,7 +121,7 @@ async def test_oidc_id_token_validates_signature_nonce_and_verified_phone(monkey
     def make_token(*, nonce="expected-nonce", phone_verified=True):
         return jwt.encode(
             {
-                "iss": settings.telegram_oidc_issuer,
+                "iss": TELEGRAM_OIDC_ISSUER,
                 "aud": "telegram-client",
                 "sub": "telegram-user-1",
                 "iat": now,
@@ -184,7 +186,7 @@ async def test_oidc_id_token_validates_signature_nonce_and_verified_phone(monkey
     other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     _Client.token = jwt.encode(
         {
-            "iss": settings.telegram_oidc_issuer,
+            "iss": TELEGRAM_OIDC_ISSUER,
             "aud": "telegram-client",
             "sub": "telegram-user-1",
             "iat": now,

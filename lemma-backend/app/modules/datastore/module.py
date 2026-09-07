@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal
 
+from app.modules.datastore.config import datastore_settings
 from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 from app.core.registry import LemmaModule
@@ -76,8 +77,10 @@ async def _preload_local_embeddings(context):
     from app.modules.datastore.composition import get_datastore_composition
 
     composition = get_datastore_composition()
-    should_preload = settings.local_embedding_preload and composition.preload_embeddings
-    mode = settings.local_embedding_startup_mode if should_preload else "lazy"
+    should_preload = (
+        datastore_settings.local_embedding_preload and composition.preload_embeddings
+    )
+    mode = datastore_settings.local_embedding_startup_mode if should_preload else "lazy"
     if not composition.preload_embeddings:
         _embedding_capability.status = "disabled"
         _embedding_capability.detail = ""
@@ -89,7 +92,7 @@ async def _preload_local_embeddings(context):
         yield
         return
 
-    timeout = max(1.0, settings.local_embedding_preload_timeout_seconds)
+    timeout = max(1.0, datastore_settings.local_embedding_preload_timeout_seconds)
     if mode == "blocking":
         # Preserve the existing fail-fast contract outside managed Desktop.
         _embedding_capability.status = "preparing"
@@ -202,7 +205,7 @@ async def _datastore_outbox_dispatcher(context):
     )
 
     del context
-    datastore_url = settings.datastore_database_url or settings.database_url
+    datastore_url = datastore_settings.datastore_database_url or settings.database_url
     if datastore_url == settings.database_url:
         yield
         return
@@ -217,6 +220,30 @@ async def _datastore_outbox_dispatcher(context):
 
 
 @asynccontextmanager
+async def _close_datastore_engine(context):
+    """Dispose this module's own engine when the worker stops.
+
+    It used to be a function-local import and a call at the end of
+    `streaq_runtime`'s shutdown, which is one of the two things core did that
+    made it import a module. The module owns the engine, so the module closes
+    it.
+
+    Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
+    so entering this one first makes it the last of datastore's to unwind --
+    after `_close_reindex_queue` and the outbox dispatcher, both of which can
+    still want the engine on their way out.
+    """
+    try:
+        yield
+    finally:
+        from app.modules.datastore.infrastructure.session import (
+            close_datastore_engine,
+        )
+
+        await close_datastore_engine()
+
+
+@asynccontextmanager
 async def _close_reindex_queue(context):
     try:
         yield
@@ -228,12 +255,51 @@ async def _close_reindex_queue(context):
         await close_datastore_reindex_queue()
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.datastore.infrastructure.models.datastore_models import (
+        DatastoreFile,
+        DatastoreTable,
+    )
+
+    return (
+        (
+            ResourceType.DATASTORE_TABLE,
+            ResourceNameTable(
+                DatastoreTable.id, DatastoreTable.pod_id, DatastoreTable.table_name
+            ),
+        ),
+        # `FOLDER` and `DOCUMENT` are the same rows, addressed by path.
+        (
+            ResourceType.FOLDER,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+        (
+            ResourceType.DOCUMENT,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="datastore",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_preload_local_embeddings, _backfill_query_role),
     worker_lifespans=(
+        _close_datastore_engine,
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,
         _close_reindex_queue,

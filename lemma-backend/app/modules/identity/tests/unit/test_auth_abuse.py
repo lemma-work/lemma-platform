@@ -14,6 +14,7 @@ from app.modules.identity.services.auth_abuse import (
     RateLimitExceeded,
     client_ip,
 )
+from app.modules.identity.config import identity_settings
 
 
 class _FakeRedis:
@@ -72,8 +73,10 @@ def _solve(challenge: dict) -> str:
 @pytest.mark.asyncio
 async def test_altcha_proof_is_single_use_and_purpose_bound(monkeypatch):
     monkeypatch.setattr(settings, "auth_altcha_enabled", True)
-    monkeypatch.setattr(settings, "auth_altcha_hmac_key", SecretStr("test-altcha-key"))
-    monkeypatch.setattr(settings, "auth_altcha_max_number", 100)
+    monkeypatch.setattr(
+        identity_settings, "auth_altcha_hmac_key", SecretStr("test-altcha-key")
+    )
+    monkeypatch.setattr(identity_settings, "auth_altcha_max_number", 100)
     store = _store()
 
     challenge = await store.issue_altcha("signup")
@@ -106,8 +109,8 @@ def test_forwarded_ip_is_only_trusted_from_configured_proxy(monkeypatch):
         "client": ("10.0.0.10", 1234),
         "headers": [(b"x-forwarded-for", b"203.0.113.8, 10.0.0.10")],
     }
-    monkeypatch.setattr(settings, "auth_trusted_proxy_ips", [])
+    monkeypatch.setattr(identity_settings, "auth_trusted_proxy_ips", [])
     assert client_ip(scope) == "10.0.0.10"
 
-    monkeypatch.setattr(settings, "auth_trusted_proxy_ips", ["10.0.0.10"])
+    monkeypatch.setattr(identity_settings, "auth_trusted_proxy_ips", ["10.0.0.10"])
     assert client_ip(scope) == "203.0.113.8"

@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
+from app.modules.identity.config import identity_settings
 
 
 _KEY_PREFIX = "identity:desktop-auth"
@@ -119,12 +120,12 @@ class DesktopAuthHandoffStore:
         self._redis_url = redis_url or settings.redis_url
         self._ttl_seconds = ttl_seconds
         self._create_limit = (
-            settings.desktop_auth_create_limit
+            identity_settings.desktop_auth_create_limit
             if create_limit is None
             else max(0, create_limit)
         )
         self._create_window_seconds = (
-            settings.desktop_auth_create_window_seconds
+            identity_settings.desktop_auth_create_window_seconds
             if create_window_seconds is None
             else max(1, create_window_seconds)
         )

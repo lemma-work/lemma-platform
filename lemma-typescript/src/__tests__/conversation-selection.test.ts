@@ -502,3 +502,29 @@ describe("explicit conversation selection", () => {
     expect(controller.get().canRetryFailedMessage).toBe(false);
   });
 });
+
+it('restores quota failure details after opening a conversation and suppresses generic retry', async () => {
+  const failed = {
+    ...conversation('quota-failed', '2026-07-19T12:00:00.000Z'),
+    status: 'FAILED',
+    last_run_status: 'FAILED',
+    last_run_error: 'Allowance exhausted',
+    last_run_error_code: 'USAGE_LIMIT_EXCEEDED',
+    last_run_error_reason: 'exhausted',
+    last_run_retryable: true,
+  } as Conversation;
+  const { client } = fakeClient([failed]);
+  const controller = captureHookResult<UseAssistantControllerResult>();
+  function Harness() {
+    controller.set(useAssistantController({ client, podId: 'pod-1', autoLoadMessages: false }));
+    return null;
+  }
+  await render(createElement(Harness));
+  await settle();
+  await act(async () => controller.get().openConversation(failed.id));
+  expect(controller.get().errorCode).toBe('USAGE_LIMIT_EXCEEDED');
+  expect(controller.get().errorReason).toBe('exhausted');
+  expect(controller.get().canRetryFailedMessage).toBe(false);
+  await act(async () => controller.get().closeConversation());
+  expect(controller.get().errorCode).toBeNull();
+});

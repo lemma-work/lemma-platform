@@ -21,7 +21,7 @@ from app.core.authorization.delegation import (
 )
 from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
-from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.domain.entity import AuthenticatedPrincipal
 from app.core.auth_state_cache import (
     AccountStanding,
     get_account_standing,
@@ -326,7 +326,7 @@ async def verify_auth(connection: HTTPConnection):
                     },
                 )
 
-            connection.state.user = AuthUserEntity(id=parsed_user_id)
+            connection.state.user = AuthenticatedPrincipal(id=parsed_user_id)
             connection.state.session = session
             # Cheap for every request that is not from a published app: the
             # header check short-circuits before anything else runs.
