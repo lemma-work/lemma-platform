@@ -14,7 +14,8 @@ async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows 
     viewport,
     reducedMotion: 'reduce',
     colorScheme,
-    ...(windows ? { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } : {}),
+    userAgent: windows ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
   });
   t.after(() => context.close());
   const page = await context.newPage();
@@ -95,16 +96,19 @@ test('shutdown ignores stale startup readiness and retries shutdown without star
 });
 
 test('opening or reloading the splash never duplicates shell-owned startup', async t => {
-  for (const phaseKey of ['boot', 'stopped']) {
-    const page = await onboarding(t, { initialState: {
-      mode: 'local', phaseKey, running: false, ready: false, error: false,
-    } });
-    assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} page load must only observe`);
-    await page.reload();
-    assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} reload must only observe`);
-    if (phaseKey === 'stopped') {
-      await page.getByRole('button', { name: 'Start Lemma', exact: true }).click();
-      assert.deepEqual((await deploymentCalls(page)).map(call => call.command), ['start']);
+  for (const windows of [false, true]) {
+    for (const phaseKey of ['boot', 'stopped']) {
+      const page = await onboarding(t, { windows, initialState: {
+        mode: 'local', phaseKey, running: false, ready: false, error: false,
+      } });
+      assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} page load must only observe`);
+      await page.reload();
+      assert.equal(await page.locator('#orb canvas').count(), 0, 'reduced motion must not create a continuously rendered WebGL surface');
+      assert.deepEqual(await deploymentCalls(page), [], `${phaseKey} reload must only observe`);
+      if (phaseKey === 'stopped') {
+        await page.getByRole('button', { name: 'Start Lemma', exact: true }).click();
+        assert.deepEqual((await deploymentCalls(page)).map(call => call.command), ['start']);
+      }
     }
   }
 });

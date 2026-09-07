@@ -13,7 +13,7 @@ import shlex
 import signal
 import sys
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
@@ -601,21 +601,15 @@ async def test_browser_chat_replays_json_acp_and_retains_results_after_reload(
                         # Playwright handles SIGTERM by closing its detached
                         # browser group; give that handler a bounded chance
                         # before killing the driver and its frontend server.
-                        try:
+                        with suppress(ProcessLookupError):
                             os.killpg(process.pid, signal.SIGTERM)
-                        except ProcessLookupError:
-                            pass
-                        try:
+                        with suppress(TimeoutError):
                             async with asyncio.timeout(5):
                                 await process.wait()
-                        except TimeoutError:
-                            pass
                     # Reap the driver/frontend group even if the driver's own
                     # cleanup did not complete.
-                    try:
+                    with suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
                     await process.wait()
             response = await client.get(f"{path}/messages")
             assert response.status_code == 200, response.text

@@ -57,7 +57,8 @@ while True:
 """)
 
     def write_cli(self, drift: bool = False, lose_shutdown_reply: bool = False,
-                  ignore_shutdown: bool = False, interrupt_shutdown: bool = False) -> None:
+                  ignore_shutdown: bool = False, interrupt_shutdown: bool = False,
+                  stall_shutdown_reply: bool = False) -> None:
         self.script(self.cli, f"""
 import json, os, pathlib, signal, sys, time
 state = pathlib.Path(os.environ['LEMMA_GUEST_CONTROL_SOCKET']).parent
@@ -71,6 +72,8 @@ if request['operation'] == 'system.shutdown':
     if {ignore_shutdown!r}:
         sys.exit(0)
     os.kill(int((state / 'pid').read_text()), signal.SIGTERM)
+    if {stall_shutdown_reply!r}:
+        time.sleep(60)
     sys.exit({1 if lose_shutdown_reply else 0})
 print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int(time.time()) - {60 if drift else 0}}}}}))
 """)
@@ -156,6 +159,16 @@ print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int
         self.assertTrue(result["fallback_shutdown"])
         self.assertFalse(result["forced_shutdown"])
         self.assertEqual(result["returncode"], 0)
+        self.assert_reaped()
+
+    def test_shutdown_rpc_timeout_is_recorded_even_if_the_guest_exits_cleanly(self) -> None:
+        self.write_cli(stall_shutdown_reply=True)
+        self.run_check(shutdown_seconds=0.2)
+        result = json.loads((self.evidence / "result-1.json").read_text())
+        self.assertTrue(result["shutdown_request_timed_out"])
+        self.assertIsNone(result["shutdown_request_returncode"])
+        self.assertEqual(result["returncode"], 0)
+        self.assertFalse(result["forced_shutdown"])
         self.assert_reaped()
 
     def test_cancellation_during_shutdown_still_reaps_the_helper(self) -> None:

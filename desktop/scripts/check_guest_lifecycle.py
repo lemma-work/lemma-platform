@@ -67,6 +67,7 @@ def check(
         forced = False
         fallback = False
         shutdown_returncode: int | None = None
+        shutdown_request_timed_out = False
         with (evidence / f"helper-{boot}.log").open("wb") as log:
             process = subprocess.Popen([
                 str(helper), "serve", "--release", str(release), "--runtime", str(state),
@@ -121,7 +122,9 @@ def check(
                                 )
                                 shutdown_returncode = response.returncode
                             except subprocess.TimeoutExpired:
-                                pass
+                                # The guest may power off before acknowledging;
+                                # record the lost reply and still verify exit.
+                                shutdown_request_timed_out = True
                         else:
                             process.terminate()
                         try:
@@ -157,6 +160,7 @@ def check(
                     "forced_shutdown": forced, "returncode": process.returncode,
                     "shutdown_method": shutdown_method, "fallback_shutdown": fallback,
                     "shutdown_request_returncode": shutdown_returncode,
+                    "shutdown_request_timed_out": shutdown_request_timed_out,
                     "shutdown_seconds": round(time.monotonic() - stopped, 2),
                     "elapsed_seconds": round(time.monotonic() - started, 2),
                 }
