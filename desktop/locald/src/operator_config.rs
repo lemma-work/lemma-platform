@@ -1537,10 +1537,18 @@ mod tests {
                 Ok(())
             }
         }
-        let mut vault = PurgeVault { denied: true, deleted: Mutex::new(Vec::new()) };
+        let mut vault = PurgeVault {
+            denied: true,
+            deleted: Mutex::new(Vec::new()),
+        };
         let master = crate::credential_vault::MASTER_KEY_NAME;
         assert_eq!(purge_vault_secrets(&vault, "installation").len(), 1);
-        assert!(!vault.deleted.lock().unwrap().iter().any(|name| name == master));
+        assert!(!vault
+            .deleted
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name == master));
         vault.denied = false;
         assert!(purge_vault_secrets(&vault, "installation").is_empty());
         assert_eq!(vault.deleted.lock().unwrap().last().unwrap(), master);

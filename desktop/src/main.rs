@@ -7513,14 +7513,6 @@ mod tests {
         );
     }
 
-    // The memory balloon's policy used to be asserted here, by `include_str!`ing
-    // a Swift file from a package this crate does not build and grepping it. It
-    // now lives in `scripts/check-balloon-policy.sh`, wired into
-    // `make desktop-lint`: still a source check, because the package has no test
-    // target, but one that says so, explains each rule it enforces, and fails
-    // where someone changing Swift will see it rather than in an unrelated
-    // crate's unit tests.
-
     #[test]
     fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
         // Every `set_*` on a menu item blocks until the main thread is free, and

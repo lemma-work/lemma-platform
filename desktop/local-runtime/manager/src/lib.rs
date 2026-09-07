@@ -1470,7 +1470,10 @@ mod tests {
             runtime.request("container.start", json!({})).unwrap_err(),
             runtime.wait_ready().unwrap_err(),
         ] {
-            assert!(error.to_string().contains("guest kernel crashed"), "{error}");
+            assert!(
+                error.to_string().contains("guest kernel crashed"),
+                "{error}"
+            );
         }
         for operation in ["system.shutdown", "diagnostics.logs"] {
             let error = runtime.request(operation, json!({})).unwrap_err();
@@ -1479,7 +1482,10 @@ mod tests {
         rotate_log(&console, 0).unwrap();
         runtime.check_guest_kernel().unwrap();
         assert_eq!(
-            runtime.request("container.start", json!({})).unwrap_err().kind(),
+            runtime
+                .request("container.start", json!({}))
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::NotFound
         );
     }

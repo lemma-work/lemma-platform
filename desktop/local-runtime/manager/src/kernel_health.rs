@@ -18,9 +18,12 @@ pub(crate) fn check_console(path: &Path) -> io::Result<()> {
     file.take(CONSOLE_TAIL_BYTES).read_to_end(&mut bytes)?;
     let text = String::from_utf8_lossy(&bytes);
     if text.lines().any(|line| {
-        line.contains("Internal error: Oops:")
+        line.contains("Internal error: Oops")
             || line.contains("Kernel panic - not syncing:")
             || line.contains("Fixing recursive fault but reboot is needed!")
+            || line.contains("BUG: Bad rss-counter state")
+            || line.contains("BUG: Bad page state")
+            || line.contains("Kernel stack overflow.")
     }) {
         return Err(io::Error::other(FAILURE));
     }
@@ -39,8 +42,12 @@ mod tests {
         check_console(&path).unwrap();
         for fault in [
             "[ 4.2] Internal error: Oops: 00000001 [#1] SMP",
+            "[ 4.2] Internal error: Oops - Undefined instruction: 02000000 [#1] SMP",
             "[ 4.2] Kernel panic - not syncing: Fatal exception",
             "[ 4.2] Fixing recursive fault but reboot is needed!",
+            "[ 4.2] BUG: Bad rss-counter state mm:0000 type:MM_FILEPAGES val:165",
+            "[ 4.2] BUG: Bad page state in process systemd",
+            "[ 4.2] Kernel stack overflow.",
         ] {
             fs::write(&path, format!("sensitive diagnostic\n{fault}\r\n")).unwrap();
             assert_eq!(check_console(&path).unwrap_err().to_string(), FAILURE);

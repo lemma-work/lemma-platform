@@ -374,20 +374,15 @@ active.
 
 ## 8. VM memory
 
-The macOS VM ceiling is adaptive from 4 GiB to 8 GiB based on host memory.
-There is exactly one traditional virtio balloon device.
+The macOS VM uses a fixed 4 GiB allocation and no balloon device. Readiness
+polls do not change guest memory. An empty sandbox count cannot distinguish
+idle time from image pulls, database initialization, migrations or shutdown.
 
-The helper state machine:
-
-- boot/initialization target: ceiling;
-- `sandbox.ensure`: restore ceiling immediately;
-- observed active sandboxes: retain ceiling;
-- zero active sandboxes for 60 seconds: request 1.5 GiB;
-- unsupported/refused request: report degraded balloon state, continue.
-
-Guest health adds active sandbox count. Locald exposes that plus balloon state
-and target. Sandbox resource admission must preserve a core-service
-reservation and return capacity errors rather than induce guest OOM.
+Guest health includes the active sandbox count. Sandbox resource admission must
+preserve a core-service reservation and return capacity errors rather than
+induce guest OOM. Changes to the allocation require guest lifecycle and workload
+qualification, including repeated startup, shutdown and existing-data checks;
+see [the native guest checks](../local-runtime-vm.md).
 
 Explicit full stop shuts down the VM and releases its memory.
 

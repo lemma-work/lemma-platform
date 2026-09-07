@@ -6,10 +6,6 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 target=""
 output=""
 guestd=""
-kata_version="3.32.0"
-kata_kernel_version="6.18.35-197-debug"
-kata_archive_sha256="8736c054d9223974735394f822000823baef509e1c33405ec798240fa9b6e4b5"
-kata_archive_url="https://github.com/kata-containers/kata-containers/releases/download/${kata_version}/kata-static-${kata_version}-arm64.tar.zst"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,7 +38,14 @@ work_dir="$(mktemp -d /tmp/lemma-guest-runtime.XXXXXX)"
 # user-facing /tmp symlink. Normalize once so later bind mounts address the
 # same file from both the host and the build VM.
 work_dir="$(cd "$work_dir" && pwd -P)"
-trap 'rm -rf "$work_dir"' EXIT
+assembly_container="lemma-guest-assembly-$(basename "$work_dir")"
+cleanup() {
+  docker rm -f "$assembly_container" >/dev/null 2>&1 || true
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 context="$work_dir/context"
 rootfs="$work_dir/rootfs"
 rootfs_tar="$work_dir/rootfs.tar"
@@ -54,6 +57,7 @@ cp "$guestd" "$context/lemma-guestd"
 
 docker buildx build \
   --platform "linux/$docker_arch" \
+  --build-arg "GUEST_PLATFORM=$target" \
   --output "type=tar,dest=$rootfs_tar" \
   "$context"
 
@@ -62,54 +66,13 @@ if [[ "$target" == "macos-aarch64" ]]; then
   # filesystem itself is assembled as root in Linux below so numeric ownership
   # from the OCI filesystem is preserved even when this runs on macOS.
   tar -xf "$rootfs_tar" -C "$rootfs"
-  initrd="$(find "$rootfs/boot" -maxdepth 1 -type f -name 'initrd.img-*' | sort | tail -1)"
-  if [[ -z "$initrd" ]]; then
-    echo "guest image did not contain an Ubuntu initramfs" >&2
-    exit 1
-  fi
-
-  # Apple Containerization pins Kata's container-optimized kernel for its own
-  # Virtualization.framework runtime. Keep the archive and exact kernel version
-  # immutable: distro kernel metapackages have regressed both virtio-vsock and
-  # cgroup/runc workloads in clean Lemma appliance boots.
-  kata_archive="$work_dir/kata-static-${kata_version}-arm64.tar.zst"
-  kata_root="$work_dir/kata"
-  mkdir -p "$kata_root"
-  if [[ -n "${LEMMA_KATA_KERNEL_ARCHIVE:-}" ]]; then
-    cp "$LEMMA_KATA_KERNEL_ARCHIVE" "$kata_archive"
-  else
-    curl \
-      --fail \
-      --silent \
-      --show-error \
-      --location \
-      --retry 5 \
-      --retry-all-errors \
-      --retry-delay 2 \
-      --connect-timeout 15 \
-      --output "$kata_archive" \
-      "$kata_archive_url"
-  fi
-  python3 - "$kata_archive" "$kata_archive_sha256" <<'PY'
-import hashlib
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-actual = hashlib.sha256(path.read_bytes()).hexdigest()
-if actual != sys.argv[2]:
-    raise SystemExit(f"Kata kernel archive checksum mismatch: {actual}")
-PY
-  tar -xf "$kata_archive" -C "$kata_root" \
-    "./opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}"
-  cp "$kata_root/opt/kata/share/kata-containers/vmlinux-${kata_kernel_version}" \
-    "$artifact/vmlinuz"
-  cp "$initrd" "$artifact/initrd"
+  python3 "$repo_root/desktop/scripts/prepare_guest_boot.py" \
+    --root "$rootfs" --output "$artifact"
   # Build within the product budget, then shrink the ext4 filesystem to its
   # actual contents plus 128 MiB of update headroom. The resulting RAW file is
   # sparse and is attached read-only by Lemma Desktop.
-  truncate -s 1280M "$artifact/disk.raw"
-  docker run --rm --platform "linux/$docker_arch" \
+  truncate -s 2048M "$artifact/disk.raw"
+  docker run --rm --name "$assembly_container" --platform "linux/$docker_arch" \
     --mount "type=bind,source=$rootfs_tar,target=/input/rootfs.tar,readonly" \
     --mount "type=bind,source=$artifact,target=/artifact" \
     ubuntu:24.04 \
@@ -133,14 +96,14 @@ PY
       resize2fs /artifact/disk.raw "$target_blocks" >/dev/null
       truncate -s "$((target_blocks * block_size))" /artifact/disk.raw
       e2fsck -fy /artifact/disk.raw >/dev/null
-      test "$(stat -c %s /artifact/disk.raw)" -le "$((1280 * 1024 * 1024))"
+      test "$(stat -c %s /artifact/disk.raw)" -le "$((2048 * 1024 * 1024))"
     '
 else
   mv "$rootfs_tar" "$artifact/rootfs.tar"
   rootfs_tar="$artifact/rootfs.tar"
 fi
 
-python3 - "$artifact/runtime.json" "$target" "$rootfs_tar" "$artifact" "$kata_kernel_version" "$kata_archive_url" "$kata_archive_sha256" <<'PY'
+python3 - "$artifact/runtime.json" "$target" "$rootfs_tar" "$artifact" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -169,9 +132,9 @@ metadata = {
 }
 if sys.argv[2] == "macos-aarch64":
     metadata.update({
-        "kernel_track": f"kata-{sys.argv[5]}",
-        "kernel_source": sys.argv[6],
-        "kernel_source_archive_sha256": sys.argv[7],
+        "kernel_track": "ubuntu-" + (artifact / "kernel-release").read_text().strip(),
+        "kernel_source": "Ubuntu archive: matching image, modules and initramfs",
+        "packages_sha256": sha256(artifact / "packages.txt"),
     })
 path.write_text(json.dumps(metadata, indent=2) + "\n")
 PY
@@ -205,7 +168,7 @@ with __import__("zipfile").ZipFile(path) as archive:
         ),
         "metadata_bytes": sum(
             entry.file_size for entry in archive.infolist()
-            if entry.filename.endswith("/runtime.json")
+            if entry.filename.endswith(("/runtime.json", "/packages.txt", "/kernel-release"))
         ),
     }
 path.with_suffix(path.suffix + ".json").write_text(json.dumps(metadata, indent=2) + "\n")

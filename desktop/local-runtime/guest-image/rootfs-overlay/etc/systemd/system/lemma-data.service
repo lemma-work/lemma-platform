@@ -4,6 +4,7 @@ DefaultDependencies=no
 ConditionPathExists=/dev/vdb
 After=dev-vdb.device local-fs.target
 Requires=dev-vdb.device
+RequiresMountsFor=/mnt/lemma-control
 Before=containerd.service lemma-guestd.service
 
 [Service]
@@ -12,4 +13,4 @@ ExecStart=/usr/local/bin/lemma-mount-data
 RemainAfterExit=yes
 
 [Install]
-WantedBy=lemma-runtime.target
+WantedBy=multi-user.target

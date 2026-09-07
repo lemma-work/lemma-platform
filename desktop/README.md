@@ -107,7 +107,7 @@ are the two that fail slowest in CI:
 | --- | --- | --- |
 | `make desktop-fmt` | Desktop workspace → Check formatting | `cargo fmt` is **not** part of `desktop-lint`; clippy will not tell you |
 | `make desktop-concepts-check` | Desktop workspace → Verify baked splash concepts | `ui/concepts.gen.json` regenerated but not committed |
-| `make desktop-lint` | Desktop workspace → Lint, plus Memory balloon policy | clippy `-D warnings` across the workspace |
+| `make desktop-lint` | Desktop workspace → Lint | clippy `-D warnings` across the workspace |
 | `make desktop-test` | Desktop workspace → Test, and Desktop contracts | the whole workspace, `--locked` |
 | `make desktop-check-windows` | Windows desktop build check, **in part** | the `cfg(windows)` paths in locald and the runtime manager — no other local step compiles them |
 

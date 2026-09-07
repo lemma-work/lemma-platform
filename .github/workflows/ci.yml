@@ -699,11 +699,6 @@ jobs:
         working-directory: desktop
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
-      # `make desktop-lint` has always run this; CI never did, and it guards a
-      # guest-kernel Oops during first setup.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
-
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
@@ -847,11 +842,6 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      # One second, and it guards a guest-kernel Oops during first setup.
-      # `make desktop-lint` has always run it; CI never did.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
-
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -859,6 +849,9 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --locked
+
+      - name: Guest boot tooling tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
@@ -1148,6 +1141,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -1199,6 +1196,9 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Guest packaging tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests

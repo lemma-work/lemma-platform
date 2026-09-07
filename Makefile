@@ -975,6 +975,7 @@ desktop-test: _desktop-ensure-sidecars
 	@echo "→ Desktop workspace tests…"
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
 	@node --test desktop/ui-tests/tests/*.test.mjs
+	@uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
@@ -996,8 +997,6 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Desktop workspace clippy…"
 	@cd $(DESKTOP_DIR) && cargo clippy $(DESKTOP_CARGO_SCOPE) --locked --all-targets -- -D warnings
 	@echo "  ✓ clippy clean"
-	@echo "→ Memory balloon policy…"
-	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
 # Build the ~1 GB artifact the app ships, and prove its interpreters run.
 #
