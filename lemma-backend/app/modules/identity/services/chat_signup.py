@@ -169,8 +169,16 @@ async def _link_surface_identity(
         raise ChatSignupError("the account vanished between creating and linking it")
 
     if mobile_number and not user.mobile_number:
-        user.mobile_number = normalize_mobile_e164(mobile_number)
-        user.mobile_verified_at = datetime.now(timezone.utc)
+        # Platforms hand over their own shape -- Meta's `wa_id` is E.164 with the
+        # `+` stripped -- and `normalize_mobile_e164` refuses a number with no
+        # country code marker rather than guessing one. The digits are already
+        # E.164, so the `+` is restored rather than inferred.
+        digits = "".join(
+            character for character in str(mobile_number) if character.isdigit()
+        )
+        if digits:
+            user.mobile_number = normalize_mobile_e164(f"+{digits}")
+            user.mobile_verified_at = datetime.now(timezone.utc)
     if telegram_username and not user.telegram_username:
         user.telegram_username = telegram_username.strip().lstrip("@").lower()
     if full_name and not user.first_name:

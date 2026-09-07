@@ -132,6 +132,38 @@ def _needs_mention_verification(
 
 
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
+    async def _onboarding_reply(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        agent_display_name: str,
+    ) -> SurfaceReplyContext | None:
+        """Carry an unknown sender one step towards being a known one.
+
+        Imported here rather than at module scope: the wiring reaches identity
+        for account creation and the mail adapter for the code, and neither
+        belongs in the import graph of every routing decision.
+        """
+        if self.uow is None:
+            return None
+        from app.modules.identity.contracts.organizations import (
+            build_identity_email_sender,
+        )
+        from app.modules.identity.contracts.surfaces import onboard_chat_sender
+        from app.modules.agent_surfaces.services.surface_onboarding_wiring import (
+            onboarding_reply,
+        )
+
+        return await onboarding_reply(
+            self.uow,
+            surface=surface,
+            parsed=parsed,
+            agent_display_name=agent_display_name,
+            onboard_sender=onboard_chat_sender,
+            send_code_email=build_identity_email_sender().send_chat_signup_code_email,
+        )
+
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
     ) -> AgentSurfaceContext | None:
@@ -373,6 +405,15 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 credentials=credentials,
             )
         if resolved_user.internal_user_id is None:
+            # Ask who they are before telling them they are nobody. The fallback
+            # below is what happens when this surface cannot onboard them.
+            onboarding = await self._onboarding_reply(
+                surface=surface,
+                parsed=parsed,
+                agent_display_name=fallback_agent_display_name,
+            )
+            if onboarding is not None:
+                return onboarding
             return unresolved_sender_context(
                 surface=surface,
                 parsed=parsed,
