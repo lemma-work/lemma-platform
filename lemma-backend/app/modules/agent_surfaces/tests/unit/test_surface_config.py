@@ -48,6 +48,7 @@ EXPECTED = [
     # guarding is bounded by the per-pod daily send cap instead.
     ("surface_webhook_security_enabled", "SURFACE_WEBHOOK_SECURITY_ENABLED", True),
     ("surface_event_dedupe_ttl_seconds", "SURFACE_EVENT_DEDUPE_TTL_SECONDS", 900),
+    ("surface_onboarding_ttl_seconds", "SURFACE_ONBOARDING_TTL_SECONDS", 1800),
     (
         "surface_stranger_reply_window_seconds",
         "SURFACE_STRANGER_REPLY_WINDOW_SECONDS",

@@ -172,6 +172,47 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             text_content=rendered.text,
         )
 
+    async def send_chat_signup_code_email(
+        self,
+        *,
+        to_email: str,
+        code: str,
+        surface_label: str,
+    ) -> bool:
+        """The code that proves somebody chatting to an agent owns this address.
+
+        Names the surface they are chatting on, because that is the one detail
+        that tells an innocent recipient what this is: an unexplained code is
+        indistinguishable from an attempt on their account, and somebody *can*
+        cause this mail by typing a stranger's address into WhatsApp. Saying
+        where it came from lets them ignore it with confidence.
+
+        No action button. The code has to be carried back to the conversation
+        that asked for it, and a link would invite the wrong move.
+        """
+        rendered = render_transactional_email(
+            preheader=f"Your Lemma code is {code}.",
+            eyebrow="Confirm your email",
+            heading=f"Your code is {code}",
+            body=(
+                f"Somebody entered this address while messaging a Lemma agent on "
+                f"{surface_label}. Send this code back in that conversation and "
+                "the agent will know it is you.",
+                "If that was not you, nothing has happened yet and you can ignore "
+                "this. The code expires shortly.",
+            ),
+            footer=(
+                "You are receiving this because this address was entered in a chat "
+                "with a Lemma agent.",
+            ),
+        )
+        return await self._send(
+            to_email=to_email,
+            subject=f"{code} is your Lemma code",
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
     async def send_invitation_accepted_email(
         self,
         *,

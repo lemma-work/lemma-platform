@@ -203,6 +203,16 @@ class SurfaceSettings(BaseSettings):
         default=900,
         description="Short TTL for Redis-based agent surface webhook dedupe keys.",
     )
+    surface_onboarding_ttl_seconds: int = Field(
+        default=1800,
+        description=(
+            "How long a half-finished chat signup waits between messages. Long "
+            "enough to go and find a code in an inbox, short enough that an "
+            "abandoned attempt is gone before anyone returns to it -- and short "
+            "enough that every exchange stays inside WhatsApp's free-form reply "
+            "window without having to reason about the window."
+        ),
+    )
     surface_stranger_reply_window_seconds: int = Field(
         default=3600,
         description=(
