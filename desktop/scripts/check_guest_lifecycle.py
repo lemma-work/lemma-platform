@@ -9,6 +9,7 @@ import secrets
 import signal
 import subprocess
 import time
+from typing import Literal
 
 from check_vm_boot import FAULTS, digest
 
@@ -17,9 +18,12 @@ def check(
     helper: Path, cli: Path, release: Path, evidence: Path,
     boots: int = 3, samples: int = 20, seconds: float = 180,
     shutdown_seconds: float = 30,
+    shutdown_method: Literal["guest", "power-button"] = "guest",
 ) -> None:
     if boots < 1 or samples < 1 or seconds <= 0 or shutdown_seconds <= 0:
         raise ValueError("Boots, samples and deadlines must be positive")
+    if shutdown_method not in ("guest", "power-button"):
+        raise ValueError("Unknown shutdown method")
     evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     state = evidence / "state"
     share = evidence / "share"
@@ -50,6 +54,8 @@ def check(
         completed = 0
         error: str | None = None
         forced = False
+        fallback = False
+        shutdown_returncode: int | None = None
         with (evidence / f"helper-{boot}.log").open("wb") as log:
             process = subprocess.Popen([
                 str(helper), "serve", "--release", str(release), "--runtime", str(state),
@@ -89,11 +95,43 @@ def check(
                 raise
             finally:
                 stopped = time.monotonic()
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=shutdown_seconds)
-                    except subprocess.TimeoutExpired:
+                try:
+                    if process.poll() is not None:
+                        error = error or "Guest exited before shutdown was requested"
+                    else:
+                        if shutdown_method == "guest":
+                            shutdown_request = json.dumps({
+                                "version": 1, "operation": "system.shutdown", "parameters": {},
+                            }).encode()
+                            try:
+                                response = subprocess.run(
+                                    [str(cli), "request"], input=shutdown_request,
+                                    capture_output=True, env=env, timeout=min(8, shutdown_seconds),
+                                )
+                                shutdown_returncode = response.returncode
+                            except subprocess.TimeoutExpired:
+                                pass
+                        else:
+                            process.terminate()
+                        try:
+                            process.wait(timeout=max(0, shutdown_seconds - (time.monotonic() - stopped)))
+                        except subprocess.TimeoutExpired:
+                            if shutdown_method == "guest":
+                                fallback = True
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    forced = True
+                            else:
+                                forced = True
+                            if forced:
+                                process.kill()
+                                process.wait(timeout=5)
+                finally:
+                    # Cancellation can arrive while the shutdown RPC or wait is
+                    # active. Reap the owned helper even on that path.
+                    if process.poll() is None:
                         forced = True
                         process.kill()
                         process.wait(timeout=5)
@@ -106,12 +144,14 @@ def check(
                 report = {
                     "boot": boot, "health_checks": completed, "error": error,
                     "forced_shutdown": forced, "returncode": process.returncode,
+                    "shutdown_method": shutdown_method, "fallback_shutdown": fallback,
+                    "shutdown_request_returncode": shutdown_returncode,
                     "shutdown_seconds": round(time.monotonic() - stopped, 2),
                     "elapsed_seconds": round(time.monotonic() - started, 2),
                 }
                 (evidence / f"result-{boot}.json").write_text(json.dumps(report, indent=2) + "\n")
                 print(json.dumps(report), flush=True)
-            if error or forced or process.returncode != 0:
+            if error or forced or fallback or process.returncode != 0:
                 raise RuntimeError(error or "Guest did not shut down cleanly")
         fresh.unlink(missing_ok=True)
 
@@ -128,6 +168,7 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--seconds", type=float, default=180)
     parser.add_argument("--shutdown-seconds", type=float, default=30)
+    parser.add_argument("--shutdown-method", choices=("guest", "power-button"), default="guest")
     check(**vars(parser.parse_args()))
 
 

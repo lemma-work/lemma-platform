@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from typing import Literal
 
 from check_guest_lifecycle import check
 
@@ -54,19 +55,31 @@ while True:
     time.sleep(1)
 """)
 
-    def write_cli(self, drift: bool = False) -> None:
+    def write_cli(self, drift: bool = False, lose_shutdown_reply: bool = False,
+                  ignore_shutdown: bool = False, interrupt_shutdown: bool = False) -> None:
         self.script(self.cli, f"""
-import json, os, pathlib, time
+import json, os, pathlib, signal, sys, time
 state = pathlib.Path(os.environ['LEMMA_GUEST_CONTROL_SOCKET']).parent
 while not (state / 'ready').exists():
     time.sleep(0.01)
+request = json.load(sys.stdin)
+if request['operation'] == 'system.shutdown':
+    if {interrupt_shutdown!r}:
+        os.kill(os.getppid(), signal.SIGINT)
+        sys.exit(1)
+    if {ignore_shutdown!r}:
+        sys.exit(0)
+    os.kill(int((state / 'pid').read_text()), signal.SIGTERM)
+    sys.exit({1 if lose_shutdown_reply else 0})
 print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int(time.time()) - {60 if drift else 0}}}}}))
 """)
 
-    def run_check(self, boots: int = 1, shutdown_seconds: float = 3) -> None:
+    def run_check(self, boots: int = 1, shutdown_seconds: float = 3,
+                  shutdown_method: Literal["guest", "power-button"] = "guest") -> None:
         with contextlib.redirect_stdout(io.StringIO()):
             check(self.helper, self.cli, self.release, self.evidence,
-                  boots=boots, samples=2, seconds=5, shutdown_seconds=shutdown_seconds)
+                  boots=boots, samples=2, seconds=5, shutdown_seconds=shutdown_seconds,
+                  shutdown_method=shutdown_method)
 
     def assert_reaped(self) -> None:
         pid = int((self.evidence / "state/pid").read_text())
@@ -82,6 +95,8 @@ print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int
             self.assertEqual(result["health_checks"], 2)
             self.assertEqual(result["returncode"], 0)
             self.assertFalse(result["forced_shutdown"])
+            self.assertFalse(result["fallback_shutdown"])
+            self.assertEqual(result["shutdown_method"], "guest")
         self.assertEqual((self.release / "disk.raw").read_bytes(), b"immutable artifact")
         self.assert_reaped()
 
@@ -100,9 +115,41 @@ print(json.dumps({{'ok': True, 'result': {{'status': 'ready', 'clock_epoch': int
     def test_forced_shutdown_fails_and_reaps_the_helper(self) -> None:
         self.write_helper(ignore_stop=True)
         with self.assertRaisesRegex(RuntimeError, "shut down cleanly"):
-            self.run_check(shutdown_seconds=0.1)
+            self.run_check(shutdown_seconds=0.1, shutdown_method="power-button")
         result = json.loads((self.evidence / "result-1.json").read_text())
         self.assertTrue(result["forced_shutdown"])
+        self.assert_reaped()
+
+    def test_guest_shutdown_can_finish_before_its_reply_arrives(self) -> None:
+        self.write_cli(lose_shutdown_reply=True)
+        self.run_check()
+        result = json.loads((self.evidence / "result-1.json").read_text())
+        self.assertEqual(result["shutdown_request_returncode"], 1)
+        self.assertEqual(result["returncode"], 0)
+        self.assertFalse(result["fallback_shutdown"])
+        self.assert_reaped()
+
+    def test_guest_shutdown_fallback_fails_even_when_the_power_button_works(self) -> None:
+        self.write_cli(ignore_shutdown=True)
+        with self.assertRaisesRegex(RuntimeError, "shut down cleanly"):
+            self.run_check(shutdown_seconds=0.2)
+        result = json.loads((self.evidence / "result-1.json").read_text())
+        self.assertTrue(result["fallback_shutdown"])
+        self.assertFalse(result["forced_shutdown"])
+        self.assertEqual(result["returncode"], 0)
+        self.assert_reaped()
+
+    def test_cancellation_during_shutdown_still_reaps_the_helper(self) -> None:
+        self.write_cli(interrupt_shutdown=True)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_check()
+        self.assert_reaped()
+
+    def test_power_button_shutdown_is_an_independent_check(self) -> None:
+        self.run_check(shutdown_method="power-button")
+        result = json.loads((self.evidence / "result-1.json").read_text())
+        self.assertEqual(result["shutdown_method"], "power-button")
+        self.assertIsNone(result["shutdown_request_returncode"])
         self.assert_reaped()
 
     def test_zero_boots_cannot_report_success(self) -> None:

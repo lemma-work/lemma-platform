@@ -181,6 +181,13 @@ input hashes, per-boot console logs and result files, and owns process cleanup
 on failure or cancellation. Run this on a Mac that supports
 Virtualization.framework; unit-test CI alone cannot certify a bootable artifact.
 
+The default shutdown path sends `system.shutdown`, as the app does, allowing
+the guest to stop its containers before powering off. A lost RPC reply is
+acceptable only when the VM actually exits cleanly. Falling back to the power
+button or forced termination fails this check. Run a separate evidence directory
+with `--shutdown-method power-button` to qualify the helper's graceful signal
+fallback; passing that path does not prove normal app shutdown, or vice versa.
+
 Tooling regression tests run in `make desktop-test` and desktop CI:
 
 ```bash
