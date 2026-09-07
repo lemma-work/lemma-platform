@@ -1251,7 +1251,7 @@ impl TargetWorker {
 
     fn spawn_run(
         &mut self,
-        spec: RunSpec,
+        mut spec: RunSpec,
         adapter: ResolvedAdapter,
         can_load_session: bool,
         published_config_options: Vec<ConfigOption>,
@@ -1299,11 +1299,13 @@ impl TargetWorker {
                 )?;
                 return Ok(());
             }
-            let scratch = scratch_directory(&paths, target_id, spec.conversation_id);
-            if let Some(parent) = scratch.parent() {
-                prune_stale_scratch(parent);
-            }
-            std::fs::create_dir_all(&scratch)?;
+            let scratch = prepare_conversation_directory(&paths, target_id, spec.conversation_id)?;
+            let host_cwd = scratch
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("conversation directory is not valid Unicode"))?
+                .to_owned();
+            spec.system_prompt
+                .push_str(&host_directory_instructions(&host_cwd));
             // The name Lemma published for this run's server, not a name of our
             // own. An agent namespaces every MCP tool with the server it came
             // from, so registering a different name here made the same tool
@@ -1337,6 +1339,7 @@ impl TargetWorker {
                 target_id,
                 run_id,
                 lease_epoch,
+                host_cwd: Some(host_cwd),
                 provider_seen: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: Arc::clone(&events_ready),
@@ -1596,6 +1599,7 @@ impl TargetWorker {
                 target_id: self.target.target_id,
                 run_id: run.run_id,
                 lease_epoch: run.lease_epoch,
+                host_cwd: None,
                 provider_seen: AtomicBool::new(true),
                 stream_segments: std::sync::Mutex::new(segments),
                 events_ready: Arc::clone(&self.events_ready),
@@ -2179,6 +2183,7 @@ struct JournalCallbacks {
     target_id: Uuid,
     run_id: Uuid,
     lease_epoch: u32,
+    host_cwd: Option<String>,
     provider_seen: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
     /// Raised whenever this run journals an event, so the poll loop stops
@@ -2288,11 +2293,27 @@ impl AcpCallbacks for JournalCallbacks {
             self.lease_epoch,
             provider_session_id,
         )?;
-        // `mark_dispatch_intent` just made the session id durable, and
-        // `pending_control` puts it on every checkpoint this run reports. Waking
-        // the poll here gets it upstream on the first one rather than a whole
-        // long poll later, so Lemma has the conversation's session before the
-        // user's next message arrives.
+        let mut detail = JsonMap::from([
+            ("state".to_owned(), Value::String("DISPATCHING".to_owned())),
+            (
+                "provider_session_id".to_owned(),
+                Value::String(provider_session_id.to_owned()),
+            ),
+        ]);
+        if let Some(cwd) = &self.host_cwd {
+            detail.insert("host_cwd".to_owned(), Value::String(cwd.clone()));
+        }
+        // Control polling and streaming are independent. Put the binding at
+        // the head of this run's event stream so the backend saves it before
+        // processing any answer, even while its control poll is waiting.
+        self.journal.append_event(
+            self.target_id,
+            self.run_id,
+            self.lease_epoch,
+            EventType::RunState,
+            None,
+            detail,
+        )?;
         self.events_ready.notify_one();
         Ok(())
     }
@@ -2457,6 +2478,20 @@ fn terminal_failure_detail(
     Ok(())
 }
 
+fn host_directory_instructions(cwd: &str) -> String {
+    // Encode the path as data: a folder name may contain quotes or newlines.
+    let encoded = serde_json::to_string(cwd).expect("strings serialize to JSON");
+    format!(
+        "\n\n# Native Working Directory\nYour native tools run on this computer in \
+         {encoded} (JSON-encoded path). This directory belongs to this conversation \
+         and is reused across turns. Use relative paths here for native file and \
+         shell tools. Lemma MCP execution tools use their separate sandbox cwd; \
+         never pass its /workspace paths to native tools or this host path to \
+         sandbox tools. A reported path is not an access grant. Respect tool \
+         approvals; access outside this directory requires separate permission."
+    )
+}
+
 /// The working directory a conversation's provider session lives in.
 ///
 /// Keyed on the conversation, not the run. ACP's `session/load` takes a working
@@ -2491,27 +2526,16 @@ fn publish_generated_images(
     Ok(())
 }
 
-/// How long a conversation's working directory outlives its last turn.
-const SCRATCH_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
-
-/// Drop conversation directories nothing has touched in a fortnight.
-///
-/// These used to be deleted after every run, so nothing needed pruning. Keeping
-/// them is what makes session resumption possible, and this is what keeps that
-/// from becoming an unbounded pile of working directories on someone's disk.
-fn prune_stale_scratch(target_root: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(target_root) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let stale = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > SCRATCH_RETENTION));
-        if stale {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
+fn prepare_conversation_directory(
+    paths: &HostPaths,
+    target_id: Uuid,
+    conversation_id: Uuid,
+) -> anyhow::Result<PathBuf> {
+    // Keep the lexical path stable: provider session indexes can distinguish a
+    // symlink from its destination even when both name the same directory.
+    let path = std::path::absolute(scratch_directory(paths, target_id, conversation_id))?;
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
 }
 
 fn generated_image_payloads(
@@ -4024,6 +4048,7 @@ mod stream_upsert_tests {
             target_id,
             run_id,
             lease_epoch: 1,
+            host_cwd: Some("/test/Projects/Δ workspace".to_owned()),
             provider_seen: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
             events_ready: Arc::new(tokio::sync::Notify::new()),
@@ -4040,6 +4065,40 @@ mod stream_upsert_tests {
             .flat_map(|batch| batch.events)
             .map(|event| (event.sequence, event.event_type, event.payload))
             .collect()
+    }
+
+    #[test]
+    fn session_binding_is_durable_before_any_answer_or_control_poll() {
+        let (directory, callbacks, _) = fixture();
+        callbacks.before_prompt("claude-session-42").unwrap();
+        let established = journaled_events(&callbacks);
+        assert_eq!(established.len(), 1);
+        assert_eq!(established[0].1, EventType::RunState);
+        assert_eq!(established[0].2["state"], "DISPATCHING");
+        assert_eq!(established[0].2["provider_session_id"], "claude-session-42");
+        assert_eq!(established[0].2["host_cwd"], "/test/Projects/Δ workspace");
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("answer"))
+            .unwrap();
+        callbacks.flush_stream_segments().unwrap();
+        let reopened = Journal::open(directory.path().join("journal.db")).unwrap();
+        let batch = reopened.pending_events(callbacks.target_id, 256).unwrap();
+        let events = &batch[0].events;
+        assert_eq!(
+            events[0].payload["provider_session_id"],
+            "claude-session-42"
+        );
+        assert!(
+            events
+                .iter()
+                .skip(1)
+                .any(|event| event.event_type == EventType::AgentMessageUpsert)
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
     }
 
     #[test]
@@ -4373,6 +4432,45 @@ mod adapter_failure_message_tests {
 
         let other = super::scratch_directory(&paths, target, uuid::Uuid::from_u128(3));
         assert_ne!(first, other, "different conversations stay isolated");
+    }
+
+    #[test]
+    fn old_conversation_files_survive_reopening_and_other_conversations() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = super::HostPaths::under(directory.path().join("Δ workspace"));
+        let target = uuid::Uuid::new_v4();
+        let conversation = uuid::Uuid::new_v4();
+        let first = super::prepare_conversation_directory(&paths, target, conversation).unwrap();
+        std::fs::write(first.join("user-work.txt"), "keep this work").unwrap();
+        #[cfg(unix)]
+        {
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86400);
+            std::fs::File::open(&first)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        super::prepare_conversation_directory(&paths, target, uuid::Uuid::new_v4()).unwrap();
+        let reopened = super::prepare_conversation_directory(&paths, target, conversation).unwrap();
+        assert_eq!(first, reopened);
+        assert_eq!(
+            std::fs::read_to_string(reopened.join("user-work.txt")).unwrap(),
+            "keep this work"
+        );
+    }
+
+    #[test]
+    fn native_directory_instruction_encodes_paths_without_inventing_a_mount() {
+        for cwd in [
+            "/Users/test/Δ project",
+            "C:\\Users\\test\\My Project",
+            "/tmp/quote\"\nfolder",
+        ] {
+            let prompt = super::host_directory_instructions(cwd);
+            assert!(prompt.contains(&serde_json::to_string(cwd).unwrap()));
+            assert!(prompt.contains("separate sandbox cwd"));
+            assert!(prompt.contains("not an access grant"));
+        }
     }
 
     #[test]

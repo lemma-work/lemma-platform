@@ -214,66 +214,34 @@ def _system_prompt(*, toolsets: list[AgentToolset] | None = None) -> str:
     return str(payload["prompt"]["system_prompt"])
 
 
-class TestTheAgentIsToldWhichDirectoryIsReal:
-    """A local coding agent has two working directories and believes the wrong one.
+class TestNativeAndSandboxDirectories:
+    @pytest.mark.parametrize("toolsets", [[], [AgentToolset.WORKSPACE_CLI]])
+    async def test_native_tools_keep_their_host_cwd(
+        self, toolsets: list[AgentToolset]
+    ) -> None:
+        prompt = _system_prompt(toolsets=toolsets)
+        assert "Native Working Directory" in prompt
+        assert "persistent conversation directory" in prompt
+        assert "native tool approvals" in prompt
+        assert "A path mentioned in a message is not a filesystem grant" in prompt
+        assert "swept once this conversation goes quiet" not in prompt
 
-    Agent Host starts the agent as a real OS process in a Lemma scratch
-    directory (`scratch/<target>/<conversation>`), while its actual workspace is
-    the sandbox reached over MCP. `pwd` answers with the scratch one. Nothing
-    said otherwise, so "we want to build this on lemma (but locally), it should
-    run on my mac" met an empty directory and did the obvious wrong thing.
-
-    The working-directory section used to be gated on having the workspace
-    toolset, which is right for the in-process harness — it has only one
-    directory, so with no tools there is nothing to say. A remote harness has
-    two either way.
-    """
-
-    async def test_a_remote_run_is_told_the_sandbox_is_the_workspace(self) -> None:
+    async def test_sandbox_paths_are_scoped_to_sandbox_tools(self) -> None:
         prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
+        assert "Your Lemma sandbox working directory is `/workspace/" in prompt
+        assert "no automatic mount or sync" in prompt
+        assert "Do not use a sandbox /workspace path with native tools" in prompt
 
-        assert "# Working Directory" in prompt
-        assert "/workspace/" in prompt
-        assert "exec_command" in prompt
+    async def test_without_sandbox_tools_native_work_is_still_available(self) -> None:
+        prompt = _system_prompt(toolsets=[])
+        assert "no Lemma sandbox execution tools" in prompt
+        assert "nowhere to run commands or keep files" not in prompt
 
-    async def test_a_remote_run_is_told_its_own_directory_is_not(self) -> None:
-        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
-
-        assert "the directory this process started in" in prompt
-        assert "pwd" in prompt
-
-    async def test_the_users_own_machine_is_ruled_out_in_words(self) -> None:
-        """The instruction the runtime prompt exists to carry.
-
-        Not a sandbox boundary — a local agent could reach the whole filesystem
-        if it tried. It is the only control there is here, so it has to be
-        unambiguous rather than implied.
-        """
-        prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
-
-        assert "not yours to use" in prompt
-        assert "home directory" in prompt
-
-    async def test_a_remote_run_without_workspace_tools_still_gets_the_warning(
+    async def test_pod_files_remain_separate_from_both_execution_directories(
         self,
     ) -> None:
-        """The case the old gate missed entirely.
-
-        No workspace toolset used to mean no working-directory section at all,
-        which left the agent with a real directory, no correction, and every
-        reason to treat it as the workspace.
-        """
-        prompt = _system_prompt(toolsets=[])
-
-        assert "# Working Directory" in prompt
-        assert "scratch space belonging to Lemma" in prompt
-
-    async def test_pod_files_are_named_as_the_third_place(self) -> None:
-        """Workspace, pod files, and the user's machine are three things, and
-        conflating the first two is how work ends up somewhere nobody looks."""
         prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
-
-        assert "Pod files" in prompt
+        assert "Pod files are a third place" in prompt
         assert "not scratch space" in prompt
 
 
