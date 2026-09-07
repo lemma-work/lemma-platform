@@ -103,8 +103,10 @@ def render(module: str, rows: list[tuple[str, str, str, str]]) -> str:
     lines = [
         f"# {module} contract",
         "",
-        f"What every `{module}` API operation guarantees: who may call it, what "
-        "must be true first, what changes, what it emits, and how it refuses.",
+        (
+            f"What every `{module}` API operation guarantees: who may call it, what "
+            "must be true first, what changes, what it emits, and how it refuses."
+        ),
         "",
         (
             "The product promises these serve are in "
