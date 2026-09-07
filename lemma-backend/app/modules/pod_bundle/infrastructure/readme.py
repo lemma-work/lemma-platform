@@ -120,8 +120,10 @@ def render_readme(
     safe_icon_url = _safe_icon_url(icon_url)
     if safe_icon_url:
         lines += [
-            f'<img src="{safe_icon_url}" width="88" height="88" '
-            f'alt="{escaped_name}" />',
+            (
+                f'<img src="{safe_icon_url}" width="88" height="88" '
+                f'alt="{escaped_name}" />'
+            ),
             "",
         ]
     lines += [
@@ -152,22 +154,30 @@ def render_readme(
     lines += [
         "## 🚀 Install",
         "",
-        f"**One click** — press **Run it on Lemma** above "
-        f"(or [open the installer]({install_target(owner, repo)})).",
+        (
+            f"**One click** — press **Run it on Lemma** above "
+            f"(or [open the installer]({install_target(owner, repo)}))."
+        ),
         "",
-        "**From inside Lemma** — go to **Settings → Share & Export → Import from "
-        f"GitHub** and paste `{owner}/{repo}`.",
+        (
+            "**From inside Lemma** — go to **Settings → Share & Export → Import from "
+            f"GitHub** and paste `{owner}/{repo}`."
+        ),
         "",
-        "Everything installs into *your own* workspace — your data, your model keys. "
-        "Connectors reconnect to *your* accounts and apps rebuild for your pod on "
-        "import, so nothing is shared but the recipe.",
+        (
+            "Everything installs into *your own* workspace — your data, your model keys. "
+            "Connectors reconnect to *your* accounts and apps rebuild for your pod on "
+            "import, so nothing is shared but the recipe."
+        ),
         "",
         "---",
         "",
         '<div align="center">',
         "",
-        "<sub>Run your apps and agents. Bring your team. "
-        '<a href="https://lemma.work">Lemma</a>.</sub>',
+        (
+            "<sub>Run your apps and agents. Bring your team. "
+            '<a href="https://lemma.work">Lemma</a>.</sub>'
+        ),
         "",
         "</div>",
         "",

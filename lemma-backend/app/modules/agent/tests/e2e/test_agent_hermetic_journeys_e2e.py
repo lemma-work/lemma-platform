@@ -1478,8 +1478,10 @@ async def test_scripted_write_todos_normalizes_malformed_and_duplicate_checkbox_
             "write_todos",
             {
                 "todos": [
-                    "<todos><item>Draft the proposal</item>"
-                    "<item>Send the invoice - done</item></todos>"
+                    (
+                        "<todos><item>Draft the proposal</item>"
+                        "<item>Send the invoice - done</item></todos>"
+                    )
                 ]
             },
             tool_call_id="todo-flattened-plan-1",

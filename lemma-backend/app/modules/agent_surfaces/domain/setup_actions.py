@@ -139,10 +139,14 @@ def build_surface_setup_actions(
                     SurfaceSetupActionField(label="Request URL", value=webhook_url)
                 ],
                 steps=[
-                    "Messages not arriving? Open your app on api.slack.com and "
-                    "check ‘Event Subscriptions’ shows this URL as Verified.",
-                    "If you changed anything, Slack may ask you to reinstall the "
-                    "app to your workspace.",
+                    (
+                        "Messages not arriving? Open your app on api.slack.com and "
+                        "check ‘Event Subscriptions’ shows this URL as Verified."
+                    ),
+                    (
+                        "If you changed anything, Slack may ask you to reinstall the "
+                        "app to your workspace."
+                    ),
                 ],
             )
         )

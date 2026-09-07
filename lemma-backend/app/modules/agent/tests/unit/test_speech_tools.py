@@ -386,8 +386,10 @@ async def test_transcribe_asks_for_multilingual_by_default(monkeypatch):
         [
             (
                 200,
-                b'{"results": {"channels": [{"alternatives": '
-                b'[{"transcript": "kal meeting hai"}]}]}, "metadata": {}}',
+                (
+                    b'{"results": {"channels": [{"alternatives": '
+                    b'[{"transcript": "kal meeting hai"}]}]}, "metadata": {}}'
+                ),
             )
         ],
     )
