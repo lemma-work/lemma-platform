@@ -149,7 +149,7 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
 
     def unresolved_sender_reply(
         self, event: ParsedInboundSurfaceEvent
-    ) -> tuple[str, dict[str, Any]] | None:
+    ) -> tuple[str, dict[str, str]] | None:
         """Say which number we did not recognise, rather than "please sign up".
 
         The default prompt tells the sender to create an account, which is
