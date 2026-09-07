@@ -301,6 +301,19 @@ function labelSecretButton(button, input) {
 }
 
 function configureInteractionHandlers() {
+  document.querySelectorAll("dialog").forEach((dialog) => {
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
+        .filter((control) => control.tabIndex >= 0 && !control.matches(":disabled") && control.getClientRects().length);
+      if (!controls.length) return;
+      event.preventDefault();
+      const current = controls.indexOf(document.activeElement);
+      const next = current < 0 ? (event.shiftKey ? controls.length - 1 : 0)
+        : (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+      controls[next].focus();
+    });
+  });
   document.querySelectorAll('[data-action="reset-local-data"]').forEach((button) => { button.disabled = !LOCAL_MODE; });
   document.querySelectorAll(".nav-item").forEach((button) => {
     if (!LOCAL_MODE && LOCAL_PAGES.has(button.dataset.page)) {

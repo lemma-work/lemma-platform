@@ -144,6 +144,27 @@ test('real settings DOM preserves drafts across health refresh, navigation, and 
   assert.equal(await page.locator('#ai-key').inputValue(), '');
 });
 
+test('the unsaved dialog keeps keyboard focus inside and Cancel restores the draft', async (t) => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-base').fill('https://draft.example/v1');
+  await page.getByRole('button', { name: 'Back to Lemma' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Save your settings changes?' });
+  await dialog.waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'unsaved-cancel');
+  for (const id of ['unsaved-discard', 'unsaved-save', 'unsaved-cancel']) {
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), id);
+  }
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'unsaved-save');
+  await page.keyboard.press('Escape');
+  assert.equal(await dialog.isVisible(), false);
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'back-to-lemma');
+  assert.equal(await page.locator('#ai-base').inputValue(), 'https://draft.example/v1');
+  assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')), false);
+});
+
 test('a save submits one section and does not erase typing during activation', async (t) => {
   const page = await settings(t);
   await page.getByRole('button', { name: 'AI provider', exact: true }).click();
