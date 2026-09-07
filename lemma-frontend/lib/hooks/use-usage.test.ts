@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { MyUsageLimitsResponse } from 'lemma-sdk';
-import { useMyUsageLimits } from './use-usage';
+import { useMyUsageLimits, useUsageLimits } from './use-usage';
+import { usageOrganizationScope } from '@/components/usage/usage-scope';
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('@/lib/sdk/lemma-client', () => ({ getLemmaClient: () => ({ request }) }));
@@ -41,4 +42,22 @@ it('cannot display a previous organization response after switching context', as
     await waitFor(() => expect(hook.result.current.data?.organization_id).toBe('org-b'));
     await act(async () => { pending.resolve(result('org-a')); await pending.promise; });
     expect(hook.result.current.data?.organization_id).toBe('org-b');
+});
+
+it.each([
+    [{ organization_id: null }, undefined],
+    [{ organization_id: 'conversation-org' }, 'conversation-org'],
+    [undefined, 'pod-org'],
+] as const)('requests the resolved conversation allowance scope', async (conversation, expected) => {
+    request.mockResolvedValue(result('unused'));
+    const scope = usageOrganizationScope(conversation, 'pod-org');
+    renderHook(() => useMyUsageLimits(scope ?? undefined), { wrapper: harness() });
+    await waitFor(() => expect(request).toHaveBeenCalledWith('GET', '/usage/me/limits', {
+        params: { organization_id: expected },
+    }));
+});
+
+it('does not request administrative limits without an organization', () => {
+    renderHook(() => useUsageLimits(undefined), { wrapper: harness() });
+    expect(request).not.toHaveBeenCalled();
 });

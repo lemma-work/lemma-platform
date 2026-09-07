@@ -20,6 +20,7 @@ import {
     type DisplayResourceRequest,
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
+import { usageOrganizationScope } from '@/components/usage/usage-scope';
 import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
 import {
     projectConversationMetadata,
@@ -55,7 +56,7 @@ interface AIAssistantContextType {
     hasPodContext: boolean;
     podContext: PodContext | null | undefined;
     conversationPodId: string | null;
-    conversationOrganizationId: string | null;
+    conversationOrganizationId: string | null | undefined;
     openAssistant: () => void;
     closeAssistant: (options?: { skipUrlSync?: boolean; suppressUrlRestore?: boolean }) => void;
     toggleAssistant: () => void;
@@ -664,7 +665,7 @@ export function AIAssistantProvider({
         hasPodContext: isProviderEnabled && !!podContext,
         podContext,
         conversationPodId: conversationScope.podId ?? null,
-        conversationOrganizationId: controller.conversations.find(conversation => conversation.id === controller.openedConversationId)?.organization_id ?? conversationScope.organizationId ?? null,
+        conversationOrganizationId: usageOrganizationScope(controller.conversations.find(conversation => conversation.id === controller.openedConversationId), conversationScope.organizationId),
         openAssistant,
         closeAssistant,
         toggleAssistant,

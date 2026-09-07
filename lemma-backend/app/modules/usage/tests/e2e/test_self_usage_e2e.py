@@ -188,3 +188,25 @@ async def test_unlimited_zero_and_overshoot(
     assert response.status_code == 200, response.text
     assert [window["used_percent"] for window in response.json()["windows"]] == expected
     assert response.json()["allowed"] is (cap is None)
+
+
+@pytest.mark.parametrize("endpoint", ["summary", "events", "stats"])
+@pytest.mark.parametrize(
+    "dates,expected_status",
+    [
+        ({"start": "2020-01-01T00:00:00Z"}, 422),
+        ({"start": "2026-09-02T00:00:00Z", "end": "2026-09-01T00:00:00Z"}, 422),
+        ({"start": "2025-08-31T00:00:00Z", "end": "2026-09-01T00:00:00Z"}, 422),
+        ({"start": "2025-09-01T00:00:00Z", "end": "2026-09-01T00:00:00Z"}, 200),
+        ({"start": "2026-09-01T00:00:00", "end": "2026-09-01T01:00:00Z"}, 200),
+    ],
+)
+async def test_self_reports_validate_explicit_intervals(
+    authenticated_client: AsyncClient,
+    plan: PlanLimits,
+    endpoint: str,
+    dates: dict[str, str],
+    expected_status: int,
+) -> None:
+    response = await authenticated_client.get(f"/usage/me/{endpoint}", params=dates)
+    assert response.status_code == expected_status, response.text

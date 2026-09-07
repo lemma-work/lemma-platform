@@ -11,6 +11,11 @@ e2e_settings = e2e_fixtures.e2e_settings
 db_manager = e2e_fixtures.db_manager
 
 __all__ = [
+    "test_app",
+    "async_client",
+    "fixed_test_user",
+    "authenticated_client",
+    "fixed_test_org",
     "db_manager",
     "e2e_settings",
     "postgres_container",

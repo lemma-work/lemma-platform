@@ -2204,6 +2204,8 @@ export function useAssistantController({
     conversationModel,
     conversations,
     error,
+    errorCode,
+    errorReason,
     conversationsCursor,
     isActiveConversationRunning,
     isLoading,

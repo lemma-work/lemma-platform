@@ -126,7 +126,7 @@ export function useRecentUsage(
     });
 }
 
-export function useUsageLimits(organizationId: string | undefined, options?: { enabled?: boolean; self?: boolean }) {
+export function useUsageLimits(organizationId: string | undefined, options?: { enabled?: boolean }) {
     return useQuery({
         queryKey: ['usage', 'limits', organizationId],
         queryFn: () => {
@@ -139,7 +139,7 @@ export function useUsageLimits(organizationId: string | undefined, options?: { e
                 `/usage/organizations/${encodePath(organizationId)}/limits`
             );
         },
-        enabled: (Boolean(organizationId) || Boolean(options?.self)) && (options?.enabled ?? true),
+        enabled: Boolean(organizationId) && (options?.enabled ?? true),
     });
 }
 

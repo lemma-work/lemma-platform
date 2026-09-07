@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.api.dependencies import UoWDep
 from app.modules.identity.contracts.organizations import organization_member_role
@@ -48,6 +48,13 @@ def _report_query(
 ) -> tuple[UUID | None, UsageReportQuery]:
     end = params.end or datetime.now(timezone.utc)
     start = params.start or end - timedelta(days=params.days)
+    start = start.replace(tzinfo=timezone.utc) if start.tzinfo is None else start
+    end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end
+    if not timedelta(0) <= end - start <= timedelta(days=365):
+        raise HTTPException(
+            status_code=422,
+            detail="Usage reporting interval must be between 0 and 365 days.",
+        )
     global_scope = values.user_limit_scope == "global"
     return (None if global_scope else params.organization_id), UsageReportQuery(
         start=start,

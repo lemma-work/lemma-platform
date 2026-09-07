@@ -36,6 +36,7 @@ export function UsageOverview({
   organizationId,
   podId,
   scope,
+  title,
 }: {
   organizationId?: string;
   podId?: string;
@@ -106,11 +107,11 @@ export function UsageOverview({
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-semibold">
-                {self
+                {title ?? (self
                   ? "Your activity"
                   : scope === "pod"
                     ? "Pod activity"
-                    : "Organization activity"}
+                    : "Organization activity")}
               </h2>
               <p className="mt-1 text-sm text-[var(--text-secondary)]">
                 Recorded spend and tokens in the selected period. Pending or
