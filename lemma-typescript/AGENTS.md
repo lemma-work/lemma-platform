@@ -62,11 +62,12 @@ This runs `tsc` then bundles the browser client.
 ```bash
 npx vitest run
 npx tsc -p tsconfig.json --noEmit
+npx tsc -p tsconfig.test.json --noEmit
 ```
 
-Tests live in `src/__tests__/`. Note that `tsconfig.json` excludes them from the
-typecheck, so a type-level assertion written in a test file is never checked —
-put those in source.
+Tests live in `src/__tests__/`. The build's `tsconfig.json` excludes them;
+`tsconfig.test.json` typechecks them separately. CI and `make quality-frontend`
+run both checks.
 
 ## Import conventions
 

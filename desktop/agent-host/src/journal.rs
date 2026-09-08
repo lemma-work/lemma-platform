@@ -599,6 +599,32 @@ impl Journal {
         Ok(event)
     }
 
+    /// Visit a run's retained events, including acknowledged rows, in order.
+    /// Recovery needs those rows even when the receiver already saw their
+    /// transient chunks; visit incrementally instead of loading the whole log.
+    pub fn visit_run_events(
+        &self,
+        target_id: Uuid,
+        run_id: Uuid,
+        lease_epoch: u32,
+        mut visit: impl FnMut(Event),
+    ) -> Result<(), JournalError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT event_json FROM event_outbox WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3 ORDER BY sequence",
+        )?;
+        let mut rows = statement.query(params![
+            target_id.to_string(),
+            run_id.to_string(),
+            i64::from(lease_epoch)
+        ])?;
+        while let Some(row) = rows.next()? {
+            let encoded: String = row.get(0)?;
+            visit(serde_json::from_str(&encoded)?);
+        }
+        Ok(())
+    }
+
     pub fn pending_events(
         &self,
         target_id: Uuid,
@@ -1235,6 +1261,7 @@ mod tests {
             system_prompt: "system".into(),
             prompt: vec![serde_json::json!({"role": "user", "content": "hello"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             mcp: serde_json::json!({
                 "url": "https://lemma.test/mcp",
@@ -1270,6 +1297,69 @@ mod tests {
                 .accept_start(target, &command, &spec, "codex", "1.0")
                 .unwrap(),
             AcceptOutcome::Duplicate
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_checkpoints_and_event_reads_make_progress() {
+        // A SQLite mutex deadlock cannot be cancelled by a Tokio timeout on
+        // the same thread. Isolate the workload so a regression fails promptly
+        // and the parent reaps it instead of hanging the entire test job.
+        if std::env::var_os("LEMMA_JOURNAL_CONCURRENCY_CHILD").is_none() {
+            let thread = std::thread::current();
+            let test_name = thread.name().expect("the test runner names its thread");
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_name, "--nocapture"])
+                .env("LEMMA_JOURNAL_CONCURRENCY_CHILD", "1")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            if let Ok(status) = tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+                assert!(status.unwrap().success());
+            } else {
+                child.kill().await.unwrap();
+                panic!("concurrent journal operations deadlocked");
+            }
+            return;
+        }
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    journal
+                        .checkpoint(
+                            target,
+                            spec.agent_run_id,
+                            1,
+                            RunState::Running,
+                            &JsonMap::new(),
+                        )
+                        .unwrap();
+                    journal
+                        .append_event(
+                            target,
+                            spec.agent_run_id,
+                            1,
+                            EventType::AgentMessageChunk,
+                            None,
+                            JsonMap::new(),
+                        )
+                        .unwrap();
+                }
+            });
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    journal.pending_events(target, 256).unwrap();
+                    journal.pending_control(target).unwrap();
+                }
+            });
+        });
+        assert_eq!(
+            journal.pending_events(target, 256).unwrap()[0].events.len(),
+            200
         );
     }
 

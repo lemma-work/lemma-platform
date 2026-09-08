@@ -292,15 +292,70 @@
   .scene.choosing .whisper,
   .scene.choosing .corner,
   .scene.choosing .progress { display: none; }
-  /* The sign-in screen is the splash with a button on it, so it takes no
-     layout of its own. Only the local review screen, which genuinely has a
-     column of disclosures to read, switches into `.choosing`. */
   .scene.choosing #choose, .scene.choosing #local-confirm {
     width: 100%;
     padding: 0 0 0 clamp(40px, 5vw, 72px);
     border-left: 1px solid var(--hairline);
   }
-  #choose { width: 100%; display: flex; flex-direction: column; align-items: center; }
+  .scene.welcoming {
+    padding: clamp(24px, 4vh, 44px) clamp(28px, 5vw, 76px) 54px;
+    text-align: left;
+    align-items: stretch;
+    justify-content: flex-start;
+    overflow-y: auto;
+    background: var(--canvas);
+  }
+  .scene.welcoming .setup-intro { display: block; width: 100%; max-width: 1080px; margin: 0 auto; }
+  .scene.welcoming .setup-brand { display: flex; align-items: center; gap: 9px; }
+  .scene.welcoming .orb-wrap,
+  .scene.welcoming .statement,
+  .scene.welcoming .whisper,
+  .scene.welcoming .truth { display: none; }
+  .scene.welcoming .corner { opacity: 1; color: var(--ink-soft); }
+  #choose { width: 100%; max-width: 1080px; margin: auto; padding: 26px 0 0; }
+  .welcome-heading { margin: 0; font-size: clamp(30px, 4vw, 48px); font-weight: 520; line-height: 1.08; letter-spacing: -.045em; }
+  .welcome-subtitle { margin: 12px 0 26px; font-size: 16px; line-height: 1.45; color: var(--ink-soft); }
+  .deployment-options { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, 1fr); gap: 32px; }
+  .cloud-option { padding: 26px 28px; border-radius: 18px; background: color-mix(in srgb, var(--gold) 8%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--gold) 28%, var(--canvas)); }
+  .deployment-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .deployment-title h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+  .recommended { padding: 3px 9px; border-radius: 6px; color: var(--gold-deep); background: color-mix(in srgb, var(--gold) 12%, transparent); font-size: 12px; font-weight: 600; }
+  .cloud-benefits { display: grid; gap: 17px; list-style: none; margin: 22px 0 24px; padding: 0; }
+  .cloud-benefits li { display: grid; grid-template-columns: 24px 1fr; gap: 12px; align-items: start; }
+  .cloud-benefits svg { width: 21px; height: 21px; margin-top: 2px; color: var(--gold-deep); }
+  .cloud-benefits strong { display: block; font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .cloud-benefits p { margin: 3px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.4; }
+  #choose-cloud { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 17px; border-radius: 9px; background: var(--gold); border-color: var(--gold); color: #fff; }
+  #choose-cloud:hover { background: var(--gold-deep); }
+  .cloud-storage { margin: 10px 0 0; font-size: 12px; color: var(--ink-soft); text-align: center; }
+  .local-option { display: flex; flex-direction: column; align-items: flex-start; padding: 24px 0; }
+  .local-option h2 { margin: 0; font-size: 23px; font-weight: 550; letter-spacing: -.025em; }
+  .local-option p { margin: 14px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.5; }
+  .local-option ul { padding: 0; list-style: none; display: grid; gap: 9px; margin: 19px 0 22px; color: var(--ink-soft); font-size: 14px; }
+  .local-option li { padding-left: 15px; position: relative; }
+  .local-option li::before { content: "·"; position: absolute; left: 0; color: var(--gold-deep); }
+  .local-option #choose-local { margin-top: auto; padding: 8px 0; font-size: 14px; }
+  .welcome-notes { margin: 20px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .welcome-notes p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-soft); }
+  @media (prefers-color-scheme: dark) {
+    #choose-cloud { color: #19142c; }
+  }
+  @media (max-height: 720px) and (min-width: 851px) {
+    .scene.welcoming { padding-top: 22px; }
+    #choose { padding-top: 18px; }
+    .welcome-heading { font-size: 36px; }
+    .welcome-subtitle { margin-bottom: 20px; }
+    .cloud-option { padding: 20px 24px; }
+    .cloud-benefits { gap: 12px; margin: 17px 0 20px; }
+    .local-option { padding: 18px 0; }
+    .welcome-notes { margin-top: 16px; }
+  }
+  @media (max-width: 850px) {
+    .deployment-options { grid-template-columns: 1fr; gap: 18px; }
+    .local-option { padding: 0; }
+    .local-option ul { margin: 12px 0; }
+    .welcome-notes { grid-template-columns: 1fr; gap: 10px; }
+  }
   button.start {
     all: unset;
     box-sizing: border-box;
@@ -424,13 +479,23 @@
     }
     .scene.choosing .statement { min-height: 220px; }
     .scene.choosing .statement p { font-size: 3.45rem; }
-    #choose, #local-confirm { padding-left: 40px; }
+    .scene.choosing #local-confirm { padding-left: 40px; }
   }
 
   @media (max-height: 720px) {
     .scene.choosing { padding-top: 36px; padding-bottom: 36px; }
     .scene.choosing .statement { min-height: 200px; }
     .scene.choosing .statement p { font-size: 3.15rem; }
+  }
+  @media (max-width: 850px) {
+    .scene.choosing { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 24px; padding: 28px 24px 70px; overflow-y: auto; }
+    .scene.choosing .setup-intro { height: auto; }
+    .scene.choosing .setup-brand { position: static; margin-bottom: 20px; }
+    .scene.choosing .statement { min-height: 0; }
+    .scene.choosing .statement p { position: static; font-size: 2.25rem; }
+    .scene.choosing .setup-support { margin-top: 12px; }
+    .scene.choosing #local-confirm { border-left: 0; padding: 0; min-width: 0; }
+    .confirm-actions { flex-wrap: wrap; }
   }
 
   /* ---------- quiet chrome ---------- */
@@ -654,31 +719,35 @@
   </div>
   <p class="truth" id="truth"></p>
 
-  <!--
-    One button, because on this screen we do not yet know who is holding the app.
-
-    This used to be two equal choices under the heading "Workspace location" — an
-    architecture question asked before anything had been established, of someone
-    with no basis to answer it. Equal visual weight for options with wildly
-    unequal cost is misdirection however well meant, and the cost only appeared
-    on the next screen.
-
-    It also cannot pitch. Any line about coding agents excludes the person who
-    has not installed one, on the first screen they ever see. What the machine
-    actually has is checked after sign-in, where it is a fact rather than a
-    guess — and now cheap enough to check that the screen can be built on it.
-  -->
-  <section id="choose" hidden>
-    <button class="primary start" id="choose-cloud" type="button">Sign in</button>
-    <p class="mode-note">
-      Or <button class="linklike" id="choose-local" type="button">run Lemma on this Mac</button>
-      <!-- Qualitative on purpose. A figure here is a promise made on the first
-           screen anyone sees, over a download whose length is somebody else's
-           network, and the review screen behind this link is where the cost is
-           actually laid out. "A number in prose goes stale silently" applies to
-           product copy as much as to docs. -->
-      <span class="local-cost" id="local-choice-cost">· downloads and installs services</span>
-    </p>
+  <section id="choose" aria-labelledby="welcome-heading" hidden>
+    <h1 class="welcome-heading" id="welcome-heading">Better work, together.</h1>
+    <p class="welcome-subtitle">A shared home for your team, your agents, and everything you build.</p>
+    <div class="deployment-options">
+      <section class="cloud-option" aria-labelledby="cloud-title">
+        <div class="deployment-title"><h2 id="cloud-title">Lemma Cloud</h2><span class="recommended">Recommended</span></div>
+        <ul class="cloud-benefits">
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 4a3 3 0 0 1 0 6M18 13a5 5 0 0 1 3 5v2"/></svg><div><strong>Share and collaborate with your team</strong><p>Work together on the same data, apps, and agents.</p></div></li>
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 3 3 3-5 5-3-3m10 10 3 3 5-5-3-3M6 11l7 7M11 6l7 7m-7-2 2 2M2 22l5-5M17 7l5-5"/></svg><div><strong>Connect your tools, skip the setup</strong><p>Sign in to supported integrations. We handle the hosting.</p></div></li>
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a5 5 0 1 1 .8-9.9A6 6 0 0 1 19 7a5.5 5.5 0 0 1 0 11H7Z"/><path d="m12 10-2 4h4l-2 4"/></svg><div><strong>Keep work moving when you're away</strong><p>Cloud agents and schedules run even when your computer is off.</p></div></li>
+        </ul>
+        <button class="primary start" id="choose-cloud" type="button">Use Lemma Cloud <span aria-hidden="true">→</span></button>
+        <p class="cloud-storage">Workspace data lives in Lemma Cloud. No local services to install.</p>
+      </section>
+      <section class="local-option" aria-labelledby="local-title">
+        <h2 id="local-title">Prefer to host it yourself?</h2>
+        <p>Local Lemma keeps its services and stored application data on this Mac.</p>
+        <ul>
+          <li id="local-choice-cost">Install and manage the local services.</li>
+          <li>Set up your own integrations and sharing.</li>
+          <li>Keep this computer on for agents and schedules.</li>
+        </ul>
+        <button class="linklike" id="choose-local" type="button">Use Local Lemma</button>
+      </section>
+    </div>
+    <div class="welcome-notes">
+      <p>You can also connect coding agents on this computer to Lemma Cloud. Local agents need this computer running.</p>
+      <p>Configured AI providers and connectors can send requested data over the internet in either mode. You can switch modes later in Settings.</p>
+    </div>
   </section>
 
   <section id="local-confirm" hidden>
@@ -687,18 +756,10 @@
     <div class="local-review">
       <ul>
         <li id="local-data-copy">Workspace data is stored on this Mac.</li>
-        <!-- Moved here from the choice screen. It is a consequence of picking
-             local, so it belongs where that is being decided rather than on a
-             screen that no longer asks the question. -->
         <li>A local workspace shares no data with a cloud one.</li>
-        <!-- The real numbers. "Several gigabytes" overstated the transfer by
-             about three times: the download gate is 750 MiB compressed, and a
-             current release is around 506 MB. This is the one screen where
-             somebody on a hotspot or a metered connection decides, so it should
-             not be the screen that guesses high. Resumability is worth saying
-             for the same reason -- it is already true, and nothing told them. -->
-        <li>First setup downloads about 500&nbsp;MB and installs about 1.8&nbsp;GB. On a slow connection this takes a while; you can close Lemma and it picks up where it left off.</li>
+        <li>First setup installs the local runtime and downloads service images. Download and storage needs depend on the release and cached files. Interrupted runtime downloads can resume.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
+        <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
       <p class="setup-error" id="local-setup-error" hidden></p>
       <div class="confirm-actions">
@@ -730,6 +791,7 @@
   <div class="progress"><div id="bar"></div></div>
   <div class="corner left">
     <button id="toggle-log" type="button">log</button>
+    <button id="open-recovery" type="button">recovery</button>
     <button id="switch-mode" type="button" hidden>use lemma cloud</button>
   </div>
   <div class="corner right" id="runinfo"></div>
@@ -768,6 +830,7 @@
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
         recoveryOptions: () => invoke("local_recovery_options"),
+        openRecovery: () => invoke("open_control_center", { page: "recovery" }),
         resetLocalData: () => invoke("reset_local_data"),
         resetFullReinstall: () => invoke("reset_full_reinstall"),
         onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
@@ -829,6 +892,7 @@
 
   // ---- the script: poetic line + honest mono subtitle per real phase ----
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+  document.getElementById("local-network-permission").hidden = IS_WINDOWS;
   const DEVICE = IS_WINDOWS ? "PC" : "Mac";
   /** Any sentence about the machine, said the way this machine's owner would. */
   function forThisDevice(text) {
@@ -850,6 +914,7 @@
     stopped:    ["Asleep.", "services stopped"],
   };
   const READY_LINE = "It's ready. Opening Lemma.";
+  const openIntent = new URLSearchParams(location.search).get("intent");
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
@@ -993,6 +1058,23 @@
   }
   function renderState(s) {
     if (!s) return;
+    if (openIntent === "quit") {
+      clearTimeout(readyOpenTimer);
+      stopWhispers();
+      hideConnectionChoice();
+      switchModeBtn.hidden = true;
+      openBtn.hidden = true;
+      prepareWindowsBtn.hidden = true;
+      showRecoveryButtons(false, false);
+      say(s.error ? "Lemma could not finish stopping." : "Stopping Lemma.");
+      truth.textContent = s.phaseKey === "stopping" ? s.status : "Waiting for local work to stop safely";
+      errwrap.hidden = !s.error;
+      errdetail.textContent = s.error ? s.status : "";
+      retryBtn.textContent = "Retry shutdown";
+      retryBtn.hidden = !s.error;
+      progressEl.classList.toggle("active", !s.error);
+      return;
+    }
     // Neither of these may return silently. This function is the only thing that
     // draws the screen and the only thing that schedules the move to the
     // workspace, so a state it declines to handle leaves the bare static logo up
@@ -1304,6 +1386,17 @@
     }
   });
   retryBtn.addEventListener("click", async () => {
+    if (openIntent === "quit") {
+      retryBtn.disabled = true;
+      try {
+        await window.lemmaDesktop.stop(true);
+      } catch (error) {
+        errdetail.textContent = String(error);
+      } finally {
+        retryBtn.disabled = false;
+      }
+      return;
+    }
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
@@ -1322,6 +1415,9 @@
    * would read as "cancelled" every time.
    */
   let recoveryOffered = false;
+  document.getElementById("open-recovery").addEventListener("click", () => {
+    window.lemmaDesktop.openRecovery?.().catch((error) => { errdetail.textContent = String(error); });
+  });
   async function showRecoveryButtons(offer, dataIsUnreadable) {
     if (!offer) {
       resetDataBtn.hidden = true;
@@ -1391,8 +1487,9 @@
   const localSetupError = document.getElementById("local-setup-error");
   const confirmLocalBtn = document.getElementById("confirm-local");
   function showChooser() {
-    // Deliberately not `.choosing`: this is the splash, with a button.
+    const entering = chooseEl.hidden;
     scene.classList.remove("choosing");
+    scene.classList.add("welcoming");
     chooseEl.hidden = false;
     localConfirmEl.hidden = true;
     switchModeBtn.hidden = true;
@@ -1406,15 +1503,11 @@
     // this machine, because nothing has looked yet and a wrong guess here tells
     // someone the app is not for them before they have used it.
     say("Welcome to Lemma.");
-    // Nothing. This used to promise "no local services are installed until you
-    // confirm" — a reassurance against a fear nobody arrives with, referring to
-    // a confirmation step they have not seen, on a screen whose only action is
-    // signing in. It was written for the other path and was invisible here
-    // anyway until this screen stopped being a two-column layout. The gating it
-    // describes is self-evident on the review screen that actually does it.
     truth.textContent = "";
+    if (entering) document.getElementById("choose-cloud").focus({ preventScroll: true });
   }
   function showLocalConfirmation() {
+    scene.classList.remove("welcoming");
     scene.classList.add("choosing");
     chooseEl.hidden = true;
     localConfirmEl.hidden = false;
@@ -1425,7 +1518,7 @@
     truth.textContent = "review before installation";
   }
   function hideConnectionChoice() {
-    scene.classList.remove("choosing");
+    scene.classList.remove("choosing", "welcoming");
     chooseEl.hidden = true;
     localConfirmEl.hidden = true;
   }
@@ -1461,28 +1554,20 @@
   });
 
   // ---- boot ----------------------------------------------------------------
-  lineEl.textContent = VOICE.boot[0];
+  shownLine = openIntent === "quit" ? "Stopping Lemma."
+    : openIntent === "stop" ? VOICE.stopping[0] : VOICE.boot[0];
+  lineEl.textContent = shownLine;
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
   refreshDiagnosticLog();
-  function shouldAutoStart(s) {
-    return Boolean(
-      s &&
-      s.mode === "local" &&
-      (s.phaseKey === "boot" || s.phaseKey === "stopped") &&
-      !s.error &&
-      !s.running &&
-      !s.ready
-    );
-  }
-  // Why this document was opened. The splash reloads with no memory, so
-  // without this it reads "nothing is running" as "start Lemma" — which is
-  // right when the user opened the app and wrong when they asked it to stop.
-  const openIntent = new URLSearchParams(location.search).get("intent");
-
+  // The shell owns launch and connection-mode startup. Loading a document is
+  // only observation: an automatic start here races the shell's request.
+  // Explicit Start and Retry buttons still send their own user actions.
   window.lemmaDesktop.getState().then((s) => {
-    if (s && s.mode === "undecided") {
+    if (openIntent === "quit") {
+      renderState(s);
+    } else if (s && s.mode === "undecided") {
       showChooser();
     } else if (openIntent === "stop") {
       // Say what is actually happening, and never offer to start what the
@@ -1494,9 +1579,6 @@
       bar.style.width = "100%";
     } else {
       renderState(s);
-      if (shouldAutoStart(s)) {
-        requestStart();
-      }
     }
   });
 </script>
@@ -1582,62 +1664,71 @@ void main() {
 
   const container = document.getElementById("orb");
   const prefersReducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
-  camera.position.z = 3.4;
+  // Freezing shader time still redraws every frame, including on software GPUs.
+  // Reduced motion must avoid the rendering loop and its graphics context.
+  if (!prefersReducedMotion) {
+    try {
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+      camera.position.z = 3.4;
 
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setClearColor(0xffffff, 0);
-  container.appendChild(renderer.domElement);
+      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearColor(0xffffff, 0);
+      container.appendChild(renderer.domElement);
 
-  const geometry = new THREE.IcosahedronGeometry(1.15, 8);
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      time: { value: 0 },
-      pointLightPos: { value: new THREE.Vector3(0, 0, 4.5) },
-      color: { value: new THREE.Color(0x7a5ce0) },
-    },
-    vertexShader,
-    fragmentShader,
-    wireframe: true,
-    transparent: true,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  scene.add(mesh);
+      const geometry = new THREE.IcosahedronGeometry(1.15, 8);
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0 },
+          pointLightPos: { value: new THREE.Vector3(0, 0, 4.5) },
+          color: { value: new THREE.Color(0x7a5ce0) },
+        },
+        vertexShader,
+        fragmentShader,
+        wireframe: true,
+        transparent: true,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
 
-  let speed = 1;
-  const targetColor = new THREE.Color(0x7a5ce0);
-  window.__orb = {
-    awake() { speed = 2.4; targetColor.set(0xeab451); setTimeout(() => { speed = 1.3; }, 1800); },
-    stall() { speed = 0.12; targetColor.set(0xb0a48d); },
-    resume() { speed = 1; targetColor.set(0x7a5ce0); },
-  };
+      let speed = 1;
+      const targetColor = new THREE.Color(0x7a5ce0);
+      window.__orb = {
+        awake() { speed = 2.4; targetColor.set(0xeab451); setTimeout(() => { speed = 1.3; }, 1800); },
+        stall() { speed = 0.12; targetColor.set(0xb0a48d); },
+        resume() { speed = 1; targetColor.set(0x7a5ce0); },
+      };
 
-  const resize = () => {
-    const { width, height } = container.getBoundingClientRect();
-    camera.aspect = Math.max(1, width) / Math.max(1, height);
-    camera.updateProjectionMatrix();
-    renderer.setSize(Math.max(1, width), Math.max(1, height), false);
-  };
-  new ResizeObserver(resize).observe(container);
-  resize();
+      const resize = () => {
+        const { width, height } = container.getBoundingClientRect();
+        camera.aspect = Math.max(1, width) / Math.max(1, height);
+        camera.updateProjectionMatrix();
+        renderer.setSize(Math.max(1, width), Math.max(1, height), false);
+      };
+      new ResizeObserver(resize).observe(container);
+      resize();
 
-  let clock = 0;
-  let last = performance.now();
-  const animate = (now) => {
-    const dt = now - last;
-    last = now;
-    clock += dt * (prefersReducedMotion ? 0 : speed);
-    material.uniforms.time.value = clock * 0.00035;
-    material.uniforms.color.value.lerp(targetColor, 0.04);
-    mesh.rotation.y += prefersReducedMotion ? 0 : 0.0016 * speed;
-    mesh.rotation.x += prefersReducedMotion ? 0 : 0.0008 * speed;
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-  };
-  requestAnimationFrame(animate);
+      let clock = 0;
+      let last = performance.now();
+      const animate = (now) => {
+        const dt = now - last;
+        last = now;
+        clock += dt * speed;
+        material.uniforms.time.value = clock * 0.00035;
+        material.uniforms.color.value.lerp(targetColor, 0.04);
+        mesh.rotation.y += 0.0016 * speed;
+        mesh.rotation.x += 0.0008 * speed;
+        if (!document.hidden && container.getClientRects().length) renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      };
+      requestAnimationFrame(animate);
+    } catch {
+      // Decorative graphics must never prevent setup on machines without WebGL.
+      container.hidden = true;
+    }
+  }
 </script>
 </body>
 </html>

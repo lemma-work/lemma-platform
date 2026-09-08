@@ -448,7 +448,6 @@ def test_the_two_non_shard_lanes_match_their_workflows() -> None:
 #: name available. `identity` and `pod` had no such excuse and are gone.
 RESERVED_UNUSED_MARKERS = {
     "protected": "reserved for backend-protected-e2e.yml; nothing carries it yet",
-    "local_cli": "reserved for tests needing a local Codex/OpenCode/Claude binary",
 }
 
 

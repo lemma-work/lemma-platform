@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+#[cfg(any(not(target_os = "macos"), test))]
+use std::net::TcpStream;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,6 +20,7 @@ use serde_json::json;
 use crate::host_process::ManagedRuntimeSpec;
 use crate::native_host_pack::ManagedManifestMaterial;
 use crate::paths::LocalPaths;
+use crate::tcp_forwarder::TcpForwarder;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +133,8 @@ impl ManagedRuntimeBootstrap {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
         }))
     }
 }
@@ -240,6 +245,8 @@ pub struct ManagedRuntimeController {
     /// See `start_with_progress`. Joined by `await_private_services` before
     /// anything reports ready, so this is a reordering and not a weakening.
     pending_auth: Mutex<Option<thread::JoinHandle<io::Result<()>>>>,
+    pending_images: Mutex<Option<thread::JoinHandle<()>>>,
+    cancellation: lemma_desktop_process::Cancellation,
 }
 
 impl ManagedRuntimeController {
@@ -253,8 +260,17 @@ impl ManagedRuntimeController {
 
     pub fn start_with_progress(
         self: &Arc<Self>,
-        mut progress: impl FnMut(&str, &str, u64, &str),
+        progress: impl FnMut(&str, &str, u64, &str),
     ) -> io::Result<()> {
+        self.start_cancellable(progress, || Ok(()))
+    }
+
+    pub fn start_cancellable(
+        self: &Arc<Self>,
+        mut progress: impl FnMut(&str, &str, u64, &str),
+        checkpoint: impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        checkpoint()?;
         validate_spec(&self.spec)?;
         progress(
             "vm",
@@ -262,9 +278,10 @@ impl ManagedRuntimeController {
             32,
             "booting the app-owned Linux appliance",
         );
-        let status = self.runtime.start().inspect_err(|_error| {
+        self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
         })?;
+        checkpoint()?;
         // Before PostgreSQL, Redis or the auth service exist in there. `start`
         // only boots a guest that is not already running, and a reused guest
         // keeps whatever clock it drifted to while the Mac was asleep -- so the
@@ -300,12 +317,41 @@ impl ManagedRuntimeController {
                 "preparing local streams, cache, and pub/sub",
             ),
         ] {
+            checkpoint()?;
             progress(component, label, percentage, detail);
-            if let Err(error) = self.runtime.request(operation, parameters.clone()) {
+            if let Err(error) = self.runtime.request_cancellable(
+                operation,
+                parameters.clone(),
+                self.cancellation.clone(),
+            ) {
                 let _ = self.runtime.capture_diagnostics();
                 let _ = self.runtime.stop();
                 return Err(error);
             }
+        }
+
+        checkpoint()?;
+        let status = self.runtime.health()?;
+        progress(
+            "private-connectivity",
+            "Connecting to local services",
+            61,
+            "checking this computer can reach the private database and cache",
+        );
+        // Guest health proves the services are running inside the VM. Host
+        // reachability is a separate gate, including when migrations are cached.
+        if let Err(error) = self.ensure_forwarders(&status).and_then(|()| {
+            self.wait_for_service_connections(
+                &status,
+                &PRIVATE_SERVICE_PORTS[..2],
+                Duration::from_secs(30),
+                &checkpoint,
+            )
+        }) {
+            let _ = self.runtime.capture_diagnostics();
+            self.clear_forwarders();
+            let _ = self.runtime.stop();
+            return Err(error);
         }
 
         // The auth service starts here and is *waited for* later, because the
@@ -325,6 +371,7 @@ impl ManagedRuntimeController {
         // its accept loop, so this request occupies that channel either way.
         // What it must not also occupy is *this* thread, which is what the
         // daemon needs back in order to start the backend at all.
+        checkpoint()?;
         progress(
             "supertokens",
             "Starting local authentication",
@@ -339,7 +386,11 @@ impl ManagedRuntimeController {
                 .spawn(move || {
                     controller
                         .runtime
-                        .request("core.supertokens", parameters)
+                        .request_cancellable(
+                            "core.supertokens",
+                            parameters,
+                            controller.cancellation.clone(),
+                        )
                         .map(|_| ())
                 })?
         };
@@ -347,11 +398,6 @@ impl ManagedRuntimeController {
             .pending_auth
             .lock()
             .expect("pending auth lock poisoned") = Some(auth);
-        if let Err(error) = self.ensure_forwarders(&status) {
-            let _ = self.runtime.capture_diagnostics();
-            let _ = self.runtime.stop();
-            return Err(error);
-        }
         *self.status.lock().expect("managed runtime status poisoned") = Some(status);
         self.start_clock_keeper();
         Ok(())
@@ -404,7 +450,21 @@ impl ManagedRuntimeController {
         // The same check as before, in the same place in the sequence relative
         // to anything that uses these services -- only now the services had the
         // backend's boot to finish coming up in, so it usually finds them ready.
-        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+        if let Err(error) = self.wait_for_service_connections(
+            &status,
+            &PRIVATE_SERVICE_PORTS,
+            Duration::from_secs(90),
+            || {
+                if self.cancellation.is_cancelled() {
+                    Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Local startup was cancelled.",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
             let _ = self.runtime.capture_diagnostics();
             let _ = self.runtime.stop();
             return Err(error);
@@ -454,9 +514,30 @@ impl ManagedRuntimeController {
         // nothing behind it. Today the process exits immediately afterwards and
         // nobody notices; the first caller to use this for a soft stop would
         // inherit a thread that never ends.
+        self.cancel_pending_requests();
         self.stop_clock_keeper();
+        if let Some(auth) = self
+            .pending_auth
+            .lock()
+            .expect("pending auth lock poisoned")
+            .take()
+        {
+            let _ = auth.join();
+        }
+        if let Some(images) = self
+            .pending_images
+            .lock()
+            .expect("pending images lock poisoned")
+            .take()
+        {
+            let _ = images.join();
+        }
         self.clear_forwarders();
         self.runtime.stop()
+    }
+
+    pub fn cancel_pending_requests(&self) {
+        self.cancellation.cancel();
     }
 
     pub fn status(&self) -> Option<ManagedRuntimeStatus> {
@@ -480,6 +561,10 @@ impl ManagedRuntimeController {
         }
     }
 
+    pub fn check_guest_kernel(&self) -> io::Result<()> {
+        self.runtime.check_guest_kernel()
+    }
+
     pub fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
         let status = self.status().ok_or_else(|| {
             io::Error::new(
@@ -487,39 +572,59 @@ impl ManagedRuntimeController {
                 "private runtime is not ready for host processes",
             )
         })?;
-        let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
+        let (host, postgres, redis, supertokens) = if cfg!(target_os = "macos") {
+            (
+                Ipv4Addr::LOCALHOST,
+                self.spec.ports.postgres,
+                self.spec.ports.redis,
+                self.spec.ports.supertokens,
+            )
+        } else {
+            (
+                private_ipv4(&status.endpoint_host, "guest endpoint")?,
+                5432,
+                6379,
+                3567,
+            )
+        };
         let capability_file = runtime_path_value(self.runtime.capability_file())?;
         let control_socket = runtime_path_value(self.runtime.control_socket())?;
         Ok(HashMap::from([
             (
                 "DATABASE_URL".into(),
                 format!(
-                    "postgresql+asyncpg://postgres:{}@{host}:5432/lemma",
+                    "postgresql+asyncpg://postgres:{}@{host}:{postgres}/lemma",
                     self.spec.credentials.postgres_password
                 ),
             ),
             (
                 "DATASTORE_DATABASE_URL".into(),
                 format!(
-                    "postgresql+asyncpg://postgres:{}@{host}:5432/lemma_datastore",
+                    "postgresql+asyncpg://postgres:{}@{host}:{postgres}/lemma_datastore",
                     self.spec.credentials.postgres_password
                 ),
             ),
             (
                 "REDIS_URL".into(),
                 format!(
-                    "redis://:{}@{host}:6379",
+                    "redis://:{}@{host}:{redis}",
                     self.spec.credentials.redis_password
                 ),
             ),
-            ("SUPERTOKENS_CORE_URL".into(), format!("http://{host}:3567")),
+            (
+                "SUPERTOKENS_CORE_URL".into(),
+                format!("http://{host}:{supertokens}"),
+            ),
             // The backend invokes the narrow runtime bridge for the sandbox runtime
             // lifecycle operations. Pass explicit paths to the app-owned
             // capability and transport; the bridge must never guess from a
             // developer checkout or rewrite a localhost URL.
             ("LEMMA_GUEST_CAPABILITY_FILE".into(), capability_file),
             ("LEMMA_GUEST_CONTROL_SOCKET".into(), control_socket),
-            ("LEMMA_WSL_DISTRIBUTION".into(), "LemmaRuntime".into()),
+            (
+                "LEMMA_WSL_DISTRIBUTION".into(),
+                self.runtime.wsl_distribution().into(),
+            ),
         ]))
     }
 
@@ -547,21 +652,53 @@ impl ManagedRuntimeController {
         self: &Arc<Self>,
         report: impl Fn(&SandboxImageStatus) + Send + 'static,
     ) {
+        let mut pending = self
+            .pending_images
+            .lock()
+            .expect("pending images lock poisoned");
+        if self.cancellation.is_cancelled() {
+            return;
+        }
         let Some(started) = self.claim_sandbox_image_warmup() else {
             return;
         };
         report(&started);
 
         let controller = Arc::clone(self);
-        thread::spawn(move || {
+        if let Some(previous) = pending.take() {
+            let _ = previous.join();
+        }
+        *pending = Some(thread::spawn(move || {
             let parameters = json!({
                 "images": controller.spec.images,
                 "credentials": controller.spec.credentials,
             });
-            let status = match controller
-                .runtime
-                .request("core.sandbox_images", parameters)
-            {
+            let result = if cfg!(target_os = "macos") {
+                poll_sandbox_image_warmup(
+                    &controller.cancellation,
+                    Duration::from_secs(8 * 60),
+                    Duration::from_secs(1),
+                    || {
+                        controller.runtime.request_cancellable(
+                            "core.sandbox_images_status",
+                            parameters.clone(),
+                            controller.cancellation.clone(),
+                        )
+                    },
+                )
+            } else {
+                // WSL launches a guest process per request. Background threads
+                // cannot outlive that process; its independent channel can wait.
+                controller
+                    .runtime
+                    .request_cancellable(
+                        "core.sandbox_images",
+                        parameters,
+                        controller.cancellation.clone(),
+                    )
+                    .map(|_| ())
+            };
+            let status = match result {
                 Ok(_) => {
                     SandboxImageStatus::new(SANDBOX_IMAGES_READY, "The workspace sandbox is ready")
                 }
@@ -574,7 +711,7 @@ impl ManagedRuntimeController {
                 }
             };
             controller.publish_sandbox_images(status, &report);
-        });
+        }));
     }
 
     /// Take the warm-up, or decline because one is already running.
@@ -725,9 +862,8 @@ impl ManagedRuntimeController {
             return Ok(());
         }
 
-        // Host applications use the guest's private NAT address directly.
-        // Only sandbox callbacks need guest-to-host bridges; no database,
-        // cache, or auth service is published on a host loopback port.
+        // Internal Mac services use the VM's virtual socket; callbacks still
+        // use the guest network. WSL retains its existing private service route.
         let bindings = [
             (
                 "sandbox-api-callback",
@@ -749,7 +885,60 @@ impl ManagedRuntimeController {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
+        for (label, port, guest_port) in [
+            ("postgres", self.spec.ports.postgres, 5432),
+            ("redis", self.spec.ports.redis, 6379),
+            ("supertokens", self.spec.ports.supertokens, 3567),
+        ] {
+            match TcpForwarder::start_private(
+                label,
+                SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                self.runtime.service_socket(guest_port),
+            ) {
+                Ok(forwarder) => current.push(forwarder),
+                Err(error) => {
+                    current.clear();
+                    return Err(error);
+                }
+            }
+        }
         Ok(())
+    }
+
+    fn wait_for_service_connections(
+        &self,
+        _status: &ManagedRuntimeStatus,
+        services: &[(&str, u16)],
+        timeout: Duration,
+        checkpoint: impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            wait_for_services(services, timeout, checkpoint, |port, budget| {
+                // Probe the bridge acknowledgement, not the host TCP listener:
+                // a listener can accept while its VM connection is still pending.
+                let path = self.runtime.service_socket(port);
+                runtime.block_on(async {
+                    tokio::time::timeout(
+                        budget,
+                        crate::tcp_forwarder::connect_private_service(&path),
+                    )
+                    .await??;
+                    Ok(())
+                })
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        wait_for_tcp_services(
+            private_ipv4(&_status.endpoint_host, "guest endpoint")?,
+            services,
+            timeout,
+            checkpoint,
+        )
     }
 
     fn clear_forwarders(&self) {
@@ -758,6 +947,44 @@ impl ManagedRuntimeController {
             .expect("forwarder lock poisoned")
             .clear();
         *self.status.lock().expect("managed runtime status poisoned") = None;
+    }
+}
+
+fn poll_sandbox_image_warmup(
+    cancellation: &lemma_desktop_process::Cancellation,
+    budget: Duration,
+    interval: Duration,
+    mut request: impl FnMut() -> io::Result<serde_json::Value>,
+) -> io::Result<()> {
+    let deadline = Instant::now() + budget;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "image preparation cancelled",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "image preparation timed out",
+            ));
+        }
+        let response = request()?;
+        if cancellation.is_cancelled() || Instant::now() >= deadline {
+            continue;
+        }
+        match response.get("ready").and_then(serde_json::Value::as_bool) {
+            Some(true) => return Ok(()),
+            Some(false) => {}
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "guest omitted image readiness",
+                ))
+            }
+        }
+        thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -775,7 +1002,7 @@ const PRIVATE_SERVICE_PORTS: [(&str, u16); 3] =
 /// one's stop kills the other's runtime, and the second silently runs against
 /// the first's data.
 #[cfg(windows)]
-fn wsl_distribution_for(root: &Path) -> String {
+pub(crate) fn wsl_distribution_for(root: &Path) -> String {
     if let Some(name) = env::var_os("LEMMA_RUNTIME_WSL_DISTRIBUTION")
         .map(|value| value.to_string_lossy().into_owned())
         .filter(|value| !value.trim().is_empty())
@@ -800,53 +1027,90 @@ fn wsl_distribution_for(_root: &Path) -> String {
     DEFAULT_WSL_DISTRIBUTION.to_string()
 }
 
-fn wait_for_private_services(status: &ManagedRuntimeStatus, timeout: Duration) -> io::Result<()> {
-    let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
-    wait_for_tcp_services(host, &PRIVATE_SERVICE_PORTS, timeout)
-}
-
+#[cfg(any(not(target_os = "macos"), test))]
 fn wait_for_tcp_services(
     host: Ipv4Addr,
     services: &[(&str, u16)],
     timeout: Duration,
+    checkpoint: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
+    wait_for_services(services, timeout, checkpoint, |port, budget| {
+        TcpStream::connect_timeout(&SocketAddr::from((host, port)), budget).map(|_| ())
+    })
+}
+
+fn wait_for_services(
+    services: &[(&str, u16)],
+    timeout: Duration,
+    checkpoint: impl Fn() -> io::Result<()>,
+    mut connect: impl FnMut(u16, Duration) -> io::Result<()>,
 ) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
-    let mut pending = services.to_vec();
-    let mut last_error = None;
+    let mut pending = services
+        .iter()
+        .map(|&(label, port)| (label, port, io::ErrorKind::TimedOut))
+        .collect::<Vec<_>>();
     while !pending.is_empty() {
-        pending.retain(|(_, port)| {
-            let address = SocketAddr::from((host, *port));
-            match TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
-                Ok(_) => false,
+        checkpoint()?;
+        let mut index = 0;
+        while index < pending.len() {
+            checkpoint()?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (_, port, kind) = &mut pending[index];
+            match connect(*port, remaining.min(Duration::from_millis(200))) {
+                Ok(_) => {
+                    pending.remove(index);
+                }
                 Err(error) => {
-                    last_error = Some(error);
-                    true
+                    *kind = error.kind();
+                    index += 1;
                 }
             }
-        });
+        }
+        checkpoint()?;
         if pending.is_empty() {
             return Ok(());
         }
         if Instant::now() >= deadline {
             let pending = pending
                 .iter()
-                .map(|(label, port)| format!("{label} ({host}:{port})"))
+                .map(|(label, _, kind)| format!("{label}: {}", private_connection_reason(*kind)))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let recovery = if cfg!(target_os = "macos") {
+                "Restart the local runtime, then retry. If it persists, use Repair installation in Desktop settings."
+            } else {
+                "Check local network permissions and firewall settings, then retry."
+            };
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "private runtime services did not become reachable within {} seconds: {pending}; last error: {}",
-                    timeout.as_secs(),
-                    last_error
-                        .map(|error| error.to_string())
-                        .unwrap_or_else(|| "connection timed out".into())
+                    "This computer could not connect to its private Lemma services ({pending}). {recovery} Your stored data has not been reset."
                 ),
             ));
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100)),
+        );
     }
     Ok(())
+}
+
+fn private_connection_reason(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::PermissionDenied => "connection denied",
+        io::ErrorKind::HostUnreachable | io::ErrorKind::NetworkUnreachable => {
+            "network route unavailable"
+        }
+        io::ErrorKind::ConnectionRefused => "service not accepting connections",
+        io::ErrorKind::TimedOut => "connection timed out",
+        _ => "connection unavailable",
+    }
 }
 
 fn runtime_path_value(path: &Path) -> io::Result<String> {
@@ -856,114 +1120,6 @@ fn runtime_path_value(path: &Path) -> io::Result<String> {
             format!("managed runtime path is not Unicode: {}", path.display()),
         )
     })
-}
-
-struct TcpForwarder {
-    stop: Arc<AtomicBool>,
-    local_address: SocketAddr,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl TcpForwarder {
-    fn start(label: &'static str, bind: SocketAddr, target: SocketAddr) -> io::Result<Self> {
-        let listener = bind_forwarder_listener(bind).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("could not bind managed {label} route at {bind}: {error}"),
-            )
-        })?;
-        let local_address = listener.local_addr()?;
-        listener.set_nonblocking(true)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = Arc::clone(&stop);
-        let worker = thread::spawn(move || {
-            while !thread_stop.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        if let Err(error) = stream.set_nonblocking(false) {
-                            eprintln!(
-                                "managed {label} route could not configure accepted socket: {error}"
-                            );
-                            continue;
-                        }
-                        thread::spawn(move || {
-                            if let Err(error) = proxy_connection(stream, target) {
-                                eprintln!("managed {label} route to {target} failed: {error}");
-                            }
-                        });
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        Ok(Self {
-            stop,
-            local_address,
-            thread: Some(worker),
-        })
-    }
-}
-
-#[cfg(unix)]
-fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
-    use socket2::{Domain, Protocol, Socket, Type};
-
-    let socket = Socket::new(
-        Domain::for_address(address),
-        Type::STREAM,
-        Some(Protocol::TCP),
-    )?;
-    // The forwarder is always bound to Lemma's private guest-to-host gateway.
-    // Reuse permits an immediate controlled restart after a real callback
-    // connection leaves TCP state behind; it does not relax locald's separate
-    // ownership checks for host loopback application ports.
-    socket.set_reuse_address(true)?;
-    socket.bind(&address.into())?;
-    socket.listen(128)?;
-    Ok(socket.into())
-}
-
-#[cfg(not(unix))]
-fn bind_forwarder_listener(address: SocketAddr) -> io::Result<TcpListener> {
-    TcpListener::bind(address)
-}
-
-impl Drop for TcpForwarder {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        // The listener is nonblocking and observes `stop` within 25 ms. Do not
-        // wake it with a synthetic TCP connection: that connection can enter
-        // TIME_WAIT and prevent an immediate restart from reclaiming the exact
-        // callback port on macOS.
-        if let Some(worker) = self.thread.take() {
-            if worker.join().is_err() {
-                eprintln!(
-                    "managed callback forwarder at {} stopped unexpectedly",
-                    self.local_address
-                );
-            }
-        }
-    }
-}
-
-fn proxy_connection(mut inbound: TcpStream, target: SocketAddr) -> io::Result<()> {
-    let mut outbound = TcpStream::connect_timeout(&target, Duration::from_secs(5))?;
-    let mut inbound_writer = inbound.try_clone()?;
-    let mut outbound_reader = outbound.try_clone()?;
-    let upload = thread::spawn(move || {
-        let result = io::copy(&mut inbound, &mut outbound);
-        let _ = outbound.shutdown(Shutdown::Write);
-        result
-    });
-    let download = io::copy(&mut outbound_reader, &mut inbound_writer);
-    let _ = inbound_writer.shutdown(Shutdown::Write);
-    let upload = upload
-        .join()
-        .map_err(|_| io::Error::other("managed TCP route worker panicked"))?;
-    upload.and(download).map(|_| ())
 }
 
 fn validate_spec(spec: &ManagedRuntimeSpec) -> io::Result<()> {
@@ -1181,6 +1337,7 @@ fn bundled_executable(variable: &str, sibling_name: &str) -> io::Result<PathBuf>
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::net::TcpListener;
     use std::sync::mpsc;
     use tempfile::tempdir;
 
@@ -1235,6 +1392,80 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn stopping_forwarder_closes_idle_connections_in_both_directions() {
+        assert_forwarder_shutdown(false);
+    }
+
+    #[test]
+    fn stopping_forwarder_cancels_backpressured_connections() {
+        assert_forwarder_shutdown(true);
+    }
+
+    fn assert_forwarder_shutdown(backpressured: bool) {
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        target.set_nonblocking(true).unwrap();
+        let forwarder = TcpForwarder::start(
+            "idle-shutdown-test",
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            target.local_addr().unwrap(),
+        )
+        .unwrap();
+        let mut client = TcpStream::connect(forwarder.local_address).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut upstream = loop {
+            match target.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "relay did not connect upstream");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("upstream accept failed: {error}"),
+            }
+        };
+        upstream.set_nonblocking(false).unwrap();
+        for stream in [&client, &upstream] {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+        }
+
+        if backpressured {
+            client.set_nonblocking(true).unwrap();
+            let bytes = [0_u8; 64 * 1024];
+            let mut sent = 0;
+            loop {
+                match client.write(&bytes) {
+                    Ok(count) => {
+                        assert!(count > 0);
+                        sent += count;
+                        assert!(
+                            sent < 32 * 1024 * 1024,
+                            "idle upstream must exert backpressure"
+                        );
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("writing to relay failed: {error}"),
+                }
+            }
+            client.set_nonblocking(false).unwrap();
+        }
+
+        drop(forwarder);
+
+        let mut byte = [0_u8; 1];
+        match client.read(&mut byte) {
+            Ok(count) => assert_eq!(count, 0, "client must see EOF"),
+            // Closing TCP with unread inbound data sends RST, not FIN. Both
+            // prove cancellation; a timeout would leave the connection alive.
+            Err(error) if backpressured && error.kind() == io::ErrorKind::ConnectionReset => {}
+            Err(error) => panic!("client remained open or failed unexpectedly: {error}"),
+        }
+        // Drain already accepted bytes; EOF must arrive without either peer
+        // having to close first, including when a copy was blocked on writing.
+        io::copy(&mut upstream, &mut io::sink()).unwrap();
     }
 
     #[test]
@@ -1303,7 +1534,7 @@ mod tests {
         // Half-close, then read to EOF: the relay passing the upstream hang-up
         // back down is the observable proof that it finished both directions,
         // which is what makes the release check below race-free.
-        client.shutdown(Shutdown::Write).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
         let mut trailing = Vec::new();
         client.read_to_end(&mut trailing).unwrap();
         assert!(trailing.is_empty());
@@ -1372,7 +1603,100 @@ mod tests {
             ("second", second.local_addr().unwrap().port()),
         ];
 
-        wait_for_tcp_services(Ipv4Addr::LOCALHOST, &services, Duration::from_millis(250)).unwrap();
+        wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &services,
+            Duration::from_millis(250),
+            || Ok(()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_service_gate_honors_cancellation_before_connecting() {
+        let service = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        service.set_nonblocking(true).unwrap();
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[("Redis", service.local_addr().unwrap().port())],
+            Duration::from_secs(30),
+            || Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled")),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            service.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn private_service_gate_cancellation_interrupts_an_unfinished_wait() {
+        use std::cell::Cell;
+        let service = crate::port_reservation::PortReservation::ephemeral().unwrap();
+        let port = service.port();
+        let checks = Cell::new(0);
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[("Redis", port)],
+            Duration::from_secs(30),
+            || {
+                checks.set(checks.get() + 1);
+                if checks.get() >= 3 {
+                    Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn private_service_gate_reports_only_unreachable_services() {
+        let ready = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let unavailable = crate::port_reservation::PortReservation::ephemeral().unwrap();
+        let unavailable_port = unavailable.port();
+        let error = wait_for_tcp_services(
+            Ipv4Addr::LOCALHOST,
+            &[
+                ("PostgreSQL", ready.local_addr().unwrap().port()),
+                ("Redis", unavailable_port),
+            ],
+            Duration::from_secs(1),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        // A bound, non-listening socket can refuse or time out by platform.
+        assert!(error.to_string().contains("Redis:"), "{error}");
+        assert!(!error.to_string().contains("PostgreSQL"));
+        assert!(error.to_string().contains("stored data has not been reset"));
+    }
+
+    #[test]
+    fn private_connectivity_reasons_do_not_misdiagnose_route_failure_as_permission_denial() {
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::ConnectionRefused),
+            "service not accepting connections"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::PermissionDenied),
+            "connection denied"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::HostUnreachable),
+            "network route unavailable"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::NetworkUnreachable),
+            "network route unavailable"
+        );
+        assert_eq!(
+            private_connection_reason(io::ErrorKind::TimedOut),
+            "connection timed out"
+        );
     }
 
     /// The case that shipped broken: the Mac slept for eleven hours, so wall
@@ -1457,6 +1781,8 @@ mod tests {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
@@ -1504,11 +1830,113 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_prevents_late_image_warmup_from_starting() {
+        let (_root, controller) = test_controller();
+        let controller = Arc::new(controller);
+        controller.cancel_pending_requests();
+        controller.warm_sandbox_images(|_| panic!("shutdown must not admit a download"));
+        assert!(controller.pending_images.lock().unwrap().is_none());
+        assert_eq!(
+            controller.sandbox_image_status().state,
+            SANDBOX_IMAGES_PENDING
+        );
+    }
+
+    #[test]
+    fn image_warmup_polls_until_ready_and_rejects_invalid_responses() {
+        let cancellation = lemma_desktop_process::Cancellation::default();
+        let mut calls = 0;
+        poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || {
+                calls += 1;
+                Ok(json!({"ready": calls == 3}))
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 3);
+        for response in [json!({}), json!({"ready": "true"})] {
+            let error = poll_sandbox_image_warmup(
+                &cancellation,
+                Duration::from_secs(5),
+                Duration::ZERO,
+                || Ok(response.clone()),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
+    }
+
+    #[test]
+    fn image_warmup_stops_on_cancellation_deadline_and_guest_failure() {
+        let cancellation = lemma_desktop_process::Cancellation::default();
+        let error =
+            poll_sandbox_image_warmup(&cancellation, Duration::ZERO, Duration::ZERO, || {
+                panic!("expired work must not dispatch")
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let error = poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || Err(io::Error::new(io::ErrorKind::ConnectionReset, "guest lost")),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+        let mut calls = 0;
+        let error = poll_sandbox_image_warmup(
+            &cancellation,
+            Duration::from_secs(5),
+            Duration::ZERO,
+            || {
+                calls += 1;
+                cancellation.cancel();
+                Ok(json!({"ready": false}))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn image_warmup_rejects_success_after_cancellation_or_deadline() {
+        for cancel in [false, true] {
+            let cancellation = lemma_desktop_process::Cancellation::default();
+            let budget = if cancel {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_millis(1)
+            };
+            let error = poll_sandbox_image_warmup(&cancellation, budget, Duration::ZERO, || {
+                if cancel {
+                    cancellation.cancel();
+                } else {
+                    thread::sleep(budget);
+                }
+                Ok(json!({"ready": true}))
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                if cancel {
+                    io::ErrorKind::Interrupted
+                } else {
+                    io::ErrorKind::TimedOut
+                }
+            );
+        }
+    }
+
+    #[test]
     fn host_processes_use_private_guest_services_without_published_infra_ports() {
         let root = tempdir().unwrap();
         let controller = ManagedRuntimeController {
             runtime: ManagedRuntime::new(ManagedRuntimeConfig {
-                wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+                wsl_distribution: "LemmaRuntime-separate-installation".to_string(),
                 local_root: root.path().join("local"),
                 artifact_root: root.path().join("artifacts"),
                 bridge_executable: root.path().join("lemma-runtime"),
@@ -1543,6 +1971,8 @@ mod tests {
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
             pending_auth: Mutex::new(None),
+            pending_images: Mutex::new(None),
+            cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
                 endpoint_host: "192.168.64.10".into(),
                 host_gateway: "192.168.64.1".into(),
@@ -1554,17 +1984,25 @@ mod tests {
         };
 
         let environment = controller.backend_environment().unwrap();
-        assert!(environment["DATABASE_URL"].contains("@192.168.64.10:5432/lemma"));
-        assert_eq!(
-            environment["SUPERTOKENS_CORE_URL"],
-            "http://192.168.64.10:3567"
-        );
+        let (database, auth) = if cfg!(target_os = "macos") {
+            ("@127.0.0.1:55432/lemma", "http://127.0.0.1:53567")
+        } else {
+            ("@192.168.64.10:5432/lemma", "http://192.168.64.10:3567")
+        };
+        assert!(environment["DATABASE_URL"].contains(database));
+        assert_eq!(environment["SUPERTOKENS_CORE_URL"], auth);
         assert!(Path::new(&environment["LEMMA_GUEST_CAPABILITY_FILE"])
             .ends_with("local/run/guest-control/guest.capability"));
         assert!(
             Path::new(&environment["LEMMA_GUEST_CONTROL_SOCKET"]).ends_with("local/run/guest.sock")
         );
-        assert_eq!(environment["LEMMA_WSL_DISTRIBUTION"], "LemmaRuntime");
-        assert!(!environment.values().any(|value| value.contains(":55432")));
+        assert_eq!(
+            environment["LEMMA_WSL_DISTRIBUTION"],
+            "LemmaRuntime-separate-installation"
+        );
+        assert_eq!(
+            environment.values().any(|value| value.contains(":55432")),
+            cfg!(target_os = "macos")
+        );
     }
 }

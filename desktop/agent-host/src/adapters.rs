@@ -1,10 +1,10 @@
 //! Pinned ACP adapter manifest and local harness discovery.
 
-use crate::NoConsoleWindow;
+use lemma_desktop_process::{self as setup_process, Cancellation, SetupProcessError};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -109,6 +109,22 @@ pub struct ResolvedAdapter {
     pub command: PathBuf,
     pub upstream_command: PathBuf,
     pub upstream_version: Option<String>,
+}
+
+pub struct AdapterWarmup {
+    cancellation: Cancellation,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AdapterWarmup {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            tracing::warn!("adapter setup worker failed during shutdown");
+        }
+    }
 }
 
 impl AdapterManifest {
@@ -265,7 +281,36 @@ impl AdapterManifest {
     /// Each thread's outcome is recorded per adapter, so discovery can tell an
     /// install that has not finished from one that cannot.
     pub fn install_cache(&self, cache_root: &Path, repair: bool) -> anyhow::Result<()> {
-        std::fs::create_dir_all(cache_root)?;
+        self.install_cache_cancellable(cache_root, repair, &Cancellation::default())
+    }
+
+    pub fn start_cache_warmup(&self, cache_root: PathBuf) -> std::io::Result<AdapterWarmup> {
+        let manifest = self.clone();
+        let cancellation = Cancellation::default();
+        let worker_cancellation = cancellation.clone();
+        let worker = std::thread::Builder::new()
+            .name("adapter-install".into())
+            .spawn(move || {
+                match manifest.install_cache_cancellable(&cache_root, false, &worker_cancellation) {
+                    Ok(()) => tracing::info!("adapter cache ready"),
+                    Err(error) if !worker_cancellation.is_cancelled() => {
+                        tracing::warn!(%error, "adapter setup failed");
+                    }
+                    Err(_) => tracing::info!("adapter setup cancelled"),
+                }
+            })?;
+        Ok(AdapterWarmup {
+            cancellation,
+            worker: Some(worker),
+        })
+    }
+
+    fn install_cache_cancellable(
+        &self,
+        cache_root: &Path,
+        repair: bool,
+        cancellation: &Cancellation,
+    ) -> anyhow::Result<()> {
         let pending: Vec<&AdapterSpec> = self
             .adapters
             .iter()
@@ -286,10 +331,23 @@ impl AdapterManifest {
                 .map(|spec| {
                     let registry = &registry;
                     scope.spawn(move || {
-                        (
-                            spec.key.clone(),
-                            install_cached_adapter(spec, cache_root, repair, registry),
-                        )
+                        let result = install_cached_adapter(
+                            spec,
+                            cache_root,
+                            repair,
+                            registry,
+                            cancellation,
+                        );
+                        let mut failures = self.install_failures.lock().expect("install failures");
+                        match &result {
+                            Ok(()) => {
+                                failures.remove(&spec.key);
+                            }
+                            Err(error) => {
+                                failures.insert(spec.key.clone(), error.to_string());
+                            }
+                        }
+                        (spec.key.clone(), result)
                     })
                 })
                 .collect();
@@ -305,24 +363,12 @@ impl AdapterManifest {
                 })
                 .collect()
         });
-        // Recorded and reported only after every thread has been joined, so an
-        // early return cannot leave one still writing into the cache.
-        let mut first_failure = None;
-        {
-            let mut failures = self.install_failures.lock().expect("install failures");
-            for (key, result) in results {
-                match result {
-                    Ok(()) => {
-                        failures.remove(&key);
-                    }
-                    Err(error) => {
-                        failures.insert(key, error.to_string());
-                        first_failure.get_or_insert(error);
-                    }
-                }
-            }
-        }
-        first_failure.map_or(Ok(()), Err)
+        // Join every installer before returning; an early failure must not
+        // leave another worker writing into the cache after shutdown.
+        results
+            .into_iter()
+            .find_map(|(_, result)| result.err())
+            .map_or(Ok(()), Err)
     }
 
     /// Why warming this adapter last failed, if it did.
@@ -351,6 +397,9 @@ impl AdapterManifest {
         let mut digest = Sha256::new();
         for adapter in &self.adapters {
             digest.update(adapter.key.as_bytes());
+            if let Some(failure) = self.install_failure(&adapter.key) {
+                digest.update(failure.as_bytes());
+            }
             fingerprint_path(&mut digest, resolve_executable(&adapter.upstream_command));
             // The adapter cache counts too, and leaving it out was a bug with a
             // very visible symptom: warming the cache in the background means a
@@ -502,7 +551,9 @@ fn install_cached_adapter(
     cache_root: &Path,
     repair: bool,
     registry: &Mutex<()>,
+    cancellation: &Cancellation,
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(!cancellation.is_cancelled(), "adapter setup cancelled");
     let destination = cached_adapter_directory(cache_root, spec);
     let executable = cached_adapter_executable(cache_root, spec);
     if verify_cached_adapter(&executable).is_ok() {
@@ -525,7 +576,8 @@ fn install_cached_adapter(
                 // protects a shared npm cache, not any state of ours.
                 poisoned.into_inner()
             });
-            install_npm_adapter(spec, &staging)?;
+            anyhow::ensure!(!cancellation.is_cancelled(), "adapter setup cancelled");
+            install_npm_adapter(spec, &staging, cancellation)?;
         }
         let staged_executable = platform_cached_executable(&staging, &spec.command);
         anyhow::ensure!(
@@ -544,6 +596,10 @@ fn install_cached_adapter(
     }
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    if cancellation.is_cancelled() {
+        let _ = std::fs::remove_dir_all(&staging);
+        anyhow::bail!("adapter setup cancelled");
     }
     activate_staged_cache(&staging, &destination)?;
     verify_cached_adapter(&executable)
@@ -640,7 +696,11 @@ fn activate_staged_cache(staging: &Path, destination: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()> {
+fn install_npm_adapter(
+    spec: &AdapterSpec,
+    staging: &Path,
+    cancellation: &Cancellation,
+) -> anyhow::Result<()> {
     let package = spec
         .distribution
         .strip_prefix("npm:")
@@ -649,9 +709,7 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
         .ok_or_else(|| anyhow::anyhow!("npm is required to install ACP adapters"))?;
     std::fs::create_dir_all(staging)?;
     let mut command = Command::new(npm);
-    command
-        .no_console_window()
-        .args(["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    command.args(["install", "--ignore-scripts", "--no-audit", "--no-fund"]);
     // Lemma exists to drive the agent the user already has, holding the user's
     // own credentials and configuration. Downloading a second copy contradicts
     // that even when it works, and it was most of why a first run took minutes.
@@ -663,13 +721,23 @@ fn install_npm_adapter(spec: &AdapterSpec, staging: &Path) -> anyhow::Result<()>
     if spec.omit_optional_dependencies {
         command.arg("--omit=optional");
     }
-    let status = command
+    command
         .args(["--package-lock=true", "--prefix"])
         .arg(staging)
-        .arg(package)
-        .stdin(Stdio::null())
-        .status()?;
-    anyhow::ensure!(status.success(), "npm adapter installation failed");
+        .arg(package);
+    let output = setup_process::run_cancellable(
+        command,
+        Duration::from_secs(300),
+        4 * 1024 * 1024,
+        cancellation.clone(),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("npm adapter installation failed: {error}. Recheck your network and retry.")
+    })?;
+    anyhow::ensure!(
+        output.status.success(),
+        "npm adapter installation failed; check registry access and available disk space, then retry"
+    );
 
     let package_name = package
         .rsplit_once('@')
@@ -838,7 +906,6 @@ pub fn reason_without_marker(reason: &str) -> &str {
 /// install. Nothing is slower for the larger budget: a healthy agent answers and
 /// the loop exits, so this is only ever reached by one that never will.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
-const VERSION_PROBE_POLL: Duration = Duration::from_millis(25);
 
 /// Why an agent's version is unknown.
 ///
@@ -863,43 +930,27 @@ fn probe_version_within(
     timeout: Duration,
 ) -> Result<String, VersionUnknown> {
     let mut command = Command::new(executable);
-    command
-        .no_console_window()
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped());
-    let mut child = command.spawn().map_err(|_| VersionUnknown::Failed)?;
-    let started = std::time::Instant::now();
-    loop {
-        if started.elapsed() > timeout {
-            // Killed, not abandoned. Dropping a `Child` neither reaps nor stops
-            // it, so every timeout used to leave the agent running against a
-            // question nobody was waiting for an answer to any more.
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(VersionUnknown::TimedOut);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|_| VersionUnknown::Failed)?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let text = if stdout.trim().is_empty() {
-                    stderr.trim().to_owned()
-                } else {
-                    stdout.trim().to_owned()
-                };
-                return (!text.is_empty())
-                    .then_some(text)
-                    .ok_or(VersionUnknown::Failed);
-            }
-            Ok(Some(_)) | Err(_) => return Err(VersionUnknown::Failed),
-            Ok(None) => std::thread::sleep(VERSION_PROBE_POLL),
-        }
+    command.args(arguments);
+    let output =
+        setup_process::run(command, timeout, 1024 * 1024).map_err(|error| match error {
+            SetupProcessError::TimedOut => VersionUnknown::TimedOut,
+            SetupProcessError::OutputLimit
+            | SetupProcessError::Io(_)
+            | SetupProcessError::Cancelled => VersionUnknown::Failed,
+        })?;
+    if !output.status.success() {
+        return Err(VersionUnknown::Failed);
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = if stdout.trim().is_empty() {
+        stderr.trim().to_owned()
+    } else {
+        stdout.trim().to_owned()
+    };
+    (!text.is_empty())
+        .then_some(text)
+        .ok_or(VersionUnknown::Failed)
 }
 
 fn version_is_at_least(installed: &str, minimum: &str) -> bool {
@@ -1055,6 +1106,23 @@ fn push_unique(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn version_discovery_does_not_deadlock_on_full_output_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("chatty-agent");
+        std::fs::write(&executable, "#!/bin/sh\nprintf 'agent 1.2.3\\n'\ni=0\nwhile [ \"$i\" -lt 30000 ]; do printf 'stdout diagnostic\\n'; printf 'stderr diagnostic\\n' >&2; i=$((i+1)); done\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = probe_version_within(&executable, &[], Duration::from_secs(5));
+        assert!(
+            output
+                .as_ref()
+                .is_ok_and(|text| text.starts_with("agent 1.2.3")),
+            "{output:?}"
+        );
+    }
 
     /// A script that reports it started, waits, and reports it finished.
     ///
@@ -1412,6 +1480,7 @@ mod tests {
         let waiting = manifest.snapshot_for(&spec);
         assert_eq!(waiting.health, HarnessHealth::Installing);
         assert!(waiting.stale_reason.is_none());
+        let before_failure = manifest.installed_fingerprint();
 
         manifest.install_failures.lock().unwrap().insert(
             spec.key.clone(),
@@ -1419,6 +1488,7 @@ mod tests {
         );
 
         let failed = manifest.snapshot_for(&spec);
+        assert_ne!(before_failure, manifest.installed_fingerprint());
         assert_eq!(
             failed.health,
             HarnessHealth::ProbeFailed,
@@ -1436,6 +1506,7 @@ mod tests {
         // A later success clears it, so `doctor --repair` is a real remedy
         // rather than something that leaves the row saying it failed.
         manifest.install_failures.lock().unwrap().remove(&spec.key);
+        assert_eq!(before_failure, manifest.installed_fingerprint());
         assert_eq!(
             manifest.snapshot_for(&spec).health,
             HarnessHealth::Installing

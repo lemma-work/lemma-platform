@@ -210,14 +210,9 @@ def build_agent_instructions(
     # passes include_toolset_prompts=False; remote passes True) and BOTH agent types
     # (pod-default + user) get told their cwd whenever they can run workspace tools.
     #
-    # `runs_as_remote_process` widens that to every Agent Host run, whether or
-    # not it has workspace tools. A remote harness is a coding agent running as
-    # a real OS process on somebody's Mac, and its *own* cwd is a Lemma scratch
-    # directory that has nothing to do with the workspace. Left unsaid, the
-    # agent believes the empty directory it was started in is the workspace --
-    # which is exactly what "we want to build this on lemma (but locally)"
-    # walked into. The in-process harness has no such second directory, so it
-    # only needs this when it can act on it.
+    # Native agents also have a host cwd, resolved by Agent Host at dispatch.
+    # Keep the sandbox path scoped to its tools so neither path masquerades as
+    # a mount that does not exist.
     sections.extend(
         _directory_sections(
             ctx=ctx,
@@ -453,18 +448,13 @@ def _workspace_directory_section(
 ) -> str:
     cwd = _workspace_cwd(ctx, conversation)
     if not has_workspace_tools:
-        # A remote harness with no workspace toolset. It still has a local
-        # process directory that looks exactly like a working directory, so the
-        # only useful thing to say is that it is not one.
         return (
             "# Working Directory\n"
-            "The directory this process started in is scratch space belonging "
-            "to Lemma, not a workspace. It is not backed up, nobody else can "
-            "see it, and it is swept once this conversation goes quiet.\n\n"
-            "You have no workspace tools on this run, so there is nowhere to "
-            "run commands or keep files. Do the work in your reply. If the task "
-            "genuinely needs a shell or a filesystem, say so rather than using "
-            "the machine you are running on."
+            "Your native tools use the directory this process started in. "
+            "Agent Host supplies its exact path in Native Working Directory; "
+            "it persists across conversation turns. You have no Lemma sandbox "
+            "execution tools on this run. Do not invent a /workspace path for "
+            "native tools. Tool approvals still apply."
         )
     repo = _workspace_repo(ctx)
     orientation = (
@@ -478,24 +468,16 @@ def _workspace_directory_section(
             "the workspace was recreated."
         )
     )
-    # For a remote harness the sentence "your working directory is X" is not
-    # only informative, it is a correction: the agent is a real OS process and
-    # `pwd` will answer with something else entirely. Naming both, and saying
-    # which one is real, is the whole point.
     where = (
         (
-            f"Your working directory is `{cwd}`, and you reach it **only "
+            f"Your Lemma sandbox working directory is `{cwd}`. Reach it **only "
             "through the Lemma tools** — `exec_command`, `execute_python` and "
-            "the file tools. That is the workspace: a sandbox Lemma runs for "
-            "this conversation.\n\n"
-            "It is **not** the directory this process started in. `pwd` will "
-            "answer with a Lemma scratch directory on somebody's own computer: "
-            "it is swept, nobody can see it, and nothing you leave there is "
-            "part of the conversation. Do not read or write anywhere else on "
-            "that machine either — not the home directory, not a project "
-            "folder, not even one the user names. If they ask for work on a "
-            "local folder, say you work in the Lemma workspace and offer to do "
-            "it there."
+            "the sandbox file tools. Native tools use the directory this "
+            "process started in; native `pwd` reports that host directory. "
+            "Agent Host supplies its exact path in Native Working Directory. "
+            "These are separate filesystems with no automatic mount or sync. "
+            "Do not use a sandbox /workspace path with native tools, or a host "
+            "path with sandbox tools."
         )
         if runs_as_remote_process
         else (

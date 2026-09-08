@@ -129,6 +129,8 @@ jobs:
             desktop_contract:
               - 'lemma-backend/**'
               - 'lemma-frontend/**'
+              - 'lemma-typescript/**'
+              - 'Makefile'
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
               - 'desktop/locald/src/native_host_pack.rs'
@@ -671,9 +673,9 @@ jobs:
   # host pack the app ships. Nothing connected the two, so a backend change
   # that broke the desktop stack merged with CI fully green.
   #
-  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  # Includes the real backend/Agent Host seam without the app crate or bundler.
   desktop-contract:
-    timeout-minutes: 20
+    timeout-minutes: 30
     name: Desktop contracts
     needs: changes
     if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
@@ -698,10 +700,42 @@ jobs:
         working-directory: desktop
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
-      # `make desktop-lint` has always run this; CI never did, and it guards a
-      # guest-kernel Oops during first setup.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install backend dependencies
+        working-directory: lemma-backend
+        run: uv sync --locked --extra local
+
+      - name: Real backend and Agent Host streaming
+        run: make desktop-agent-host-e2e
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            lemma-typescript/package-lock.json
+            lemma-frontend/package-lock.json
+            desktop/ui-tests/package-lock.json
+
+      - name: Install chat UI test dependencies
+        run: |
+          npm ci --prefix lemma-typescript
+          npm ci --prefix lemma-frontend
+          npm ci --prefix desktop/ui-tests
+          npm exec --prefix desktop/ui-tests -- playwright install --with-deps chromium
+
+      - name: Chat UI with JSON ACP agents
+        run: make desktop-agent-host-browser-e2e
+
+      - name: Upload chat UI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-host-chat-ui
+          path: output/playwright/agent-host-*/
+          if-no-files-found: ignore
 
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
@@ -725,7 +759,9 @@ jobs:
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -769,10 +805,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-ci
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -809,11 +846,6 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      # One second, and it guards a guest-kernel Oops during first setup.
-      # `make desktop-lint` has always run it; CI never did.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
-
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -821,6 +853,21 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --locked
+
+      - name: Test native VM service transport
+        run: swift test --package-path desktop/local-runtime/macos-vz
+
+      - name: Guest boot tooling tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
@@ -1073,9 +1120,7 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: desktop-guestd
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # PR merge-ref caches cannot be restored by main or release refs.
 
       - name: Lint
         working-directory: desktop
@@ -1101,13 +1146,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -1125,10 +1176,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-win
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -1153,6 +1205,18 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
 
+      - name: Guest packaging tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       - name: Read the pinned Tauri CLI
         run: |
           $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
@@ -1162,8 +1226,8 @@ jobs:
       # bundler runs and the payload stays within budget, not that the artifact
       # is installable.
       # Skipped on a pull request that cannot have changed the result. The
-      # bundle is the single most expensive step in CI's Windows job and its
-      # output is discarded, so it runs where a regression would actually be
+      # bundle is the single most expensive step in CI's Windows job, so it
+      # runs where a regression would actually be
       # caught by it: every push to main, and any branch that touches packaging.
       # A compile or test regression -- the thing this job exists to catch, and
       # the thing that has actually caught real bugs -- is still gated on every
@@ -1183,23 +1247,39 @@ jobs:
           github.event_name == 'push'
           || needs.changes.outputs.desktop_packaging == 'true'
         run: |
-          $ErrorActionPreference = "Stop"
-          $payload = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/lemma-local.json"
-          )
-          $bytes = ($payload | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          # The online application downloads its runtime on first launch, so the
-          # installed payload is the shell plus the daemon and nothing else.
-          if ($bytes -gt 25MB) {
-            throw "Online application payload is $bytes bytes; the limit is 25 MiB"
+          python desktop/scripts/check_online_payload.py --windows-root desktop
+
+      - name: Record Windows candidate provenance
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        run: |
+          $installers = @(Get-ChildItem desktop/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw "Expected exactly one candidate installer" }
+          $payload = @{
+            commit = (git rev-parse HEAD).Trim()
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            architecture = 'x86_64'
+            authenticode_signed = $false
+            runtime_manifest = 'placeholder-not-installable'
+            installer = $installers[0].Name
+            sha256 = (Get-FileHash $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           }
-          Write-Host "online payload ok: $bytes bytes"
+          $payload | ConvertTo-Json | Set-Content desktop/target/release/bundle/nsis/candidate.json
+
+      - name: Retain Windows candidate for installed-app QA
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows-x64-buildcheck
+          path: |
+            desktop/target/release/bundle/nsis/*.exe
+            desktop/target/release/bundle/nsis/candidate.json
+          if-no-files-found: error
+          retention-days: 14
 
   ci:
     name: CI passed

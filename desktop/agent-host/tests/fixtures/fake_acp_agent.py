@@ -5,6 +5,9 @@ import json
 import pathlib
 import sys
 
+# ACP uses UTF-8 even when Windows gives redirected Python pipes a legacy codec.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 
 log_path = pathlib.Path(sys.argv[1])
 
@@ -42,7 +45,7 @@ for raw_line in sys.stdin:
                 "agentInfo": {"name": "fake-acp", "version": "1.0.0"},
             },
         )
-    elif method == "session/new":
+    elif method in {"session/new", "session/load"}:
         result(
             request_id,
             {

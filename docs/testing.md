@@ -70,6 +70,8 @@ way a scenario says, do not edit the scenario.
 |---|---|---|
 | Backend unit | `make test-backend-unit` | Every push that touches the backend. **Required.** |
 | Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
+| Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider. |
+| Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |
 | Scenario gates | `make scenarios-guards`, `make scenario-coverage` | Every pull request |
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |

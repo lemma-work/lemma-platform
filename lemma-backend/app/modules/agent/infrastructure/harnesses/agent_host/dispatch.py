@@ -51,6 +51,7 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     final_answer_expected,
 )
+from app.modules.agent.services.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
 
@@ -222,6 +223,7 @@ async def enqueue_run[DepsT: AgentContext](
             system_prompt_delivery=system_prompt_delivery,
             prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
             resume_session_id=resume_session_id,
+            workspace_cwd=resolve_workspace_location(conversation).cwd,
             context={
                 "agent": payload.get("agent"),
                 "conversation": payload.get("conversation"),

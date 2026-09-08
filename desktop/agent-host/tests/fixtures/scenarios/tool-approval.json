@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "I will read the project file.\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "read-project",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read README.md",
+            "rawInput": {
+              "path": "README.md"
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 900,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "scripted-session",
+          "toolCall": {
+            "toolCallId": "read-project",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read README.md",
+            "rawInput": {
+              "path": "README.md"
+            }
+          },
+          "options": [
+            {
+              "optionId": "once",
+              "name": "Allow once",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject",
+              "name": "Deny",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "await_permission": {
+        "id": 900,
+        "selected": {
+          "once": [
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "read-project",
+                    "status": "completed",
+                    "rawOutput": {
+                      "text": "# Mock project"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                      "type": "text",
+                      "text": "Read approved: # Mock project"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "cancelled": [
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "tool_call_update",
+                  "toolCallId": "read-project",
+                  "status": "failed",
+                  "rawOutput": {
+                    "error": "Permission denied"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "agent_message_chunk",
+                  "content": {
+                    "type": "text",
+                    "text": "Read denied; no file was accessed."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
