@@ -1,0 +1,229 @@
+name: Desktop test build
+
+# An installable Lemma, built from any branch, handed back as an Actions
+# artifact. No tag, no release, nothing published.
+#
+# The two builds that existed before this both had a reason not to be this one.
+# CI's build-check artifacts are deliberately *not* installable: they carry
+# `artifact_source: ci-build-check` and refuse to fetch a runtime, by name, so
+# that whoever tries one is told why instead of debugging a network error. And
+# the nightly is a public pre-release, which is a heavy thing to mint every
+# time somebody wants to try a pull request on a real machine.
+#
+# So testing a branch on real hardware meant publishing a pre-release for it.
+# This is the same installer without that: `prepare_desktop_test_runtime.py
+# --mode bundled` puts the runtime payloads *inside* the installer, which is
+# what makes it work against no published release at all -- the shape that
+# script was written for and that `make desktop-dmg` already builds locally.
+#
+# The guest runtime is built from this ref, because that is where the guest
+# daemon lives and it is what a branch usually needs proving. The host pack is
+# taken from a published release by default: it is 370 MB, it is built from the
+# container images rather than from the desktop tree, and most desktop branches
+# do not change it. `host_pack_tag` is there for the ones that do.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which installer to build."
+        required: true
+        default: windows
+        type: choice
+        options:
+          - windows
+          - macos
+      host_pack_tag:
+        description: >-
+          Release tag to take the host pack from, or "latest" to resolve the
+          newest one that has it. Only matters if this branch changes the
+          backend, the frontend, or the sandbox images.
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  guest-runtime:
+    name: Build the guest runtime from this branch
+    timeout-minutes: 90
+    runs-on: ${{ inputs.platform == 'macos' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo and desktop target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: guest-runtime-${{ inputs.platform }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Install ARM64 kernel unpacker
+        if: inputs.platform == 'macos'
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Build guest control daemon
+        run: cargo build --manifest-path desktop/Cargo.toml -p lemma-guestd --release
+
+      - name: Assemble private guest artifact
+        shell: bash
+        env:
+          GUEST_TARGET: ${{ inputs.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
+        run: |
+          bash scripts/build_local_guest_runtime.sh \
+            --target "${GUEST_TARGET}" \
+            --guestd desktop/target/release/lemma-guestd \
+            --output "guest-runtime-out/lemma-guest-runtime-${GUEST_TARGET}.zip"
+
+      - name: Upload the guest runtime for the installer job
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-build-guest-runtime
+          path: guest-runtime-out/
+          if-no-files-found: error
+          retention-days: 1
+
+  installer:
+    name: Build an installable ${{ inputs.platform }} package
+    timeout-minutes: 90
+    needs: guest-runtime
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-14' || 'windows-latest' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache cargo and desktop target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+
+      - name: Collect the runtime payloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOST_TARGET: ${{ inputs.platform == 'macos' && 'aarch64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+          HOST_PACK_TAG: ${{ inputs.host_pack_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-artifacts
+          # The guest half comes from this branch.
+          gh run download "${GITHUB_RUN_ID}" --name test-build-guest-runtime --dir runtime-artifacts
+          # The host half comes from a release, because it is 370 MB and is
+          # built from the container images rather than from this tree.
+          tag="${HOST_PACK_TAG}"
+          if [ "${tag}" = "latest" ]; then
+            tag="$(gh release list --limit 40 --json tagName --jq '.[].tagName' \
+              | while read -r candidate; do
+                  if gh release view "${candidate}" --json assets \
+                       --jq '.assets[].name' 2>/dev/null \
+                       | grep -qx "lemma-host-pack-${HOST_TARGET}.zip"; then
+                    echo "${candidate}"; break
+                  fi
+                done)"
+          fi
+          test -n "${tag}" || { echo "::error::no release carries a host pack for ${HOST_TARGET}"; exit 1; }
+          echo "host pack from ${tag}"
+          gh release download "${tag}" \
+            --pattern "lemma-host-pack-${HOST_TARGET}.zip" --dir runtime-artifacts
+
+      - name: Stage the runtime inside the app
+        shell: bash
+        env:
+          HOST_TARGET: ${{ inputs.platform == 'macos' && 'aarch64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+          GUEST_TARGET: ${{ inputs.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
+        run: |
+          set -euo pipefail
+          # The same script `make desktop-dmg` uses, so a local test build and
+          # this one are produced by one piece of code.
+          python3 scripts/prepare_desktop_test_runtime.py \
+            --artifacts-dir runtime-artifacts \
+            --mode bundled \
+            --host-target "${HOST_TARGET}" \
+            --guest-target "${GUEST_TARGET}" \
+            --stage-dir desktop/runtime/bundled \
+            --output desktop/runtime/bundled/lemma-local.json
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Build sidecars (Windows)
+        if: inputs.platform == 'windows'
+        shell: pwsh
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Build sidecars (macOS)
+        if: inputs.platform == 'macos'
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Read the pinned Tauri CLI
+        shell: bash
+        run: echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
+
+      # Unsigned. This is a build to try on a machine you control, not one to
+      # hand to anybody else: Windows will show SmartScreen and macOS will ask
+      # on first open.
+      - name: Bundle the self-contained installer
+        working-directory: desktop
+        shell: bash
+        env:
+          LEMMA_BUILD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.platform }}" = "windows" ]; then
+            npx -y "${TAURI_CLI}" build --config tauri.dist.conf.json --bundles nsis
+          else
+            npx -y "${TAURI_CLI}" build --config tauri.dist.conf.json --bundles dmg
+          fi
+
+      - name: Refuse to hand back something that cannot install
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The build-check artifacts carry `ci-build-check` and refuse to fetch
+          # a runtime on purpose. This build exists precisely because those
+          # cannot be installed, so shipping one by accident would waste the
+          # time of whoever downloaded it.
+          manifest="$(find desktop/target/release/bundle desktop/runtime/bundled \
+            -name lemma-local.json | head -1)"
+          test -n "${manifest}"
+          python3 -c '
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          if data.get("artifact_source") == "ci-build-check":
+              raise SystemExit("this build carries the refusal marker and cannot install")
+          for kind in ("host_packs", "guest_runtimes"):
+              if not data.get(kind):
+                  raise SystemExit(f"the bundled manifest names no {kind}")
+          ' "${manifest}"
+
+      - name: Hand back the installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: lemma-desktop-${{ inputs.platform }}-${{ github.ref_name }}-${{ github.sha }}
+          path: |
+            desktop/target/release/bundle/nsis/*.exe
+            desktop/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
