@@ -38,6 +38,12 @@ see the other's sandboxes as orphans and destroy them.
 
 ## Status of each template
 
+Release CI installs the published images and runs this. To test a commit on
+main before it is tagged, dispatch **Release Local Stack Images** from main with
+publish unchecked, then dispatch **Compose deployment** with that run's id as
+`images_run_id` — it installs exactly those images. Both are manual: images get
+built when somebody asks for them.
+
 The **compose stack is tested**: brought up from the published release images,
 migrated, served over TLS on real hostnames, and provisioned with the product
 scenario suite's cast over HTTPS. Release CI does the same on every release, so

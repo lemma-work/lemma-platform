@@ -13,6 +13,20 @@ name: Compose deployment
 #
 # A failure here means somebody following docs/self-hosting.md today gets a
 # stack that does not come up. It reaches Slack through notify-failure.yml.
+#
+# To exercise a merge to main before anything is tagged — two manual dispatches,
+# because images are built when somebody asks for them, not on every push:
+#
+#   1. Run "Release Local Stack Images" from main with **publish unchecked**.
+#      It pushes images to GHCR and keeps the manifest naming them as an
+#      artifact for 14 days.
+#   2. Run this workflow with **images_run_id** set to that run's id.
+#
+# That installs the images that run built rather than the last release, so the
+# scenario suite in the checkout and the API it is pointed at are the same
+# commit. Against a published release they are the same by construction; against
+# an older release they are not, and the suite fails on routes the image
+# predates.
 
 on:
   release:
@@ -20,12 +34,25 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release to install (e.g. 0.8.0). Defaults to the latest."
+        description: "Published release to install (e.g. 0.8.0). Defaults to the latest."
+        required: false
+        type: string
+      images_run_id:
+        description: >-
+          Test images that are not a release yet: the run id of a
+          "Release Local Stack Images" dispatch with publish unchecked. Its
+          lemma-local.json is used instead of a published release, so this
+          installs exactly the images that run built. Takes precedence over
+          version.
         required: false
         type: string
 
 permissions:
   contents: read
+  # Reading the manifest artifact off another workflow run, and pulling the
+  # images it names.
+  actions: read
+  packages: read
 
 concurrency:
   group: compose-deploy-${{ github.ref }}
@@ -51,16 +78,46 @@ jobs:
                       /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
+      # Only when testing images that are not a release yet. A branch-test
+      # dispatch of "Release Local Stack Images" pushes its images to GHCR and
+      # keeps the manifest naming them as an artifact for 14 days; this is how
+      # a merge to main gets exercised end to end before anything is tagged.
+      - name: Fetch the manifest for those images
+        if: inputs.images_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.images_run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --pattern 'lemma-local-test-*' --dir /tmp/manifest
+          found="$(find /tmp/manifest -name lemma-local.json -print -quit)"
+          test -n "$found" || {
+            echo "run $RUN_ID has no lemma-local.json artifact. It has to be a" >&2
+            echo "'Release Local Stack Images' dispatch run with publish off." >&2
+            exit 1
+          }
+          cp "$found" /tmp/lemma-local.json
+          python3 -c "import json;m=json.load(open('/tmp/lemma-local.json'));print('manifest version', m['version'])"
+          # The images are in this repository's registry; released ones are
+          # public but a branch-test tag need not be.
+          echo "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Bootstrap
         working-directory: deploy/compose
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
+          IMAGES_RUN_ID: ${{ inputs.images_run_id }}
         run: |
           # 127.0.0.1.sslip.io resolves to loopback, so the runner reaches the
           # stack on the same hostnames a real deployment uses — including the
           # app subdomains, which is the half a plain localhost test misses.
-          if [ -n "$VERSION" ]; then
+          if [ -n "$IMAGES_RUN_ID" ]; then
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io --manifest /tmp/lemma-local.json
+          elif [ -n "$VERSION" ]; then
             ./bootstrap.sh --domain 127.0.0.1.sslip.io --version "$VERSION"
           else
             ./bootstrap.sh --domain 127.0.0.1.sslip.io
