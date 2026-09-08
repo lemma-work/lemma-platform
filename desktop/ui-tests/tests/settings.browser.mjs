@@ -319,6 +319,46 @@ test('public sharing requires an affirmative app-owned confirmation on every act
   assert.equal(enabled[0].args.payload.public_warning_confirmed, true);
 });
 
+// This window can reinstall Lemma and write credentials, and its CSP allows
+// inline script. The QR arrives as markup on the daemon's event stream, so if
+// it ever reaches the DOM as HTML rather than as an image, anything that can
+// write to that stream runs code with the settings window's privileges.
+test('a QR code from the event stream is rendered as an image, never as live markup', async t => {
+  const page = await settings(t);
+  await page.evaluate(() => {
+    window.__fixture.snapshot.sharing = {
+      mode: 'local_network',
+      phase: 'ready',
+      canonical_url: 'https://192.168.1.20:7423',
+      interfaces: [{ name: 'en0', address: '192.168.1.20' }],
+      selected_interface: 'en0',
+      qr_svg: '<svg xmlns="http://www.w3.org/2000/svg"><script>window.__pwned = true;<\/script></svg>',
+    };
+    window.__fixture.refresh();
+  });
+  await page.getByRole('button', { name: 'Sharing', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#sharing-qr-image img'));
+
+  assert.equal(
+    await page.evaluate(() => window.__pwned),
+    undefined,
+    'markup from the daemon must not execute in the settings window',
+  );
+  assert.equal(
+    await page.evaluate(() => document.querySelector('#sharing-qr-image script')),
+    null,
+    'the QR must not be injected as live markup',
+  );
+  assert.ok(
+    await page.evaluate(() => document.querySelector('#sharing-qr-image img').src.startsWith('data:image/svg+xml')),
+    'the QR should load through an image, which cannot run script',
+  );
+  assert.ok(
+    await page.evaluate(() => document.querySelector('#sharing-qr-image img').alt.length > 0),
+    'the QR needs a text alternative',
+  );
+});
+
 test('native Save keeps the page open after a failed apply or a newer draft', async t => {
   for (const fail of [true, false]) {
     const page = await settings(t);

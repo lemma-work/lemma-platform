@@ -95,6 +95,34 @@ test('shutdown ignores stale startup readiness and retries shutdown without star
   assert.deepEqual(calls, [{ command: 'stop', args: { includeInfra: true } }]);
 });
 
+// The quit case above was guarded; Stop was not. Stop puts the same splash up
+// after the daemon admits the operation, and a snapshot taken just before that
+// still says ready -- which used to reach `scheduleReadyOpen` and navigate the
+// window into a workspace whose services were going away, 650ms later.
+test('stopping ignores stale readiness instead of opening the workspace it is shutting down', async t => {
+  const page = await onboarding(t, { intent: 'stop', initialState: {
+    mode: 'local', phaseKey: 'stopping', status: 'Stopping services', running: true,
+  } });
+  await page.getByText('Winding down.', { exact: true }).waitFor();
+
+  await page.evaluate(() => window.__fixture.renderState({
+    mode: 'local', phaseKey: 'ready', ready: true, running: true,
+  }));
+  // Longer than the 650ms the ready screen waits before opening on its own.
+  await page.waitForTimeout(900);
+
+  assert.equal(await page.locator('#open-app').isVisible(), false,
+    'a stop must not offer to open the workspace');
+  assert.deepEqual(
+    await page.evaluate(() => window.__fixture.calls.filter(call =>
+      ['open_app', 'start'].includes(call.command))),
+    [],
+    'a stale ready snapshot must not start or open anything',
+  );
+  assert.equal(await page.getByText('Winding down.', { exact: true }).count(), 1,
+    'the screen must keep saying what is actually happening');
+});
+
 test('opening or reloading the splash never duplicates shell-owned startup', async t => {
   for (const windows of [false, true]) {
     for (const phaseKey of ['boot', 'stopped']) {

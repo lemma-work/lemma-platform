@@ -220,6 +220,16 @@ export function desktopBridgeAvailable(): boolean {
  */
 export function crossSiteFramesCarryCookies(): boolean {
   if (typeof window === "undefined") return true;
-  if (window.__LEMMA_DESKTOP__?.platform !== "macos") return true;
+  const desktop = window.__LEMMA_DESKTOP__;
+  // Not the desktop shell at all: an ordinary browser, a LAN visitor, a public
+  // link. Chromium and Firefox keep their iframes.
+  if (!desktop) return true;
+  // Windows and its WebView2 treat `*.localhost` as same-site.
+  if (desktop.platform && desktop.platform !== "macos") return true;
+  // macOS, or a shell too old to say. `platform` is optional because locald
+  // serves a frontend pack that updates independently of the shell, so a newer
+  // pack can run inside an older shell that never injected it. Assuming the
+  // permissive case there brings back a permanently signed-out iframe that
+  // retries for ever; assuming the restrictive one costs a window.
   return !window.location.hostname.endsWith(".localhost");
 }

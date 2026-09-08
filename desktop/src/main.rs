@@ -3776,9 +3776,21 @@ async fn install_app_update(
         .await
         .map_err(|error| error.to_string())??;
 
-    update
-        .install(bytes)
-        .map_err(|error| format!("could not install the update: {error}"))?;
+    if let Err(error) = update.install(bytes) {
+        // The stack is down and the update did not happen. Leaving it there
+        // stranded the user in Local settings over a workspace whose backend
+        // had gone, with nothing offering to bring it back: the reader thread
+        // only re-shows the splash when the settings window is absent, and
+        // this command requires it to be open. Put the previous version --
+        // still the installed one -- back into service before reporting.
+        let handle = app.clone();
+        let restarted = tauri::async_runtime::spawn_blocking(move || {
+            start_after_runtime_maintenance(&handle, "shell-update-recover")
+        })
+        .await
+        .map_err(|join| join.to_string())?;
+        return Err(failed_install_message(&error.to_string(), restarted.err()));
+    }
 
     // The Windows updater exits this process to run the installer. Completion
     // belongs to the next launch, not a dialog after installation.
@@ -6819,33 +6831,96 @@ fn stop_then_quit(app: &AppHandle) {
     // outcome -- leaves the app running with the user's quit unanswered.
     let handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(QUIT_STOP_BUDGET);
-        let shell: State<Shell> = handle.state();
-        if !shell.quit_after_stop.load(Ordering::Acquire) {
+        run_quit_watchdog(
+            || std::thread::sleep(QUIT_STOP_BUDGET),
+            || {
+                handle
+                    .state::<Shell>()
+                    .quit_after_stop
+                    .load(Ordering::Acquire)
+            },
+            || {
+                append_install_log(&format!(
+                    "quit: the stop did not finish within {}s; offering to quit anyway",
+                    QUIT_STOP_BUDGET.as_secs()
+                ));
+                confirm_destructive_action_impl(
+                    handle.clone(),
+                    "Lemma is taking longer than usual to stop.".into(),
+                    "Lemma is waiting for local work to stop safely. Keep waiting while \
+                     a database migration or installation finishes. Quit Anyway may interrupt \
+                     that work and require recovery when Lemma next starts."
+                        .into(),
+                    "Quit Anyway".into(),
+                )
+                .unwrap_or(false)
+            },
+            || {
+                handle
+                    .state::<Shell>()
+                    .quit_after_stop
+                    .store(true, Ordering::Release);
+            },
+            || finish_quit(&handle),
+        );
+    });
+}
+
+/// What to tell someone whose update failed after their stack was stopped.
+///
+/// The install runs with local services deliberately down, so a failure here
+/// leaves the machine in a state the user did not ask for and cannot see the
+/// cause of. Both halves matter: that the version they had is intact, and
+/// whether it is running again. Saying only "could not install the update"
+/// left them looking at a settings window over a dead workspace.
+fn failed_install_message(install_error: &str, restart_error: Option<String>) -> String {
+    match restart_error {
+        None => format!(
+            "could not install the update: {install_error}. Your previous version is \
+             still installed and its services are starting again."
+        ),
+        Some(restart_error) => format!(
+            "could not install the update: {install_error}. Your previous version is \
+             still installed, but its services could not be restarted: {restart_error}. \
+             Use Recovery to start them."
+        ),
+    }
+}
+
+/// Watch a confirmed quit that is waiting on a stop, and keep offering a way out.
+///
+/// `quit_after_stop` is consumed only by a `done` event saying the stop
+/// succeeded, so any other outcome -- including no outcome -- leaves the app
+/// running with the user's quit unanswered. This asks once per budget.
+///
+/// It loops. Asking once and then, on "Keep waiting", re-arming the flag and
+/// returning meant the offer never came back: a stop that never confirmed sat
+/// on "Winding down." for ever, and repeating the shortcut was no escape
+/// either, because `request_quit` returns early once `quit_confirmed` is set
+/// and `ExitRequested` refuses the exit in that state.
+///
+/// Written over its effects so the cycle can be tested without a 45 second
+/// sleep, a window, or a daemon.
+fn run_quit_watchdog(
+    mut wait: impl FnMut(),
+    still_waiting: impl Fn() -> bool,
+    ask: impl Fn() -> bool,
+    rearm: impl Fn(),
+    leave: impl FnOnce(),
+) {
+    loop {
+        wait();
+        if !still_waiting() {
             return; // The stop finished and the app is already gone.
         }
-        append_install_log(&format!(
-            "quit: the stop did not finish within {}s; offering to quit anyway",
-            QUIT_STOP_BUDGET.as_secs()
-        ));
-        let quit_anyway = confirm_destructive_action_impl(
-            handle.clone(),
-            "Lemma is taking longer than usual to stop.".into(),
-            "Lemma is waiting for local work to stop safely. Keep waiting while \
-             a database migration or installation finishes. Quit Anyway may interrupt \
-             that work and require recovery when Lemma next starts."
-                .into(),
-            "Quit Anyway".into(),
-        )
-        .unwrap_or(false);
-        if quit_anyway {
-            finish_quit(&handle);
-        } else {
-            // They chose to wait, so re-arm: a stop that lands later should
-            // still complete the quit they originally asked for.
-            shell.quit_after_stop.store(true, Ordering::Release);
+        if ask() {
+            leave();
+            return;
         }
-    });
+        // They chose to wait, so re-arm: a stop that lands later should still
+        // complete the quit they originally asked for.
+        rearm();
+    }
 }
 
 /// Exit without stopping anything, for the cases where there is nothing to stop.
@@ -9656,21 +9731,93 @@ mod tests {
     /// succeeded, so a wedged VM left the app running on "Winding down." with
     /// the user's quit unanswered -- and the error screen's button read "Try
     /// again", offering to *start* Lemma to somebody who had asked to leave.
+    /// An update that fails after the stack is stopped must say the previous
+    /// version survived, and whether it is running.
+    ///
+    /// `install_app_update` stops locald before installing, on purpose: an
+    /// in-place update writes to the same path, so a stale daemon would be
+    /// adopted by the new shell. But when the install then failed it returned
+    /// the error and stopped there, leaving someone in Local settings looking
+    /// at a workspace whose backend had gone, with nothing on screen offering
+    /// to bring it back.
     #[test]
-    fn a_confirmed_quit_offers_to_leave_when_the_stop_does_not_finish() {
-        let body = function_body(include_str!("main.rs"), "fn stop_then_quit(");
+    fn a_failed_update_says_the_previous_version_survived_it() {
+        let recovered = failed_install_message("the bundle is not writable", None);
         assert!(
-            body.contains("QUIT_STOP_BUDGET"),
-            "the wait must be bounded, or a stop that never lands never quits",
+            recovered.contains("previous version is still installed"),
+            "{recovered}"
         );
         assert!(
-            body.contains("Quit Anyway"),
-            "the way out has to be on screen, not only on a second Cmd-Q",
+            recovered.contains("starting again"),
+            "the user needs to know the stack is coming back: {recovered}"
+        );
+
+        let stranded = failed_install_message(
+            "the bundle is not writable",
+            Some("daemon did not answer".into()),
         );
         assert!(
-            body.contains("quit_after_stop.store(true"),
-            "choosing to keep waiting must re-arm, so a late stop still quits",
+            stranded.contains("previous version is still installed"),
+            "{stranded}"
         );
+        assert!(
+            stranded.contains("Recovery"),
+            "a stack that stayed down has to name the way out: {stranded}"
+        );
+        assert!(
+            stranded.contains("daemon did not answer"),
+            "the reason it stayed down is the actionable half: {stranded}"
+        );
+    }
+
+    /// Choosing "Keep waiting" must bring the offer back, not retire it.
+    ///
+    /// The watchdog used to ask once. On "Keep waiting" it re-armed the flag
+    /// and returned, so a stop that never confirmed left the app on "Winding
+    /// down." for ever with no way out -- repeating the shortcut does not help,
+    /// because `request_quit` returns early once the quit is confirmed.
+    #[test]
+    fn a_confirmed_quit_keeps_offering_to_leave_until_the_stop_finishes() {
+        let asked = std::cell::Cell::new(0);
+        let rearmed = std::cell::Cell::new(0);
+        let left = std::cell::Cell::new(false);
+
+        run_quit_watchdog(
+            || {},
+            || true, // The stop never lands.
+            || {
+                asked.set(asked.get() + 1);
+                // Wait three times, then take the way out.
+                asked.get() > 3
+            },
+            || rearmed.set(rearmed.get() + 1),
+            || left.set(true),
+        );
+
+        assert_eq!(asked.get(), 4, "each budget must ask again");
+        assert_eq!(rearmed.get(), 3, "waiting must re-arm so a late stop quits");
+        assert!(left.get(), "Quit Anyway must actually leave");
+    }
+
+    /// The other exit: the stop lands, and nobody is asked anything.
+    #[test]
+    fn a_quit_watchdog_stands_down_once_the_stop_finishes() {
+        let asked = std::cell::Cell::new(0);
+        let left = std::cell::Cell::new(false);
+
+        run_quit_watchdog(
+            || {},
+            || false, // `quit_after_stop` was consumed by a `done` event.
+            || {
+                asked.set(asked.get() + 1);
+                true
+            },
+            || {},
+            || left.set(true),
+        );
+
+        assert_eq!(asked.get(), 0, "a finished stop must not prompt");
+        assert!(!left.get(), "the quit already completed on its own");
     }
 
     /// A web inspector does not ship enabled in the top-level menus.

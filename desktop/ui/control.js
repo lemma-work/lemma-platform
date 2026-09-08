@@ -1042,7 +1042,19 @@ function renderSharing(sharing = {}) {
   }
   const qrVisible = actualMode === "local_network" && sharing.phase === "ready" && Boolean(sharing.qr_svg);
   $("sharing-qr").hidden = !qrVisible;
-  $("sharing-qr-image").innerHTML = qrVisible ? sharing.qr_svg : "";
+  // Not innerHTML. This window can reinstall Lemma and write credentials, and
+  // its CSP allows inline script, so markup arriving over the daemon's event
+  // stream must not become live DOM here. An SVG loaded through <img> cannot
+  // run script, and img-src already permits data: URIs.
+  const qrImage = $("sharing-qr-image");
+  qrImage.replaceChildren();
+  if (qrVisible) {
+    const img = document.createElement("img");
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sharing.qr_svg)}`;
+    img.alt = "QR code for this computer's Lemma address";
+    img.decoding = "async";
+    qrImage.appendChild(img);
+  }
 
   $("cloudflare-fields").hidden = sharingProvider !== "cloudflare";
   const readiness = sharing.provider_readiness?.[sharingProvider] || {};

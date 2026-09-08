@@ -16,6 +16,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const PROTOCOL_VERSION: u64 = 1;
 pub const VSOCK_PORT: u32 = 42_411;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+/// Connections served at once. The host keeps one control connection plus a
+/// probe, so this is generous; it exists so a caller that opens sockets and
+/// never closes them cannot spawn threads without limit.
+///
+/// Only the vsock listener accepts connections, and that is Linux-only.
+#[cfg(target_os = "linux")]
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CONTAINER_PREFIX: &str = "lemma-sandbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
@@ -458,6 +465,18 @@ enum ImageWarmupState {
     Finished(Result<(), GuestError>),
 }
 
+/// Whether an operation only reads guest state.
+///
+/// Observation answers concurrently; everything else is serialised. Anything
+/// not named here is treated as a mutation, so a new operation is safe by
+/// default and only becomes concurrent when someone says it may.
+fn is_observation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "health" | "core.status" | "core.sandbox_images_status" | "sandbox.status" | "sandbox.list"
+    ) || operation.starts_with("diagnostics.")
+}
+
 pub struct GuestService<E: Engine> {
     engine: Arc<E>,
     state_root: PathBuf,
@@ -467,6 +486,8 @@ pub struct GuestService<E: Engine> {
     capability: Option<String>,
     kernel_taint_path: Option<PathBuf>,
     image_warmups: Arc<Mutex<HashMap<SandboxImageSet, ImageWarmupState>>>,
+    /// Held for the duration of every mutating operation. See `handle`.
+    mutations: Arc<Mutex<()>>,
 }
 
 impl<E: Engine> Clone for GuestService<E> {
@@ -479,6 +500,7 @@ impl<E: Engine> Clone for GuestService<E> {
             host_gateway: self.host_gateway.clone(),
             capability: self.capability.clone(),
             kernel_taint_path: self.kernel_taint_path.clone(),
+            mutations: Arc::clone(&self.mutations),
             image_warmups: Arc::clone(&self.image_warmups),
         }
     }
@@ -544,6 +566,7 @@ impl<E: Engine + 'static> GuestService<E> {
             capability,
             kernel_taint_path: None,
             image_warmups: Arc::new(Mutex::new(HashMap::new())),
+            mutations: Arc::new(Mutex::new(())),
         })
     }
 
@@ -583,6 +606,23 @@ impl<E: Engine + 'static> GuestService<E> {
         {
             self.check_kernel_health()?;
         }
+        // Everything that changes the guest runs one at a time, exactly as it
+        // did when a single connection carried every request. Observation --
+        // health above all -- deliberately does not take this lock: the host
+        // probes health every five seconds with a five second budget, and a
+        // `sandbox.ensure` waiting on a callback can legitimately hold the
+        // guest for far longer. When one queue served both, that wait timed
+        // the probe out, the host concluded the runtime was gone, and it tore
+        // down the database forwarders under a running backend.
+        let _serialised = if is_observation(&request.operation) {
+            None
+        } else {
+            Some(
+                self.mutations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        };
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
@@ -3256,6 +3296,9 @@ fn handle_stream<R: Read, W: Write, E: Engine + 'static>(
 pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<()> {
     use std::mem::{size_of, zeroed};
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let connections = Arc::new(AtomicUsize::new(0));
 
     // SAFETY: all libc calls use initialized Linux sockaddr_vm values, checked
     // return codes, and OwnedFd closes each accepted descriptor exactly once.
@@ -3297,7 +3340,35 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
             let connection = OwnedFd::from_raw_fd(accepted);
             let reader = std::fs::File::from(connection.try_clone()?);
             let writer = std::fs::File::from(connection);
-            let _ = handle_stream(reader, writer, service);
+            // One thread per connection, rather than serving each to
+            // completion inside the accept loop. The host opens a separate
+            // connection for its health probe, and while this loop answered
+            // one request at a time a long operation -- a callback wait, an
+            // image pull -- left every later connection sitting in the listen
+            // backlog until it finished. The probe timed out and the host
+            // concluded the guest was gone. Mutating operations are still
+            // serialised, inside `handle`.
+            if connections.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                // Closing is the honest answer: the host retries, and an
+                // unbounded thread per connection is a worse failure than a
+                // refused one.
+                drop(reader);
+                drop(writer);
+                continue;
+            }
+            connections.fetch_add(1, Ordering::AcqRel);
+            let service = service.clone();
+            let owned = Arc::clone(&connections);
+            if let Err(error) = thread::Builder::new()
+                .name("guestd-connection".into())
+                .spawn(move || {
+                    let _ = handle_stream(reader, writer, &service);
+                    owned.fetch_sub(1, Ordering::AcqRel);
+                })
+            {
+                connections.fetch_sub(1, Ordering::AcqRel);
+                return Err(error);
+            }
         }
         #[allow(unreachable_code)]
         drop(_listener);
@@ -3588,6 +3659,117 @@ mod tests {
         handle_reader(poll.to_string().as_bytes(), &mut replies, &service).unwrap();
         let response: Value = serde_json::from_slice(&replies).unwrap();
         assert_eq!(response["result"]["ready"], true);
+    }
+
+    /// Health must answer while a mutation is still running.
+    ///
+    /// Context: the host probes health every five seconds and gives it five,
+    /// but the guest served one request at a time -- and a `sandbox.ensure`
+    /// waiting on a callback holds it for up to five minutes. Every probe
+    /// behind one of those timed out, the host read that as "the runtime is
+    /// gone", and tore down the Postgres and Redis forwarders under a backend
+    /// that was using them.
+    ///
+    /// What this test covers, precisely: that the mutation lock added with the
+    /// fix does not itself become the queue that was just removed. The other
+    /// half -- serving each connection on its own thread -- lives in
+    /// `serve_vsock` behind a Linux `cfg` and needs a booted guest, so it is
+    /// qualified by `check_guest_lifecycle.py` rather than here. Do not read a
+    /// pass here as proof that the host's probe is safe end to end.
+    #[test]
+    fn health_answers_while_a_mutation_is_still_running() {
+        let root = tempdir().unwrap();
+        let (release, receiver) = std::sync::mpsc::channel();
+        let (started, downloads) = std::sync::mpsc::channel();
+        let service = GuestService::new(
+            GatedPullEngine {
+                release: Mutex::new(receiver),
+                started,
+                present: Mutex::new(std::collections::HashSet::new()),
+                invalid: Mutex::new(std::collections::HashSet::new()),
+            },
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let parameters = json!({
+            "images": {"postgres": "pg@sha256:test", "redis": "redis@sha256:test",
+                "supertokens": "auth@sha256:test",
+                "workspace": "ghcr.io/lemma/workspace@sha256:blocked",
+                "function": "ghcr.io/lemma/function@sha256:blocked"},
+            "credentials": {"postgres_password": "a".repeat(64), "redis_password": "b".repeat(64)},
+        });
+
+        // A mutation that will not return until the test releases it.
+        let blocking = service.clone();
+        let blocked = thread::spawn(move || {
+            blocking.handle(GuestRequest {
+                version: 1,
+                operation: "core.images".into(),
+                parameters: parameters.clone(),
+                capability: None,
+            })
+        });
+        // Wait until it is genuinely inside the engine, holding the lock.
+        downloads.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let answered = service.handle(GuestRequest {
+            version: 1,
+            operation: "health".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+        assert!(
+            answered.ok,
+            "health must not queue behind a mutation: {:?}",
+            answered.error
+        );
+
+        release.send(true).unwrap();
+        release.send(true).unwrap();
+        let _ = blocked.join().unwrap();
+    }
+
+    /// The other half: two mutations still may not interleave. Concurrency was
+    /// added for observation, not for `core.postgres` racing itself.
+    #[test]
+    fn mutations_are_still_served_one_at_a_time() {
+        assert!(is_observation("health"));
+        assert!(is_observation("core.status"));
+        assert!(is_observation("core.sandbox_images_status"));
+        assert!(is_observation("sandbox.status"));
+        assert!(is_observation("sandbox.list"));
+        assert!(is_observation("diagnostics.network"));
+        assert!(is_observation("diagnostics.sandbox"));
+
+        for mutation in [
+            "core.ensure",
+            "core.images",
+            "core.sandbox_images",
+            "core.postgres",
+            "core.redis",
+            "core.supertokens",
+            "core.stop",
+            "core.reset_data",
+            "sandbox.ensure",
+            "sandbox.release",
+            "sandbox.delete",
+            "sandbox.purge",
+            "sandbox.purge_storage",
+            "system.shutdown",
+            "system.clock",
+            // Unknown operations are mutations by default, so a new one is
+            // safe until someone deliberately says it only reads.
+            "core.something_added_later",
+        ] {
+            assert!(
+                !is_observation(mutation),
+                "{mutation} must stay serialised against other mutations"
+            );
+        }
     }
 
     #[test]

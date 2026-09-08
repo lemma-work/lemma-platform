@@ -68,6 +68,53 @@ impl ResetEnvironment for SystemReset {
     }
 }
 
+/// Files only a locald state directory has.
+///
+/// Any one of them is enough: this runs on installations too damaged to read,
+/// which is the whole point of the command, so it cannot require the set.
+const LOCALD_STATE_MARKERS: [&str; 7] = [
+    "installation.id",
+    "control.token",
+    "state.json",
+    "operator-config.json",
+    "network.json",
+    "processes.json",
+    "credentials.enc",
+];
+
+/// Whether this directory is a Lemma installation's state, or someone else's.
+///
+/// `reset --confirm=erase-local-lemma` ends in `remove_dir_all(root)`, and the
+/// root comes from `LEMMA_LOCALD_ROOT`. Nothing else stood between a mistyped
+/// or inherited value and a recursive delete of whatever it named, so a stray
+/// environment variable could take a projects folder with it.
+///
+/// The test is for someone else's *content*, not for Lemma's: this command
+/// exists for installations too damaged to read, and an absent or empty
+/// directory has nothing to lose either way. Only a directory holding files
+/// that are recognisably not ours is refused.
+fn looks_like_locald_state(root: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        // Absent, or unreadable. Nothing here can be identified as someone
+        // else's, and `remove_dir_all` reports its own failure.
+        return true;
+    };
+    let mut occupied = false;
+    for entry in entries.flatten() {
+        occupied = true;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if LOCALD_STATE_MARKERS.contains(&name.as_ref())
+            // A first run interrupted during the guest download has these and
+            // none of the markers above.
+            || matches!(name.as_ref(), "runtime" | "logs" | "data" | "agent-host")
+        {
+            return true;
+        }
+    }
+    !occupied
+}
+
 fn perform_reset_with(
     paths: LocalPaths,
     environment: &impl ResetEnvironment,
@@ -76,6 +123,12 @@ fn perform_reset_with(
         if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(io::Error::other("local state is redirected by a symbolic link; restore its original location before cleanup"));
         }
+    }
+    if !looks_like_locald_state(&paths.root) {
+        return Err(io::Error::other(format!(
+            "{} does not hold a Lemma installation's local state; refusing to erase it",
+            paths.root.display()
+        )));
     }
     let mut summary = json!({
         "root": paths.root.display().to_string(),
@@ -335,6 +388,45 @@ mod tests {
         let root = tempdir().unwrap();
         let paths = LocalPaths::new(root.path().join("never-ran"));
         perform_reset_with(paths, &ResetFixture::default()).unwrap();
+    }
+
+    /// This command ends in `remove_dir_all` on a directory named by an
+    /// environment variable. An inherited or mistyped `LEMMA_LOCALD_ROOT` --
+    /// a home directory, a projects folder -- would have been erased with the
+    /// same confirmation flag that erases an installation.
+    #[test]
+    fn resetting_refuses_a_directory_that_is_not_a_lemma_installation() {
+        let root = tempdir().unwrap();
+        let bystander = root.path().join("Projects");
+        std::fs::create_dir_all(bystander.join("something-important")).unwrap();
+        std::fs::write(bystander.join("notes.md"), b"a year of work").unwrap();
+
+        let error =
+            perform_reset_with(LocalPaths::new(bystander.clone()), &ResetFixture::default())
+                .expect_err("a directory with no locald state must not be erased");
+
+        assert!(
+            error.to_string().contains("does not hold a Lemma"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            bystander.join("notes.md").exists(),
+            "the refusal must leave the directory untouched"
+        );
+    }
+
+    /// The guard cannot be so strict that it blocks the installations this
+    /// command exists for: a first run interrupted mid-download has a runtime
+    /// directory and none of the usual state files.
+    #[test]
+    fn resetting_accepts_a_half_installed_directory() {
+        let root = tempdir().unwrap();
+        let half = root.path().join("locald");
+        std::fs::create_dir_all(half.join("runtime/downloads")).unwrap();
+
+        perform_reset_with(LocalPaths::new(half.clone()), &ResetFixture::default()).unwrap();
+
+        assert!(!half.exists(), "a half-installed root must still be erased");
     }
 
     /// The identity is read before the file naming it is destroyed.

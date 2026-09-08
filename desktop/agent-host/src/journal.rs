@@ -1,6 +1,7 @@
 //! Durable host-side command, run, checkpoint, and event journal.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -96,6 +97,73 @@ impl Checkpoint {
 #[derive(Clone, Debug)]
 pub struct Journal {
     path: PathBuf,
+    /// See [`Journal::connection`]. Shared by every clone, so the whole
+    /// process serialises on one handle instead of racing several.
+    connection: Arc<Mutex<Connection>>,
+}
+
+/// Free rather than a method, so callers already holding the connection guard
+/// can run it without locking a second, non-reentrant time.
+fn check_integrity(connection: &Connection) -> Result<(), JournalError> {
+    let result: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if result != "ok" {
+        return Err(JournalError::Sql(rusqlite::Error::InvalidQuery));
+    }
+    Ok(())
+}
+
+fn open_connection(path: &Path) -> Result<Connection, JournalError> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    // NORMAL, not FULL. Under WAL, NORMAL still survives a process crash --
+    // which is the failure this outbox exists for -- and gives up only the
+    // guarantee that a host losing power mid-write keeps its last events. The
+    // server holds the run leases and re-drives what it needs, and the cost of
+    // FULL is an fsync on every streamed chunk.
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(connection)
+}
+
+/// Rebuild the journal when the file on disk has a different shape.
+///
+/// `initialize` is all `CREATE TABLE IF NOT EXISTS`, so an older table
+/// survives untouched. That is not theoretical: `event_outbox` once had a
+/// NOT NULL `event_id` column, and a host carrying it failed *every* event
+/// insert with a constraint error — accepting runs, renewing their leases,
+/// and delivering nothing, so conversations hung on "thinking" forever with
+/// no failure anyone could see.
+///
+/// This is a local outbox for crash recovery, not a source of truth: the
+/// server holds the run leases and re-drives what it needs. Losing
+/// undelivered events is strictly better than never delivering again.
+fn discard_if_incompatible(path: &Path) -> Result<(), JournalError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mismatch = {
+        let connection = open_connection(path)?;
+        EXPECTED_COLUMNS.iter().find_map(|(table, expected)| {
+            let found = table_columns(&connection, table).ok()?;
+            // An absent table is fine: initialize creates it.
+            (!found.is_empty() && found != *expected).then_some((*table, found))
+        })
+    };
+    let Some((table, found)) = mismatch else {
+        return Ok(());
+    };
+    tracing::warn!(
+        %table,
+        found = ?found,
+        "rebuilding the Agent Host journal: it was written with a different schema"
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let mut companion = path.to_path_buf().into_os_string();
+        companion.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(companion));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,8 +228,14 @@ impl Journal {
             std::fs::create_dir_all(parent)
                 .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         }
-        let journal = Self { path };
-        journal.discard_if_incompatible()?;
+        // Both of these run on their own short-lived connection, before the
+        // process takes a long-lived one: a rebuild deletes the file, which no
+        // open handle may be holding when it happens.
+        discard_if_incompatible(&path)?;
+        let journal = Self {
+            connection: Arc::new(Mutex::new(open_connection(&path)?)),
+            path,
+        };
         journal.initialize()?;
         Ok(journal)
     }
@@ -178,50 +252,34 @@ impl Journal {
     /// This is a local outbox for crash recovery, not a source of truth: the
     /// server holds the run leases and re-drives what it needs. Losing
     /// undelivered events is strictly better than never delivering again.
-    fn discard_if_incompatible(&self) -> Result<(), JournalError> {
-        if !self.path.exists() {
-            return Ok(());
-        }
-        let mismatch = {
-            let connection = self.connection()?;
-            EXPECTED_COLUMNS.iter().find_map(|(table, expected)| {
-                let found = table_columns(&connection, table).ok()?;
-                // An absent table is fine: initialize creates it.
-                (!found.is_empty() && found != *expected).then_some((*table, found))
-            })
-        };
-        let Some((table, found)) = mismatch else {
-            return Ok(());
-        };
-        tracing::warn!(
-            %table,
-            found = ?found,
-            "rebuilding the Agent Host journal: it was written with a different schema"
-        );
-        for suffix in ["", "-wal", "-shm"] {
-            let mut companion = self.path.clone().into_os_string();
-            companion.push(suffix);
-            let _ = std::fs::remove_file(std::path::PathBuf::from(companion));
-        }
-        Ok(())
-    }
-
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    fn connection(&self) -> Result<Connection, JournalError> {
-        let connection = Connection::open(&self.path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        connection.pragma_update(None, "foreign_keys", "ON")?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "FULL")?;
-        Ok(connection)
+    /// Borrow this process's single journal connection.
+    ///
+    /// One connection, held for the life of the process, rather than one per
+    /// operation. Opening and closing per call meant every streamed chunk paid
+    /// an open, three pragmas and a close -- and closing the *last* connection
+    /// checkpoints and unlinks the WAL, which is precisely the open/close path
+    /// the bundled SQLite 3.51.1 deadlocked in. The upgraded dependency fixed
+    /// that deadlock; not walking into it hundreds of times a turn is the
+    /// other half.
+    ///
+    /// A panic elsewhere can poison the mutex, but not the connection: an
+    /// in-flight transaction rolls back on drop and SQLite is left consistent.
+    /// Refusing to serve the journal after an unrelated panic would turn a
+    /// recoverable error into a host that can no longer record anything, so
+    /// the guard is recovered rather than propagated.
+    fn connection(&self) -> MutexGuard<'_, Connection> {
+        self.connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn initialize(&self) -> Result<(), JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(
             r#"
@@ -297,21 +355,18 @@ impl Journal {
         )?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
-        self.integrity_check()?;
+        // `check_integrity(&connection)`, not `self.integrity_check()`: the
+        // guard is still held here, and the mutex behind it is not reentrant.
+        check_integrity(&connection)?;
         Ok(())
     }
 
     pub fn integrity_check(&self) -> Result<(), JournalError> {
-        let connection = self.connection()?;
-        let result: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-        if result != "ok" {
-            return Err(JournalError::Sql(rusqlite::Error::InvalidQuery));
-        }
-        Ok(())
+        check_integrity(&self.connection())
     }
 
     pub fn register_target(&self, target_id: Uuid) -> Result<(), JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let now = Utc::now().to_rfc3339();
         connection.execute(
             r#"
@@ -325,7 +380,7 @@ impl Journal {
     }
 
     pub fn remove_target(&self, target_id: Uuid) -> Result<(), JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = target_id.to_string();
         transaction.execute("DELETE FROM event_outbox WHERE target_id=?1", params![id])?;
@@ -348,7 +403,7 @@ impl Journal {
         self.register_target(target_id)?;
         let now = Utc::now().to_rfc3339();
         let connected_at = (state == "ONLINE").then_some(now.as_str());
-        self.connection()?.execute(
+        self.connection().execute(
             r#"
             UPDATE targets
                SET connection_state = ?2,
@@ -380,7 +435,7 @@ impl Journal {
         if run_id != spec.agent_run_id {
             return Err(JournalError::LeaseConflict(run_id));
         }
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM command_receipts WHERE target_id=?1 AND command_id=?2)",
@@ -442,7 +497,7 @@ impl Journal {
         command: &Command,
     ) -> Result<AcceptOutcome, JournalError> {
         self.register_target(target_id)?;
-        let connection = self.connection()?;
+        let connection = self.connection();
         let now = Utc::now().to_rfc3339();
         let changed = connection.execute(
             r#"
@@ -473,7 +528,7 @@ impl Journal {
         state: RunState,
         detail: &JsonMap,
     ) -> Result<(), JournalError> {
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             UPDATE runs
                SET checkpoint=?4, state=?5, checkpoint_detail=?6,
@@ -503,7 +558,7 @@ impl Journal {
         lease_epoch: u32,
         provider_session_id: &str,
     ) -> Result<(), JournalError> {
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             UPDATE runs
                SET checkpoint='DISPATCH_INTENT', state='DISPATCHING',
@@ -521,7 +576,7 @@ impl Journal {
             ],
         )?;
         if changed == 0 {
-            let exists: bool = self.connection()?.query_row(
+            let exists: bool = self.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM runs WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3)",
                 params![target_id.to_string(), run_id.to_string(), i64::from(lease_epoch)],
                 |row| row.get(0),
@@ -544,7 +599,7 @@ impl Journal {
         object_id: Option<String>,
         payload: JsonMap,
     ) -> Result<Event, JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let sequence: i64 = transaction
             .query_row(
@@ -609,7 +664,7 @@ impl Journal {
         lease_epoch: u32,
         mut visit: impl FnMut(Event),
     ) -> Result<(), JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let mut statement = connection.prepare(
             "SELECT event_json FROM event_outbox WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3 ORDER BY sequence",
         )?;
@@ -630,7 +685,7 @@ impl Journal {
         target_id: Uuid,
         limit: usize,
     ) -> Result<Vec<EventBatch>, JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let mut statement = connection.prepare(
             r#"
             SELECT event_json FROM event_outbox
@@ -683,7 +738,7 @@ impl Journal {
     /// stayed permanently rejected. Retention is bounded by the run's own
     /// lifetime, not by the journal's.
     pub fn acknowledge_events(&self, target_id: Uuid, ack: &EventAck) -> Result<(), JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state: Option<String> = transaction
             .query_row(
@@ -746,7 +801,7 @@ impl Journal {
         run_id: Uuid,
         lease_epoch: u32,
     ) -> Result<u64, JournalError> {
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             UPDATE event_outbox SET acknowledged_at=NULL
              WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
@@ -773,7 +828,7 @@ impl Journal {
         run_id: Uuid,
         lease_epoch: u32,
     ) -> Result<u64, JournalError> {
-        let changed = self.connection()?.execute(
+        let changed = self.connection().execute(
             r#"
             DELETE FROM event_outbox
              WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
@@ -788,7 +843,7 @@ impl Journal {
     }
 
     pub fn cleanup_retained(&self, now: DateTime<Utc>) -> Result<u64, JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let cutoff = (now - chrono::Duration::days(30)).to_rfc3339();
         let terminal_states = "'WAITING_INPUT','SUCCEEDED','FAILED','CANCELLED','DISPATCH_UNKNOWN'";
@@ -829,11 +884,19 @@ impl Journal {
         )?)
         .unwrap_or_default();
         transaction.commit()?;
+        // Nothing closes this connection until the process exits, and it was
+        // closing the last connection that used to checkpoint and truncate the
+        // WAL. Retention already runs on a timer and has just freed the pages
+        // this reclaims, so it is the natural place to do it deliberately.
+        // TRUNCATE can find readers mid-query; that is not a cleanup failure.
+        if let Err(error) = connection.pragma_update(None, "wal_checkpoint", "TRUNCATE") {
+            tracing::debug!(%error, "journal WAL checkpoint deferred");
+        }
         Ok(deleted)
     }
 
     pub fn pending_control(&self, target_id: Uuid) -> Result<PendingControl, JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let mut command_statement = connection.prepare(
             "SELECT command_id FROM command_receipts WHERE target_id=?1 AND ack_pending=1 ORDER BY received_at LIMIT 256",
         )?;
@@ -943,7 +1006,7 @@ impl Journal {
         target_id: Uuid,
         rejection: &CommandRejection,
     ) -> Result<(), JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         connection.execute(
             r#"
             INSERT INTO command_rejections(
@@ -969,7 +1032,7 @@ impl Journal {
         checkpoints: &[RunCheckpoint],
         rejections: &[CommandRejection],
     ) -> Result<(), JournalError> {
-        let mut connection = self.connection()?;
+        let mut connection = self.connection();
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for command_id in command_ids {
             transaction.execute(
@@ -1031,7 +1094,7 @@ impl Journal {
         }
         let mut spec = run.spec;
         spec.mcp = mcp.clone();
-        let connection = self.connection()?;
+        let connection = self.connection();
         let updated = connection.execute(
             "UPDATE runs SET spec_json=?3, updated_at=?4 \
              WHERE target_id=?1 AND run_id=?2",
@@ -1050,7 +1113,20 @@ impl Journal {
         target_id: Uuid,
         run_id: Uuid,
     ) -> Result<Option<JournalRun>, JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
+        read_run(&connection, target_id, run_id)
+    }
+}
+
+/// Free rather than a method, so `recoverable_runs` can read each run while
+/// still holding the connection guard it opened its cursor with. The mutex is
+/// not reentrant.
+fn read_run(
+    connection: &Connection,
+    target_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<JournalRun>, JournalError> {
+    {
         let row = connection
             .query_row(
                 r#"
@@ -1107,9 +1183,11 @@ impl Journal {
         )
         .transpose()
     }
+}
 
+impl Journal {
     pub fn recoverable_runs(&self, target_id: Uuid) -> Result<Vec<JournalRun>, JournalError> {
-        let connection = self.connection()?;
+        let connection = self.connection();
         let mut statement = connection.prepare(
             r#"
             SELECT run_id FROM runs
@@ -1128,15 +1206,14 @@ impl Journal {
             .map(|raw| {
                 let run_id = Uuid::parse_str(&raw)
                     .map_err(|_| JournalError::InvalidEnum(format!("invalid run UUID {raw}")))?;
-                self.get_run(target_id, run_id)?
-                    .ok_or(JournalError::RunMissing(run_id))
+                read_run(&connection, target_id, run_id)?.ok_or(JournalError::RunMissing(run_id))
             })
             .collect()
     }
 
     pub fn target_status(&self, target_id: Uuid) -> Result<TargetJournalStatus, JournalError> {
         self.register_target(target_id)?;
-        let connection = self.connection()?;
+        let connection = self.connection();
         let (connection_state, last_error, last_connected_at) = connection.query_row(
             "SELECT connection_state, last_error, last_connected_at FROM targets WHERE target_id=?1",
             params![target_id.to_string()],
@@ -1283,6 +1360,39 @@ mod tests {
         (directory, journal, target_id, command, spec)
     }
 
+    /// What a restarted host reads to find the runs it left mid-flight, and
+    /// the only journal method that reads rows while its own cursor is open.
+    /// It had no direct test: the one path that reached it drove the whole
+    /// binary, so a fault here surfaced as a hung process in the slow lane
+    /// rather than as a failure here.
+    #[test]
+    fn a_restart_recovers_exactly_the_runs_that_had_not_finished() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+
+        let recovered = journal.recoverable_runs(target).unwrap();
+        assert_eq!(recovered.len(), 1, "an accepted run is still in flight");
+        assert_eq!(recovered[0].run_id, spec.agent_run_id);
+        assert_eq!(recovered[0].harness_key, "codex");
+
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                RunState::Succeeded,
+                &JsonMap::new(),
+            )
+            .unwrap();
+
+        assert!(
+            journal.recoverable_runs(target).unwrap().is_empty(),
+            "a finished run must not be re-driven on the next start"
+        );
+    }
+
     #[test]
     fn duplicate_command_is_idempotent() {
         let (_directory, journal, target, command, spec) = fixture();
@@ -1356,10 +1466,92 @@ mod tests {
                     journal.pending_control(target).unwrap();
                 }
             });
+            // The delivery task acknowledges while the run streams, so the
+            // writer above is not the only thing taking write transactions.
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    journal
+                        .acknowledge_events(
+                            target,
+                            &EventAck {
+                                run_id: spec.agent_run_id,
+                                lease_epoch: 1,
+                                acked_through: 0,
+                            },
+                        )
+                        .unwrap();
+                }
+            });
         });
         assert_eq!(
             journal.pending_events(target, 256).unwrap()[0].events.len(),
             200
+        );
+    }
+
+    /// A fast adapter streams faster than the flusher drains, and every one of
+    /// those chunks is a write transaction competing with the delivery task's
+    /// reads and acknowledgements. When each of those took its own connection,
+    /// the five second busy timeout was the only thing between this and a
+    /// `SQLITE_BUSY` surfacing as `JournalError::Sql` -- which fails the run
+    /// and loses the turn. It must not merely be unlikely; it must not happen.
+    #[test]
+    fn a_fast_stream_never_surfaces_a_busy_journal() {
+        const CHUNKS: usize = 600;
+
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        let started = std::time::Instant::now();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for index in 0..CHUNKS {
+                    let mut payload = JsonMap::new();
+                    payload.insert("text".into(), format!("chunk {index}").into());
+                    journal
+                        .append_event(
+                            target,
+                            spec.agent_run_id,
+                            1,
+                            EventType::AgentMessageChunk,
+                            None,
+                            payload,
+                        )
+                        .expect("a streamed chunk must never fail to journal");
+                }
+            });
+            scope.spawn(|| {
+                for _ in 0..CHUNKS {
+                    journal
+                        .pending_events(target, 128)
+                        .expect("delivery must never fail to read");
+                }
+            });
+        });
+
+        // Summed across batches: a batch caps at 256 events, so this many
+        // chunks is deliberately more than one batch's worth.
+        let batches = journal.pending_events(target, CHUNKS).unwrap();
+        let recorded: usize = batches.iter().map(|batch| batch.events.len()).sum();
+        assert_eq!(
+            recorded, CHUNKS,
+            "every chunk must be recorded exactly once"
+        );
+        let sequences: Vec<u64> = batches
+            .iter()
+            .flat_map(|batch| batch.events.iter().map(|event| event.sequence))
+            .collect();
+        assert!(
+            sequences.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "sequences must stay contiguous under concurrent reads"
+        );
+        // Loose enough not to be a benchmark, tight enough that reintroducing
+        // an fsync-per-chunk open/close cycle fails here rather than in a chat.
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "journalling {CHUNKS} chunks took {:?}",
+            started.elapsed()
         );
     }
 
@@ -1436,7 +1628,6 @@ mod tests {
     fn stored_events(journal: &Journal, target: Uuid) -> i64 {
         journal
             .connection()
-            .unwrap()
             .query_row(
                 "SELECT COUNT(*) FROM event_outbox WHERE target_id=?1",
                 params![target.to_string()],
@@ -1734,7 +1925,6 @@ mod tests {
             .unwrap();
         journal
             .connection()
-            .unwrap()
             .execute(
                 "UPDATE runs SET updated_at=?1 WHERE target_id=?2 AND run_id=?3",
                 params![
@@ -1746,7 +1936,6 @@ mod tests {
             .unwrap();
         journal
             .connection()
-            .unwrap()
             .execute(
                 "UPDATE command_receipts SET updated_at=?1 WHERE target_id=?2 AND command_id=?3",
                 params![
@@ -1771,7 +1960,6 @@ mod tests {
             .unwrap();
         active_journal
             .connection()
-            .unwrap()
             .execute(
                 "UPDATE runs SET updated_at=?1 WHERE target_id=?2 AND run_id=?3",
                 params![

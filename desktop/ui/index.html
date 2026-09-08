@@ -915,6 +915,10 @@
   };
   const READY_LINE = "It's ready. Opening Lemma.";
   const openIntent = new URLSearchParams(location.search).get("intent");
+  // This window was opened to watch something stop. The daemon can still emit
+  // a snapshot taken before the stop began, and acting on its `ready` would
+  // navigate the user into a workspace whose services are going away.
+  const isShuttingDown = openIntent === "quit" || openIntent === "stop";
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
@@ -1043,6 +1047,7 @@
     openBtn.removeAttribute("aria-busy");
   }
   function scheduleReadyOpen() {
+    if (isShuttingDown) return;
     clearTimeout(readyOpenTimer);
     readyOpenTimer = setTimeout(async () => {
       if (!lastState?.ready || lastState.error) return;
@@ -1140,6 +1145,20 @@
     showRecoveryButtons(false, false);
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
+    // A snapshot taken before the stop was admitted still says ready. Saying
+    // so here would offer to open a workspace that is being shut down, and
+    // `scheduleReadyOpen` would then take that offer on the user's behalf.
+    if (s.ready && isShuttingDown) {
+      clearPrimaryBusy();
+      say(VOICE.stopping[0]);
+      truth.textContent = VOICE.stopping[1];
+      openBtn.hidden = true;
+      whisper.classList.remove("on");
+      stopWhispers();
+      progressEl.classList.add("active");
+      bar.style.width = "100%";
+      return;
+    }
     if (s.ready) {
       clearPrimaryBusy();
       hideOperationStatus();

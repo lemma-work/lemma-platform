@@ -16,7 +16,7 @@ use crate::config_operations::{ConfigOperation, ConfigOperations};
 use crate::host_process::HostProcessManager;
 use crate::lifecycle::Lifecycle;
 use crate::managed_runtime::{
-    ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
+    ManagedRuntimeBootstrap, ManagedRuntimeController, ProbeOutcome, SANDBOX_IMAGES_UNSUPPORTED,
 };
 use crate::native_host_pack;
 use crate::operator_config::{OperatorConfigStore, OperatorConfigUpdate};
@@ -285,11 +285,17 @@ impl Daemon {
                                 return;
                             }
                             match probe {
-                                Ok(_) => {
+                                ProbeOutcome::Healthy(_) => {
                                     manager.mark_dependency_ready();
                                     runtime_failure_reported = false;
                                 }
-                                Err(error) => {
+                                // The guest did not answer in time, which a
+                                // busy control channel looks exactly like.
+                                // Leave the running stack and its forwarders
+                                // alone; a real loss is reported by the next
+                                // probes.
+                                ProbeOutcome::Transient(_) => {}
+                                ProbeOutcome::Lost(error) => {
                                     let message = error.to_string();
                                     manager.mark_dependency_unavailable(message.clone());
                                     if !runtime_failure_reported {
@@ -1861,7 +1867,7 @@ impl Daemon {
         // files and accounts". Someone resetting before handing the machine on
         // would have kept all of it.
         let host_side = crate::paths::discard_host_side_data(&self.paths.root)?;
-        if runtime.probe().is_ok() {
+        if runtime.probe().is_healthy() {
             let removed = runtime.reset_guest_data()?;
             runtime.stop_infrastructure()?;
             return Ok(json!({
