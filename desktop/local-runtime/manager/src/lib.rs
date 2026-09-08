@@ -101,7 +101,16 @@ pub struct ManagedRuntimeConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ManagedRuntimeStatus {
-    pub endpoint_host: String,
+    /// Absent when the guest holds no DHCP lease.
+    ///
+    /// A guest without one is still healthy: core services reach the host over
+    /// the private socket bridges, which need no address. Only sandboxes are
+    /// unreachable. Typed as a required `String`, a null here failed to
+    /// deserialise and became "invalid guest health response" -- which the
+    /// probe then read as a dead runtime, turning a denied Local Network
+    /// permission back into the failure the guest fix removed.
+    #[serde(default)]
+    pub endpoint_host: Option<String>,
     pub host_gateway: String,
     pub engine: String,
     #[serde(default)]

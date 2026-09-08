@@ -681,7 +681,19 @@ impl ManagedRuntimeController {
             )
         } else {
             (
-                private_ipv4(&status.endpoint_host, "guest endpoint")?,
+                // This route reaches the guest by address, so unlike macOS it
+                // genuinely needs one. A guest that reports none is healthy
+                // but unreachable this way, and saying so beats a parse error.
+                private_ipv4(
+                    status.endpoint_host.as_deref().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::AddrNotAvailable,
+                            "the private runtime reported no network address, so host \
+                             services cannot reach its database",
+                        )
+                    })?,
+                    "guest endpoint",
+                )?,
                 5432,
                 6379,
                 3567,
@@ -1034,7 +1046,18 @@ impl ManagedRuntimeController {
         }
         #[cfg(not(target_os = "macos"))]
         wait_for_tcp_services(
-            private_ipv4(&_status.endpoint_host, "guest endpoint")?,
+            // Unlike macOS, this route reaches the guest's services by address
+            // rather than over the private socket bridges, so it does need one.
+            private_ipv4(
+                _status.endpoint_host.as_deref().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::AddrNotAvailable,
+                        "the private runtime reported no network address, so its services \
+                         cannot be reached",
+                    )
+                })?,
+                "guest endpoint",
+            )?,
             services,
             timeout,
             checkpoint,
@@ -1885,7 +1908,7 @@ mod tests {
             pending_images: Mutex::new(None),
             cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
-                endpoint_host: "192.168.64.10".into(),
+                endpoint_host: Some("192.168.64.10".into()),
                 host_gateway: "192.168.64.1".into(),
                 engine: "containerd".into(),
                 active_sandboxes: 0,
@@ -1983,6 +2006,31 @@ mod tests {
             assert_eq!(probes.failed(&timeout()), ProbeVerdict::Transient);
         }
         assert_eq!(probes.failed(&timeout()), ProbeVerdict::Lost);
+    }
+
+    /// A guest with no DHCP lease is healthy, and must parse as such.
+    ///
+    /// The guest stopped refusing to start without a vmnet lease, because a
+    /// denied macOS Local Network permission is exactly how it loses one -- and
+    /// core services reach the host over the private socket bridges, which need
+    /// no address at all. That fix only holds if the host can read the health
+    /// response: with `endpoint_host` typed as a required string, a null failed
+    /// to deserialise, became "invalid guest health response", and the probe
+    /// read that as a dead runtime.
+    #[test]
+    fn a_guest_reporting_no_network_address_is_not_a_broken_health_response() {
+        let status: ManagedRuntimeStatus = serde_json::from_value(serde_json::json!({
+            "status": "ready",
+            "engine": "containerd",
+            "endpoint_host": null,
+            "network": {"leased": false},
+            "host_gateway": "192.168.64.1",
+            "active_sandboxes": 0,
+        }))
+        .expect("a lease-less guest must still report a readable health status");
+
+        assert_eq!(status.endpoint_host, None);
+        assert_eq!(status.host_gateway, "192.168.64.1");
     }
 
     /// A fresh controller starts owing nothing to a previous guest.
@@ -2157,7 +2205,7 @@ mod tests {
             pending_images: Mutex::new(None),
             cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
-                endpoint_host: "192.168.64.10".into(),
+                endpoint_host: Some("192.168.64.10".into()),
                 host_gateway: "192.168.64.1".into(),
                 engine: "containerd".into(),
                 active_sandboxes: 0,

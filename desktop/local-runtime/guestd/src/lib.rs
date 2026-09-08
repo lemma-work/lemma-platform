@@ -16,6 +16,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const PROTOCOL_VERSION: u64 = 1;
 pub const VSOCK_PORT: u32 = 42_411;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+/// Where guestd reaches the guest's own services.
+///
+/// The core containers run with host networking, so they listen on every
+/// address in the guest's namespace and loopback reaches them exactly as the
+/// DHCP-assigned address does -- without needing one. That matters because
+/// the lease comes from vmnet, which macOS Local Network privacy can withhold
+/// from the responsible app: readiness that went through the routable address
+/// turned a denied permission into a guest that never reported ready at all.
+const GUEST_LOOPBACK: &str = "127.0.0.1";
 /// Connections served at once. The host keeps one control connection plus a
 /// probe, so this is generous; it exists so a caller that opens sockets and
 /// never closes them cannot spawn threads without limit.
@@ -480,7 +489,7 @@ fn is_observation(operation: &str) -> bool {
 pub struct GuestService<E: Engine> {
     engine: Arc<E>,
     state_root: PathBuf,
-    endpoint_host: String,
+    endpoint_host: Option<String>,
     dynamic_endpoint_host: bool,
     host_gateway: String,
     capability: Option<String>,
@@ -515,9 +524,18 @@ impl GuestService<NerdctlEngine> {
             .ok()
             .filter(|value| valid_ip(value));
         let dynamic_endpoint_host = configured_endpoint_host.is_none();
-        let endpoint_host = configured_endpoint_host
-            .or_else(discover_guest_ip)
-            .ok_or_else(|| GuestError::engine("could not discover the guest IPv4 address"))?;
+        // Not fatal when it is absent.
+        //
+        // This address comes from the vmnet DHCP lease, which is exactly what
+        // macOS Local Network privacy can withhold from the responsible app.
+        // Refusing to start without it meant a denied permission put guestd
+        // into a systemd restart loop: the vsock control port never listened,
+        // the host waited out its two minutes and reported "managed guest did
+        // not become ready", and the private service bridges -- which need no
+        // lease at all -- were never given the chance to work. The address is
+        // needed for the host to reach a *sandbox*, so that is what fails
+        // without it, by name, and the rest of the guest serves.
+        let endpoint_host = configured_endpoint_host.or_else(discover_guest_ip);
         let host_gateway = std::env::var("LEMMA_HOST_GATEWAY")
             .ok()
             .filter(|value| valid_ip(value))
@@ -544,11 +562,12 @@ impl<E: Engine + 'static> GuestService<E> {
     pub fn new(
         engine: E,
         state_root: PathBuf,
-        endpoint_host: String,
+        endpoint_host: Option<String>,
         host_gateway: String,
         capability: Option<String>,
     ) -> Result<Self, GuestError> {
-        if !valid_ip(&endpoint_host) || !valid_ip(&host_gateway) {
+        if endpoint_host.as_deref().is_some_and(|host| !valid_ip(host)) || !valid_ip(&host_gateway)
+        {
             return Err(GuestError::invalid(
                 "endpoint_host and host_gateway must be literal IP addresses",
             ));
@@ -570,12 +589,34 @@ impl<E: Engine + 'static> GuestService<E> {
         })
     }
 
-    fn current_endpoint_host(&self) -> String {
+    /// The address the *host* can reach this guest on, if it has one.
+    ///
+    /// `None` means no DHCP lease -- see `discover`. Everything that only needs
+    /// to reach the guest's own services uses `GUEST_LOOPBACK` instead and is
+    /// unaffected.
+    fn current_endpoint_host(&self) -> Option<String> {
         if self.dynamic_endpoint_host {
-            discover_guest_ip().unwrap_or_else(|| self.endpoint_host.clone())
+            discover_guest_ip().or_else(|| self.endpoint_host.clone())
         } else {
             self.endpoint_host.clone()
         }
+    }
+
+    /// The guest address, or a named failure for the callers that need one.
+    ///
+    /// Only reached by operations that hand the host somewhere to connect --
+    /// a sandbox's URL. Core services do not, because the host reaches those
+    /// over the private socket bridges.
+    fn routable_endpoint_host(&self) -> Result<String, GuestError> {
+        self.current_endpoint_host().ok_or_else(|| GuestError {
+            code: "guest_network_unavailable".into(),
+            message: "The private runtime has no network address, so sandboxes \
+                      cannot be reached. On macOS this is what a denied Local \
+                      Network permission looks like."
+                .into(),
+            retryable: true,
+            status_code: 503,
+        })
     }
 
     pub fn handle(&self, request: GuestRequest) -> GuestResponse {
@@ -968,7 +1009,14 @@ impl<E: Engine + 'static> GuestService<E> {
         let endpoint_host = self.current_endpoint_host();
         Ok(json!({
             "status": "ready", "engine": "containerd",
+            // Null when the guest holds no DHCP lease. The guest is still
+            // serving -- core services reach the host over the private socket
+            // bridges -- but nothing can reach a sandbox, and the host needs
+            // to be able to tell that apart from a guest that is simply gone.
             "endpoint_host": endpoint_host,
+            "network": {
+                "leased": endpoint_host.is_some(),
+            },
             "host_gateway": self.host_gateway,
             "active_sandboxes": active_sandboxes,
             // Reported on every health call so a drifting guest clock is
@@ -1098,7 +1146,9 @@ impl<E: Engine + 'static> GuestService<E> {
                     "running": running,
                     "state": state_name,
                     "exit_code": exit_code,
-                    "endpoint": format!("{endpoint_host}:{port}"),
+                    "endpoint": endpoint_host
+                        .as_ref()
+                        .map(|host| format!("{host}:{port}")),
                 }),
             );
         }
@@ -1711,9 +1761,8 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_tcp(&self, port: u16, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            let endpoint_host = self.current_endpoint_host();
             if TcpStream::connect_timeout(
-                &format!("{endpoint_host}:{port}")
+                &format!("{GUEST_LOOPBACK}:{port}")
                     .to_socket_addrs()
                     .map_err(|error| GuestError::engine(error.to_string()))?
                     .next()
@@ -1734,7 +1783,7 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_http_port(&self, port: u16, path: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            let url = format!("http://{}:{port}{path}", self.current_endpoint_host());
+            let url = format!("http://{GUEST_LOOPBACK}:{port}{path}");
             if probe_http(&url).is_ok() {
                 return Ok(());
             }
@@ -1748,7 +1797,7 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_redis(&self, password: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            if redis_ready(&self.current_endpoint_host(), password).is_ok() {
+            if redis_ready(GUEST_LOOPBACK, password).is_ok() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(250));
@@ -2085,7 +2134,7 @@ impl<E: Engine + 'static> GuestService<E> {
         Ok(Some(snapshot_from_inspect(
             sandbox_id,
             inspect,
-            &self.current_endpoint_host(),
+            &self.routable_endpoint_host()?,
         )?))
     }
 
@@ -2466,9 +2515,19 @@ impl<E: Engine + 'static> GuestService<E> {
             }
             thread::sleep(Duration::from_millis(250));
         }
-        Err(GuestError::engine(format!(
-            "sandbox cannot reach the Lemma API callback: {}",
-            last_error.unwrap_or_else(|| "probe timed out".into())
+        // Say which way the network is broken, while the evidence is fresh.
+        //
+        // "sandbox cannot reach the Lemma API callback: probe timed out" is
+        // true of a denied Local Network permission, a VPN that took the
+        // default route, a host relay that failed to bind, and a sandbox that
+        // simply has not finished starting -- and it distinguishes none of
+        // them. `diagnostics.network` could answer that, and nothing called
+        // it. Guest egress working while the callback fails points at the
+        // host's relay; egress failing points outside Lemma altogether.
+        let network = network_diagnostics();
+        Err(GuestError::engine(callback_failure_message(
+            last_error.as_deref(),
+            network["dns_ok"] == json!(true),
         )))
     }
 }
@@ -3422,6 +3481,24 @@ pub fn probe_http(url: &str) -> io::Result<()> {
     }
 }
 
+/// Explain a failed sandbox callback, including which side of it is broken.
+///
+/// "sandbox cannot reach the Lemma API callback: probe timed out" is equally
+/// true of a denied Local Network permission, a VPN that took the default
+/// route, a host relay that failed to bind, and a sandbox that has not
+/// finished starting -- and it distinguishes none of them. `diagnostics.network`
+/// could answer that, and until now nothing ever called it.
+fn callback_failure_message(last_error: Option<&str>, guest_egress_ok: bool) -> String {
+    let cause = last_error.unwrap_or("probe timed out");
+    let egress = if guest_egress_ok {
+        "the guest's own network is working, so this is the route back to this computer"
+    } else {
+        "the guest cannot resolve names either, so its network is unavailable rather than \
+         just this route"
+    };
+    format!("sandbox cannot reach the Lemma API callback: {cause}. {egress}.")
+}
+
 fn network_diagnostics() -> Value {
     let dns = Command::new("/usr/bin/timeout")
         .args([
@@ -3605,7 +3682,7 @@ mod tests {
                 invalid: Mutex::new(std::collections::HashSet::new()),
             },
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -3689,7 +3766,7 @@ mod tests {
                 invalid: Mutex::new(std::collections::HashSet::new()),
             },
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -3731,6 +3808,133 @@ mod tests {
         release.send(true).unwrap();
         release.send(true).unwrap();
         let _ = blocked.join().unwrap();
+    }
+
+    /// A failed callback has to say which side of it is broken.
+    ///
+    /// Both readings end with a sandbox that cannot reach the API, and the
+    /// remedies have nothing in common: one is a permission or a VPN on this
+    /// computer, the other is Lemma's own relay. The guest already knew the
+    /// answer -- `diagnostics.network` -- and nothing asked it.
+    #[test]
+    fn a_failed_callback_distinguishes_the_route_from_the_network() {
+        let relay = callback_failure_message(Some("connection refused"), true);
+        assert!(relay.contains("connection refused"), "{relay}");
+        assert!(
+            relay.contains("route back to this computer"),
+            "guest egress working points at the host's relay: {relay}"
+        );
+
+        let network = callback_failure_message(None, false);
+        assert!(
+            network.contains("probe timed out"),
+            "an absent cause still needs describing: {network}"
+        );
+        assert!(
+            network.contains("network is unavailable"),
+            "no name resolution at all is a different problem: {network}"
+        );
+        assert!(
+            !network.contains("route back to this computer"),
+            "the two readings must not both appear: {network}"
+        );
+    }
+
+    /// A guest with no DHCP lease still serves.
+    ///
+    /// The lease comes from vmnet, which is exactly what macOS Local Network
+    /// privacy withholds from the responsible app. `discover` used to refuse to
+    /// start without one, so a denied permission put guestd into a systemd
+    /// restart loop: the vsock control port never listened, the host waited out
+    /// its two minutes and said "managed guest did not become ready", and the
+    /// private service bridges -- which need no lease at all -- never got the
+    /// chance to work. The app looked dead for a permission that only affects
+    /// reaching sandboxes.
+    #[test]
+    fn a_guest_without_a_network_lease_still_reports_ready() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(true, "")]),
+            root.path().into(),
+            None,
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let response = service.handle(GuestRequest {
+            version: 1,
+            operation: "health".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert_eq!(result["status"], "ready");
+        assert_eq!(
+            result["endpoint_host"],
+            Value::Null,
+            "an address it does not have must not be invented"
+        );
+        assert_eq!(
+            result["network"]["leased"], false,
+            "the host has to be able to tell this apart from a guest that died"
+        );
+    }
+
+    /// What the missing lease actually costs, said by name.
+    #[test]
+    fn without_a_lease_only_sandbox_addresses_are_refused() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            None,
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service.routable_endpoint_host().unwrap_err();
+        assert_eq!(error.code, "guest_network_unavailable");
+        assert!(
+            error.retryable,
+            "granting the permission fixes it, so this must not be terminal"
+        );
+        assert!(
+            error.message.contains("Local Network"),
+            "the message has to name the cause somebody can act on: {}",
+            error.message
+        );
+    }
+
+    /// Readiness must not depend on the lease either.
+    ///
+    /// The core containers run with host networking, so they answer on
+    /// loopback in the guest's own namespace. Probing them through the
+    /// routable address is what tied startup to a permission that has nothing
+    /// to do with whether Postgres came up.
+    #[test]
+    fn core_readiness_probes_do_not_need_a_routable_address() {
+        let root = tempdir().unwrap();
+        // A stand-in for a core container: host networking means it answers on
+        // every address in the guest's namespace, loopback included.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            None, // No DHCP lease, as when Local Network is denied.
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .wait_tcp(port, 5)
+            .expect("readiness must not depend on a lease it may never get");
     }
 
     /// The other half: two mutations still may not interleave. Concurrency was
@@ -3792,7 +3996,7 @@ mod tests {
                     invalid: Mutex::new(present),
                 },
                 root.path().into(),
-                "192.168.64.2".into(),
+                Some("192.168.64.2".into()),
                 "192.168.64.1".into(),
                 None,
             )
@@ -4063,7 +4267,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4106,7 +4310,7 @@ mod tests {
                 output(true, ""),         // volume rm lemma-redis-data
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4173,7 +4377,7 @@ mod tests {
                 output(true, "18\n"), // postgres_image_major: what does the image ship
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4218,7 +4422,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![inspect, output(true, "18\n")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4243,7 +4447,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![inspect, output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4266,7 +4470,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), warning]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4297,7 +4501,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4403,7 +4607,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![shutting_down, output(true, "1\n")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4435,7 +4639,7 @@ mod tests {
                 output(true, "1\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4682,7 +4886,7 @@ mod tests {
                 output(true, "starting\nfatal: runtime bootstrap failed\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4747,7 +4951,7 @@ mod tests {
                 output(true, "runtime stopped\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4774,7 +4978,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4807,7 +5011,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4842,7 +5046,7 @@ mod tests {
                 output(true, ""),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4878,7 +5082,7 @@ mod tests {
                 output(true, ""),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5040,7 +5244,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5054,7 +5258,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5082,7 +5286,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             Some("a".repeat(32)),
         )
@@ -5113,7 +5317,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, &inspect()), output(true, &inspect())]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5143,7 +5347,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5169,7 +5373,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, ""), output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5196,7 +5400,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5214,7 +5418,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5235,7 +5439,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5270,7 +5474,7 @@ mod tests {
                 output(true, "aabbccddeeff\n001122334455\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
