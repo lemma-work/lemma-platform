@@ -121,6 +121,29 @@ pub struct ManagedRuntimeStatus {
     pub balloon_target_bytes: Option<u64>,
 }
 
+/// Which rootfs a registered distribution was imported from.
+///
+/// Size, and deliberately not modification time. The question this answers is
+/// "was this guest imported from a *different release*", and what the answer is
+/// used for is a prompt offering to delete the distribution -- which is where
+/// the user's workspaces and databases live. Modification time changes whenever
+/// the archive is written again, so a repair, a re-download or a plain reinstall
+/// of the very same release all looked like a different one, and offered to
+/// destroy the only copy of the data over a timestamp.
+///
+/// Two different releases with a byte-identical archive size would go unnoticed.
+/// That is remote, and its consequence is one in-place start this check would
+/// otherwise have refused; the alternative, hashing several gigabytes on every
+/// launch, costs every user real time to catch it.
+///
+/// Free and un-gated so it is tested on every platform, not only compiled on
+/// one -- the Windows guest path is its only caller, and code that exists on one
+/// platform and is checked on none is how the mtime bug survived.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn rootfs_stamp(rootfs: &Path) -> io::Result<String> {
+    Ok(fs::metadata(rootfs)?.len().to_string())
+}
+
 fn guest_request_budget(operation: &str) -> Duration {
     match operation {
         "system.shutdown" => Duration::from_secs(8),
@@ -762,21 +785,6 @@ impl ManagedRuntime {
 
     /// A cheap identity for the rootfs archive an installed guest came from.
     ///
-    /// Length and modification time answer "is this the same file" without
-    /// reading a gigabyte on every launch. They can differ for a file whose
-    /// contents did not change -- a reinstall of the same release rewrites the
-    /// archive -- so a mismatch is a reason to look closer, not a conclusion.
-    #[cfg(windows)]
-    fn rootfs_stamp(rootfs: &Path) -> io::Result<String> {
-        let metadata = fs::metadata(rootfs)?;
-        let modified = metadata
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_secs();
-        Ok(format!("{}:{}", metadata.len(), modified))
-    }
-
     /// Run wsl.exe and hand back whatever it produced, exit code included.
     ///
     /// `wsl()` turns a non-zero exit into an error, which is right for a command
@@ -854,7 +862,7 @@ impl ManagedRuntime {
         }
         let marker = self.guest_release_marker();
         let recorded = fs::read_to_string(&marker).unwrap_or_default();
-        let current = Self::rootfs_stamp(rootfs)?;
+        let current = rootfs_stamp(rootfs)?;
         if recorded == current {
             return Ok(());
         }
@@ -967,7 +975,7 @@ impl ManagedRuntime {
                 ],
                 None,
             )?;
-            let stamp = Self::rootfs_stamp(&rootfs)?;
+            let stamp = rootfs_stamp(&rootfs)?;
             fs::write(self.guest_release_marker(), stamp)?;
         } else {
             self.check_installed_guest_is_current(&rootfs)?;
@@ -1593,6 +1601,44 @@ mod tests {
         validate_macos_release(&release).unwrap();
         fs::remove_file(release.join("disk.raw")).unwrap();
         assert!(validate_macos_release(&release).is_err());
+    }
+
+    /// Re-writing the same archive must not look like a different release.
+    ///
+    /// A mismatch here prompts the user to reset the Windows runtime, which
+    /// deletes the distribution their workspaces and databases live in. The
+    /// stamp used to include modification time, so a repair, a re-download or a
+    /// reinstall of the identical release all changed it — and offered to
+    /// destroy the only copy of the data over a timestamp.
+    #[test]
+    fn a_rootfs_rewritten_in_place_is_still_the_same_guest() {
+        let root = tempdir().unwrap();
+        let rootfs = root.path().join("rootfs.tar");
+        fs::write(&rootfs, b"a guest filesystem").unwrap();
+        let before = rootfs_stamp(&rootfs).unwrap();
+
+        // What a repair or a re-download does: identical bytes, written again.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(&rootfs, b"a guest filesystem").unwrap();
+
+        assert_eq!(
+            rootfs_stamp(&rootfs).unwrap(),
+            before,
+            "the same archive must not read as a different release"
+        );
+    }
+
+    /// It must still notice a genuinely different one, or the check is theatre.
+    #[test]
+    fn a_different_rootfs_is_still_recognised_as_different() {
+        let root = tempdir().unwrap();
+        let rootfs = root.path().join("rootfs.tar");
+        fs::write(&rootfs, b"the guest from 0.7.2").unwrap();
+        let before = rootfs_stamp(&rootfs).unwrap();
+
+        fs::write(&rootfs, b"the rather larger guest from 0.8.0").unwrap();
+
+        assert_ne!(rootfs_stamp(&rootfs).unwrap(), before);
     }
 
     #[cfg(target_os = "macos")]
