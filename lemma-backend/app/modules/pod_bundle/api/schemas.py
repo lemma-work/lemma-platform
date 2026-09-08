@@ -147,8 +147,8 @@ class VariableSpecResponse(BaseModel):
         default=None,
         description=(
             "For a connector account variable, which of the connector's kinds "
-            "the source install used ('composio', 'package', 'mcp', 'sql', "
-            "'http'), so the importer selects an account of the same kind. "
+            "the source install used ('composio', 'http', 'mcp', 'sql'), so "
+            "the importer selects an account of the same kind. "
             "Null for non-connector variables."
         ),
     )

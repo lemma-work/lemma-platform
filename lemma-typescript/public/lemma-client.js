@@ -13031,9 +13031,9 @@ var LemmaClient = (() => {
     }
     /**
      * Get Connector Skill
-     * Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
+     * Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
      * @param connectorId
-     * @param kind Kind override, e.g. package or composio
+     * @param kind Kind override, e.g. http or composio
      * @returns ConnectorSkillResponse Successful Response
      * @throws ApiError
      */

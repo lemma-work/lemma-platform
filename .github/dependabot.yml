@@ -28,7 +28,6 @@ updates:
   - package-ecosystem: uv
     directories:
       - /lemma-backend
-      - /lemma-backend/lemma-connectors
       - /lemma-backend/sandbox-images/templates/function-python
       - /lemma-backend/sandbox-images/templates/workspace-python
       - /lemma-cli

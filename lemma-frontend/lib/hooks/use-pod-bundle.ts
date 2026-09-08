@@ -71,7 +71,7 @@ export interface VariableSpec {
     /** For `account`-kind variables: the connector, e.g. "slack". */
     connector?: string | null;
     /** For `account`-kind variables: which of the connector's kinds the source
-     * install used ("composio", "package", "mcp", ...), so the picker selects
+     * install used ("composio", "http", "mcp", ...), so the picker selects
      * or creates an account of the same kind rather than any account for that
      * connector. */
     connector_kind?: string | null;

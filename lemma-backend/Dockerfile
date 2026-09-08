@@ -22,7 +22,6 @@ COPY lemma-backend/pyproject.toml lemma-backend/uv.lock ./
 
 # Copy local path dependencies and repo-native skills.
 COPY lemma-pod-bundle /lemma-pod-bundle
-COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
 
 # Install dependencies into /app/.venv. The local extra ships MarkItDown in the

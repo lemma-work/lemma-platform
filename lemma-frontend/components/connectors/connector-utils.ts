@@ -6,7 +6,6 @@ export type SchemaValues = Record<string, unknown>;
 export type AuthConfigMode = 'MANAGED' | 'CUSTOM';
 
 export const KIND = {
-    PACKAGE: 'package',
     COMPOSIO: 'composio',
     HTTP: 'http',
     SQL: 'sql',
@@ -46,7 +45,7 @@ export const getSupportedKinds = (app: Connector | null | undefined): string[] =
     const kinds = getKindSpecs(app)
         .map((capability) => String(capability.kind ?? ''))
         .filter((kind) => kind.length > 0);
-    return kinds.length > 0 ? kinds : [KIND.PACKAGE];
+    return kinds.length > 0 ? kinds : [KIND.HTTP];
 };
 
 export const getKindSpec = (
@@ -69,11 +68,19 @@ export const getPrimaryKindSpec = (app: Connector | null | undefined): Connector
 };
 
 export const getPrimaryKind = (app: Connector | null | undefined): string =>
-    getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.PACKAGE;
+    getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.HTTP;
 
 export const getConfigSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
     const schema = capability?.config_schema;
     return isRecord(schema) ? (schema as JsonSchemaLike) : null;
+};
+
+/** Whether an install of this kind has anything for the org to fill in. */
+export const declaresInstallConfigFields = (
+    capability: ConnectorKindSpec | null,
+): boolean => {
+    const properties = getConfigSchema(capability)?.properties;
+    return isRecord(properties) && Object.keys(properties).length > 0;
 };
 
 export const usesDirectCredentials = (capability: ConnectorKindSpec | null): boolean => {
@@ -107,7 +114,8 @@ export const hasSystemDefault = (capability: ConnectorKindSpec | null): boolean 
 /**
  * A kind alone stopped being enough to describe an install once a first-party
  * OAuth connector shipped over the http kind. GitHub is `http`, but nobody
- * points Lemma at a GitHub spec — they sign in.
+ * points Lemma at a GitHub spec — they sign in. Slack and Gmail joined it when
+ * the vendored connector clients were removed.
  */
 export const isOAuthOverHttp = (
     kind: string,
@@ -139,7 +147,16 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
     if (!capability) return false;
     const kind = String(capability.kind);
     if (!TENANT_CONFIGURED_KINDS.has(kind)) return false;
-    return !isOAuthOverHttp(kind, capability);
+    if (isOAuthOverHttp(kind, capability)) return false;
+    // The kind narrowed this down; the install config schema settles it. `http`
+    // became the one native kind when the vendored connector clients were
+    // removed, so it now also covers the credential-managed surface bots
+    // (WhatsApp, Telegram, Resend) — API-key connectors with a bot token and no
+    // address at all. The backend hands every non-OAuth connector that declares
+    // no schema an empty one, so "has fields to fill in" is the same question
+    // as "the org supplies something", and asking it directly avoids guessing
+    // from the kind or the auth scheme (`sql` and `mcp` are API_KEY too).
+    return declaresInstallConfigFields(capability);
 };
 
 /**
@@ -248,7 +265,6 @@ export const getTenantConfiguredKindSpec = (
     getKindSpecs(app).find((capability) => isTenantConfigured(capability)) ?? null;
 
 export const formatKindName = (kind: string): string => {
-    if (kind === KIND.PACKAGE) return 'Native';
     if (kind === KIND.COMPOSIO) return 'Composio';
     if (kind === KIND.SQL) return 'Database';
     if (kind === KIND.HTTP) return 'API';
@@ -262,8 +278,7 @@ export const formatKindName = (kind: string): string => {
 
 export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (kind === KIND.COMPOSIO) return 'Composio (recommended)';
-    if (kind === KIND.PACKAGE && usesDirectCredentials(capability)) return 'Native credentials';
-    if (kind === KIND.PACKAGE) return 'Native OAuth';
+    if (usesDirectCredentials(capability) && kind === KIND.HTTP) return 'Native credentials';
     if (isOAuthOverHttp(kind, capability)) return 'Native OAuth';
     return formatKindName(kind);
 };
@@ -277,7 +292,6 @@ export const getKindDescription = (kind: string, capability: ConnectorKindSpec |
     if (kind === KIND.HTTP) return 'Point Lemma at an OpenAPI spec; its endpoints become operations.';
     if (kind === KIND.MCP) return 'Point Lemma at an MCP server; its tools become operations.';
     if (usesDirectCredentials(capability)) return 'Connect with a key or token from the app itself.';
-    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s app, or with your own.';
     return 'Another way to connect this.';
 };
 
@@ -302,7 +316,6 @@ export const getManagedConfigCopy = (kind: string, capability: ConnectorKindSpec
     if (isTenantConfigured(capability)) return 'This one needs an address. Fill in the fields below.';
     if (usesDirectCredentials(capability)) return 'Nothing to set up here — you’ll add the account’s details next.';
     if (kind === KIND.COMPOSIO) return 'Composio handles this one. Nothing to set up.';
-    if (kind === KIND.PACKAGE) return 'Sign in with Lemma’s own app. Nothing to set up.';
     return 'Use Lemma’s default setup for this.';
 };
 
