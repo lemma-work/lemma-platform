@@ -13,7 +13,12 @@ from app.modules.usage.domain.errors import UsageReportingError
 
 class RequestAccountingGateway(Protocol):
     async def begin(
-        self, request_id: UUID, now: datetime, *, priceable: bool = True
+        self,
+        request_id: UUID,
+        now: datetime,
+        *,
+        priceable: bool = True,
+        in_flight: bool = False,
     ) -> bool: ...
 
     async def record(self, receipt: RequestReceipt) -> bool: ...
@@ -25,6 +30,10 @@ class RequestMeter:
         self.pending: dict[UUID, RequestReceipt] = {}
         self.closed = False
         self.require_reconciliation = False
+        #: Whether this scope has already put a request to a provider. A run
+        #: that has spent tokens must not be killed by a refusal that could
+        #: only ever have been made before it started -- see `begin`.
+        self.admitted = 0
 
     async def before(self, *, priceable: bool) -> tuple[UUID, datetime, bool]:
         if self.closed:
@@ -33,7 +42,10 @@ class RequestMeter:
             raise UsageReportingError()
         await self.flush()
         request_id, occurred_at = uuid4(), datetime.now(timezone.utc)
-        limited = await self.gateway.begin(request_id, occurred_at, priceable=priceable)
+        limited = await self.gateway.begin(
+            request_id, occurred_at, priceable=priceable, in_flight=self.admitted > 0
+        )
+        self.admitted += 1
         return request_id, occurred_at, limited
 
     async def after(self, receipt: RequestReceipt) -> None:

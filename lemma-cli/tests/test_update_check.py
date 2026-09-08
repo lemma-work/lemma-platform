@@ -392,3 +392,79 @@ def test_invoked_command_knows_every_registered_command():
 def test_invoked_command_drops_an_unknown_token():
     assert _invoked_command(["--json", "update"]) == "update"
     assert _invoked_command(["/etc/passwd"]) is None
+
+
+# --- where the server's version is read from ------------------------------
+
+
+class _Response:
+    """Just enough of `urlopen`'s context manager for `fetch_server_api_version`."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+
+def _server(monkeypatch, routes: dict[str, dict]) -> list[str]:
+    """Serve `routes`; 404 anything else. Returns the list of URLs dialed."""
+    import urllib.error
+    import urllib.request
+
+    dialed: list[str] = []
+
+    def _urlopen(url, **_kwargs):
+        dialed.append(url)
+        for path, payload in routes.items():
+            if url.endswith(path):
+                return _Response(payload)
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+    return dialed
+
+
+def test_version_comes_from_health_without_an_openapi_document(monkeypatch):
+    """Production serves no OpenAPI document, which is every real deployment."""
+    dialed = _server(monkeypatch, {"/health": {"status": "ok", "api_version": "0.7.2"}})
+
+    assert update_mod.fetch_server_api_version("https://api.example.com") == (
+        "0.7.2",
+        None,
+    )
+    assert dialed == ["https://api.example.com/health"]
+
+
+def test_a_server_older_than_the_health_field_falls_back_to_openapi(monkeypatch):
+    dialed = _server(
+        monkeypatch,
+        {
+            "/health": {"status": "ok", "loop_lag_seconds": 0.0},
+            "/openapi.json": {"info": {"version": "0.7.1"}},
+        },
+    )
+
+    assert update_mod.fetch_server_api_version("https://api.example.com") == (
+        "0.7.1",
+        None,
+    )
+    assert dialed == [
+        "https://api.example.com/health",
+        "https://api.example.com/openapi.json",
+    ]
+
+
+def test_a_server_that_answers_neither_reports_why_the_first_failed(monkeypatch):
+    _server(monkeypatch, {})
+
+    version, error = update_mod.fetch_server_api_version("https://api.example.com")
+
+    assert version is None
+    assert error is not None and "404" in error
