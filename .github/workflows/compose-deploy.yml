@@ -4,8 +4,8 @@ name: Compose deployment
 #
 # On releases, not on pull requests. The stack it exercises is built from
 # published images pinned by digest in the release manifest, so before a release
-# exists there is nothing to test — and a per-PR run would pull ~4 GB to tell us
-# something about the *previous* release either way.
+# exists there is nothing to test — and a per-PR run would pull 1.5 GB of images
+# to tell us something about the *previous* release either way.
 #
 # This exists because the thing it guards is exactly the kind that rots quietly.
 # `lemma-backend/nginx.conf` sat in the tree for months describing a compose

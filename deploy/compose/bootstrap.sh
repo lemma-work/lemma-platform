@@ -180,6 +180,51 @@ for key, value in out.items():
 eval "$(printf '%s\n' "$images" | sed 's/^/export /')"
 echo "  release ${LEMMA_VERSION}"
 
+# Caddy and the Docker CLI are upstream images this deployment picks rather than
+# ones Lemma publishes, so they are not in the release manifest and arrive here
+# as moving tags. Resolve them to digests now and pin those.
+#
+# Not cosmetic consistency: `sandbox-images` runs the Docker CLI image with the
+# host Docker socket mounted, so an attacker who can move that tag can drive the
+# daemon and own the machine. A digest cannot be moved.
+pin_to_digest() {
+	reference="$1"
+	case "$reference" in
+	*@sha256:*)
+		printf '%s' "$reference"
+		return 0
+		;;
+	esac
+	# The registry is asked for the digest of the multi-arch index, so one .env
+	# is correct on both amd64 and arm64.
+	digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$reference" 2>/dev/null || true)"
+	if [ -z "$digest" ]; then
+		# No buildx: pull it and read the digest the daemon recorded.
+		docker pull --quiet "$reference" >/dev/null 2>&1 || {
+			printf '%s' "$reference"
+			return 1
+		}
+		printf '%s' "$(docker image inspect --format '{{index .RepoDigests 0}}' "$reference" 2>/dev/null || printf '%s' "$reference")"
+		return 0
+	fi
+	printf '%s@%s' "${reference%%@*}" "$digest"
+}
+
+echo "→ pinning the proxy and Docker CLI images…"
+caddy_image="$(pin_to_digest "${LEMMA_CADDY_IMAGE:-caddy:2-alpine}")" ||
+	echo "  warning: could not resolve a digest for Caddy; leaving the tag"
+docker_cli_image="$(pin_to_digest "${LEMMA_DOCKER_CLI_IMAGE:-docker:29-cli}")" ||
+	echo "  warning: could not resolve a digest for the Docker CLI; leaving the tag"
+case "$docker_cli_image" in
+*@sha256:*) ;;
+*)
+	die "could not resolve a digest for $docker_cli_image, and this one is not
+optional: the sandbox-images service runs it with the host Docker socket
+mounted. Check the machine can reach the registry, or set
+LEMMA_DOCKER_CLI_IMAGE to a digest-pinned reference yourself."
+	;;
+esac
+
 # `production` is refused at startup without a valid release identity, and
 # rightly: a deployment that cannot say which commit it is running cannot be
 # debugged from its own logs. Releases published before the manifest carried the
@@ -247,6 +292,8 @@ export BOOTSTRAP_SECRET_ENCRYPTION_KEY="$secret_encryption_key"
 export BOOTSTRAP_RUNTIME_CREDENTIAL_KEY="$runtime_credential_key"
 export BOOTSTRAP_ENVIRONMENT="$environment"
 export BOOTSTRAP_RELEASE_SHA="$release_sha"
+export BOOTSTRAP_CADDY_IMAGE="$caddy_image"
+export BOOTSTRAP_DOCKER_CLI_IMAGE="$docker_cli_image"
 
 python3 - "$template" "$env_file" <<'PY'
 import os
@@ -279,6 +326,8 @@ values = {
     "WORKSPACE_RUNTIME_CREDENTIAL_KEY": os.environ["BOOTSTRAP_RUNTIME_CREDENTIAL_KEY"],
     "ENVIRONMENT": os.environ["BOOTSTRAP_ENVIRONMENT"],
     "LEMMA_RELEASE_SHA": os.environ["BOOTSTRAP_RELEASE_SHA"],
+    "LEMMA_CADDY_IMAGE": os.environ["BOOTSTRAP_CADDY_IMAGE"],
+    "LEMMA_DOCKER_CLI_IMAGE": os.environ["BOOTSTRAP_DOCKER_CLI_IMAGE"],
 }
 
 lines = []

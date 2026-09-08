@@ -16,6 +16,22 @@
 
 previewsEnabled: false
 
+# The API and the worker must agree on these, and a YAML anchor cannot make them:
+# `generateValue: true` is evaluated per service, so an anchor shared between two
+# services produces two different keys. SECRET_ENCRYPTION_KEY decides whether the
+# worker can read what the API encrypted, and WORKSPACE_RUNTIME_CREDENTIAL_KEY
+# decides whether a sandbox token minted by one is accepted by the other — so two
+# values means a deployment that looks healthy and fails at the first connector
+# credential and the first sandbox. An environment group is generated once and
+# injected into both.
+envVarGroups:
+  - name: lemma-secrets
+    envVars:
+      - key: SECRET_ENCRYPTION_KEY
+        generateValue: true
+      - key: WORKSPACE_RUNTIME_CREDENTIAL_KEY
+        generateValue: true
+
 databases:
   # Two Postgres instances, because Lemma keeps pod data in its own database
   # rather than another schema of the platform one. SuperTokens shares the
@@ -32,6 +48,11 @@ databases:
     plan: basic-256mb
     postgresMajorVersion: "17"
 
+# Pinned to a release, not `latest`: a restart that silently pulls a different
+# image can leave the API, the worker and the migration job on three different
+# builds of Lemma. Bump these together when you upgrade, and check the release
+# notes first. The current releases are listed at
+# https://github.com/lemma-work/lemma-platform/releases
 services:
   - type: keyvalue
     name: lemma-redis
@@ -56,13 +77,14 @@ services:
     runtime: image
     plan: standard
     image:
-      url: ghcr.io/lemma-work/lemma-backend:latest
+      url: ghcr.io/lemma-work/lemma-backend:v0.7.2
     healthCheckPath: /health/ready
     # Migrations before the new instance serves. On compose this is a separate
     # one-shot container so a failure stops the deploy; Render's equivalent is
     # this hook, which fails the deploy the same way.
     preDeployCommand: alembic upgrade head
     envVars: &backend_env
+      - fromGroup: lemma-secrets
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
@@ -75,8 +97,13 @@ services:
         fromDatabase: {name: lemma-datastore, property: connectionString}
       - key: REDIS_URL
         fromService: {type: keyvalue, name: lemma-redis, property: connectionString}
+      # A literal, not `fromService: {property: hostport}` — that yields
+      # `host:port` with no scheme, and it is passed straight to
+      # SupertokensConfig(connection_uri=...), which cannot connect without one.
+      # Render has no string interpolation in this file, so the scheme is written
+      # here. Private services are reachable at their own name on their port.
       - key: SUPERTOKENS_CORE_URL
-        fromService: {type: pserv, name: lemma-supertokens, property: hostport}
+        value: http://lemma-supertokens:3567
       # Sandboxes are rented: there is no Docker socket here to run them on.
       - key: WORKSPACE_PROVIDER
         value: e2b
@@ -86,10 +113,6 @@ services:
       # account and a namespace each destroy the other's live sandboxes.
       - key: E2B_METADATA_NAMESPACE
         sync: false
-      - key: SECRET_ENCRYPTION_KEY
-        generateValue: true
-      - key: WORKSPACE_RUNTIME_CREDENTIAL_KEY
-        generateValue: true
       # Set these to your Render URLs after the first deploy — Render assigns
       # the hostnames, and Lemma never infers its own.
       - key: API_URL
@@ -119,7 +142,7 @@ services:
     runtime: image
     plan: standard
     image:
-      url: ghcr.io/lemma-work/lemma-backend:latest
+      url: ghcr.io/lemma-work/lemma-backend:v0.7.2
     dockerCommand: python -m app.worker
     envVars: *backend_env
 
@@ -128,7 +151,7 @@ services:
     runtime: image
     plan: starter
     image:
-      url: ghcr.io/lemma-work/lemma-frontend:latest
+      url: ghcr.io/lemma-work/lemma-frontend:v0.7.2
     envVars:
       - key: NEXT_PUBLIC_API_URL
         sync: false

@@ -11,9 +11,9 @@ Everything below lives in [`deploy/compose/`](../deploy/compose).
 
 ## What you need
 
-- A Linux machine with **4 vCPU and 8 GB of RAM**, and 40 GB of disk. Agent
-  sandboxes are containers on this same machine, and the workspace image alone
-  is 2.5 GB.
+- A Linux machine with **4 vCPU and 8 GB of RAM**, and 40 GB of disk. Images
+  and volumes are about 6.6 GB of that before you store anything; the rest is
+  headroom for your data and for the sandbox containers agents run in.
 - **Docker Engine 25+ with the Compose v2 plugin.** Not Docker Desktop — this
   is a server.
 - `curl` and `python3`, which every mainstream server image already has.
@@ -43,7 +43,10 @@ Open `.env`, set a model provider key, then:
 docker compose up -d
 ```
 
-First start pulls about 4 GB and runs the database migrations. When
+First start downloads about 1.5 GB of compressed images, which unpack to
+roughly 6 GB on disk, and runs the database migrations. The agent workspace
+image is 2.5 GB of that on its own — it carries Chromium, Node, Python, and the
+Lemma SDKs, because that is the machine your agents get. When
 `docker compose ps` shows `api` healthy, open the URL `bootstrap.sh` printed
 and create the first account.
 
@@ -226,8 +229,20 @@ Uploaded files and objects live in the `lemma_object_storage` and
 `lemma_file_storage` volumes when `STORAGE_BACKEND=local`. Back those up too, or
 move object storage to S3/GCS/Azure and let it handle durability.
 
-Restore into an empty stack: bring up `db` alone, `psql -U postgres -f dump`,
-restore `.env`, then `docker compose up -d`.
+Restore into an empty stack. `.env` goes back first — Compose needs
+`LEMMA_POSTGRES_IMAGE` and `POSTGRES_PASSWORD` before it can start anything, and
+the dump is encrypted against the key in it:
+
+```bash
+cp lemma-env-<date>.backup .env
+docker compose up -d db
+gunzip -c lemma-<date>.sql.gz | docker compose exec -T db psql -U postgres -d postgres
+docker compose up -d
+```
+
+`pg_dumpall` output carries its own `\connect` lines, so this restores all three
+databases. Nothing needs `psql` on the host — it runs inside the container that
+already has it.
 
 ## Upgrades
 

@@ -18,6 +18,11 @@
 # It serves on https://<public-ip>.sslip.io with a certificate from Caddy's own
 # authority, so the first visit warns. To use a real domain, follow
 # docs/self-hosting.md once this finishes.
+#
+# It installs the latest published release — repository and images from the same
+# tag. Set LEMMA_VERSION to pick a different one. The tag is trusted because
+# GitHub serves it over TLS; this does not verify a signature, so treat it as
+# the same trust decision as `curl | sh` for Docker above.
 
 package_update: true
 packages:
@@ -43,13 +48,27 @@ write_files:
       fi
       systemctl enable --now docker
 
-      echo "--- fetching lemma"
+      # Pin to a release, not to whatever the default branch says today.
+      #
+      # Two reasons. The scripts below run as root, so "the tip of main" is a
+      # moving target being executed with full privilege on a fresh machine.
+      # And bootstrap.sh installs *released* images either way — cloning main
+      # would pair a compose file from one commit with images from another,
+      # which is the kind of mismatch that only shows up once something breaks.
+      # Set LEMMA_VERSION in the environment to install a specific release.
+      version="${LEMMA_VERSION:-}"
+      if [ -z "$version" ]; then
+        version="$(curl -fsSL https://api.github.com/repos/lemma-work/lemma-platform/releases/latest \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+      fi
+      echo "--- fetching lemma $version"
       rm -rf /opt/lemma
-      git clone --depth 1 https://github.com/lemma-work/lemma-platform.git /opt/lemma
+      git clone --depth 1 --branch "$version" \
+        https://github.com/lemma-work/lemma-platform.git /opt/lemma
 
       cd /opt/lemma/deploy/compose
       echo "--- bootstrapping"
-      ./bootstrap.sh
+      ./bootstrap.sh --version "${version#v}"
 
       echo "--- starting"
       docker compose up -d

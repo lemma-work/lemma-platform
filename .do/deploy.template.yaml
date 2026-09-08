@@ -20,29 +20,40 @@ spec:
     - buildpack-stack=ubuntu-22
 
   databases:
-    # Two, because Lemma keeps pod data in its own database rather than another
-    # schema of the platform one. SuperTokens shares the first, in its own
-    # schema.
+    # Two Postgres, because Lemma keeps pod data in its own database rather than
+    # another schema of the platform one. SuperTokens shares the first, in its
+    # own schema.
+    #
+    # Deliberately without `production: true`. App Platform requires a
+    # `cluster_name` naming an existing managed cluster alongside it, which a
+    # one-click template cannot know — so `production: true` here fails
+    # validation for everyone who has not already created three clusters. These
+    # are development databases: fine for trying Lemma, not fine for keeping a
+    # team's data in. Before you rely on this deployment, create managed
+    # clusters and add `production: true` with the matching `cluster_name` to
+    # each entry.
     - name: lemma-db
       engine: PG
       version: "17"
-      production: true
     - name: lemma-datastore
       engine: PG
       version: "17"
-      production: true
     - name: lemma-redis
       engine: REDIS
       version: "7"
-      production: true
 
+  # Pinned to a release rather than `latest`. The api, the worker and the
+  # pre-deploy migration job all run the backend image; with a moving tag a
+  # restart can land them on three different builds, with the migrations coming
+  # from a fourth. Bump them together. Releases:
+  # https://github.com/lemma-work/lemma-platform/releases
   services:
     - name: api
       image:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: latest
+        tag: v0.7.2
       http_port: 8000
       instance_size_slug: professional-xs
       instance_count: 1
@@ -99,7 +110,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-frontend
-        tag: latest
+        tag: v0.7.2
       http_port: 8080
       instance_size_slug: basic-xs
       instance_count: 1
@@ -117,7 +128,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: latest
+        tag: v0.7.2
       run_command: python -m app.worker
       instance_size_slug: professional-xs
       instance_count: 1
@@ -133,7 +144,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: latest
+        tag: v0.7.2
       run_command: alembic upgrade head
       instance_size_slug: basic-xs
       instance_count: 1
