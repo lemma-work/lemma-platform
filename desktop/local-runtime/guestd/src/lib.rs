@@ -5648,6 +5648,47 @@ mod tests {
         assert_eq!(first_reachable_address(""), None);
     }
 
+    /// Every wsl.exe call ended in an fstab error, in the one log Windows has.
+    ///
+    /// WSL reads `/etc/fstab` on every start, and its first line is a virtiofs
+    /// share only the VZ guest has. It cannot mount there, so WSL appended
+    /// "Processing /etc/fstab with mount -a failed." to the output of every
+    /// single invocation -- including into `logs/wsl.log`, which is one of the
+    /// only diagnostics a Windows installation produces.
+    ///
+    /// Measured on the machine before deciding what to do about it: `mount -a`
+    /// exits 32 and carries on, so `/tmp` was still the expected tmpfs and
+    /// nothing was actually broken. Which is why the fix is to stop WSL
+    /// reading a file written for another hypervisor, and to mount the one
+    /// entry that does apply from the WSL entry point -- not to change what
+    /// the VZ guest does, where the file is correct.
+    #[test]
+    fn wsl_does_not_read_an_fstab_written_for_the_vz_guest() {
+        let conf = include_str!("../../guest-image/rootfs-overlay/etc/wsl.conf");
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+        let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
+
+        assert!(
+            conf.lines()
+                .any(|line| line.split_whitespace().collect::<String>() == "mountFsTab=false"),
+            "WSL must not process an fstab whose first entry it can never mount: {conf}"
+        );
+        // The entry that does apply on WSL, moved to where WSL will run it.
+        assert!(
+            init.contains("mount -t tmpfs") && init.contains("/tmp"),
+            "with fstab unread, the guest's own entry point owns /tmp"
+        );
+        for option in ["nosuid", "nodev", "noexec", "size=512m"] {
+            assert!(
+                init.contains(option),
+                "/tmp keeps the properties fstab gave it, including {option}"
+            );
+        }
+        // Unchanged, because on the VZ guest it is right.
+        assert!(fstab.contains("virtiofs") && fstab.contains("tmpfs /tmp tmpfs"));
+    }
+
     /// A missing data disk must stop the guest, not be waved through.
     ///
     /// `ConditionPathExists=/dev/nvme0n1` reads like a safety check and is the
