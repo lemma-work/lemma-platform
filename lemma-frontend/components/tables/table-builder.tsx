@@ -124,7 +124,7 @@ export function TableBuilder({ podId, onClose, onSuccess }: TableBuilderProps) {
                 items: (response.items || []).map((item) => {
                     const raw = item as unknown as Record<string, unknown>;
                     return {
-                        name: String(raw.name || raw.name || ''),
+                        name: String(raw.name || ''),
                         primary_key_column: String(raw.primary_key_column || 'id'),
                         columns: Array.isArray(raw.columns) ? raw.columns : [],
                     } as Table;
@@ -139,7 +139,7 @@ export function TableBuilder({ podId, onClose, onSuccess }: TableBuilderProps) {
             getLemmaClient(podId).tables.create(data as unknown as never) as Promise<{ name?: string }>,
         onSuccess: (createdTable) => {
             queryClient.invalidateQueries({ queryKey: ['tables', podId] });
-            onSuccess(createdTable?.name || createdTable?.name || tableName);
+            onSuccess(createdTable?.name || tableName);
             onClose();
         },
     });

@@ -240,6 +240,7 @@ class ScheduleFilterTaskQueue(ABC):
     @abstractmethod
     async def enqueue(
         self,
+        *,
         schedule_id: UUID,
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
