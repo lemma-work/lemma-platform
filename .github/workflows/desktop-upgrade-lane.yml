@@ -9,6 +9,13 @@ name: Desktop upgrade lane
 # installs anything, and none of them runs the updater. So the first person to
 # perform a Lemma upgrade is a user, every time.
 #
+# Its logic has been run end to end against two real DMGs on an Apple Silicon
+# Mac, which is how the two bugs in it were found: `hdiutil`'s last output column
+# is the volume *name*, so parsing the mount point out of it lost everything
+# after the first space, and a run that fails after attaching leaves the image
+# mounted so the next attach reports "Resource busy". It has not yet run on a
+# GitHub runner.
+#
 # Deliberately `workflow_dispatch` only, and deliberately not wired into the
 # release path. A lane that has never run cannot be trusted to gate a release —
 # it would be as likely to block a good one as to catch a bad one. Run it by
@@ -56,7 +63,18 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL "${FROM_URL}" -o before.dmg
-          mount="$(hdiutil attach before.dmg -nobrowse -readonly | tail -1 | awk '{print $NF}')"
+          # `-mountpoint`, rather than parsing `hdiutil`'s output. Its last
+          # column is the volume name, and Lemma's contains spaces -- so
+          # `awk '{print $NF}'` yields the last *word* of the path and every
+          # step after it looks for a directory that does not exist.
+          mount="${RUNNER_TEMP}/before-mount"
+          mkdir -p "${mount}"
+          # `-force` on the way in as well: a run that failed after attaching
+          # leaves the image mounted, and the next attach then fails with
+          # "Resource busy" -- which reads as a broken DMG rather than as
+          # leftovers from the run before.
+          hdiutil detach "${mount}" -force -quiet 2>/dev/null || true
+          hdiutil attach before.dmg -nobrowse -readonly -mountpoint "${mount}" >/dev/null
           app="$(find "${mount}" -maxdepth 1 -name '*.app' | head -1)"
           test -n "${app}" || { echo "::error::no .app in ${FROM_URL}"; exit 1; }
           cp -R "${app}" /Applications/
@@ -85,8 +103,12 @@ jobs:
           # unpacking over the top: replacing an app bundle by hand does not
           # exercise anything the updater does.
           curl -fsSL "${TO_URL}" -o after.dmg
-          mount="$(hdiutil attach after.dmg -nobrowse -readonly | tail -1 | awk '{print $NF}')"
+          mount="${RUNNER_TEMP}/after-mount"
+          mkdir -p "${mount}"
+          hdiutil detach "${mount}" -force -quiet 2>/dev/null || true
+          hdiutil attach after.dmg -nobrowse -readonly -mountpoint "${mount}" >/dev/null
           app="$(find "${mount}" -maxdepth 1 -name '*.app' | head -1)"
+          test -n "${app}" || { echo "::error::no .app in ${TO_URL}"; exit 1; }
           rm -rf "${APP}"
           cp -R "${app}" /Applications/
           hdiutil detach "${mount}" -quiet
@@ -131,7 +153,10 @@ jobs:
           done
           # A mount left behind fails the *next* run on a reused runner, which
           # is a confusing way to learn about this one.
-          for mount in /Volumes/Lemma*; do
-            [ -d "${mount}" ] && hdiutil detach "${mount}" -quiet || true
+          for mount in "${RUNNER_TEMP}/before-mount" "${RUNNER_TEMP}/after-mount"; do
+            [ -d "${mount}" ] || continue
+            hdiutil detach "${mount}" -quiet 2>/dev/null \
+              || hdiutil detach "${mount}" -force -quiet 2>/dev/null \
+              || echo "::warning::${mount} is still attached"
           done
           true
