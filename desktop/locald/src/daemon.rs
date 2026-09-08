@@ -2811,8 +2811,130 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 
 #[cfg(test)]
 mod tests {
-    use super::SUBSCRIBER_BACKLOG;
+    use super::{Daemon, SUBSCRIBER_BACKLOG};
+    use crate::paths::LocalPaths;
+    use serde_json::{json, Value};
     use std::sync::mpsc;
+
+    /// A daemon over a throwaway root, with no host stack behind it.
+    ///
+    /// `host_processes`, `managed_runtime` and `sharing` are all `Option`, so
+    /// the arms that are pure protocol -- authentication, unknown commands, the
+    /// stopping gate, the shapes of acks and errors -- can be driven without a
+    /// VM, a backend or a tunnel. Those arms had no test at all.
+    fn daemon() -> (tempfile::TempDir, std::sync::Arc<Daemon>) {
+        let root = tempfile::tempdir().unwrap();
+        let daemon = Daemon::new(LocalPaths::new(root.path().join("locald")))
+            .expect("a daemon over an empty root");
+        (root, daemon)
+    }
+
+    /// Drive one command and collect everything the daemon said back.
+    fn exchange(daemon: &std::sync::Arc<Daemon>, request: Value) -> Vec<Value> {
+        let (sender, receiver) = mpsc::sync_channel::<String>(SUBSCRIBER_BACKLOG);
+        daemon.dispatch(request, &sender);
+        drop(sender);
+        receiver
+            .into_iter()
+            .map(|line| serde_json::from_str(&line).expect("every reply is JSON"))
+            .collect()
+    }
+
+    #[test]
+    fn an_unknown_command_is_refused_by_name_rather_than_ignored() {
+        let (_root, daemon) = daemon();
+        let replies = exchange(&daemon, json!({"cmd": "not-a-command", "id": "abc"}));
+        assert!(!replies.is_empty(), "a client must never be left waiting");
+        let reply = &replies[replies.len() - 1];
+        assert_eq!(reply["id"], "abc", "the answer must carry the request id");
+        assert_eq!(reply["event"], "error");
+    }
+
+    /// A daemon that is stopping refuses new work, but must keep answering the
+    /// questions a client asks *because* it is stopping.
+    ///
+    /// Six commands are exempt on purpose -- an app watching a shutdown needs
+    /// status and snapshots, and needs to be able to disconnect. Getting that
+    /// list wrong in either direction is bad: too narrow and the app goes blind
+    /// mid-quit, too wide and a start races the cleanup draining it.
+    #[test]
+    fn a_stopping_daemon_refuses_new_work_and_still_answers_observation() {
+        let (_root, daemon) = daemon();
+        assert!(daemon.lifecycle.request_shutdown());
+
+        let refused = exchange(&daemon, json!({"cmd": "start", "id": "s1"}));
+        let last = refused.last().expect("a refusal is still an answer");
+        assert_eq!(last["event"], "error");
+        assert_eq!(last["code"], "stopping");
+        assert_eq!(last["id"], "s1");
+
+        for observation in ["ping", "status", "control.snapshot", "agent-host.status"] {
+            let replies = exchange(&daemon, json!({"cmd": observation, "id": observation}));
+            let last = replies
+                .last()
+                .unwrap_or_else(|| panic!("{observation} must answer while stopping"));
+            assert_ne!(
+                last["code"], "stopping",
+                "{observation} is what a client watching a shutdown depends on"
+            );
+        }
+    }
+
+    /// Every reply carries back the id it was asked with.
+    ///
+    /// The app matches answers to requests by id; one arm returning an
+    /// unlabelled reply leaves that request outstanding for ever, which is a
+    /// spinner that never resolves rather than an error anybody can see.
+    #[test]
+    fn every_answer_carries_the_id_it_was_asked_with() {
+        let (_root, daemon) = daemon();
+        for command in [
+            "ping",
+            "status",
+            "control.snapshot",
+            "agent-host.status",
+            "sharing.snapshot",
+            "config.models",
+            "not-a-command",
+        ] {
+            let replies = exchange(&daemon, json!({"cmd": command, "id": "carried"}));
+            let last = replies
+                .last()
+                .unwrap_or_else(|| panic!("{command} answered nothing at all"));
+            assert_eq!(
+                last["id"], "carried",
+                "{command} lost the id, so the app waits for ever: {last}"
+            );
+        }
+    }
+
+    /// A command with no id at all must still be answered rather than dropped.
+    #[test]
+    fn a_request_without_an_id_is_still_answered() {
+        let (_root, daemon) = daemon();
+        let replies = exchange(&daemon, json!({"cmd": "ping"}));
+        assert!(
+            !replies.is_empty(),
+            "a missing id is not a reason to say nothing"
+        );
+    }
+
+    /// Commands that need a host stack must say so, not panic or hang.
+    ///
+    /// This daemon has no `sharing` and no `host_processes`, which is the shape
+    /// of a fresh install and of a Cloud-mode machine. Every one of these arms
+    /// reaches for a collaborator that is `None`.
+    #[test]
+    fn commands_that_need_a_stack_that_is_not_there_answer_rather_than_hang() {
+        let (_root, daemon) = daemon();
+        for command in ["sharing.snapshot", "sharing.preflight"] {
+            let replies = exchange(&daemon, json!({"cmd": command, "id": command}));
+            assert!(
+                !replies.is_empty(),
+                "{command} must answer even with no sharing controller"
+            );
+        }
+    }
 
     /// A client that holds its socket open and stops reading must not be
     /// carried for ever.
