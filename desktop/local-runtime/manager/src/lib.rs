@@ -148,6 +148,16 @@ fn guest_request_budget(operation: &str) -> Duration {
     match operation {
         "system.shutdown" => Duration::from_secs(8),
         "health" | "core.sandbox_images_status" => Duration::from_secs(5),
+        // Pulling images is the one operation whose length is set by the
+        // user's connection rather than by the guest. A first install fetches
+        // roughly a gigabyte, and eight minutes is a limit on a slow download
+        // rather than on a stuck one -- on a real Windows machine it failed
+        // every attempt while making progress on every attempt.
+        //
+        // Longer than the guest's own `ENGINE_PULL_TIMEOUT`, deliberately. If
+        // this expired first the guest would keep pulling into a request
+        // nobody is waiting on, and the next attempt would contend with it.
+        "core.images" | "core.sandbox_images" => Duration::from_secs(75 * 60),
         _ => Duration::from_secs(8 * 60),
     }
 }
@@ -2096,6 +2106,36 @@ mod tests {
         assert!(
             GUEST_DIAGNOSTICS.contains("set +e"),
             "a collector that fails halfway is still worth what it printed first"
+        );
+    }
+
+    /// A first install downloads about a gigabyte, and that is the user's
+    /// connection's business, not the guest's.
+    ///
+    /// Eight minutes bounded a slow download rather than a stuck one. On a
+    /// real Windows machine the image phase failed on every attempt while
+    /// making progress on every attempt -- 317 MB in the content store after
+    /// ten minutes, no image completed, and no way for it ever to finish.
+    ///
+    /// Larger than the guest's own pull timeout on purpose. If the host gave
+    /// up first the guest would keep pulling into a request nobody is waiting
+    /// on, and the retry would contend with it.
+    #[test]
+    fn pulling_images_is_given_longer_than_the_guest_spends_pulling_them() {
+        // `ENGINE_PULL_TIMEOUT` in the guest daemon; a different crate, so the
+        // number is named rather than imported.
+        let guest_pull_timeout = Duration::from_secs(60 * 60);
+        for operation in ["core.images", "core.sandbox_images"] {
+            assert!(
+                guest_request_budget(operation) > guest_pull_timeout,
+                "{operation} must outlast the guest's own pull"
+            );
+        }
+        // And nothing else grew: a wedged health probe still fails fast.
+        assert_eq!(guest_request_budget("health"), Duration::from_secs(5));
+        assert_eq!(
+            guest_request_budget("core.postgres"),
+            Duration::from_secs(8 * 60)
         );
     }
 

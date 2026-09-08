@@ -36,7 +36,23 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CONTAINER_PREFIX: &str = "lemma-sandbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
-const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long one image pull may take before it is treated as wedged.
+///
+/// Five minutes was not a limit on a hung pull, it was a limit on a slow one.
+/// A first install pulls roughly a gigabyte of PostgreSQL, Redis and
+/// SuperTokens, and on a connection that manages half a megabyte a second that
+/// is half an hour. Measured on a real Windows machine: two attempts, ten
+/// minutes, 317 MB in the content store and not one image completed --
+/// progress every time, and failure every time, for ever.
+///
+/// An hour is still a bound: a pull that is genuinely stuck ends, and one
+/// that is merely slow finishes. Measured on that machine, the rate had
+/// dropped to about a third of a megabyte a second -- a gigabyte at that rate
+/// is fifty minutes. The nested budget on the host side has to
+/// be larger than this or it gives up first, which is a worse failure because
+/// the guest carries on pulling into a request nobody is waiting on any more --
+/// see `guest_request_budget` in the runtime manager.
+const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
 
 /// How long one `sandbox.ensure` may wait for a sandbox to start serving.
@@ -442,8 +458,14 @@ fn run_bounded_engine_command(
                 libc::kill(process_group, libc::SIGKILL);
             }
             let _ = child.wait();
+            // Naming the verb, because "engine command" is true of pulling a
+            // gigabyte of images and of listing containers, and those are not
+            // the same problem to the person reading it.
+            let verb = arguments.first().map_or("command", String::as_str);
             return Err(format!(
-                "managed container engine command timed out after {}s",
+                "managed container engine `{verb}` timed out after {}s. \
+                 If this was a first install, it was downloading images, and \
+                 the download is bounded by this computer's connection.",
                 timeout.as_secs()
             ));
         }
