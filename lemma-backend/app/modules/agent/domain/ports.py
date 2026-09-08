@@ -364,3 +364,16 @@ class ConversationRepository(Protocol):
     ) -> list[Message]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...
+
+
+class AgentScheduleTeardownPort(Protocol):
+    """What agent deletion needs from the schedule module, stated locally.
+
+    Deleting an agent must take the schedules pointing at it, in the same
+    request. `PS-SCHED-030` asks for the dangling target to be prevented rather
+    than reported: a schedule left pointing at an agent that no longer exists
+    fires on a timer forever, and when it does nothing there is nobody who can
+    see why. The workflow half is `WorkflowScheduleTeardownPort`.
+    """
+
+    async def remove_all_for_agent(self, agent_id: UUID) -> int: ...

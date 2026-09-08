@@ -96,8 +96,10 @@ put it there having to think about it on every operation.
   sort by column, and page through the result.
 - The system shall return a stable page boundary, so that paging through an
   unchanging table returns every record exactly once.
-- The system shall bound the size of any single page, so that a table with many
-  records cannot be pulled in one request by accident.
+- The system shall publish a maximum page size and refuse a request for more,
+  rather than quietly returning fewer, so that a table with many records cannot
+  be pulled in one request by accident and a caller is never left reading a
+  bounded page as the whole table.
 
 **Contracts:** `record.list`, `record.get`
 

@@ -506,31 +506,13 @@ class ScheduleService:
     async def delete_all_for_pod(self, pod_id: UUID) -> int:
         """Delete every schedule in a pod with full teardown (cleanup-only).
 
-        System-level: no RBAC filtering, includes internal schedules.
-        Best-effort in one specific respect: an *external* teardown failure
-        (APScheduler/Composio) does not abort the rest, and the row is
-        force-deleted anyway so the schedule can no longer fire. A database
-        failure is not best-effort and propagates -- swallowing it left the
-        session rollback-pending and the caller's commit failing later with an
-        error naming none of this, under a pod reported cleaned up.
+        The three bulk cleanups live in `schedule_cleanup`: this file is over
+        the size the architecture ratchet allows, so the family moved out
+        together rather than growing it. The published name stays here.
         """
-        schedules = await self.schedule_repository.list_all_by_pod(pod_id)
-        deleted = 0
-        for schedule in schedules:
-            try:
-                if await self.delete_schedule(schedule.id):
-                    deleted += 1
-            except ScheduleInfrastructureError:
-                # ``delete_schedule`` wraps every external failure in this, so
-                # this arm is the external teardown and nothing else.
-                logger.debug(
-                    "schedule.cleanup.primary_failed",
-                    pod_id=pod_id,
-                    exc_info=True,
-                )
-                if await self.schedule_repository.delete(schedule.id):
-                    deleted += 1
-        return deleted
+        from app.modules.schedule.services.schedule_cleanup import delete_all_for_pod
+
+        return await delete_all_for_pod(self, pod_id)
 
     async def list_schedules(
         self,

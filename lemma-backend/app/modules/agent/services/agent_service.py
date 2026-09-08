@@ -29,7 +29,10 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     JsonObject,
 )
-from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.ports import (
+    AgentRepository,
+    AgentScheduleTeardownPort,
+)
 
 #: What `create_agent` does besides making the row. Both default to the real
 #: thing; both are here so a test can watch one without patching this module.
@@ -74,6 +77,7 @@ class AgentService:
         authorization_service: object,
         memory_grant_deriver: MemoryGrantDeriver | None = None,
         email_surface_provisioner: EmailSurfaceProvisioner | None = None,
+        schedule_teardown: AgentScheduleTeardownPort | None = None,
     ):
         self.uow = uow
         self.agent_repository = agent_repository
@@ -84,6 +88,7 @@ class AgentService:
         # double in front of half of this service's own behaviour.
         self._derive_memory_grant_for = memory_grant_deriver
         self._provision_email_surface = email_surface_provisioner
+        self._schedule_teardown = schedule_teardown
 
     async def _require_action(
         self,
@@ -367,6 +372,13 @@ class AgentService:
         )
 
         await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
+        # Also before the row goes, and for the same shape of reason: a
+        # schedule is found by `agent_id`, and one left pointing at a deleted
+        # agent fires on a timer forever with nobody able to see why it did
+        # nothing. PS-SCHED-030 asks for that state to be prevented rather than
+        # reported. The workflow half of it lives in `WorkflowService.delete`.
+        if self._schedule_teardown:
+            await self._schedule_teardown.remove_all_for_agent(agent.id)
         await self.agent_repository.delete(agent.id)
         # Revoke any in-flight delegated token minted for this agent so it stops
         # working immediately rather than lingering until the token expires.

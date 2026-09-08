@@ -272,3 +272,21 @@ class SchedulePort(ABC):
         pod_id: UUID,
         user_id: UUID,
     ) -> UUID: ...
+
+
+class WorkflowScheduleTeardownPort(Protocol):
+    """What workflow deletion needs from the schedule module, stated locally.
+
+    Deleting a workflow must take the schedules pointing at it, in the same
+    request. PS-SCHED-030 asks for the dangling target to be prevented rather
+    than reported: a schedule left pointing at a workflow that no longer exists
+    fires on a timer forever, and when it does nothing there is nobody who can
+    see why.
+
+    Removal rather than the disarm `PodScheduleTeardownPort` asks for, and
+    inline rather than on an event. A pod holds an unbounded number of webhook
+    schedules whose teardown is a Composio round trip each, which is why that
+    one defers; a workflow holds the handful its author pointed at it.
+    """
+
+    async def remove_all_for_workflow(self, workflow_id: UUID) -> int: ...

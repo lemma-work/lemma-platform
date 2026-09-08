@@ -11,6 +11,7 @@ from app.core.authorization.context import (
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.icon.contracts import IconCleanupPort
+from app.modules.workflow.domain.ports import WorkflowScheduleTeardownPort
 from app.modules.workflow.domain.workflow import (
     WorkflowEntity,
     WorkflowSummaryEntity,
@@ -37,11 +38,13 @@ class WorkflowService:
         _schedule_adapter: object | None = None,
         authorization_service: object | None = None,
         icon_service: IconCleanupPort | None = None,
+        schedule_teardown: WorkflowScheduleTeardownPort | None = None,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
         self.authorization_service = authorization_service
         self.icon_service = icon_service
+        self.schedule_teardown = schedule_teardown
 
     async def _require_action(
         self,
@@ -299,6 +302,13 @@ class WorkflowService:
                 flow_id=flow.id,
                 ctx=ctx,
             )
+        # Before the row goes, not after: the schedules are found by
+        # `workflow_id`, and a workflow deleted first is a workflow whose
+        # schedules can still be created against it by a request racing this
+        # one. Prevention is what PS-SCHED-030 asks for -- a schedule outliving
+        # its target fires on a timer forever and explains nothing.
+        if self.schedule_teardown and flow is not None:
+            await self.schedule_teardown.remove_all_for_workflow(flow.id)
         await self.flow_repo.delete(flow_id)
         if self.icon_service:
             await self.icon_service.delete_by_url(old_icon_url)
