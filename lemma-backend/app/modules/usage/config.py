@@ -10,6 +10,8 @@ Env var names are unchanged by the move: no settings class here sets
 on whichever class holds it.
 """
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,6 +55,30 @@ class UsageSettings(BaseSettings):
     usage_user_monthly_limit_usd: float | None = Field(
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
+    )
+    usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(
+        default="allow",
+        description=(
+            "What to do when a monetary limit applies but this deployment has "
+            "no enforceable price for the model. `allow` runs the request and "
+            "meters it, priced with whatever rate the catalog holds, so the "
+            "limit still binds approximately. `refuse` rejects it, which "
+            "a deployment billing somebody else for the usage should set, "
+            "because a limit it cannot measure is not a limit. This "
+            "covers the rate card only -- a request whose *shape* has no price "
+            "(a priority tier, `extra_body`, 1h cache writes) asks the provider "
+            "for billable work the adapter never sees, and is refused whatever "
+            "this is set to. "
+            "The default is `allow` because refusing is almost always the "
+            "wrong answer for the deployment that hits this: a model served "
+            "through an OpenAI-compatible gateway is never enforceable -- the "
+            "catalog resolves the vendor's list price, not what the gateway "
+            "charges -- so `refuse` turned a spend cap into a total outage for "
+            "anyone self-hosting behind vLLM, LiteLLM, OpenRouter or a proxy. "
+            "Either way the deployment is told at startup which models cannot "
+            "back a limit; state prices in LEMMA_SYSTEM_MODEL_METADATA_JSON to "
+            "make the limit bind again."
+        ),
     )
 
 

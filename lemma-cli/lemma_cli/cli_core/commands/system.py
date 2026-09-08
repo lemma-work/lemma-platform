@@ -679,7 +679,7 @@ def server_init(
 
 
 def _fetch_server_api_version(state) -> tuple[str | None, str | None]:  # type: ignore[no-untyped-def]
-    """Return (server_api_version, error). Reads info.version from /openapi.json.
+    """Return (server_api_version, error). Reads `api_version` from `/health`.
 
     The fetch itself lives in ``cli_core/update.py`` because the background
     update check needs the same number and must not depend on a ``CliState``.
