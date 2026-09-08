@@ -1076,9 +1076,10 @@ desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \
 		rustup target add x86_64-pc-windows-msvc)
-	@echo "→ Windows compile check (locald, runtime manager, tests included)…"
+	@echo "→ Windows compile check (locald, runtime manager, bridge, process)…"
 	@cd $(DESKTOP_DIR) && cargo clippy \
 		-p lemma-locald -p lemma-runtime-manager \
+		-p lemma-runtime -p lemma-desktop-process \
 		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
 	@echo "  ✓ the Windows code paths compile and lint"
 
