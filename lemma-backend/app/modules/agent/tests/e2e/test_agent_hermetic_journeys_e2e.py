@@ -3249,7 +3249,7 @@ async def _seed_connector_with_operation(db_session) -> None:
             id="e2e-mail",
             title="E2E Mail",
             description="A connector for the agent-run journey.",
-            kinds=[{"kind": "package", "auth_scheme": "NOAUTH"}],
+            kinds=[{"kind": "http", "auth_scheme": "NOAUTH"}],
             is_active=True,
         )
     )

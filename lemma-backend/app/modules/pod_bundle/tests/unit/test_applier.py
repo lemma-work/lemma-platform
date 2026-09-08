@@ -1037,7 +1037,7 @@ class _FakeConnectorService:
     """Stand-in for the connectors service the applier consults to confirm a
     supplied account matches the connector the bundle declared."""
 
-    def __init__(self, account, kind: str = "package"):
+    def __init__(self, account, kind: str = "http"):
         from types import SimpleNamespace
 
         self.account_repository = SimpleNamespace(get=self._get_account)
@@ -1085,7 +1085,7 @@ async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkey
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1118,7 +1118,7 @@ async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypat
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1145,7 +1145,7 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1179,7 +1179,7 @@ async def test_surface_apply_rejects_an_account_of_the_wrong_kind(
             "platform": "SLACK",
             "account_id": "${slack_account}",
             "connector_id": "slack",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )

@@ -65,7 +65,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_request_approval,
     script_text,
 )
-from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
@@ -895,7 +895,7 @@ async def test_request_approval_on_resend_completes_in_the_one_reply(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,
@@ -961,7 +961,7 @@ async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_threa
         connector_id="resend",
         credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     agent, surface = await _create_agent_surface(
         authenticated_client,

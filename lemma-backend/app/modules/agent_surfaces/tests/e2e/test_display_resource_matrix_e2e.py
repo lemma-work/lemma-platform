@@ -80,7 +80,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_display_resource,
     script_text,
 )
-from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
@@ -765,7 +765,7 @@ async def test_a_file_shown_on_email_is_attached_to_the_one_reply(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,

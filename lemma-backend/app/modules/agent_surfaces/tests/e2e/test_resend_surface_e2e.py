@@ -55,7 +55,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_text,
 )
-from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
@@ -167,7 +167,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,
@@ -261,7 +261,7 @@ async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,

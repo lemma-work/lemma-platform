@@ -43,7 +43,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_say,
     script_text,
 )
-from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
@@ -346,7 +346,7 @@ async def test_two_widgets_on_email_are_refused_and_the_turn_still_replies(
             "api_base_url": fake_resend.api_base,
         },
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     _agent, surface = await _create_agent_surface(
         authenticated_client,

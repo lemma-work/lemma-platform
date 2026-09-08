@@ -399,7 +399,7 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
         script_text,
         process_ingress_and_run_scripted,
     )
-    from app.modules.connectors.domain.connector import ConnectorKind
+    from app.modules.connectors.domain.connector import AuthProvider
 
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
@@ -408,7 +408,7 @@ async def test_a_notification_cold_opens_an_email_thread_the_reply_can_find(
         connector_id="resend",
         credentials={"api_key": "resend-token", "api_base_url": fake_resend.api_base},
         email="assistant@resend.test",
-        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA,
     )
     surface = await _create_surface(
         authenticated_client,

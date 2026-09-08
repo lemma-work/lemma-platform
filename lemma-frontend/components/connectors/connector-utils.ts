@@ -75,6 +75,14 @@ export const getConfigSchema = (capability: ConnectorKindSpec | null): JsonSchem
     return isRecord(schema) ? (schema as JsonSchemaLike) : null;
 };
 
+/** Whether an install of this kind has anything for the org to fill in. */
+export const declaresInstallConfigFields = (
+    capability: ConnectorKindSpec | null,
+): boolean => {
+    const properties = getConfigSchema(capability)?.properties;
+    return isRecord(properties) && Object.keys(properties).length > 0;
+};
+
 export const usesDirectCredentials = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
     if (capability.auth_scheme === 'API_KEY' || capability.auth_scheme === 'NOAUTH') return true;
@@ -139,14 +147,16 @@ export const isTenantConfigured = (capability: ConnectorKindSpec | null): boolea
     if (!capability) return false;
     const kind = String(capability.kind);
     if (!TENANT_CONFIGURED_KINDS.has(kind)) return false;
-    // Neither of these has an address to ask for. `http` became the one native
-    // kind when the vendored connector clients were removed, so it now covers
-    // first-party OAuth (GitHub, Slack, Gmail) and the credential-managed
-    // surface bots (WhatsApp, Telegram, Resend) as well as "point Lemma at a
-    // spec". Treating those as tenant-configured opens the "add a connection"
-    // form and asks for a host that does not exist.
     if (isOAuthOverHttp(kind, capability)) return false;
-    return !usesDirectCredentials(capability);
+    // The kind narrowed this down; the install config schema settles it. `http`
+    // became the one native kind when the vendored connector clients were
+    // removed, so it now also covers the credential-managed surface bots
+    // (WhatsApp, Telegram, Resend) — API-key connectors with a bot token and no
+    // address at all. The backend hands every non-OAuth connector that declares
+    // no schema an empty one, so "has fields to fill in" is the same question
+    // as "the org supplies something", and asking it directly avoids guessing
+    // from the kind or the auth scheme (`sql` and `mcp` are API_KEY too).
+    return declaresInstallConfigFields(capability);
 };
 
 /**

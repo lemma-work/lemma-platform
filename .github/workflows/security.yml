@@ -185,7 +185,6 @@ jobs:
         run: >-
           uv export --frozen --no-dev --extra local --no-emit-project
           --no-emit-package lemma-pod-bundle
-         
           --output-file /tmp/lemma-backend-audit.txt
       - name: Audit locked third-party dependency graph
         run: >-

@@ -221,7 +221,7 @@ async def test_sync_static_operations_stores_the_declared_kind():
     `AuthProvider.LEMMA`, which `provider_to_kind` maps to `PACKAGE` as an
     ambiguous best-effort default -- so every static-operations connector's
     rows (not just github's: `sql`'s query/list_tables/describe_table too)
-    were stored with `kind='package'` regardless of the connector's real
+    were stored with `kind='http'` regardless of the connector's real
     declared kind. `get_by_connector_kind_and_name` -- what the execute-
     operation route uses -- looks up by the *real* kind, so every such
     operation was unreachable at runtime despite importing without error.
