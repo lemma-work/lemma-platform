@@ -29,6 +29,7 @@ jobs:
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
       desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
+      app_template: ${{ steps.filter.outputs.app_template }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -55,6 +56,22 @@ jobs:
             typescript:
               - 'lemma-typescript/**'
               - '.github/actions/verify-typescript-sdk/**'
+              - '.github/workflows/ci.yml'
+            # The app starter and everything its compile depends on. The SDK is
+            # in here because the template is typed against it: `lemma apps
+            # init` shipped a starter reading a field `UserResponse` does not
+            # have, so every newly scaffolded app failed its first `deploy`.
+            # Nothing compiled the template, so nothing could have caught it.
+            app_template:
+              - 'lemma-cli/lemma_cli/cli_core/assets/app_vite_template/**'
+              - 'lemma-cli/lemma_cli/cli_core/app_scaffold.py'
+              - 'lemma-typescript/**'
+              # The job compiles the starter with this Node, and a version this
+              # repo has already been bitten by -- see the desktop pack job's
+              # note on three days of red main. `.nvmrc` reaches no other
+              # filter, so no other Node job reruns on a bump; that gap is
+              # older than this job and is not addressed here.
+              - '.nvmrc'
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
@@ -453,6 +470,75 @@ jobs:
       # Shared with release-lemma-typescript.yml, so what a release verifies
       # cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-typescript-sdk
+
+  app-template:
+    name: App starter compiles
+    timeout-minutes: 20
+    needs: changes
+    if: needs.changes.outputs.app_template == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # Against this commit's SDK, not the published one. A starter that only
+      # compiles against whatever npm currently calls `latest` is a starter
+      # whose breakage arrives after the release that caused it.
+      - name: Build the SDK the starter is typed against
+        working-directory: lemma-typescript
+        run: npm ci && npm run build
+      - name: Scaffold an app the way `lemma apps init` does
+        run: |
+          uv run --project lemma-cli python - "$RUNNER_TEMP/app-template-check" <<'EOF'
+          import sys
+          from pathlib import Path
+
+          from lemma_cli.cli_core.app_scaffold import (
+              AppScaffoldOptions,
+              resolve_local_sdk_path,
+              scaffold_app,
+          )
+
+          sdk = resolve_local_sdk_path()
+          assert sdk is not None, "the sibling lemma-typescript checkout was not found"
+          scaffold_app(
+              AppScaffoldOptions(
+                  target_dir=Path(sys.argv[1]),
+                  name="app-template-check",
+                  pod_id="00000000-0000-0000-0000-000000000000",
+                  api_url="http://localhost:8000",
+                  auth_url="http://localhost:8000",
+                  title="App Template Check",
+                  navigation="none",
+                  agent_name=None,
+                  chat_mode="none",
+                  members=False,
+                  search_config=None,
+                  theme_toggle=False,
+                  install=False,
+                  registry=False,
+                  style_preset="default",
+                  template_source="bundled",
+                  sdk_path=str(sdk),
+              )
+          )
+          EOF
+      # `tsc -b && vite build` -- exactly what `lemma apps deploy` runs, and the
+      # step that was failing on a clean scaffold.
+      - name: Build the scaffolded app
+        working-directory: ${{ runner.temp }}/app-template-check
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
 
   codegen-drift:
     name: Codegen drift gate
@@ -1293,6 +1379,7 @@ jobs:
       # failed this job and "CI passed" stayed green.
       - cli-packaging
       - typescript-sdk
+      - app-template
       - codegen-drift
       - frontend
       - dev-workflow

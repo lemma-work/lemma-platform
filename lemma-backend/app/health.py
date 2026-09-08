@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.version import API_VERSION
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.migration_state import schema_migration_state
 from app.core.observability.dependency_incident import DependencyIncident
@@ -44,15 +45,19 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-# Liveness: process/event-loop check only. No DB or network dependency, so
-# it normally completes within ~100 ms. 503 when the event loop is wedged
-# (lag over the unhealthy threshold), so a liveness probe restarts the
-# process. A fully blocked loop can't serve this at all, which trips the
-# probe's timeout — either way a hung process is restarted instead of
-# hanging silently.
-@router.get("/health/live", include_in_schema=False)
-@router.get("/livez", include_in_schema=False)
-async def health_live():
+def _liveness_payload() -> tuple[dict, int]:
+    """The liveness body, and the status a probe should read it with.
+
+    `api_version` is here because it is the only unauthenticated place a client
+    can learn what the server is. `info.version` in `/openapi.json` was the
+    other one, and production serves no OpenAPI document (`api_docs_served()`
+    is off by default and deliberately not inferred from the environment) --
+    so `lemma doctor` and the background update check could only ever detect
+    skew against a local server, and silently reported "server_unreachable"
+    against every real deployment. A probe endpoint is the right home for it:
+    it is already public, already cheap, and already the thing a client can
+    reach before it has credentials.
+    """
     from app.core.observability.loop_watchdog import (
         get_loop_lag_seconds,
         is_loop_healthy,
@@ -62,8 +67,22 @@ async def health_live():
     payload = {
         "status": "ok" if healthy else "unhealthy",
         "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
+        "api_version": API_VERSION,
     }
-    return JSONResponse(payload, status_code=200 if healthy else 503)
+    return payload, 200 if healthy else 503
+
+
+# Liveness: process/event-loop check only. No DB or network dependency, so
+# it normally completes within ~100 ms. 503 when the event loop is wedged
+# (lag over the unhealthy threshold), so a liveness probe restarts the
+# process. A fully blocked loop can't serve this at all, which trips the
+# probe's timeout — either way a hung process is restarted instead of
+# hanging silently.
+@router.get("/health/live", include_in_schema=False)
+@router.get("/livez", include_in_schema=False)
+async def health_live():
+    payload, status_code = _liveness_payload()
+    return JSONResponse(payload, status_code=status_code)
 
 
 #: One degraded/recovered pair per dependency instead of a record per
@@ -228,14 +247,5 @@ async def health_capabilities():
 # Compatibility alias for /health/live during probe migration.
 @router.get("/health", include_in_schema=False)
 async def health_alias():
-    from app.core.observability.loop_watchdog import (
-        get_loop_lag_seconds,
-        is_loop_healthy,
-    )
-
-    healthy = is_loop_healthy()
-    payload = {
-        "status": "ok" if healthy else "unhealthy",
-        "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
-    }
-    return JSONResponse(payload, status_code=200 if healthy else 503)
+    payload, status_code = _liveness_payload()
+    return JSONResponse(payload, status_code=status_code)

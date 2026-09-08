@@ -106,3 +106,25 @@ def test_function_storage_composition_uses_selected_cloud_adapter(monkeypatch):
 
     assert isinstance(manager, FunctionFileManager)
     assert captured["remote_prefix"] == f"functions/{function_id}"
+
+
+@pytest.mark.asyncio
+async def test_list_prefix_returns_paths_under_the_prefix_only(tmp_path):
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+    await manager.write_file("artifact-uploads/gen-a/abc.zip", b"a")
+    await manager.write_file("artifact-uploads/gen-b/abc.zip", b"b")
+    await manager.write_file("revisions/abc/function.py", "code")
+
+    listed = await manager.list_prefix("artifact-uploads")
+
+    assert sorted(listed) == [
+        "artifact-uploads/gen-a/abc.zip",
+        "artifact-uploads/gen-b/abc.zip",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_prefix_of_nothing_is_empty(tmp_path):
+    manager = FunctionFileManager(uuid4(), root_path=tmp_path)
+
+    assert await manager.list_prefix("artifact-uploads") == ()
