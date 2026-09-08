@@ -146,8 +146,17 @@ jobs:
         run: |
           set -euo pipefail
           # Caddy's own CA by default, so the suite and curl need its root.
+          #
+          # Appended to the system bundle, not used instead of it. SSL_CERT_FILE
+          # replaces the trust store outright for every child process, and the
+          # suite shells out to `uv` — which then cannot verify pypi.org and
+          # fails to build the CLI it is trying to test. Measured: four client
+          # conformance scenarios failing with `invalid peer certificate:
+          # UnknownIssuer`, none of them about Lemma.
           docker compose exec -T caddy \
             cat /data/caddy/pki/authorities/local/root.crt >"$RUNNER_TEMP/caddy-root.crt"
+          cat /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/caddy-root.crt" \
+            >"$RUNNER_TEMP/ca-bundle.crt"
 
           check() {
             printf '%-46s' "$1"
@@ -182,8 +191,8 @@ jobs:
         working-directory: tests/scenarios
         shell: bash
         env:
-          SSL_CERT_FILE: ${{ runner.temp }}/caddy-root.crt
-          REQUESTS_CA_BUNDLE: ${{ runner.temp }}/caddy-root.crt
+          SSL_CERT_FILE: ${{ runner.temp }}/ca-bundle.crt
+          REQUESTS_CA_BUNDLE: ${{ runner.temp }}/ca-bundle.crt
           # A fresh deployment has no cast, which is the one case where making
           # one is right. Against a deployment that already has one this guard
           # is what stops a second, parallel cast being created.
