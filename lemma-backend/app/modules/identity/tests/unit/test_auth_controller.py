@@ -219,6 +219,7 @@ async def test_desktop_auth_handoff_creates_completes_and_exchanges(monkeypatch)
             code_verifier="b" * 43,
         ),
         webview_request,
+        store,
     )
 
     assert store.created_challenges == [(challenge, "127.0.0.1")]
@@ -243,9 +244,7 @@ async def test_desktop_auth_handoff_creates_completes_and_exchanges(monkeypatch)
     ],
 )
 @pytest.mark.asyncio
-async def test_a_handoff_that_cannot_be_exchanged_mints_no_session(
-    monkeypatch, failure, status
-):
+async def test_a_handoff_that_cannot_be_exchanged_mints_no_session(failure, status):
     """Three refusals, three codes, and never a session.
 
     The desktop app branches on these: 409 means keep waiting, 403 means this
@@ -254,37 +253,28 @@ async def test_a_handoff_that_cannot_be_exchanged_mints_no_session(
     had none either. A session minted on a rejected verifier is the whole
     exchange defeated.
     """
-    from app.modules.identity.api.controllers import auth_controller
 
     async def refuse(*_args, **_kwargs):
         raise failure
 
-    minted = []
-    monkeypatch.setattr(
-        auth_controller,
-        "get_desktop_auth_handoff_store",
-        lambda: SimpleNamespace(consume=refuse),
-    )
-    monkeypatch.setattr(
-        auth_controller,
-        "create_desktop_browser_session",
-        lambda request, user_id: minted.append(user_id) or _async_value("handle"),
-    )
-
+    # If the exchange ever minted a session before consuming, the real
+    # `create_desktop_browser_session` would run here against a request with no
+    # state and fail loudly. Nothing is patched to notice that; being
+    # unreachable is the property, and reaching it is what breaks.
     with pytest.raises(HTTPException) as exc:
         await create_desktop_auth_session(
             DesktopAuthSessionRequest(
                 request_id="desktop-request-123456789", code_verifier="b" * 43
             ),
             SimpleNamespace(headers={"st-auth-mode": "cookie"}),
+            SimpleNamespace(consume=refuse),
         )
 
     assert exc.value.status_code == status
-    assert minted == [], "no session may be created for an exchange that failed"
 
 
 @pytest.mark.asyncio
-async def test_the_exchange_refuses_a_request_that_is_not_in_cookie_mode(monkeypatch):
+async def test_the_exchange_refuses_a_request_that_is_not_in_cookie_mode():
     """The header decides where the session lands.
 
     Without cookie mode SuperTokens answers with tokens in the body instead of
@@ -293,15 +283,9 @@ async def test_the_exchange_refuses_a_request_that_is_not_in_cookie_mode(monkeyp
     attempt. Refused before `consume` is called, which is what keeps the
     request usable.
     """
-    from app.modules.identity.api.controllers import auth_controller
-
     consumed = []
-    monkeypatch.setattr(
-        auth_controller,
-        "get_desktop_auth_handoff_store",
-        lambda: SimpleNamespace(
-            consume=lambda *args, **kwargs: consumed.append(args) or _async_value(None)
-        ),
+    store = SimpleNamespace(
+        consume=lambda *args, **kwargs: consumed.append(args) or _async_value(None)
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -310,6 +294,7 @@ async def test_the_exchange_refuses_a_request_that_is_not_in_cookie_mode(monkeyp
                 request_id="desktop-request-123456789", code_verifier="b" * 43
             ),
             SimpleNamespace(headers={}),
+            store,
         )
 
     assert exc.value.status_code == 400

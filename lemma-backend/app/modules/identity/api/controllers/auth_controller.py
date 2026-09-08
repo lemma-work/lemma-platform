@@ -5,7 +5,7 @@ from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from supertokens_python.recipe.session.asyncio import (
@@ -44,6 +44,7 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 )
 from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthCompletionConflict,
+    DesktopAuthHandoffStore,
     DesktopAuthRequestNotFound,
     DesktopAuthRequestPending,
     DesktopAuthRateLimitExceeded,
@@ -506,6 +507,9 @@ async def complete_desktop_auth_request(
 async def create_desktop_auth_session(
     body: DesktopAuthSessionRequest,
     request: Request,
+    # Injected rather than fetched from module scope, so a test can hand this
+    # endpoint a store instead of patching the module it is testing.
+    store: DesktopAuthHandoffStore = Depends(get_desktop_auth_handoff_store),
 ) -> DesktopAuthSessionResponse:
     if request.headers.get("st-auth-mode") != "cookie":
         raise HTTPException(
@@ -513,7 +517,7 @@ async def create_desktop_auth_session(
             detail="Desktop session exchange requires cookie auth mode",
         )
     try:
-        user_id = await get_desktop_auth_handoff_store().consume(
+        user_id = await store.consume(
             body.request_id,
             body.code_verifier,
         )
