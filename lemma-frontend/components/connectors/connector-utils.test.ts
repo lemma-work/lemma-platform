@@ -63,7 +63,7 @@ const mcpKind = {
 
 /** A credential-only catalog app: a bot token and nothing to configure. */
 const telegramKind = {
-    kind: ConnectorKind.PACKAGE,
+    kind: ConnectorKind.HTTP,
     auth_scheme: AuthScheme.API_KEY,
     system_default_available: true,
     supports_org_custom_oauth: false,
@@ -76,7 +76,7 @@ const telegramKind = {
 } satisfies Partial<KindSpec> as Partial<KindSpec>;
 
 const oauthKind = {
-    kind: ConnectorKind.PACKAGE,
+    kind: ConnectorKind.HTTP,
     auth_scheme: AuthScheme.OAUTH2,
     system_default_available: true,
     supports_org_custom_oauth: true,
@@ -398,7 +398,7 @@ describe('an OAuth kind that promises an org app it cannot honour', () => {
      * name taken.
      */
     const strandedKind = {
-        kind: ConnectorKind.PACKAGE,
+        kind: ConnectorKind.HTTP,
         auth_scheme: AuthScheme.OAUTH2,
         system_default_available: false,
         supports_org_custom_oauth: true,

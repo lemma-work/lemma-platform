@@ -10,5 +10,4 @@ export enum ConnectorKind {
     HTTP = 'http',
     SQL = 'sql',
     MCP = 'mcp',
-    PACKAGE = 'package',
 }

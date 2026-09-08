@@ -18,13 +18,14 @@ from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
-from app.core.redaction import redact_text
-from sandbox_runtime.errors import (
-    SandboxError,
-    SandboxUnavailable,
-)
 from app.core.request_context import create_inherited_task
 from app.modules.function.application.runtime_logs import terminal_logs
+from app.modules.function.application.dispatch_failures import (
+    InvocationOutcomeUnconfirmed,
+    RuntimeNeverReached,
+    execution_error,
+    runtime_failure_message,
+)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -166,6 +167,17 @@ class FunctionDispatcher:
                 async with self._uow_factory() as uow:
                     await FunctionExecutionRepository(uow).cancel_dispatch(dispatch)
                 await self._best_effort_cancel(dispatch, endpoint=endpoint)
+                raise
+            # Interpreter teardown is not a dispatch failure. `CancelledError`
+            # is handled above because it has a durable outcome to record --
+            # the dispatch is cancelled and the run says so. `KeyboardInterrupt`
+            # and `SystemExit` have no such outcome: recording one marks the run
+            # failed while the process is already on its way out, so a restart
+            # leaves behind runs that report a failure that never happened.
+            # `agent_runner_service` re-raises at the same boundary and for the
+            # same reason -- swallowing it there made every interrupted run look
+            # like a success, and a deploy ended every conversation in flight.
+            if not isinstance(exc, Exception):
                 raise
             if (
                 isinstance(exc, InvocationOutcomeUnconfirmed)
@@ -544,54 +556,5 @@ class FunctionDispatcher:
         return datetime.now(timezone.utc)
 
     _terminal_logs = staticmethod(terminal_logs)
-
-    @staticmethod
-    def _runtime_failure_message(request: RuntimeTerminalRequest) -> str:
-        assert request.error is not None
-        if request.error.name == "TimeoutError":
-            return "Function execution timed out (deadline exceeded)"
-        return redact_text(f"{request.error.name}: {request.error.message}")[:16_384]
-
-    @staticmethod
-    def _execution_error(exc: BaseException) -> str:
-        if isinstance(exc, InvocationOutcomeUnconfirmed):
-            if isinstance(exc.__cause__, (httpx.TimeoutException, TimeoutError)):
-                # Report the deadline (what the caller can change) while keeping
-                # the "may have run" caveat (what they must not assume away).
-                return (
-                    "Function execution timed out (deadline exceeded); execution "
-                    "may have started and was not retried"
-                )
-            return (
-                "Function runtime response was not confirmed; execution may have "
-                "started and was not retried"
-            )
-        if isinstance(exc, TimeoutError):
-            return "Function execution timed out (deadline exceeded)"
-        if isinstance(exc, SandboxError):
-            # The type says whether waiting could have helped; the message says
-            # what happened. Both go to a user reading a failed run.
-            if isinstance(exc, SandboxUnavailable):
-                return f"Function sandbox unavailable ({redact_text(str(exc))})"
-            return f"Function sandbox refused the request ({redact_text(str(exc))})"
-        if isinstance(exc, ValueError) and "token expires" in str(exc):
-            return "Function execution exceeds delegated token lifetime"
-        return "Function execution failed"
-
-
-class InvocationOutcomeUnconfirmed(RuntimeError):
-    """The runtime may have begun work, so the invocation must not be replayed."""
-
-
-class RuntimeNeverReached(InvocationOutcomeUnconfirmed):
-    """No connection was ever established, so the runtime cannot have begun work.
-
-    The one failure where replay is provably safe, and it is deliberately
-    narrow. ``httpx.TransportError`` is not the right boundary: ``ReadError``,
-    ``WriteError`` and ``RemoteProtocolError`` all mean bytes crossed the wire
-    and the run may be underway with only the response lost. Only a refused or
-    unroutable connection proves the request was never delivered.
-
-    It still subclasses ``InvocationOutcomeUnconfirmed`` so that any caller
-    which does not know about this distinction keeps the safe behaviour.
-    """
+    _runtime_failure_message = staticmethod(runtime_failure_message)
+    _execution_error = staticmethod(execution_error)

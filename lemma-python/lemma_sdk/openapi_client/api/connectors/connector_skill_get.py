@@ -77,13 +77,13 @@ def sync_detailed(
 ) -> Response[ConnectorSkillResponse | ErrorResponse]:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+     Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-
     specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
     file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        kind (None | str | Unset): Kind override, e.g. package or composio
+        kind (None | str | Unset): Kind override, e.g. http or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -113,13 +113,13 @@ def sync(
 ) -> ConnectorSkillResponse | ErrorResponse | None:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+     Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-
     specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
     file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        kind (None | str | Unset): Kind override, e.g. package or composio
+        kind (None | str | Unset): Kind override, e.g. http or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -144,13 +144,13 @@ async def asyncio_detailed(
 ) -> Response[ConnectorSkillResponse | ErrorResponse]:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+     Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-
     specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
     file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        kind (None | str | Unset): Kind override, e.g. package or composio
+        kind (None | str | Unset): Kind override, e.g. http or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -178,13 +178,13 @@ async def asyncio(
 ) -> ConnectorSkillResponse | ErrorResponse | None:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+     Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-
     specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
     file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        kind (None | str | Unset): Kind override, e.g. package or composio
+        kind (None | str | Unset): Kind override, e.g. http or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

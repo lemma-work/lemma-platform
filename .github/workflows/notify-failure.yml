@@ -41,6 +41,7 @@ on:
       - Security
       - Product scenarios
       - Sandbox function benchmark
+      - Compose deployment
       - Release Lemma Desktop
       - Release Local Stack Images
       - Release Lemma Python SDK

@@ -9,6 +9,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | Document | What it answers |
 |---|---|
 | [Installation](installation.md) | Install Lemma Desktop on macOS or Windows, first start, URLs and ports, diagnostics, updates, uninstall |
+| [Self-hosting on a VM](self-hosting.md) | Running Lemma for a team with Docker Compose: install, the URL layout and why it is that shape, domains and TLS, what the Docker socket means, backups, upgrades |
 | [Configuration](configuration.md) | What every operator-facing setting decides and why you would change it |
 | [Observability](observability.md) | Exporting traces, metrics, and logs to any OTLP collector; the local HyperDX + Phoenix stack |
 | [Authentication hardening](authentication-hardening.md) | Production email, verification, abuse protection, bounce handling, Telegram and WhatsApp verification |

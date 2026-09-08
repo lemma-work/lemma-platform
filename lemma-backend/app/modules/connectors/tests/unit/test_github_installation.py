@@ -134,3 +134,25 @@ def test_the_install_link_names_the_configured_app(monkeypatch):
     assert install_url() == "https://github.com/apps/lemma-dev/installations/new"
     monkeypatch.setattr(connector_settings, "connector_github_app_slug", None)
     assert install_url() is None
+
+
+class TestInstallationStillNeeded:
+    """Authorizing is not installing, and the difference is invisible to a person.
+
+    A GitHub App user token is scoped to the repositories the App is installed
+    on, so a first connect ends with a valid token that reaches nothing. The
+    connect flow reported that as success.
+    """
+
+    def test_a_github_account_with_no_installation_is_not_finished(self) -> None:
+        assert github_installation.installation_still_needed("github", None)
+
+    def test_a_bound_account_is_finished(self) -> None:
+        assert not github_installation.installation_still_needed("github", "12345")
+
+    def test_the_check_is_case_and_whitespace_insensitive(self) -> None:
+        assert github_installation.installation_still_needed("  GitHub ", None)
+
+    def test_no_other_connector_is_asked_to_install_anything(self) -> None:
+        assert not github_installation.installation_still_needed("slack", None)
+        assert not github_installation.installation_still_needed("", None)

@@ -22,7 +22,6 @@ COPY lemma-backend/pyproject.toml lemma-backend/uv.lock ./
 
 # Copy local path dependencies and repo-native skills.
 COPY lemma-pod-bundle /lemma-pod-bundle
-COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
 
 # Install dependencies into /app/.venv. The local extra ships MarkItDown in the
@@ -128,6 +127,20 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH=/app \
     COMPOSIO_CACHE_DIR=/app/.composio \
     HOME=/home/appuser
+
+# The source commit this image was built from.
+#
+# `ENVIRONMENT=production` refuses to start without a valid one
+# (`app/core/log/log.py::validate_release_identity`), and it is a property of
+# the image rather than of the deployment that runs it — a self-hosted compose
+# stack pulling a published image has no way to know the SHA otherwise, and was
+# forced to run as `development` to boot at all. Every log line and the
+# OpenTelemetry Resource carry it as `service.version` / `release.sha`.
+#
+# Deliberately the last layer that changes: it takes a different value on every
+# commit, so anything below it would be rebuilt every time.
+ARG LEMMA_RELEASE_SHA=""
+ENV LEMMA_RELEASE_SHA=${LEMMA_RELEASE_SHA}
 
 # Switch to non-root user
 USER appuser

@@ -132,6 +132,12 @@ jobs:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
+          # Stamps the source commit into the backend image. `ENVIRONMENT=production`
+          # refuses to start without it, and a self-hosted compose deployment
+          # pulling a published image cannot supply it from outside. Harmless on
+          # the images whose Dockerfile does not declare the ARG.
+          build-args: |
+            LEMMA_RELEASE_SHA=${{ github.sha }}
           # Push by digest only; the merge job assembles the tagged manifest list.
           outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
           # Per-(image, arch) cache scope so the two arch builds never clobber
@@ -700,6 +706,7 @@ jobs:
           PREFIX: ${{ env.IMAGE_PREFIX }}
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           python3 - <<'PY'
           import json
@@ -712,6 +719,7 @@ jobs:
           prefix = os.environ["PREFIX"]
           repository = os.environ["REPOSITORY"]
           release_tag = os.environ["RELEASE_TAG"]
+          source_sha = os.environ["SOURCE_SHA"]
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
@@ -778,6 +786,13 @@ jobs:
               # host_packs and continue to consume the same release safely.
               "schema_version": 1,
               "version": version,
+              # The commit these images were built from. Backend containers
+              # already carry it as LEMMA_RELEASE_SHA (baked in by the build
+              # above), but a self-hosted compose deployment reads it from here
+              # to configure the worker and migration containers without having
+              # to inspect an image. Additive schema-1 field; older clients
+              # ignore it.
+              "source_sha": source_sha,
               "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "min_admin_version": "0.1.0",
               "images": {
