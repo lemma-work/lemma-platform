@@ -107,6 +107,20 @@ def identity_html(display_name: str | None, email: str | None) -> str:
     return f'<p class="body">Connected as <strong>{head}</strong>{tail}</p>'
 
 
+def next_step_html(message: str, *, href: str, label: str) -> str:
+    """A message that ends in the one link the person still has to follow.
+
+    The page's own action button is not this: it goes back to Lemma, and the
+    template's script rewrites it to "Close this tab" whenever an opener is
+    there. A step that is still outstanding has to be in the body, where it
+    survives that rewrite and reads as part of the sentence explaining it.
+    """
+    return (
+        f'<p class="body">{escape(message)} '
+        f'<a class="link" href="{escape(href, quote=True)}">{escape(label)}</a>.</p>'
+    )
+
+
 def message_html(message: str) -> str:
     return f'<p class="body">{escape(message)}</p>'
 
