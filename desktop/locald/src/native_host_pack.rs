@@ -839,14 +839,14 @@ fn resolve_on_path(tool: &str) -> io::Result<PathBuf> {
             invalid(format!(
                 "source mode needs {tool} on PATH; it runs the checkout directly"
             ))
-        })?
-        .canonicalize()
+        })
+        .and_then(|candidate| canonicalize_for_children(&candidate))
 }
 
 fn required_dir(root: &Path, label: &str, relative: &str) -> io::Result<PathBuf> {
     let candidate = root.join(relative);
     if candidate.is_dir() {
-        return candidate.canonicalize();
+        return canonicalize_for_children(&candidate);
     }
     Err(invalid(format!(
         "source checkout is missing {label}: {}",
@@ -858,7 +858,7 @@ fn required_file(root: &Path, label: &str, candidates: &[&str]) -> io::Result<Pa
     for relative in candidates {
         let candidate = root.join(relative);
         if candidate.is_file() {
-            return candidate.canonicalize();
+            return canonicalize_for_children(&candidate);
         }
     }
     Err(io::Error::new(
@@ -1135,6 +1135,38 @@ fn invalid(message: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Every path that reaches the manifest goes through the stripper.
+    ///
+    /// The first attempt at this fixed the two roots and missed the leaves:
+    /// `required_file` ended in `candidate.canonicalize()`, which put the
+    /// prefix straight back on node.exe, the launcher and server.js. The
+    /// build looked fixed and the frontend failed exactly as before.
+    ///
+    /// A source assertion rather than a behavioural one, because the property
+    /// is "nobody adds another bare canonicalize", and the only way to observe
+    /// it otherwise is on Windows with a real pack.
+    #[test]
+    fn nothing_here_canonicalizes_a_path_without_stripping_the_prefix() {
+        let source = include_str!("native_host_pack.rs").replace("\r\n", "\n");
+        // The shipping half only: this test names the string it looks for, and
+        // would otherwise find itself.
+        let shipped = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(before, _)| before);
+        let bare: Vec<&str> = shipped
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains(".canonicalize()"))
+            .filter(|line| !line.starts_with("//"))
+            .collect();
+        assert_eq!(
+            bare,
+            ["let canonical = path.canonicalize()?;"],
+            "paths from here are handed to other programs, so they go through \
+             `canonicalize_for_children`; the only bare call is the one inside it"
+        );
+    }
 
     /// Node reads `\\?\C:\...` as a UNC path and dies on `lstat 'C:'`.
     ///
