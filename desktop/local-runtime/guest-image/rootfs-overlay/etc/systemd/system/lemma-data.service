@@ -1,9 +1,10 @@
 [Unit]
 Description=Mount Lemma's private persistent data disk
 DefaultDependencies=no
-ConditionPathExists=/dev/vdb
-After=dev-vdb.device local-fs.target
-Requires=dev-vdb.device
+ConditionPathExists=/dev/nvme0n1
+After=dev-nvme0n1.device local-fs.target
+Requires=dev-nvme0n1.device
+RequiresMountsFor=/mnt/lemma-control
 Before=containerd.service lemma-guestd.service
 
 [Service]
@@ -12,4 +13,4 @@ ExecStart=/usr/local/bin/lemma-mount-data
 RemainAfterExit=yes
 
 [Install]
-WantedBy=lemma-runtime.target
+WantedBy=multi-user.target

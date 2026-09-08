@@ -13,7 +13,7 @@ use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
 
-const SECRET_NAMES: [&str; 19] = [
+pub(crate) const SECRET_NAMES: [&str; 19] = [
     "ai.api_key",
     "integrations.deepgram_api_key",
     "integrations.composio_api_key",
@@ -101,6 +101,43 @@ pub struct ApplyOperatorConfig {
     pub secrets: BTreeMap<String, Option<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum OperatorConfigUpdate {
+    Section(SectionUpdate),
+    Legacy(Box<ApplyOperatorConfig>),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SectionUpdate {
+    pub expected_revision: u64,
+    pub section: ConfigSection,
+    #[serde(default)]
+    pub secrets: BTreeMap<String, CredentialAction>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "name",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ConfigSection {
+    Ai(AiProfile),
+    Integrations(IntegrationConfig),
+    Surfaces(SurfaceConfig),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CredentialAction {
+    Keep,
+    Replace { value: String },
+    Remove,
+}
+
 impl OperatorConfig {
     fn fresh() -> io::Result<Self> {
         Self::fresh_with_install_id(random_hex(16)?)
@@ -132,56 +169,45 @@ impl OperatorConfig {
     }
 }
 
-trait SecretVault: Send + Sync {
+pub(crate) trait SecretVault: Send + Sync {
     fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>>;
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()>;
     fn delete(&self, install_id: &str, name: &str) -> io::Result<()>;
 }
 
-struct PlatformVault;
+pub(crate) struct PlatformVault;
 
 impl PlatformVault {
-    fn entry(install_id: &str, name: &str) -> io::Result<keyring::v1::Entry> {
+    pub(crate) fn entry(install_id: &str, name: &str) -> io::Result<keyring::v1::Entry> {
         keyring::v1::Entry::new(VAULT_SERVICE, &format!("{install_id}:{name}")).map_err(vault_error)
     }
 }
 
 impl SecretVault for PlatformVault {
     fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
-        match Self::entry(install_id, name)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::v1::Error::NoEntry) => Ok(None),
-            Err(error) => Err(vault_error(error)),
-        }
+        crate::vault_process::invoke(install_id, name, crate::vault_process::Operation::Get)
     }
 
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
-        Self::entry(install_id, name)?
-            .set_password(value)
-            .map_err(vault_error)
+        crate::vault_process::invoke(
+            install_id,
+            name,
+            crate::vault_process::Operation::Set {
+                value: value.into(),
+            },
+        )
+        .map(|_| ())
     }
 
     fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
-        match Self::entry(install_id, name)?.delete_credential() {
-            Ok(()) | Err(keyring::v1::Error::NoEntry) => Ok(()),
-            Err(error) => Err(vault_error(error)),
-        }
+        crate::vault_process::invoke(install_id, name, crate::vault_process::Operation::Delete)
+            .map(|_| ())
     }
 }
 
-/// Every read of one secret, answered from the first one.
-///
-/// macOS authorizes keychain access per item, per reading process, and an
-/// ad-hoc-signed build is not remembered between reads at all -- so a second
-/// read of the same item is a second modal password prompt. `backend_environment`
-/// alone is called from seven places on the daemon's start and restart paths and
-/// reads two items each time, which is how a single first-run setup put fourteen
-/// prompts in front of the user before the workspace had even opened.
-///
-/// The items themselves do not change underneath us: this process is the only
-/// writer, so `set` and `delete` update the cache rather than clearing it. No
-/// secret is held here that locald was not already holding to hand to the
-/// backend as an environment variable.
+/// Cache successful OS-vault reads for this daemon's lifetime. The encrypted
+/// credential file uses this for its wrapping key and legacy migration; set and
+/// delete must update cached values so settings changes take effect immediately.
 struct CachingVault {
     inner: Arc<dyn SecretVault>,
     seen: Mutex<HashMap<(String, String), Option<String>>>,
@@ -216,11 +242,15 @@ impl SecretVault for CachingVault {
         // prompt, and holding the cache across it would stall every other
         // secret this process wants behind the one the user is looking at.
         let value = self.inner.get(install_id, name)?;
-        self.seen
+        // A save may have replaced or removed the secret during the native
+        // read. Its newer cache entry must win over this delayed result.
+        Ok(self
+            .seen
             .lock()
             .expect("secret cache poisoned")
-            .insert(key, value.clone());
-        Ok(value)
+            .entry(key)
+            .or_insert(value)
+            .clone())
     }
 
     fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
@@ -251,6 +281,7 @@ pub struct OperatorConfigStore {
     vault: Arc<dyn SecretVault>,
     provider_probe: Arc<dyn ModelProviderProbe>,
     config: Mutex<OperatorConfig>,
+    writes: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -269,9 +300,13 @@ impl OperatorConfigStore {
     /// The public entry point takes the vault as an implementation detail; only
     /// tests substitute one.
     pub fn load_reporting(path: PathBuf, healed: &mut Vec<String>) -> io::Result<Arc<Self>> {
+        let vault = crate::credential_vault::EncryptedVault::new(
+            path.with_file_name("credentials.enc"),
+            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
+        );
         Self::load_healing(
             path,
-            Arc::new(CachingVault::new(Arc::new(PlatformVault))),
+            Arc::new(vault),
             Arc::new(HttpModelProviderProbe),
             healed,
         )
@@ -366,6 +401,7 @@ impl OperatorConfigStore {
             vault,
             provider_probe,
             config: Mutex::new(config),
+            writes: Mutex::new(()),
         }))
     }
 
@@ -397,6 +433,8 @@ impl OperatorConfigStore {
     /// no key is supplied the stored one is used, so an already-configured
     /// provider can be re-listed without the caller handling the secret at all.
     pub fn discover_models(&self, request: Value) -> io::Result<Vec<String>> {
+        // Pair the destination and vault read with the same committed revision.
+        let _write = self.writes.lock().expect("operator writes poisoned");
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct DiscoverRequest {
@@ -412,18 +450,17 @@ impl OperatorConfigStore {
         }
         validate_ai_shape(&request.ai)?;
 
-        let install_id = self
+        let saved = self
             .config
             .lock()
             .expect("operator config poisoned")
-            .install_id
             .clone();
         let api_key = match request.api_key {
             Some(value) if !value.is_empty() => Some(value),
             // An empty string is the page saying "no key", which is legitimate
             // for a loopback provider. Absent means "use whatever is stored".
             Some(_) => None,
-            None => self.vault.get(&install_id, "ai.api_key")?,
+            None => self.saved_provider_key(&saved, &request.ai)?,
         };
         if !local_no_auth(&request.ai.base_url) && api_key.is_none() {
             return Err(invalid("this AI provider requires an API key"));
@@ -470,6 +507,80 @@ impl OperatorConfigStore {
     }
 
     pub fn apply(&self, mut request: ApplyOperatorConfig) -> io::Result<Value> {
+        let _write = self.writes.lock().expect("operator writes poisoned");
+        self.apply_locked(&mut request)
+    }
+
+    pub fn update(&self, update: OperatorConfigUpdate) -> io::Result<Value> {
+        let _write = self.writes.lock().expect("operator writes poisoned");
+        let mut request = match update {
+            OperatorConfigUpdate::Legacy(request) => *request,
+            OperatorConfigUpdate::Section(patch) => {
+                let mut config = self
+                    .config
+                    .lock()
+                    .expect("operator config poisoned")
+                    .clone();
+                config.revision = patch.expected_revision;
+                let prefix = match patch.section {
+                    ConfigSection::Ai(ai) => {
+                        config.ai = ai;
+                        "ai."
+                    }
+                    ConfigSection::Integrations(integrations) => {
+                        config.integrations = integrations;
+                        "integrations."
+                    }
+                    ConfigSection::Surfaces(surfaces) => {
+                        config.surfaces = surfaces;
+                        "surfaces."
+                    }
+                };
+                let mut secrets = BTreeMap::new();
+                for (name, action) in patch.secrets {
+                    if !name.starts_with(prefix) || !SECRET_NAMES.contains(&name.as_str()) {
+                        return Err(invalid(
+                            "credential does not belong to the selected section",
+                        ));
+                    }
+                    match action {
+                        CredentialAction::Keep => {}
+                        CredentialAction::Replace { value } if value.is_empty() => {
+                            return Err(invalid(
+                                "replacement credential must not be empty; use remove",
+                            ));
+                        }
+                        CredentialAction::Replace { value } => {
+                            secrets.insert(name, Some(value));
+                        }
+                        CredentialAction::Remove => {
+                            secrets.insert(name, None);
+                        }
+                    }
+                }
+                ApplyOperatorConfig { config, secrets }
+            }
+        };
+        self.apply_locked(&mut request)
+    }
+
+    fn saved_provider_key(
+        &self,
+        saved: &OperatorConfig,
+        requested: &AiProfile,
+    ) -> io::Result<Option<String>> {
+        let key = self.vault.get(&saved.install_id, "ai.api_key")?;
+        if key.is_some()
+            && (saved.ai.protocol != requested.protocol
+                || saved.ai.base_url.trim_end_matches('/')
+                    != requested.base_url.trim_end_matches('/'))
+        {
+            return Err(invalid("provider destination changed; enter a credential for this destination or explicitly remove the saved key"));
+        }
+        Ok(key)
+    }
+
+    fn apply_locked(&self, request: &mut ApplyOperatorConfig) -> io::Result<Value> {
         let old_config = self
             .config
             .lock()
@@ -480,6 +591,10 @@ impl OperatorConfigStore {
                 io::ErrorKind::PermissionDenied,
                 "operator config install identity cannot be changed",
             ));
+        }
+        if request.config.revision != old_config.revision {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                "configuration conflict: settings changed since this draft was opened; discard and reload before saving"));
         }
         request.config.schema_version = CONFIG_SCHEMA_VERSION;
         request.config.revision = old_config.revision.saturating_add(1);
@@ -494,7 +609,7 @@ impl OperatorConfigStore {
             let api_key = match request.secrets.get("ai.api_key") {
                 Some(Some(value)) if !value.is_empty() => Some(value.clone()),
                 Some(_) => None,
-                None => self.vault.get(&old_config.install_id, "ai.api_key")?,
+                None => self.saved_provider_key(&old_config, &request.config.ai)?,
             };
             if !local_no_auth(&request.config.ai.base_url) && api_key.is_none() {
                 return Err(invalid("this AI provider requires an API key"));
@@ -502,6 +617,9 @@ impl OperatorConfigStore {
             let models = self
                 .provider_probe
                 .discover(&request.config.ai, api_key.as_deref())?;
+            if models.is_empty() {
+                return Err(invalid("this AI provider returned no models"));
+            }
             if request.config.ai.default_model.is_empty() {
                 request.config.ai.default_model = models[0].clone();
             }
@@ -557,7 +675,7 @@ impl OperatorConfigStore {
                 restore_secrets(self.vault.as_ref(), &old_config.install_id, &old_secrets),
             ));
         }
-        let config = request.config;
+        let config = request.config.clone();
         *self.config.lock().expect("operator config poisoned") = config.clone();
         Ok(snapshot_value(config, presence))
     }
@@ -575,6 +693,7 @@ impl OperatorConfigStore {
     }
 
     pub(crate) fn restore_state(&self, state: OperatorConfigState) -> io::Result<Value> {
+        let _write = self.writes.lock().expect("operator writes poisoned");
         validate_config(&state.config)?;
         let current = self.capture_state()?;
         if let Err(error) = restore_secrets(
@@ -858,13 +977,25 @@ const MIN_MIGRATABLE_CONFIG_SCHEMA_VERSION: u64 = 1;
 /// shell is a different program as far as the vault is concerned, and would
 /// prompt or fail.
 ///
-/// Failures are collected rather than raised: a reset that stopped at the first
-/// stubborn keychain item would leave the rest behind *and* skip removing the
-/// state directory, which is the part the user actually asked for.
+/// Retain the installation identity until every credential has been removed.
 pub fn purge_secrets(install_id: &str) -> Vec<String> {
-    let vault = PlatformVault;
+    purge_vault_secrets(&PlatformVault, install_id)
+}
+
+fn purge_vault_secrets(vault: &dyn SecretVault, install_id: &str) -> Vec<String> {
     let mut failures = Vec::new();
-    for name in SECRET_NAMES {
+    for name in SECRET_NAMES.into_iter().chain(["secret.encryption_keyset"]) {
+        if let Err(error) = vault.delete(install_id, name) {
+            failures.push(format!("{name}: {error}"));
+            // A denied or stalled store must not produce another consent prompt
+            // for every remaining item. Recovery can retry the idempotent sweep.
+            break;
+        }
+    }
+    // A failed reset retains local data. Keep its decryption key until every
+    // legacy item has been removed, so an aborted cleanup remains recoverable.
+    if failures.is_empty() {
+        let name = crate::credential_vault::MASTER_KEY_NAME;
         if let Err(error) = vault.delete(install_id, name) {
             failures.push(format!("{name}: {error}"));
         }
@@ -1301,7 +1432,7 @@ fn current_unix_ms() -> io::Result<u64> {
         .map_err(|_| io::Error::other("system time does not fit in milliseconds"))
 }
 
-fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
@@ -1319,6 +1450,8 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     file.write_all(contents)?;
     file.sync_all()?;
     fs::rename(temporary, path)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
     ensure_private_file(path)
 }
 
@@ -1332,17 +1465,20 @@ fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
 ///
 /// Anything that is not a regular file still fails: a symlink or a directory
 /// here is not a permissions accident, and following one would be the bug.
-fn ensure_private_file(path: &Path) -> io::Result<()> {
+pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "private configuration is not a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("operator config is not a regular file: {}", path.display()),
-            ));
-        }
         if metadata.mode() & 0o077 != 0 {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
@@ -1375,6 +1511,215 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn failed_cleanup_stops_prompting_and_keeps_remaining_credentials() {
+        struct Denied(Mutex<Vec<String>>);
+        impl SecretVault for Denied {
+            fn get(&self, _: &str, _: &str) -> io::Result<Option<String>> {
+                unreachable!()
+            }
+            fn set(&self, _: &str, _: &str, _: &str) -> io::Result<()> {
+                unreachable!()
+            }
+            fn delete(&self, _: &str, name: &str) -> io::Result<()> {
+                self.0.lock().unwrap().push(name.into());
+                Err(io::ErrorKind::TimedOut.into())
+            }
+        }
+        let vault = Denied(Mutex::new(Vec::new()));
+        assert_eq!(purge_vault_secrets(&vault, "installation").len(), 1);
+        assert_eq!(*vault.0.lock().unwrap(), vec!["ai.api_key"]);
+    }
+
+    #[test]
+    fn aborted_cleanup_preserves_the_encrypted_vault_key_until_retry_succeeds() {
+        struct PurgeVault {
+            denied: bool,
+            deleted: Mutex<Vec<String>>,
+        }
+        impl SecretVault for PurgeVault {
+            fn get(&self, _: &str, _: &str) -> io::Result<Option<String>> {
+                unreachable!()
+            }
+            fn set(&self, _: &str, _: &str, _: &str) -> io::Result<()> {
+                unreachable!()
+            }
+            fn delete(&self, _: &str, name: &str) -> io::Result<()> {
+                if self.denied && name == "secret.encryption_keyset" {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                self.deleted.lock().unwrap().push(name.into());
+                Ok(())
+            }
+        }
+        let mut vault = PurgeVault {
+            denied: true,
+            deleted: Mutex::new(Vec::new()),
+        };
+        let master = crate::credential_vault::MASTER_KEY_NAME;
+        assert_eq!(purge_vault_secrets(&vault, "installation").len(), 1);
+        assert!(!vault
+            .deleted
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name == master));
+        vault.denied = false;
+        assert!(purge_vault_secrets(&vault, "installation").is_empty());
+        assert_eq!(vault.deleted.lock().unwrap().last().unwrap(), master);
+    }
+
+    #[test]
+    fn section_updates_isolate_fields_and_credential_actions() {
+        let root = tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let store =
+            OperatorConfigStore::load_with_vault(root.path().join("operator.json"), vault.clone())
+                .unwrap();
+        let initial = store.snapshot().unwrap();
+        let revision = initial["config"]["revision"].as_u64().unwrap();
+        let id = initial["config"]["install_id"].as_str().unwrap();
+        let patch = |revision, secrets| {
+            serde_json::from_value::<OperatorConfigUpdate>(json!({
+                "expected_revision": revision,
+                "section": {"name": "integrations", "value": initial["config"]["integrations"]},
+                "secrets": secrets
+            }))
+            .unwrap()
+        };
+        store
+            .update(patch(
+                revision,
+                json!({"integrations.deepgram_api_key": {"action":"replace", "value":"test-key"}}),
+            ))
+            .unwrap();
+        assert_eq!(
+            vault
+                .get(id, "integrations.deepgram_api_key")
+                .unwrap()
+                .as_deref(),
+            Some("test-key")
+        );
+        store
+            .update(patch(
+                revision + 1,
+                json!({"integrations.deepgram_api_key": {"action":"keep"}}),
+            ))
+            .unwrap();
+        assert_eq!(
+            vault
+                .get(id, "integrations.deepgram_api_key")
+                .unwrap()
+                .as_deref(),
+            Some("test-key")
+        );
+        let before = store.snapshot().unwrap();
+        assert!(store
+            .update(patch(
+                revision + 2,
+                json!({"surfaces.slack_bot_token": {"action":"remove"}})
+            ))
+            .is_err());
+        assert_eq!(before, store.snapshot().unwrap());
+        let after = store
+            .update(patch(
+                revision + 2,
+                json!({"integrations.deepgram_api_key": {"action":"remove"}}),
+            ))
+            .unwrap();
+        assert!(vault
+            .get(id, "integrations.deepgram_api_key")
+            .unwrap()
+            .is_none());
+        assert_eq!(initial["config"]["ai"], after["config"]["ai"]);
+        assert_eq!(initial["config"]["surfaces"], after["config"]["surfaces"]);
+    }
+
+    #[test]
+    fn concurrent_settings_writers_cannot_both_commit_the_same_revision() {
+        let root = tempdir().unwrap();
+        let store = OperatorConfigStore::load_with_vault(
+            root.path().join("operator.json"),
+            Arc::new(MemoryVault::default()),
+        )
+        .unwrap();
+        let config: OperatorConfig =
+            serde_json::from_value(store.snapshot().unwrap()["config"].clone()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let writers: Vec<_> = (0..2)
+            .map(|_| {
+                let store = store.clone();
+                let config = config.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.apply(ApplyOperatorConfig {
+                        config,
+                        secrets: BTreeMap::new(),
+                    })
+                })
+            })
+            .collect();
+        let results: Vec<_> = writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            store.snapshot().unwrap()["config"]["revision"],
+            config.revision + 1
+        );
+    }
+
+    #[test]
+    fn stale_settings_save_cannot_overwrite_a_new_revision() {
+        let root = tempdir().unwrap();
+        let store = OperatorConfigStore::load_with_vault(
+            root.path().join("operator.json"),
+            Arc::new(MemoryVault::default()),
+        )
+        .unwrap();
+        let config: OperatorConfig =
+            serde_json::from_value(store.snapshot().unwrap()["config"].clone()).unwrap();
+        store
+            .apply(ApplyOperatorConfig {
+                config: config.clone(),
+                secrets: BTreeMap::new(),
+            })
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let error = store
+            .apply(ApplyOperatorConfig {
+                config,
+                secrets: BTreeMap::new(),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(before, store.snapshot().unwrap());
+    }
+
+    #[test]
+    fn discovery_never_sends_a_saved_key_to_a_changed_destination() {
+        let root = tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let store =
+            OperatorConfigStore::load_with_vault(root.path().join("operator.json"), vault).unwrap();
+        store
+            .set_ai(json!({"ai": {
+            "protocol": "openai_compat", "base_url": "https://saved.example/v1",
+            "default_model": "test", "models": ["test"], "vision_models": []
+        }, "api_key": "saved-secret"}))
+            .unwrap();
+        let mut ai = store.snapshot().unwrap()["config"]["ai"].clone();
+        assert!(store.discover_models(json!({"ai": ai})).is_ok());
+        ai["base_url"] = json!("https://changed.example/v1");
+        assert!(store.discover_models(json!({"ai": ai})).is_err());
+        assert!(store.set_ai(json!({"ai": ai})).is_err());
+        assert!(store
+            .discover_models(json!({"ai": ai, "api_key": "new-secret"}))
+            .is_ok());
+    }
+
     #[derive(Default)]
     struct MemoryVault(Mutex<BTreeMap<String, String>>);
 
@@ -1402,6 +1747,60 @@ mod tests {
                 .unwrap()
                 .remove(&format!("{install_id}:{name}"));
             Ok(())
+        }
+    }
+
+    /// A vault that remembers what was asked of it, and in what order.
+    #[test]
+    fn delayed_native_read_cannot_undo_a_saved_replacement_or_removal() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        struct DelayedVault {
+            inner: MemoryVault,
+            started: mpsc::Sender<()>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+        impl SecretVault for DelayedVault {
+            fn get(&self, install: &str, name: &str) -> io::Result<Option<String>> {
+                let value = self.inner.get(install, name)?;
+                self.started.send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap();
+                Ok(value)
+            }
+            fn set(&self, install: &str, name: &str, value: &str) -> io::Result<()> {
+                self.inner.set(install, name, value)
+            }
+            fn delete(&self, install: &str, name: &str) -> io::Result<()> {
+                self.inner.delete(install, name)
+            }
+        }
+        for replacement in [Some("new"), None] {
+            let (started, ready) = mpsc::channel();
+            let (resume, wait) = mpsc::channel();
+            let inner = MemoryVault::default();
+            inner.set("install", "ai.api_key", "old").unwrap();
+            let vault = Arc::new(CachingVault::new(Arc::new(DelayedVault {
+                inner,
+                started,
+                resume: Mutex::new(wait),
+            })));
+            let reader = Arc::clone(&vault);
+            let read = std::thread::spawn(move || reader.get("install", "ai.api_key").unwrap());
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            match replacement {
+                Some(value) => vault.set("install", "ai.api_key", value).unwrap(),
+                None => vault.delete("install", "ai.api_key").unwrap(),
+            }
+            resume.send(()).unwrap();
+            assert_eq!(read.join().unwrap().as_deref(), replacement);
+            assert_eq!(
+                vault.get("install", "ai.api_key").unwrap().as_deref(),
+                replacement
+            );
         }
     }
 

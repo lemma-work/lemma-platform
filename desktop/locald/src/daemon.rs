@@ -12,12 +12,14 @@ use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
+use crate::config_operations::{ConfigOperation, ConfigOperations};
 use crate::host_process::HostProcessManager;
+use crate::lifecycle::Lifecycle;
 use crate::managed_runtime::{
     ManagedRuntimeBootstrap, ManagedRuntimeController, SANDBOX_IMAGES_UNSUPPORTED,
 };
 use crate::native_host_pack;
-use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
+use crate::operator_config::{OperatorConfigStore, OperatorConfigUpdate};
 use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
@@ -29,7 +31,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 3;
+const DAEMON_API_REVISION: u64 = 5;
 
 struct SupervisorProcess {
     child: Child,
@@ -49,8 +51,11 @@ pub struct Daemon {
     host_pack_root: Option<String>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
     operator_config: Arc<OperatorConfigStore>,
+    config_operations: Option<ConfigOperations>,
     sharing: Option<Arc<SharingController>>,
-    host_operation_running: AtomicBool,
+    lifecycle: Lifecycle,
+    agent_lifecycle: Lifecycle,
+    shutdown_running: AtomicBool,
     agent_host: Arc<AgentHostSupervisor>,
     /// State this daemon had to repair before it could start, in the operator's
     /// words rather than serde's. Empty on every healthy launch.
@@ -145,6 +150,15 @@ impl Daemon {
             })
             .transpose()?;
         let agent_host = Arc::new(AgentHostSupervisor::discover(&paths.root));
+        let config_operations = match ConfigOperations::load(
+            paths.root.join("config-operations.json"),
+        ) {
+            Ok(journal) => Some(journal),
+            Err(error) => {
+                healed.push(format!("settings operation history is unavailable: {error}; settings writes are disabled until it is repaired"));
+                None
+            }
+        };
         Ok(Arc::new(Self {
             paths,
             token,
@@ -158,8 +172,11 @@ impl Daemon {
             host_pack_root: host_pack_root.map(path_identity),
             managed_runtime,
             operator_config,
+            config_operations,
             sharing,
-            host_operation_running: AtomicBool::new(false),
+            lifecycle: Lifecycle::default(),
+            agent_lifecycle: Lifecycle::default(),
+            shutdown_running: AtomicBool::new(false),
             agent_host,
             healed,
         }))
@@ -222,15 +239,17 @@ impl Daemon {
         // Honour what the user last chose rather than starting unconditionally.
         // Turning the Agent Host off has to survive a daemon restart, and an
         // unpaired machine has nothing for it to do.
-        if self.agent_host.desired_running() {
-            if let Err(error) = self.agent_host.start() {
-                let _ = self.write_daemon_log(&format!("Agent Host unavailable: {error}"));
-            }
-        }
         let daemon = Arc::clone(self);
         thread::spawn(move || loop {
-            if let Err(error) = daemon.agent_host.reconcile() {
-                let _ = daemon.write_daemon_log(&format!("Agent Host recovery failed: {error}"));
+            if daemon.agent_lifecycle.checkpoint().is_err() {
+                return;
+            }
+            if daemon.agent_lifecycle.begin().is_ok() {
+                if let Err(error) = daemon.agent_host.reconcile() {
+                    let _ =
+                        daemon.write_daemon_log(&format!("Agent Host recovery failed: {error}"));
+                }
+                daemon.agent_lifecycle.finish();
             }
             thread::sleep(std::time::Duration::from_secs(1));
         });
@@ -247,20 +266,25 @@ impl Daemon {
             let mut next_runtime_recovery = std::time::Instant::now();
             let mut runtime_failure_reported = false;
             loop {
+                if daemon.lifecycle.checkpoint().is_err() {
+                    return;
+                }
                 let manager = daemon
                     .host_processes
                     .as_ref()
                     .expect("host monitor requires manager");
                 let now = std::time::Instant::now();
-                if now >= next_runtime_probe
-                    && !daemon.host_operation_running.load(Ordering::Acquire)
-                {
+                if now >= next_runtime_probe && !daemon.lifecycle.busy() {
                     next_runtime_probe = now + std::time::Duration::from_secs(5);
                     if let Some(runtime) = daemon.managed_runtime.as_ref() {
                         let runtime_expected =
                             runtime.status().is_some() || manager.desired_running();
                         if runtime_expected {
-                            match runtime.probe() {
+                            let probe = runtime.probe();
+                            if daemon.lifecycle.checkpoint().is_err() {
+                                return;
+                            }
+                            match probe {
                                 Ok(_) => {
                                     manager.mark_dependency_ready();
                                     runtime_failure_reported = false;
@@ -287,15 +311,7 @@ impl Daemon {
                                     }
                                     if manager.desired_running()
                                         && now >= next_runtime_recovery
-                                        && daemon
-                                            .host_operation_running
-                                            .compare_exchange(
-                                                false,
-                                                true,
-                                                Ordering::AcqRel,
-                                                Ordering::Acquire,
-                                            )
-                                            .is_ok()
+                                        && daemon.lifecycle.begin().is_ok()
                                     {
                                         next_runtime_recovery =
                                             now + std::time::Duration::from_secs(15);
@@ -327,9 +343,7 @@ impl Daemon {
                                                     None,
                                                 ));
                                             }
-                                            recovery
-                                                .host_operation_running
-                                                .store(false, Ordering::Release);
+                                            recovery.lifecycle.finish();
                                         });
                                     }
                                 }
@@ -345,11 +359,7 @@ impl Daemon {
                 }
                 if let Some(sharing) = daemon.sharing.as_ref() {
                     if let Some(message) = sharing.poll_failure() {
-                        if daemon
-                            .host_operation_running
-                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                            .is_ok()
-                        {
+                        if daemon.lifecycle.begin().is_ok() {
                             let recovery = Arc::clone(&daemon);
                             let sharing = Arc::clone(sharing);
                             thread::spawn(move || {
@@ -376,9 +386,7 @@ impl Daemon {
                                         None,
                                     )),
                                 }
-                                recovery
-                                    .host_operation_running
-                                    .store(false, Ordering::Release);
+                                recovery.lifecycle.finish();
                             });
                         }
                     }
@@ -500,6 +508,27 @@ impl Daemon {
         let id = request.get("id").cloned();
         if command == "shutdown-daemon" {
             self.start_daemon_shutdown(id, client.clone());
+            return true;
+        }
+        if self.lifecycle.checkpoint().is_err()
+            && !matches!(
+                command.as_str(),
+                "ping"
+                    | "status"
+                    | "control.snapshot"
+                    | "sharing.snapshot"
+                    | "agent-host.status"
+                    | "disconnect"
+            )
+        {
+            self.send_direct(
+                client,
+                error_event(
+                    "stopping",
+                    "Lemma is stopping; new work is not accepted",
+                    id.as_ref(),
+                ),
+            );
             return true;
         }
         match command.as_str() {
@@ -728,6 +757,13 @@ impl Daemon {
         client: mpsc::Sender<String>,
     ) {
         let id = request.get("id").cloned();
+        if self.agent_lifecycle.begin().is_err() {
+            self.send_direct(
+                &client,
+                error_event("busy", "Agent Host is busy or stopping", id.as_ref()),
+            );
+            return;
+        }
         self.send_direct(
             &client,
             json!({
@@ -763,9 +799,10 @@ impl Daemon {
                 }
                 _ => daemon.agent_host.refresh(),
             };
-            match result {
-                Ok(()) => {
-                    let status = daemon.agent_host.detailed_status();
+            let outcome = result.map(|()| daemon.agent_host.detailed_status());
+            daemon.agent_lifecycle.finish();
+            match outcome {
+                Ok(status) => {
                     daemon.send_direct(
                         &client,
                         json!({
@@ -805,11 +842,7 @@ impl Daemon {
         if sharing.active_mode() == SharingMode::ThisComputer {
             return;
         }
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             return;
         }
         let daemon = Arc::clone(self);
@@ -835,9 +868,7 @@ impl Daemon {
                     None,
                 )),
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -846,6 +877,7 @@ impl Daemon {
             "v": PROTOCOL_VERSION,
             "event": "control.snapshot",
             "operator": self.operator_config.snapshot()?,
+            "config_operations": self.config_operations.as_ref().map(ConfigOperations::snapshot),
             "state": self.state.lock().expect("state lock poisoned").event(None),
             "services": self.host_processes.as_ref().map(|manager| manager.status()),
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
@@ -946,11 +978,7 @@ impl Daemon {
             );
             return;
         }
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 &client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1008,9 +1036,7 @@ impl Daemon {
                     id.as_ref(),
                 )),
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -1085,11 +1111,7 @@ impl Daemon {
             );
             return;
         };
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 &client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1128,9 +1150,7 @@ impl Daemon {
                     id.as_ref(),
                 )),
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -1191,11 +1211,7 @@ impl Daemon {
 
     fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
         let id = request.get("id").cloned();
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1203,10 +1219,10 @@ impl Daemon {
             return;
         }
         let payload = request.get("payload").cloned().unwrap_or(Value::Null);
-        let apply: ApplyOperatorConfig = match serde_json::from_value(payload) {
+        let apply: OperatorConfigUpdate = match serde_json::from_value(payload) {
             Ok(apply) => apply,
             Err(error) => {
-                self.host_operation_running.store(false, Ordering::Release);
+                self.lifecycle.finish();
                 self.send_direct(
                     client,
                     error_event(
@@ -1218,13 +1234,25 @@ impl Daemon {
                 return;
             }
         };
+        if let Err(error) = self.begin_config_operation(id.as_ref()) {
+            self.lifecycle.finish();
+            self.send_direct(
+                client,
+                error_event(
+                    "config-operation-unavailable",
+                    error.to_string(),
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.apply", "id": id.as_ref()}),
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
-            let result = daemon.write_operator_config(|store| store.apply(apply));
+            let result = daemon.write_operator_config(|store| store.update(apply));
             daemon.finish_config_write(result, id.as_ref());
         });
     }
@@ -1286,6 +1314,32 @@ impl Daemon {
 
     /// Announce the outcome of an operator-config write and release the guard.
     fn finish_config_write(self: &Arc<Self>, result: io::Result<Value>, id: Option<&Value>) {
+        let code = if result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::AlreadyExists)
+        {
+            "config-conflict"
+        } else {
+            "config-apply-failed"
+        };
+        let outcome = match &result {
+            Ok(operator) => ConfigOperation::Succeeded {
+                operator: operator.clone(),
+            },
+            Err(error) => ConfigOperation::Failed {
+                code: code.into(),
+                message: error.to_string(),
+            },
+        };
+        if let (Some(journal), Some(id)) = (&self.config_operations, id.and_then(Value::as_str)) {
+            if let Err(error) = journal.finish(id, outcome) {
+                self.broadcast(error_event("config-outcome-unknown", format!("settings may have been applied, but completion could not be recorded: {error}; review settings before retrying"), Some(&json!(id))));
+                self.lifecycle.finish();
+                return;
+            }
+        }
+        // A completion can immediately trigger the next section's save.
+        self.lifecycle.finish();
         match result {
             Ok(snapshot) => self.broadcast(json!({
                 "v": PROTOCOL_VERSION,
@@ -1294,9 +1348,25 @@ impl Daemon {
                 "operator": snapshot,
                 "restart": "backend",
             })),
-            Err(error) => self.broadcast(error_event("config-apply-failed", error.to_string(), id)),
+            Err(error) => self.broadcast(error_event(code, error.to_string(), id)),
         }
-        self.host_operation_running.store(false, Ordering::Release);
+    }
+
+    fn begin_config_operation(&self, id: Option<&Value>) -> io::Result<()> {
+        let id = id.and_then(Value::as_str).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "settings write needs a string operation id",
+            )
+        })?;
+        self.config_operations
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::other(
+                    "settings operation history is unavailable; repair it before saving",
+                )
+            })?
+            .begin(id)
     }
 
     /// Change only the AI profile.
@@ -1308,11 +1378,7 @@ impl Daemon {
     /// back by the caller.
     fn set_ai_profile(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
         let id = request.get("id").cloned();
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1320,6 +1386,18 @@ impl Daemon {
             return;
         }
         let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        if let Err(error) = self.begin_config_operation(id.as_ref()) {
+            self.lifecycle.finish();
+            self.send_direct(
+                client,
+                error_event(
+                    "config-operation-unavailable",
+                    error.to_string(),
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.set-ai", "id": id.as_ref()}),
@@ -1340,7 +1418,7 @@ impl Daemon {
     /// memory. This is the same probe with no write behind it: connect, list,
     /// then let the user pick before anything is saved.
     ///
-    /// Deliberately not guarded by `host_operation_running` — it mutates
+    /// Deliberately not guarded by `lifecycle` — it mutates
     /// nothing, and making a read-only lookup wait behind an unrelated start is
     /// how a model picker ends up feeling broken.
     fn discover_provider_models(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
@@ -1368,16 +1446,24 @@ impl Daemon {
     }
 
     fn start_daemon_shutdown(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {
-        if self.host_operation_running.load(Ordering::Acquire) {
+        if self.shutdown_running.swap(true, Ordering::AcqRel) {
             self.send_direct(
                 &client,
                 error_event(
-                    "busy",
-                    "cannot replace the local daemon during an active operation",
+                    "shutdown-in-progress",
+                    "the local daemon is already stopping",
                     id.as_ref(),
                 ),
             );
             return;
+        }
+        self.lifecycle.request_shutdown();
+        self.agent_lifecycle.request_shutdown();
+        if let Some(manager) = self.host_processes.as_ref() {
+            manager.request_stop();
+        }
+        if let Some(runtime) = self.managed_runtime.as_ref() {
+            runtime.cancel_pending_requests();
         }
         self.send_direct(
             &client,
@@ -1388,6 +1474,14 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            daemon.broadcast(json!({
+                "v": PROTOCOL_VERSION, "event": "phase", "key": "stopping",
+                "label": "Stopping Lemma", "progress": 0,
+                "detail": "Waiting for the current operation to reach a safe stopping point",
+                "operation_id": id.as_ref(),
+            }));
+            daemon.lifecycle.wait_idle();
+            daemon.agent_lifecycle.wait_idle();
             let mut failure = None;
             if let Some(sharing) = daemon.sharing.as_ref() {
                 sharing.force_disable();
@@ -1397,7 +1491,7 @@ impl Daemon {
                     failure = Some(error.to_string());
                 }
             }
-            if let Err(error) = daemon.agent_host.stop() {
+            if let Err(error) = daemon.agent_host.suspend() {
                 failure.get_or_insert_with(|| error.to_string());
             }
             if let Some(runtime) = daemon.managed_runtime.as_ref() {
@@ -1415,12 +1509,17 @@ impl Daemon {
                 let _ = supervisor.child.wait();
             }
             if let Some(message) = failure {
+                daemon.shutdown_running.store(false, Ordering::Release);
                 daemon.send_direct(
                     &client,
                     error_event("shutdown-failed", message, id.as_ref()),
                 );
                 return;
             }
+            daemon.broadcast(json!({
+                "v": PROTOCOL_VERSION, "event": "state", "status": "stopped",
+                "running": false, "ready": false, "operation_id": id.as_ref(),
+            }));
             daemon.send_direct(
                 &client,
                 json!({
@@ -1442,11 +1541,7 @@ impl Daemon {
         client: mpsc::Sender<String>,
     ) {
         let id = request.get("id").cloned();
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 &client,
                 error_event(
@@ -1526,9 +1621,7 @@ impl Daemon {
                     }));
                 }
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -1545,11 +1638,7 @@ impl Daemon {
             );
             return;
         };
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 &client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1605,9 +1694,7 @@ impl Daemon {
                     }));
                 }
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -1615,7 +1702,7 @@ impl Daemon {
     ///
     /// A locald verb rather than something the shell does, because only locald
     /// owns the VM lifecycle -- and because the progress the splash already
-    /// renders comes from here. It takes `host_operation_running`, the same
+    /// renders comes from here. It takes `lifecycle`, the same
     /// guard `start`, `stop`, `restart` and `runtime.prepare` take, so a reset
     /// can never interleave with a start.
     ///
@@ -1648,11 +1735,7 @@ impl Daemon {
             );
             return;
         };
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if self.lifecycle.begin().is_err() {
             self.send_direct(
                 &client,
                 error_event("busy", "another local operation is running", id.as_ref()),
@@ -1703,9 +1786,7 @@ impl Daemon {
                     }));
                 }
             }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            daemon.lifecycle.finish();
         });
     }
 
@@ -1811,6 +1892,7 @@ impl Daemon {
         manager: &HostProcessManager,
         operation_id: Option<&Value>,
     ) -> io::Result<()> {
+        self.lifecycle.checkpoint()?;
         // Refuse before touching the guest. Something has already replaced a
         // credential this installation's data was written under, so starting
         // would fail deep inside migrations as an opaque auth error, or come up
@@ -1824,9 +1906,11 @@ impl Daemon {
         }
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
+        self.lifecycle.checkpoint()?;
         manager.mark_dependency_ready();
         manager.set_backend_environment(self.backend_environment()?);
-        manager.start_all_with_progress(|component| {
+        self.lifecycle.checkpoint()?;
+        manager.start_all_cancellable(|component| {
             let (label, progress, detail, log_source) = match component {
                 "migrations" => (
                     "Checking workspace data",
@@ -1864,6 +1948,11 @@ impl Daemon {
                 "component": component,
                 "log_source": log_source,
             }));
+        }, || self.lifecycle.checkpoint()).or_else(|error| {
+            if let Some(runtime) = self.managed_runtime.as_ref() {
+                runtime.check_guest_kernel()?;
+            }
+            Err(error)
         })?;
         // The auth service was started before the backend and is only now
         // waited for, so it came up alongside it rather than in front of it.
@@ -1882,6 +1971,7 @@ impl Daemon {
                 return Err(error);
             }
         }
+        self.lifecycle.checkpoint()?;
         let state = self.state.lock().expect("state lock poisoned").clone();
         self.broadcast(json!({
             "v": PROTOCOL_VERSION, "event": "phase", "key": "ready",
@@ -1989,24 +2079,27 @@ impl Daemon {
         runtime_generation: &str,
     ) -> io::Result<()> {
         if let Some(runtime) = self.managed_runtime.as_ref() {
-            return runtime.start_with_progress(|component, label, progress, detail| {
-                self.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "phase",
-                    "key": component,
-                    "stage": component,
-                    "label": label,
-                    "progress": progress,
-                    "detail": detail,
-                    "current": 0,
-                    "total": 1,
-                    "bytes": false,
-                    "operation_id": operation_id,
-                    "runtime_generation": runtime_generation,
-                    "component": component,
-                    "log_source": if component == "vm" { "vm" } else { "guest" },
-                }));
-            });
+            return runtime.start_cancellable(
+                |component, label, progress, detail| {
+                    self.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "phase",
+                        "key": component,
+                        "stage": component,
+                        "label": label,
+                        "progress": progress,
+                        "detail": detail,
+                        "current": 0,
+                        "total": 1,
+                        "bytes": false,
+                        "operation_id": operation_id,
+                        "runtime_generation": runtime_generation,
+                        "component": component,
+                        "log_source": if component == "vm" { "vm" } else { "guest" },
+                    }));
+                },
+                || self.lifecycle.checkpoint(),
+            );
         }
         self.wait_for_supervisor(json!({
             "cmd": "start", "setup": false, "rebuild": false, "infra_only": true,
@@ -2434,7 +2527,9 @@ fn validate_canonical_origin(origin: &str) -> io::Result<()> {
 }
 
 fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
-    if message.contains("restart to finish enabling WSL 2") {
+    if message.contains("Linux guest kernel crashed") {
+        "guest-kernel-failed"
+    } else if message.contains("restart to finish enabling WSL 2") {
         "wsl-reboot-required"
     } else if message.contains("WSL 2 is required") {
         "wsl-required"
@@ -2452,7 +2547,9 @@ fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'stat
 
 fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
     let message = message.to_ascii_lowercase();
-    if message.contains("migration") || message.contains("alembic") {
+    if message.contains("guest kernel") {
+        ("infrastructure", "infrastructure")
+    } else if message.contains("migration") || message.contains("alembic") {
         ("migrations", "migrations")
     } else if message.contains("frontend") || message.contains("eaddrinuse") {
         ("frontend", "frontend")
@@ -2784,6 +2881,15 @@ mod tests {
 
     #[test]
     fn startup_errors_select_the_relevant_diagnostic_log() {
+        let kernel_error = "backend health gate: Linux guest kernel crashed";
+        assert_eq!(
+            error_diagnostic_source(kernel_error),
+            ("infrastructure", "infrastructure")
+        );
+        assert_eq!(
+            runtime_operation_error_code(kernel_error, "host-operation-failed"),
+            "guest-kernel-failed"
+        );
         assert_eq!(
             error_diagnostic_source("frontend failed: EADDRINUSE"),
             ("frontend", "frontend")

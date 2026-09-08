@@ -19,7 +19,7 @@ export function normalizeConversationStatus(status: unknown): string | undefined
 export function isConversationRunningStatus(status: unknown): boolean {
   const normalized = normalizeConversationStatus(status);
   if (!normalized) return false;
-  return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING";
+  return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING" || normalized === "STOP_REQUESTED";
 }
 
 function extractTextFromStructuredContentEntry(entry: unknown): string {

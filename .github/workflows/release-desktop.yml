@@ -160,19 +160,11 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          # Falls back to CI's cache from main. Releases are rare, so this key is
-          # cold most times it is read; CI's is warm from the last merge, and the
-          # lockfile hash still decides whether the restore is usable.
-          restore-keys: |
-            desktop-cargo-${{ runner.os }}-
-            desktop-ci-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Download and verify native runtime artifacts
         shell: bash
@@ -241,6 +233,17 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --locked
 
+      - name: Test native VM service transport
+        run: swift test --package-path desktop/local-runtime/macos-vz
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       - name: Sign virtualization helper with its entitlement
         shell: bash
         env:
@@ -287,12 +290,22 @@ jobs:
             exit 1
           fi
 
+      - name: Verify credential access across signed helper updates
+        shell: bash
+        env:
+          LEMMA_SIGNING_TEST_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+          LEMMA_SIGNING_TEST_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "${LEMMA_SIGNING_TEST_IDENTITY}"
+          test -n "${LEMMA_SIGNING_TEST_TEAM}"
+          python3 -m unittest discover -s desktop/scripts -p test_check_macos_signing.py
+
       - name: Build online DMG
         working-directory: desktop
-        # The updater overlay is merged only here. `tauri build` runs from five
-        # other places with no signing key -- CI's build check, the Windows
-        # check, both nightly jobs and `make desktop-dmg` -- and every one of
-        # them would fail if the base config demanded updater artifacts.
+        # The updater overlay is merged only for update-capable builds. CI's
+        # build checks and `make desktop-dmg` have no updater signing key and
+        # would fail if the base config demanded one.
         run: |
           set -euo pipefail
           npx -y "$TAURI_CLI" build \
@@ -407,19 +420,11 @@ jobs:
           check "no legacy lemma-supervisor binary" test ! -e "${app}/Contents/MacOS/lemma-supervisor"
           check "no legacy bundled uv binary" test ! -e "${app}/Contents/MacOS/uv"
 
-          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
-          # 25 MiB didn't have room for lemma-agent-host (added as a Desktop
-          # sidecar after this budget was set) -- v0.7.1's bundle came in at
-          # 26,423,296 bytes, 208,896 bytes over. 30 MiB gives that real
-          # addition headroom without leaving the budget meaningless.
-          limit=$((30 * 1024 * 1024))
-          echo "app size: ${app_bytes} bytes (limit ${limit} bytes / 30 MiB)"
-          if [[ "${app_bytes}" -gt "${limit}" ]]; then
-            echo "::error::online app bundle is ${app_bytes} bytes, over the 30 MiB budget by $((app_bytes - limit)) bytes"
-            failed=1
-          fi
+          check "online application payload" python3 desktop/scripts/check_online_payload.py --macos-app "${app}"
 
           check "app bundle codesign verifies" codesign --verify --deep --strict --verbose=2 "${app}"
+          check "app and helpers preserve the release team and identifiers" \
+            python3 desktop/scripts/check_macos_signing.py "${app}" --team-id "${APPLE_TEAM_ID}"
           check "locald codesign verifies" codesign --verify --strict --verbose=2 "${locald}"
           check "runtime bridge codesign verifies" codesign --verify --strict --verbose=2 "${runtime_bridge}"
           check "vz codesign verifies" codesign --verify --strict --verbose=2 "${vz}"
@@ -446,6 +451,13 @@ jobs:
           echo "All Desktop bundle verification checks passed."
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify native credentials with the packaged release daemon
+        env:
+          LEMMA_NATIVE_CREDENTIAL_TEST_BINARY: desktop/target/release/bundle/macos/Lemma.app/Contents/MacOS/lemma-locald
+          LEMMA_SIGNING_TEST_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 -m unittest discover -s desktop/scripts -p test_native_credentials.py
 
       # Tauri notarizes and staples the .app, then tars it. That ordering is
       # believed, not documented -- and an update payload that is not notarized
@@ -733,14 +745,11 @@ jobs:
               path.write_text(json.dumps(config, indent=2) + "\n")
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Download and verify native runtime artifacts
         shell: pwsh
@@ -792,6 +801,23 @@ jobs:
       - name: Build Windows sidecars
         shell: pwsh
         run: desktop/scripts/build-sidecar.ps1
+
+      - name: Lint Windows desktop
+        working-directory: desktop
+        run: cargo clippy --workspace --exclude lemma-guestd --locked --all-targets -- -D warnings
+
+      - name: Test Windows desktop
+        working-directory: desktop
+        run: cargo test --workspace --exclude lemma-guestd --locked
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       - name: Sign native runtime bridge
         if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
@@ -863,19 +889,7 @@ jobs:
       - name: Enforce small online application payload
         shell: pwsh
         run: |
-          $paths = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/lemma-local.json"
-          )
-          $bytes = ($paths | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          if ($bytes -gt 25MB) {
-            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
-          }
+          python desktop/scripts/check_online_payload.py --windows-root desktop
 
       # Deliberately an artifact, not a release asset. See the note at the top
       # of this file: Windows is experimental and is not published yet.

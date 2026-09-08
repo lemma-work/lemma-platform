@@ -330,6 +330,11 @@ class AgentHostRunSpec(BaseModel):
     system_prompt: str
     prompt: list[JsonObject] = Field(min_length=1)
     resume_session_id: str | None = Field(default=None, max_length=512)
+    workspace_cwd: str | None = Field(
+        default=None,
+        max_length=4096,
+        description="Saved conversation cwd under /workspace; the host maps its suffix under ~/lemma.",
+    )
     context: JsonObject = Field(default_factory=dict)
     run_deadline: datetime
     system_prompt_delivery: str | None = Field(

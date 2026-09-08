@@ -157,6 +157,8 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
     }
 
     conversation = await alice.starts_a_conversation(in_pod=pod, with_agent=agent["name"])
+    saved_cwd = conversation["metadata"]["cwd"]
+    assert saved_cwd.startswith("/workspace/c/")
     # The send endpoint streams until the run finishes, and this run finishes
     # only when a host does the work — which is the thing under test. Send
     # without holding the stream: once the message commits, the run is
@@ -199,6 +201,7 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
         # second command id, or a bumped epoch while this claim still stands,
         # means somebody else was told to run the same work too.
         [claim] = commands
+        assert claim["payload"]["workspace_cwd"] == saved_cwd
         for _ in range(2):
             answer = await _poll(alice, host_secret)
             assert answer.status_code == 200, answer.text[:300]

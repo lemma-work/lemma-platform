@@ -65,6 +65,7 @@ export function HarnessRow({
     action,
     onRecheck,
     className,
+    compact = false,
 }: {
     harness: HarnessRowHarness;
     /** A healthy harness on an unreachable computer still cannot take work. */
@@ -75,15 +76,21 @@ export function HarnessRow({
     /** Offered on a harness that needs signing in, where it is the actual fix. */
     onRecheck?: () => void;
     className?: string;
+    compact?: boolean;
 }) {
     // The adapter version used to lead the facts line and is not a fact about
     // the user's computer: it is the ACP bridge Lemma pins and installs, the
     // same for everyone on a release. See `describeHarness` for what survived.
-    const { logo, facts, statusLabel, usable, blockedReason } = describeHarness(harness, { hostOnline });
+    const { logo, facts, modelCount, statusLabel, usable, blockedReason } = describeHarness(harness, { hostOnline });
+    const rowAction = action?.(usable);
+    const details = <>
+        {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
+        {harness.stale_reason ? <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p> : null}
+    </>;
 
     return (
         <div className={cn('rounded-md bg-[var(--surface-1)] px-3 py-3', className)}>
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2">
                 <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)]">
                     {logo ? (
                         <Image src={logo} alt="" width={16} height={16} className="size-4 object-contain" />
@@ -101,7 +108,7 @@ export function HarnessRow({
                       * count yet, and the empty div left a blank line under the
                       * name for the whole of the wait.
                       */}
-                    {facts.length > 0 ? (
+                    {compact && modelCount ? <div className="text-xs text-[var(--text-tertiary)]">{modelCount} {modelCount === 1 ? 'model' : 'models'}</div> : !compact && facts.length > 0 ? (
                         <div className="text-xs text-[var(--text-tertiary)]">
                             {facts.join(' · ')}
                         </div>
@@ -112,15 +119,21 @@ export function HarnessRow({
                         label={
                             savedProfile.archived
                                 ? `Archived as ${savedProfile.name}`
-                                : `Added as ${savedProfile.name}`
+                                : compact ? 'Added' : `Added as ${savedProfile.name}`
                         }
                         tone="muted"
                     />
                 ) : null}
                 <StatusBadge label={statusLabel} tone={usable ? 'ok' : 'muted'} />
+                {compact ? rowAction : null}
             </div>
-            {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
-            {action ? <div className="mt-2">{action(usable)}</div> : null}
+            {compact && (blockedReason || harness.stale_reason) ? (
+                <details className="mt-1 text-xs text-[var(--text-tertiary)]">
+                    <summary className="cursor-pointer">Setup instructions</summary>
+                    {details}
+                </details>
+            ) : !compact ? details : null}
+            {!compact && rowAction ? <div className="mt-2">{rowAction}</div> : null}
             {/*
               * The copy for AUTH_REQUIRED already says "then let Agent Host
               * re-probe", and until now there was nothing anywhere to press.
@@ -140,9 +153,6 @@ export function HarnessRow({
                         I&apos;ve signed in — re-check
                     </Button>
                 </div>
-            ) : null}
-            {harness.stale_reason ? (
-                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
             ) : null}
         </div>
     );

@@ -1523,8 +1523,6 @@ export function useAssistantController({
 
   const stop = useCallback(() => {
     const hadActiveStream = sessionIsStreamingRef.current || isStreamingRef.current;
-    sessionCancel();
-    setIsStreaming(false);
     const conversationId = activeConversationIdRef.current;
     if (!conversationId) return;
     const activeConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
@@ -1539,7 +1537,7 @@ export function useAssistantController({
       touchConversation(conversationId, { status: previousStatus });
       setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to stop conversation"));
     });
-  }, [sessionCancel, sessionStop, touchConversation]);
+  }, [sessionStop, touchConversation]);
 
   const selectConversation = useCallback((conversationId: string | null) => {
     const currentConversationId = activeConversationIdRef.current;

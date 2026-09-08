@@ -247,6 +247,10 @@ pub struct RunSpec {
     /// the run opens a fresh session.
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// Persisted conversation path. Only the /workspace-relative suffix is
+    /// accepted; a remote command cannot choose an arbitrary host directory.
+    #[serde(default)]
+    pub workspace_cwd: Option<String>,
     #[serde(default)]
     pub context: JsonMap,
     /// Run-scoped Lemma MCP configuration, delivered inline with the command.
