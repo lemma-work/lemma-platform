@@ -368,3 +368,32 @@ async fn a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent() {
     );
     assert_eq!(actual, expected);
 }
+
+/// An update naming a session this run does not own is not part of its answer.
+///
+/// ACP puts a `sessionId` on every `session/update` and nothing read it, so an
+/// adapter holding a second session open — which the protocol permits — would
+/// have had that session's output spliced into this conversation's transcript,
+/// between two chunks of the real answer and indistinguishable from them.
+#[tokio::test]
+async fn output_belonging_to_another_session_never_reaches_this_transcript() {
+    let (_directory, _shims, control, host) = streaming_run("stream-foreign-session", false).await;
+    control
+        .wait_for(
+            "terminal after the turn",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+
+    let text = control.assistant_text();
+    assert!(
+        !text.contains("STOLEN"),
+        "another session's output reached this transcript: {text:?}"
+    );
+    assert_eq!(
+        text, "mine also mine",
+        "and this run's own chunks must all still be there"
+    );
+}

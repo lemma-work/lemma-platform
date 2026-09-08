@@ -370,6 +370,8 @@ def run_stream_turn():
         # Same crash, but with enough output in flight that the child's exit is
         # observed while the host is still draining the pipe.
         "stream-crash-midstream": "crash-midstream.json",
+        # An adapter that emits an update for a session this run does not own.
+        "stream-foreign-session": "foreign-session.json",
     }.get(MODE, "stream.json")
     run_scenario(
         pathlib.Path(__file__).parent / "scenarios" / scenario,
@@ -448,6 +450,7 @@ def main():
                 "stream",
                 "stream-crash",
                 "stream-crash-midstream",
+                "stream-foreign-session",
                 "stream-deadline",
             }:
                 run_stream_turn()

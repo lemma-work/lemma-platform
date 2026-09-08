@@ -207,12 +207,31 @@ impl AgentDriver for AcpDriver {
         // opens when this run's own prompt goes out.
         let streaming = Arc::new(AtomicBool::new(false));
         let notification_streaming = Arc::clone(&streaming);
+        // Which session this run's transcript belongs to.
+        //
+        // ACP carries a `sessionId` on every update and nothing here read it,
+        // so an adapter holding more than one session open would have written
+        // another conversation's output into this one's transcript. Set once
+        // the session is established, and only updates naming it are journaled.
+        let turn_session: Arc<std::sync::OnceLock<String>> = Arc::new(std::sync::OnceLock::new());
+        let notification_session = Arc::clone(&turn_session);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host")
             .on_receive_notification(
                 async move |notification: SessionNotification, _context| {
                     if !notification_streaming.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    // An update for a session this run does not own belongs to
+                    // somebody else's transcript, not the end of this one.
+                    if let Some(session) = notification_session.get()
+                        && notification.session_id.to_string().as_str() != session.as_str()
+                    {
+                        tracing::warn!(
+                            claimed = %notification.session_id,
+                            "dropped an ACP update for another session"
+                        );
                         return Ok(());
                     }
                     if let Some((event_type, object_id, payload)) =
@@ -511,7 +530,10 @@ impl AgentDriver for AcpDriver {
                         agent_client_protocol::schema::v1::Error::internal_error()
                             .data(error.to_string())
                     })?;
-                // Past this point every session update belongs to this turn.
+                // Past this point every session update belongs to this turn --
+                // as long as it names this session, which is what the handler
+                // now checks.
+                let _ = turn_session.set(session_id.to_string());
                 streaming.store(true, Ordering::SeqCst);
                 let turn = connection
                     .send_request(PromptRequest::new(
