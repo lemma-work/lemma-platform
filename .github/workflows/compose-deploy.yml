@@ -43,7 +43,8 @@ on:
           "Release Local Stack Images" dispatch with publish unchecked. Its
           lemma-local.json is used instead of a published release, so this
           installs exactly the images that run built. Takes precedence over
-          version.
+          version. Usable for a fortnight after that build; the images and the
+          bundle artifact both last that long.
         required: false
         type: string
 
@@ -91,7 +92,14 @@ jobs:
           RUN_ID: ${{ inputs.images_run_id }}
         run: |
           set -euo pipefail
-          gh run download "$RUN_ID" --pattern 'lemma-local-test-*' --dir /tmp/manifest
+          # Two artifacts match a loose `lemma-local-test-*`: the manifest on
+          # its own (a few KB, kept a day) and the full runtime bundle that also
+          # carries the host packs and guest runtimes (1.1 GB, kept a fortnight).
+          # Only the JSON is wanted, so ask for it by name and fall back to the
+          # bundle once the small one has expired.
+          gh run download "$RUN_ID" --pattern 'lemma-local-test-manifest-*' \
+            --dir /tmp/manifest 2>/dev/null ||
+            gh run download "$RUN_ID" --pattern 'lemma-local-test-*' --dir /tmp/manifest
           found="$(find /tmp/manifest -name lemma-local.json -print -quit)"
           test -n "$found" || {
             echo "run $RUN_ID has no lemma-local.json artifact. It has to be a" >&2
