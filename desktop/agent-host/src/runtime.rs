@@ -2300,6 +2300,12 @@ struct JournalCallbacks {
     events_ready: Arc<tokio::sync::Notify>,
 }
 
+/// How much streamed text is held before it is sealed into an upsert.
+///
+/// `recover_event` replays multiple upserts correctly, so sealing early costs
+/// nothing beyond an extra row.
+const STREAM_SEGMENT_SEAL_BYTES: usize = 64 * 1024;
+
 /// Accumulated per-kind streamed text awaiting a full-text upsert.
 ///
 /// Chunks are the cosmetic live lane (the server publishes them without
@@ -2461,16 +2467,27 @@ impl AcpCallbacks for JournalCallbacks {
                     // the current text segment ahead of itself.
                     self.flush_stream_segment(is_message)?;
                 } else {
-                    let mut segments = self
-                        .stream_segments
-                        .lock()
-                        .expect("stream segments poisoned");
-                    let segment = if is_message {
-                        &mut segments.message
-                    } else {
-                        &mut segments.thought
+                    let outgrew_segment = {
+                        let mut segments = self
+                            .stream_segments
+                            .lock()
+                            .expect("stream segments poisoned");
+                        let segment = if is_message {
+                            &mut segments.message
+                        } else {
+                            &mut segments.thought
+                        };
+                        segment.push_str(&text);
+                        segment.len() >= STREAM_SEGMENT_SEAL_BYTES
                     };
-                    segment.push_str(&text);
+                    // Sealed on size as well as on a change of kind. A turn that
+                    // only ever streams text never changes kind, so the whole
+                    // answer was held in memory, written again in full as one
+                    // upsert row, and sent twice -- once as chunks and once as
+                    // that row. Long answers are exactly when that hurts.
+                    if outgrew_segment {
+                        self.flush_stream_segment(is_message)?;
+                    }
                 }
                 self.journal.append_event(
                     self.target_id,
@@ -4267,6 +4284,52 @@ mod stream_upsert_tests {
     use serde_json::Value;
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    /// A long answer that only ever streams text never changes kind, so nothing
+    /// sealed its segment: the whole thing sat in memory, was written again in
+    /// full as a single upsert row, and reached Lemma twice. Sealing on size as
+    /// well as on a change of kind bounds it, and `recover_event` already
+    /// replays multiple upserts correctly.
+    #[test]
+    fn a_long_text_only_answer_is_sealed_in_pieces_rather_than_held_whole() {
+        let (_directory, callbacks, run_id) = fixture();
+
+        // Comfortably past the seal threshold, in realistic chunk sizes.
+        let chunk = "a".repeat(4096);
+        for _ in 0..40 {
+            callbacks
+                .event(EventType::AgentMessageChunk, None, payload(&chunk))
+                .unwrap();
+        }
+
+        let batches = callbacks
+            .journal
+            .pending_events(callbacks.target_id, 4096)
+            .unwrap();
+        let upserts = batches
+            .iter()
+            .flat_map(|batch| batch.events.iter())
+            .filter(|event| event.event_type == EventType::AgentMessageUpsert)
+            .count();
+        assert!(
+            upserts >= 2,
+            "a {}KiB answer should seal more than once, saw {upserts}",
+            40 * 4
+        );
+
+        let recovered: String = batches
+            .iter()
+            .flat_map(|batch| batch.events.iter())
+            .filter(|event| event.event_type == EventType::AgentMessageChunk)
+            .map(|event| super::chunk_text(&event.payload))
+            .collect();
+        assert_eq!(
+            recovered.len(),
+            40 * 4096,
+            "sealing must not drop or duplicate any of the answer"
+        );
+        let _ = run_id;
+    }
 
     /// A run whose model the harness will not take reports that as a config
     /// update *before* the prompt goes out. Lemma treats a RUNNING checkpoint

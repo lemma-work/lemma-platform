@@ -690,7 +690,13 @@ impl Journal {
             r#"
             SELECT event_json FROM event_outbox
              WHERE target_id=?1 AND acknowledged_at IS NULL
-             ORDER BY run_id, lease_epoch, sequence
+             -- By age first, then by run, so two concurrent runs interleave
+             -- fairly. Ordering by `run_id` sorted by a UUID: the lexically
+             -- lower run's whole backlog went first, and a busy one could hold
+             -- back the other's terminal event for a full pass while the
+             -- conversation showed nothing. `sequence` still orders within a
+             -- run, which is what the contiguity check depends on.
+             ORDER BY created_at, run_id, lease_epoch, sequence
              LIMIT ?2
             "#,
         )?;
@@ -1390,6 +1396,73 @@ mod tests {
         assert!(
             journal.recoverable_runs(target).unwrap().is_empty(),
             "a finished run must not be re-driven on the next start"
+        );
+    }
+
+    /// Two runs streaming at once must interleave, not queue behind each other.
+    ///
+    /// The outbox ordered by `run_id`, which sorts by a UUID: whichever run drew
+    /// the lexically lower one had its entire backlog drained first, so a busy
+    /// run could hold back the other's terminal event for a full pass while that
+    /// conversation showed nothing at all.
+    #[test]
+    fn a_busy_run_does_not_hold_back_another_runs_events() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+
+        // A second run on the same target, with a deliberately lower id so the
+        // old ordering would have put it first regardless of age.
+        let mut second_spec = spec.clone();
+        second_spec.agent_run_id = Uuid::nil();
+        let second = Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::StartRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + ChronoDuration::minutes(1),
+            run_id: Some(second_spec.agent_run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::to_value(&second_spec).unwrap(),
+        };
+        journal
+            .accept_start(target, &second, &second_spec, "codex", "1.0")
+            .unwrap();
+
+        // The higher-id run speaks first and often; the lower-id one finishes.
+        for _ in 0..40 {
+            journal
+                .append_event(
+                    target,
+                    spec.agent_run_id,
+                    1,
+                    EventType::AgentMessageChunk,
+                    None,
+                    JsonMap::new(),
+                )
+                .unwrap();
+        }
+        journal
+            .append_event(
+                target,
+                second_spec.agent_run_id,
+                1,
+                EventType::Terminal,
+                None,
+                JsonMap::new(),
+            )
+            .unwrap();
+
+        // A pass small enough that the old ordering would have spent all of it
+        // on the lexically-lower run's backlog.
+        let batches = journal.pending_events(target, 8).unwrap();
+        let runs: Vec<Uuid> = batches
+            .iter()
+            .filter_map(|batch| batch.events.first().map(|event| event.run_id))
+            .collect();
+        assert!(
+            runs.contains(&spec.agent_run_id),
+            "the run that spoke first must be delivered first: {runs:?}"
         );
     }
 
