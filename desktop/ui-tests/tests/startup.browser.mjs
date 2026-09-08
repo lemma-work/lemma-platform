@@ -256,3 +256,62 @@ test('a recovery window that will not open says so instead of doing nothing', as
   await page.getByText('Local settings could not be created', { exact: false }).waitFor();
   assert.equal(await page.locator('#errwrap').isVisible(), true);
 });
+
+// A `role="tablist"` whose children are plain buttons announces a tab list
+// with nothing in it, marks the selected one by colour alone, and does not
+// answer arrow keys. Somebody reading a failure log with a screen reader gets
+// a list of unlabelled buttons and no way to tell which one they are reading.
+test('the log sources are real tabs, not buttons in a box', async t => {
+  const page = await splash(t, {
+    logs: {
+      sources: [{ id: 'events', label: 'Events' }, { id: 'backend', label: 'Backend' }],
+      entries: { events: 'events body', backend: 'backend body' },
+    },
+  });
+  await page.locator('#toggle-log').click();
+  await page.getByText('events body', { exact: false }).waitFor();
+
+  const tabs = page.getByRole('tab');
+  assert.deepEqual(await tabs.allTextContents(), ['Events', 'Backend']);
+  assert.equal(await page.locator('#log-tabs').getAttribute('aria-label'), 'Log sources');
+  assert.equal(await page.getByRole('tab', { name: 'Events' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('tab', { name: 'Backend' }).getAttribute('aria-selected'), 'false');
+  // The panel says which tab it belongs to, so its content is not orphaned.
+  assert.equal(
+    await page.locator('#log').getAttribute('aria-labelledby'),
+    'log-tab-events',
+  );
+
+  // One tab stop for the set, then arrows move within it.
+  assert.deepEqual(
+    await tabs.evaluateAll(nodes => nodes.map(node => node.tabIndex)),
+    [0, -1],
+  );
+  await page.getByRole('tab', { name: 'Events' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.getByText('backend body', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('tab', { name: 'Backend' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'log-tab-backend');
+});
+
+// The phase is announced once, through `say()`, which skips a repeat of the
+// same line. The byte counter beside it changes every second or so, and while
+// it was inside a live region a screen reader re-read the whole progress line
+// on every tick -- for the length of a 473 MB download.
+test('progress numbers are shown without being announced', async t => {
+  const page = await splash(t);
+  assert.equal(await page.locator('#operation-status').getAttribute('aria-live'), null);
+
+  await push(page, {
+    ...RUNNING, phaseKey: 'download', phase: 'Downloading services', progress: 20,
+    downloadedBytes: 104857600, totalBytes: 496435200,
+  });
+  // Still visible: this is not about hiding it, it is about not narrating it.
+  await page.locator('#operation-status').waitFor({ state: 'visible' });
+  assert.notEqual(await page.locator('#operation-meta').textContent(), '');
+  // And the phase itself does reach the live region.
+  assert.equal(
+    await page.locator('.statement').getAttribute('aria-live'), 'polite',
+  );
+  await page.getByText('Downloading services', { exact: false }).waitFor();
+});

@@ -785,7 +785,12 @@
     </div>
   </section>
 
-  <div class="operation-status" id="operation-status" hidden aria-live="polite">
+  <!-- Not a live region. `showOperationStatus` calls `say()`, so the phase is
+       already announced through the statement above, once per phase. What is
+       left here is the byte counter and the estimate, which change every
+       second or so: announcing those re-read the whole progress line to a
+       screen reader every tick, for the length of a 473 MB download. -->
+  <div class="operation-status" id="operation-status" hidden>
     <span class="operation-detail" id="operation-detail"></span>
     <span class="operation-meta" id="operation-meta"></span>
   </div>
@@ -821,8 +826,8 @@
         <button id="close-log" type="button">Close</button>
       </div>
     </div>
-    <div class="log-tabs" id="log-tabs" role="tablist"></div>
-    <pre class="log" id="log"></pre>
+    <div class="log-tabs" id="log-tabs" role="tablist" aria-label="Log sources"></div>
+    <pre class="log" id="log" role="tabpanel" tabindex="0"></pre>
   </div>
 </div>
 
@@ -1295,17 +1300,49 @@
     logEl.textContent = sections.join("\n");
     logEl.scrollTop = logEl.scrollHeight;
   }
+  // A `role="tablist"` whose children are plain buttons is worse than no role
+  // at all: it announces a tab list and then nothing inside it is a tab, the
+  // selected one is distinguishable only by colour, and arrow keys do nothing.
   function renderLogTabs(sources) {
+    // Choosing a source re-reads the log, which re-renders these buttons and
+    // destroys the one that was focused -- dropping keyboard focus to the
+    // document. Arrow-keying through the sources would move focus once and
+    // then lose it.
+    const hadFocus = logTabs.contains(document.activeElement);
     logTabs.innerHTML = "";
     for (const source of sources || []) {
       const button = document.createElement("button");
       button.type = "button";
+      button.id = `log-tab-${source.id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "log");
+      const selected = source.id === activeLogSource;
+      button.setAttribute("aria-selected", String(selected));
+      // One stop for the whole set, as the tabs pattern requires: Tab reaches
+      // the list, then Left/Right move within it.
+      button.tabIndex = selected ? 0 : -1;
       button.textContent = source.label;
-      button.classList.toggle("active", source.id === activeLogSource);
+      button.classList.toggle("active", selected);
       button.addEventListener("click", () => selectLogSource(source.id));
       logTabs.appendChild(button);
+      if (selected) {
+        logEl.setAttribute("aria-labelledby", button.id);
+        if (hadFocus) button.focus();
+      }
     }
   }
+
+  logTabs.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const tabs = [...logTabs.querySelectorAll('[role="tab"]')];
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = tabs[(current + step + tabs.length) % tabs.length];
+    next.focus();
+    next.click();
+  });
   async function refreshDiagnosticLog({ append = false } = {}) {
     try {
       const snapshot = await window.lemmaDesktop.diagnosticLogs(
