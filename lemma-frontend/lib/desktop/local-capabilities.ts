@@ -191,6 +191,24 @@ export function desktopBridgeAvailable(): boolean {
 }
 
 /**
+ * Whether this page is being rendered inside the Lemma desktop app.
+ *
+ * A different question from `desktopBridgeAvailable`, which asks whether the
+ * page may use the *privileged local* commands and so requires the deployment
+ * to be local as well. Someone running a cloud workspace in the desktop app is
+ * in the desktop app; they just have no local stack to command.
+ *
+ * Conflating the two made every cloud-mode desktop user report as a web
+ * visitor, which is the one thing the client name exists to distinguish.
+ */
+export function runningInDesktopApp(): boolean {
+  return (
+    typeof window !== "undefined"
+    && typeof window.__TAURI__?.core?.invoke === "function"
+  );
+}
+
+/**
  * Whether an app embedded in an iframe would still be signed in.
  *
  * On macOS it is not, and no cookie attribute can change that. `localhost` is
