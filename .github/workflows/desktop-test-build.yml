@@ -252,7 +252,10 @@ jobs:
       - name: Hand back the installer
         uses: actions/upload-artifact@v7
         with:
-          name: lemma-desktop-${{ inputs.platform }}-${{ github.ref_name }}-${{ github.sha }}
+          # The commit, not the branch: an artifact name cannot contain a
+          # forward slash, and every branch here is `lemma/something`. The run
+          # page says which branch it was.
+          name: lemma-desktop-${{ inputs.platform }}-${{ github.sha }}
           path: |
             desktop/target/release/bundle/nsis/*.exe
             desktop/target/release/bundle/dmg/*.dmg
