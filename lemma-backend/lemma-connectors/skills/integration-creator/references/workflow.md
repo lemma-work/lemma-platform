@@ -4,7 +4,7 @@ Use this when generating or regenerating a package in `lemma-connectors`.
 
 ## 1. Confirm the spec
 
-- Put the provider spec in `lemma-connectors/openapi_specs/<app>.json`.
+- Put the provider spec in `lemma-backend/openapi_specs/<app>.json`.
 - Confirm the app slug you want to expose under `src/lemma_connectors/<app>/`.
 
 ## 2. Generate transport, metadata, and canonical models
@@ -12,7 +12,7 @@ Use this when generating or regenerating a package in `lemma-connectors`.
 ```bash
 lemma-connectors/.venv/bin/python lemma-connectors/scripts/generate_openapi_metadata.py \
   --app <app> \
-  --spec lemma-connectors/openapi_specs/<app>.json \
+  --spec openapi_specs/<app>.json \
   --generated-client-output lemma-connectors/src/lemma_connectors/<app>/generated/client \
   --pydantic-models-output lemma-connectors/src/lemma_connectors/<app>/generated/pydantic_models.py \
   --pydantic-registry-output lemma-connectors/src/lemma_connectors/<app>/generated/pydantic_model_registry.json \
