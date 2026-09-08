@@ -23,8 +23,6 @@ from app.modules.connectors.infrastructure.adapters.sql_executor import (
 from app.modules.connectors.infrastructure.kinds.brokered_kinds import (
     ComposioInstaller,
     ComposioKindExecutor,
-    PackageInstaller,
-    PackageKindExecutor,
 )
 from app.modules.connectors.infrastructure.kinds.network_kinds import (
     HttpKindExecutor,
@@ -79,7 +77,6 @@ class KindRegistry:
 def build_kind_registry(
     *,
     composio_gateway: Any,
-    package_gateway: Any,
     http_executor: OpenApiHttpExecutor | None = None,
     mcp_executor: McpExecutor | None = None,
 ) -> KindRegistry:
@@ -98,11 +95,6 @@ def build_kind_registry(
                 kind=ConnectorKind.COMPOSIO,
                 executor=ComposioKindExecutor(composio_gateway),
                 installer=ComposioInstaller(),
-            ),
-            ConnectorKind.PACKAGE: KindPlugin(
-                kind=ConnectorKind.PACKAGE,
-                executor=PackageKindExecutor(package_gateway),
-                installer=PackageInstaller(),
             ),
             ConnectorKind.HTTP: KindPlugin(
                 kind=ConnectorKind.HTTP,

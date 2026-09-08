@@ -22,7 +22,7 @@ from app.modules.connectors.domain.connector import (
     ComposioKindSpec,
     ConnectorKind,
     McpKindSpec,
-    PackageKindSpec,
+    HttpKindSpec,
     SqlKindSpec,
 )
 from app.modules.connectors.domain.connector_operation import ResolvedOperation
@@ -45,7 +45,6 @@ from app.modules.connectors.services.execution import KindDispatcher
 
 ALL_KINDS = [
     ConnectorKind.COMPOSIO,
-    ConnectorKind.PACKAGE,
     ConnectorKind.HTTP,
     ConnectorKind.SQL,
     ConnectorKind.MCP,
@@ -53,14 +52,12 @@ ALL_KINDS = [
 
 
 def _registry() -> KindRegistry:
-    return build_kind_registry(
-        composio_gateway=AsyncMock(), package_gateway=AsyncMock()
-    )
+    return build_kind_registry(composio_gateway=AsyncMock())
 
 
 def _install(kind: ConnectorKind, config: dict | None = None) -> ResolvedInstall:
     specs = {
-        ConnectorKind.PACKAGE: PackageKindSpec(),
+        ConnectorKind.HTTP: HttpKindSpec(),
         ConnectorKind.SQL: SqlKindSpec(),
         ConnectorKind.MCP: McpKindSpec(),
     }
@@ -71,7 +68,7 @@ def _install(kind: ConnectorKind, config: dict | None = None) -> ResolvedInstall
         organization_id=uuid4(),
         config=config or {},
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
-        spec=specs.get(kind, PackageKindSpec()),
+        spec=specs.get(kind, HttpKindSpec()),
     )
 
 
@@ -133,22 +130,20 @@ def test_unknown_kind_is_rejected_rather_than_silently_defaulted():
 async def test_dispatch_reaches_the_registered_executor():
     gateway = AsyncMock()
     gateway.execute_operation.return_value = {"ok": True}
-    registry = build_kind_registry(
-        composio_gateway=AsyncMock(), package_gateway=gateway
-    )
+    registry = build_kind_registry(composio_gateway=gateway)
     dispatcher = KindDispatcher(registry)
 
     request = dispatcher.build_request(
-        connector_id="slack",
-        kind=ConnectorKind.PACKAGE,
-        operation=ResolvedOperation(name="chat_post_message"),
-        payload={"channel": "#general"},
-        credentials={"access_token": "tok"},
+        connector_id="hubspot",
+        kind=ConnectorKind.COMPOSIO,
+        operation=ResolvedOperation(name="hubspot_list_contacts"),
+        payload={},
+        credentials={"connection_id": "ca_1"},
         config={},
     )
     assert await dispatcher.execute(request) == {"ok": True}
     assert gateway.execute_operation.await_args.kwargs["operation_name"] == (
-        "chat_post_message"
+        "hubspot_list_contacts"
     )
 
 
@@ -208,7 +203,7 @@ async def test_discovery_is_bounded_too():
 @pytest.mark.asyncio
 async def test_a_static_kind_discovers_nothing_rather_than_erroring():
     dispatcher = KindDispatcher(_registry())
-    assert await dispatcher.discover(_install(ConnectorKind.PACKAGE)) == []
+    assert await dispatcher.discover(_install(ConnectorKind.HTTP)) == []
 
 
 @pytest.mark.asyncio
@@ -272,7 +267,7 @@ class TestInstallValidation:
 
     def test_a_kind_declaring_no_schema_still_rejects_arbitrary_keys(self):
         with pytest.raises(ConnectorValidationError):
-            validate_install_config(PackageKindSpec(), {"anything": "goes"})
+            validate_install_config(HttpKindSpec(), {"anything": "goes"})
 
     def test_valid_config_passes_through_unchanged(self):
         spec = McpKindSpec(
@@ -302,7 +297,7 @@ class TestHttpDiscoveryWithoutASpec:
         from app.modules.connectors.domain.kinds import ResolvedInstall
         from app.modules.connectors.services.execution import KindDispatcher
 
-        registry = build_kind_registry(composio_gateway=None, package_gateway=None)
+        registry = build_kind_registry(composio_gateway=None)
         install = ResolvedInstall(
             connector_id="github",
             kind=ConnectorKind.HTTP,

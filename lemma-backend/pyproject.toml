@@ -31,7 +31,6 @@ dependencies = [
     "anyio>=4.12.0",
     "fastapi[standard]>=0.128.0",
     "scalar-fastapi>=1.6.1",
-    "lemma-connectors",
     "composio>=0.11.0",
     "openinference-instrumentation-pydantic-ai>=0.1.12",
     "opentelemetry-exporter-otlp>=1.39.1",
@@ -159,7 +158,6 @@ packages = ["app", "sandbox_runtime"]
 allow-direct-references = true
 
 [tool.uv.sources]
-lemma-connectors = { path = "lemma-connectors", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 lemma-sdk = { path = "../lemma-python", editable = true }
 
@@ -271,6 +269,5 @@ typeCheckingMode = "standard"
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",
-    "lemma-connectors/**",
     "migrations/**",
 ]

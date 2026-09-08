@@ -24,14 +24,42 @@ from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
 )
 
 # A native Gmail row as seeded by the catalog importer: a LEMMA OAuth2 capability
-# with NO stored oauth2_defaults. The Google OAuth endpoints/scopes are resolved
-# at runtime from the code registry, so these tests prove the connect flow works
-# without anything OAuth-static living in the DB.
+# with the OAuth endpoints the catalog importer writes onto the row.
+#
+# They used to be absent here, and resolved at runtime from a code registry
+# keyed by connector id. That registry entry went when Gmail started declaring
+# its endpoints in `lemma_apps_config.json` like every other native connector --
+# so a row without them is no longer a shape the importer can produce, and
+# combining org-custom credentials with it yields "OAuth2 defaults are not
+# configured for 'gmail'" rather than an authorization URL.
 GMAIL_NATIVE_CAPABILITIES = [
     {
-        "kind": "package",
+        "kind": "http",
         "auth_scheme": "OAUTH2",
         "supports_org_custom_oauth": True,
+        "oauth2_defaults": {
+            "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url": "https://oauth2.googleapis.com/token",
+            "userinfo_url": "https://www.googleapis.com/oauth2/v3/userinfo",
+            "revoke_url": "https://oauth2.googleapis.com/revoke",
+            "default_scopes": [
+                "openid",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/userinfo.profile",
+                "https://www.googleapis.com/auth/gmail.modify",
+            ],
+            "extra_params": {"access_type": "offline", "prompt": "consent"},
+        },
+        # Which env vars hold the platform's own Google client. Whether they are
+        # *set* is still resolved per request, which is what
+        # `system_default_available` reports.
+        "system_oauth": {
+            "client_id_env": ["CONNECTOR_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
+            "client_secret_env": [
+                "CONNECTOR_GOOGLE_CLIENT_SECRET",
+                "GOOGLE_CLIENT_SECRET",
+            ],
+        },
     }
 ]
 GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -136,7 +164,7 @@ async def test_connect_request_and_accounts_lifecycle(
         description="OAuth test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "OAUTH2",
                 "supports_org_custom_oauth": True,
                 "oauth2_defaults": {
@@ -156,7 +184,7 @@ async def test_connect_request_and_accounts_lifecycle(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "config": {
                 "oauth2_credentials": {
@@ -289,7 +317,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
         description="System default OAuth test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "OAUTH2",
                 "supports_org_custom_oauth": True,
                 "oauth2_defaults": {
@@ -335,7 +363,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "SYSTEM_DEFAULT",
         },
     )
@@ -358,7 +386,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "SYSTEM_DEFAULT",
         },
     )
@@ -379,7 +407,7 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
         description="Credential-managed surface app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -400,7 +428,7 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -483,7 +511,7 @@ async def test_list_accounts_uses_id_cursor_pagination(
             id=connector_id,
             title=f"App {connector_id}",
             description="Pagination test app",
-            kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+            kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
             is_active=True,
         )
         db_session.add(app)
@@ -491,7 +519,7 @@ async def test_list_accounts_uses_id_cursor_pagination(
         auth_config = AuthConfig(
             organization_id=org_id,
             connector_id=connector_id,
-            kind="package",
+            kind="http",
             config_source="SYSTEM_DEFAULT",
             status="ACTIVE",
             name=connector_id,
@@ -562,7 +590,7 @@ async def test_gmail_org_custom_connect_request_builds_google_authorization_url(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": "gmail",
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "config": {
                 "oauth2_credentials": {
@@ -621,7 +649,7 @@ async def test_gmail_system_default_connect_request_uses_env_google_client(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": "gmail",
-            "kind": "package",
+            "kind": "http",
             "config_source": "SYSTEM_DEFAULT",
         },
     )
@@ -646,11 +674,11 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     db_session,
     monkeypatch,
 ):
-    """The connector API resolves OAuth defaults + system availability live.
+    """The connector API resolves system availability live.
 
-    system_default_available follows GOOGLE_CLIENT_ID/SECRET env presence on each
-    request (not a stale DB value), and the registry oauth2_defaults are surfaced
-    even though the row stores none.
+    `system_default_available` follows GOOGLE_CLIENT_ID/SECRET env presence on
+    each request rather than a stale DB value, and the row's own OAuth endpoints
+    are surfaced while the env var *names* behind them are not.
     """
     app = Connector(
         id="gmail",
@@ -669,7 +697,7 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     capability = response.json()["kinds"][0]
     assert capability["supports_org_custom_oauth"] is True
     assert capability["system_default_available"] is False
-    # Registry endpoints/scopes are surfaced despite nothing stored on the row.
+    # The endpoints are surfaced; the env var names behind them are not.
     assert capability["oauth2_defaults"]["authorization_url"] == (
         GOOGLE_AUTHORIZATION_URL
     )
@@ -704,7 +732,7 @@ async def test_delete_account_removes_account_and_404s_on_repeat(
         description="Credential-managed delete test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -725,7 +753,7 @@ async def test_delete_account_removes_account_and_404s_on_repeat(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -777,7 +805,7 @@ async def test_credential_managed_account_rejects_duplicate_identity_and_exposes
         description="Credential-managed dedup test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -798,7 +826,7 @@ async def test_credential_managed_account_rejects_duplicate_identity_and_exposes
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -866,7 +894,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
         description="OAuth multi-account test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "OAUTH2",
                 "supports_org_custom_oauth": True,
                 "oauth2_defaults": {
@@ -886,7 +914,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "config": {
                 "oauth2_credentials": {
@@ -1006,7 +1034,7 @@ async def test_list_and_get_auth_config(
         description="App for auth-config read coverage",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -1027,7 +1055,7 @@ async def test_list_and_get_auth_config(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -1073,7 +1101,7 @@ async def test_default_pod_agent_cannot_delete_account(
         description="Credential-managed agent-delete test app",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -1094,7 +1122,7 @@ async def test_default_pod_agent_cannot_delete_account(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -1148,7 +1176,7 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         description="App for auth-config delegated-delete coverage",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "credential_schema": {
                     "type": "object",
@@ -1169,7 +1197,7 @@ async def test_default_pod_agent_cannot_delete_auth_config(
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "name": connector_id,
         },
@@ -1205,7 +1233,7 @@ async def _oauth_install(authenticated_client, db_session, org_id) -> str:
             description="connect-request replay coverage",
             kinds=[
                 {
-                    "kind": "package",
+                    "kind": "http",
                     "auth_scheme": "OAUTH2",
                     "supports_org_custom_oauth": True,
                     "oauth2_defaults": {
@@ -1223,7 +1251,7 @@ async def _oauth_install(authenticated_client, db_session, org_id) -> str:
         f"/organizations/{org_id}/connectors/auth-configs",
         json={
             "connector_id": connector_id,
-            "kind": "package",
+            "kind": "http",
             "config_source": "ORG_CUSTOM",
             "config": {
                 "oauth2_credentials": {
@@ -1417,7 +1445,7 @@ async def test_a_credential_is_rotated_without_replacing_the_account(
             description="credential rotation coverage",
             kinds=[
                 {
-                    "kind": "package",
+                    "kind": "http",
                     "auth_scheme": "API_KEY",
                     "credential_schema": {
                         "type": "object",
@@ -1438,7 +1466,7 @@ async def test_a_credential_is_rotated_without_replacing_the_account(
             f"/organizations/{org_id}/connectors/auth-configs",
             json={
                 "connector_id": connector_id,
-                "kind": "package",
+                "kind": "http",
                 "config_source": "ORG_CUSTOM",
                 "name": connector_id,
             },

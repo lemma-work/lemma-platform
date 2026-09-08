@@ -37,9 +37,9 @@ logger = get_logger(__name__)
 def _registry():
     from app.modules.connectors.infrastructure.kinds import build_kind_registry
 
-    # Neither gateway is reachable from install-time work: validation and
+    # The gateway is not reachable from install-time work: validation and
     # discovery never execute an operation.
-    return build_kind_registry(composio_gateway=None, package_gateway=None)
+    return build_kind_registry(composio_gateway=None)
 
 
 def resolve_install_kind(connector: ConnectorEntity, kind: str | None) -> ConnectorKind:

@@ -91,7 +91,6 @@ def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
         assert entry["open-pull-requests-limit"] >= len(entry["groups"]), name
 
     for directory in (
-        "/lemma-backend/lemma-connectors",
         "/lemma-cli",
         "/lemma-pod-bundle",
         "/lemma-python",

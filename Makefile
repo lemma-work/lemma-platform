@@ -1720,10 +1720,9 @@ RUFF := uvx ruff@0.15.22
 # rather than silently passed.
 lint:
 	@echo "→ Backend (ruff)…"
-	@# Delegates rather than running `ruff check .`, which walked into the
-	@# vendored lemma-backend/lemma-connectors tree and failed on generated
-	@# code. That is why this target had been red for a while without anyone
-	@# noticing: the backend line was the one line here that could fail, and
+	@# Delegates rather than running `ruff check .`, which walked into
+	@# generated code. That is why this target had been red for a while without
+	@# anyone noticing: the backend line was the one line here that could fail, and
 	@# `make quality` -- the documented gate -- calls the scoped target below.
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory lint-clients
@@ -1764,7 +1763,6 @@ lint-clients:
 # `--check` resolves without writing, and the whole sweep is well under a second.
 LOCKED_PROJECTS = \
 	$(BACKEND_DIR) \
-	$(BACKEND_DIR)/lemma-connectors \
 	$(BACKEND_DIR)/sandbox-images/templates/function-python \
 	$(BACKEND_DIR)/sandbox-images/templates/workspace-python \
 	$(CLI_DIR) \
@@ -1778,14 +1776,13 @@ lint-lockfiles:
 		(cd $$project && uv lock --check --quiet) \
 			|| { echo "  $$project/uv.lock is stale — run 'uv lock' there"; exit 1; }; \
 	done
-	@echo "9 lockfiles current."
+	@echo "8 lockfiles current."
 
 # ── Format ────────────────────────────────────────────────────────────────────
 #
 # Every first-party Python file is `ruff format` clean. Generated trees are
-# excluded and stay excluded: `lemma-backend/lemma-connectors/` comes from
-# provider OpenAPI specs and `lemma-python/lemma_sdk/openapi_client/` from the
-# API spec, so formatting either one would be reverted by the next generation
+# excluded and stay excluded: `lemma-python/lemma_sdk/openapi_client/` comes
+# from the API spec, so formatting it would be reverted by the next generation
 # and read as codegen drift.
 #
 # `format-check` is part of `quality`, so formatting is a merge requirement.
@@ -1856,8 +1853,6 @@ quality:
 	@$(MAKE) --no-print-directory client-typecheck-record
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
-	@echo "→ Connector package (ruff, excludes generated clients)…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-connectors
 	@echo "→ DB connection scope…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"

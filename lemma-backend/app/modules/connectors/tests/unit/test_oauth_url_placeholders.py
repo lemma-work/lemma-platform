@@ -31,7 +31,7 @@ INSTALL_URL = "https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations
 def _github(authorization_url: str = INSTALL_URL) -> ConnectorEntity:
     return ConnectorEntity(
         id="github",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(
                 auth_scheme=AuthScheme.OAUTH2,
                 oauth2_defaults=OAuth2Defaults(
@@ -104,7 +104,7 @@ def test_scopes_and_extra_params_are_not_substitutable(env):
     env.setenv("CONNECTOR_GITHUB_APP_SLUG", "lemma-dev")
     env.setenv("DATABASE_URL", "postgresql://user:pw@host/db")
     connector = _github()
-    capability = connector.provider_capabilities[0]
+    capability = connector.kinds[0]
     assert capability.oauth2_defaults is not None
     capability.oauth2_defaults.extra_params = {"leak": "{DATABASE_URL}"}
     capability.oauth2_defaults.default_scopes = ["{DATABASE_URL}"]

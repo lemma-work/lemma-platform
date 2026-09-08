@@ -462,3 +462,217 @@ class TestRedirectsAreGuarded:
             connection_config={"server_url": "http://api.tenant.test"},
         )
         assert hops == 1
+
+
+# --- form-encoded bodies, response envelopes, path-parameter defaults --------
+#
+# Everything below exists because Slack and Gmail are not shaped like GitHub.
+# Slack's Web API is form-encoded RPC that answers every call with HTTP 200 and
+# puts success in the body; Gmail marks `userId` required on all 79 of its
+# operations and the only value anyone passes is "me".
+
+
+def _form_execution(**overrides):
+    execution = {
+        "kind": "http",
+        "mode": "openapi",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "server_url": "https://slack.com/api",
+        "path_params": [],
+        "query_params": [],
+        "header_params": [],
+        "request_body": {
+            "content_type": "application/x-www-form-urlencoded",
+            "field": "body",
+            "binary_fields": [],
+            "form_fields": ["channel", "text", "link_names"],
+        },
+        "response": {"binary": False},
+    }
+    execution.update(overrides)
+    return execution
+
+
+_SLACK_ENVELOPE = {
+    "success_field": "ok",
+    "error_field": "error",
+    "status_by_error": {
+        "invalid_auth": 401,
+        "missing_scope": 403,
+        "channel_not_found": 404,
+        "ratelimited": 429,
+    },
+    "default_status": 400,
+}
+
+
+@pytest.mark.asyncio
+async def test_a_form_body_is_sent_as_form_fields_not_as_a_file(monkeypatch):
+    """The regression that made every Slack POST unusable.
+
+    Without a form-urlencoded branch the body collapsed to a single blob, the
+    descriptor named it a binary field, and the executor sent raw bytes.
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content_type"] = request.headers.get("content-type")
+        seen["body"] = request.content.decode()
+        return httpx.Response(200, json={"ok": True, "ts": "1.0"})
+
+    result = await _run(
+        monkeypatch,
+        _form_execution(),
+        {"body": {"channel": "C1", "text": "hi", "link_names": True}},
+        handler,
+    )
+
+    assert seen["content_type"] == "application/x-www-form-urlencoded"
+    assert sorted(seen["body"].split("&")) == [
+        "channel=C1",
+        "link_names=true",
+        "text=hi",
+    ]
+    assert result == {"ok": True, "ts": "1.0"}
+
+
+@pytest.mark.asyncio
+async def test_a_form_field_left_out_is_not_sent_as_an_empty_value(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.content.decode()
+        return httpx.Response(200, json={"ok": True})
+
+    await _run(
+        monkeypatch,
+        _form_execution(),
+        {"body": {"channel": "C1", "text": None}},
+        handler,
+    )
+
+    assert seen["body"] == "channel=C1"
+
+
+@pytest.mark.asyncio
+async def test_a_200_that_says_ok_false_fails_with_the_mapped_status(monkeypatch):
+    """Slack reports failure in a 200 body; without this it read as success."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+
+    with pytest.raises(OpenApiHttpExecutionError) as excinfo:
+        await _run(
+            monkeypatch,
+            _form_execution(response={"binary": False, "envelope": _SLACK_ENVELOPE}),
+            {"body": {"channel": "nope"}},
+            handler,
+        )
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.details["error"] == "channel_not_found"
+    assert "channel_not_found" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_an_unmapped_envelope_error_falls_back_to_the_default_status(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "something_new"})
+
+    with pytest.raises(OpenApiHttpExecutionError) as excinfo:
+        await _run(
+            monkeypatch,
+            _form_execution(response={"binary": False, "envelope": _SLACK_ENVELOPE}),
+            {"body": {}},
+            handler,
+        )
+
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_an_envelope_success_is_returned_untouched(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "channels": [{"id": "C1"}]})
+
+    result = await _run(
+        monkeypatch,
+        _form_execution(response={"binary": False, "envelope": _SLACK_ENVELOPE}),
+        {"body": {}},
+        handler,
+    )
+
+    assert result == {"ok": True, "channels": [{"id": "C1"}]}
+
+
+@pytest.mark.asyncio
+async def test_without_an_envelope_a_200_saying_ok_false_is_still_a_result(monkeypatch):
+    """The envelope is opt-in: a connector that never declares one is unchanged."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+
+    result = await _run(monkeypatch, _form_execution(), {"body": {}}, handler)
+
+    assert result == {"ok": False, "error": "channel_not_found"}
+
+
+@pytest.mark.asyncio
+async def test_a_path_parameter_falls_back_to_its_declared_default(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"emailAddress": "a@b.c"})
+
+    await _run(
+        monkeypatch,
+        {
+            "kind": "http",
+            "mode": "openapi",
+            "method": "GET",
+            "path": "/gmail/v1/users/{userId}/profile",
+            "server_url": "https://gmail.googleapis.com",
+            "path_params": ["userId"],
+            "path_param_defaults": {"userId": "me"},
+            "query_params": [],
+            "header_params": [],
+            "request_body": None,
+            "response": {"binary": False},
+        },
+        {},
+        handler,
+    )
+
+    assert seen["url"] == "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+
+
+@pytest.mark.asyncio
+async def test_a_supplied_path_parameter_beats_its_default(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={})
+
+    await _run(
+        monkeypatch,
+        {
+            "kind": "http",
+            "mode": "openapi",
+            "method": "GET",
+            "path": "/gmail/v1/users/{userId}/profile",
+            "server_url": "https://gmail.googleapis.com",
+            "path_params": ["userId"],
+            "path_param_defaults": {"userId": "me"},
+            "query_params": [],
+            "header_params": [],
+            "request_body": None,
+            "response": {"binary": False},
+        },
+        {"userId": "someone@example.com"},
+        handler,
+    )
+
+    assert seen["url"].endswith("/users/someone%40example.com/profile")

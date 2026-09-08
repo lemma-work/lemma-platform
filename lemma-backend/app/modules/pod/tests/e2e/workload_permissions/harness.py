@@ -227,7 +227,7 @@ async def seed_connector(db_session, connector_id: str) -> str:
                 id=connector_id,
                 title=f"{connector_id} title",
                 description="workload permissions e2e connector",
-                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+                kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )

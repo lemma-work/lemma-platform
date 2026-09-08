@@ -1,27 +1,52 @@
 {
   "gmail": {
-    "LEMMA": ["get_profile"],
-    "COMPOSIO": ["GMAIL_GET_PROFILE", "get_profile"]
+    "LEMMA": [
+      "get_profile"
+    ],
+    "COMPOSIO": [
+      "GMAIL_GET_PROFILE",
+      "get_profile"
+    ]
   },
   "outlook": {
-    "COMPOSIO": ["OUTLOOK_GET_PROFILE"]
+    "COMPOSIO": [
+      "OUTLOOK_GET_PROFILE"
+    ]
   },
   "asana": {
-    "COMPOSIO": ["ASANA_GET_CURRENT_USER"]
+    "COMPOSIO": [
+      "ASANA_GET_CURRENT_USER"
+    ]
   },
   "notion": {
-    "COMPOSIO": ["NOTION_GET_ABOUT_ME"]
+    "COMPOSIO": [
+      "NOTION_GET_ABOUT_ME"
+    ]
   },
   "hubspot": {
-    "COMPOSIO": ["HUBSPOT_GET_ACCOUNT_INFO"]
+    "COMPOSIO": [
+      "HUBSPOT_GET_ACCOUNT_INFO"
+    ]
   },
   "linear": {
-    "COMPOSIO": ["LINEAR_GET_CURRENT_USER"]
+    "COMPOSIO": [
+      "LINEAR_GET_CURRENT_USER"
+    ]
   },
   "github": {
-    "LEMMA": ["users_get_authenticated"]
+    "LEMMA": [
+      "users_get_authenticated"
+    ]
   },
   "discord": {
-    "COMPOSIO": ["DISCORD_GET_MY_USER"]
+    "COMPOSIO": [
+      "DISCORD_GET_MY_USER"
+    ]
+  },
+  "slack": {
+    "LEMMA": [
+      "auth_test",
+      "users_profile_get"
+    ]
   }
 }

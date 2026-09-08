@@ -21,6 +21,7 @@ from app.modules.connectors.api.auth_config_controller import (
     get_auth_config,
     list_auth_configs,
 )
+from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
@@ -144,7 +145,7 @@ class TestOnlyAManagerSeesTheConfig:
             id=uuid4(),
             organization_id=uuid4(),
             connector_id="mcp",
-            provider="LEMMA",
+            kind=ConnectorKind.HTTP,
             config_source=AuthConfigSource.SYSTEM_DEFAULT,
             name="an-install",
             config={
