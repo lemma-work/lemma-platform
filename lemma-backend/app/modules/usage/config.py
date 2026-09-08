@@ -10,6 +10,8 @@ Env var names are unchanged by the move: no settings class here sets
 on whichever class holds it.
 """
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,6 +55,21 @@ class UsageSettings(BaseSettings):
     usage_user_monthly_limit_usd: float | None = Field(
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
+    )
+    usage_unpriced_limit_policy: Literal["refuse", "allow"] = Field(
+        default="refuse",
+        description=(
+            "What to do when a monetary limit applies to a request whose cost "
+            "cannot be established. `refuse` rejects it, which is right for a "
+            "deployment billing somebody else for the usage: a limit it cannot "
+            "measure is not a limit. `allow` runs it and records it unpriced, "
+            "which is right for a deployment capping its own provider spend -- "
+            "refusing there protects nobody's money and only stops the product "
+            "working. A model served through an OpenAI-compatible gateway is "
+            "the common case: the catalog resolves the vendor's list price, "
+            "not what the gateway charges, so it is never enforceable. State "
+            "prices in LEMMA_SYSTEM_MODEL_METADATA_JSON to keep enforcing."
+        ),
     )
 
 

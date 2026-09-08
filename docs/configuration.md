@@ -555,6 +555,39 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+### When the cost of the work cannot be established
+
+A limit is enforced against a price, and there is not always one to enforce
+against. The price catalog will only back a budget when it matched the model
+through *that provider's own* base URL — so a model served through an
+OpenAI-compatible gateway (vLLM, LiteLLM, OpenRouter, a hosted inference
+provider, a corporate proxy) resolves the **vendor's** list price rather than
+what the gateway charges to serve it, and is deliberately not enforceable.
+`gpt-4o` behind a gateway is as unenforceable as anything else.
+
+```dotenv
+# refuse (default) | allow
+USAGE_UNPRICED_LIMIT_POLICY=refuse
+```
+
+`refuse` is right when the usage is billed to somebody else: a limit that
+cannot be measured is not a limit. `allow` is right when the limit caps your
+own provider spend — the provider bills you directly, so refusing protects
+nobody's money and only stops the product working. An allowed request runs and
+is recorded unpriced, so the tokens stay in the ledger even though no money can
+be attributed to them.
+
+The third option is to state the prices yourself, which makes them enforceable
+and keeps the limit binding:
+
+```dotenv
+LEMMA_SYSTEM_MODEL_METADATA_JSON='{"my-model": {"input_per_million_usd": 0.14, "output_per_million_usd": 0.28}}'
+```
+
+Set a limit without one of those and the API and worker say so at startup,
+naming the models — look for
+`agent.module.system_models_cannot_back_a_spend_limit.degraded`.
 `0` refuses all model work for that organization, which is how you park one
 without deleting it.
 

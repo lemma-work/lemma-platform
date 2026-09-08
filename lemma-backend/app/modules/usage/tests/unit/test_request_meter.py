@@ -1,6 +1,8 @@
 """A failed settlement must finish before another provider request starts."""
 
+from collections.abc import Iterator
 from datetime import datetime
+from types import ModuleType
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -163,3 +165,84 @@ async def test_a_run_already_under_way_is_not_refused_mid_answer() -> None:
     await meter.before(priceable=False)
 
     assert gateway.in_flight_flags == [False, True]
+
+
+class TestUnpricedLimitPolicy:
+    """A limit a deployment cannot measure is not automatically a refusal.
+
+    `enforceable` is only true when the price was matched through the model
+    provider's own base URL, so every model served through an
+    OpenAI-compatible gateway resolves the *vendor's* list price and is
+    unenforceable -- `gpt-4o` included. A self-hoster who set any USD limit
+    against such a gateway had every request refused, mid-run, by a message
+    that named neither the model nor a fix.
+    """
+
+    def test_refuse_is_the_default(self) -> None:
+        from app.modules.usage.config import UsageSettings
+
+        assert UsageSettings().usage_unpriced_limit_policy == "refuse"
+
+    def test_the_policy_decides_whether_an_unpriced_request_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.usage.services import request_accounting_gateway as module
+
+        gateway = module.PostgresRequestAccountingGateway
+
+        monkeypatch.setattr(
+            module.usage_settings, "usage_unpriced_limit_policy", "refuse"
+        )
+        assert gateway._refuses_unpriced()
+
+        monkeypatch.setattr(
+            module.usage_settings, "usage_unpriced_limit_policy", "allow"
+        )
+        assert not gateway._refuses_unpriced()
+
+
+class TestLimitsArePossible:
+    """Whether any monetary limit can apply is knowable before a request runs.
+
+    That is the whole point: the condition that refused the request is
+    deployment configuration, so it belongs in a startup report rather than in
+    a 429 halfway through a conversation.
+    """
+
+    @pytest.fixture
+    def unlimited(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
+        """A deployment with no provider registered and no limit in settings."""
+        from app.modules.usage.services import usage_limit_provider as module
+
+        module.configure_usage_limit_provider(None)
+        for field in (
+            "usage_org_monthly_limit_usd",
+            "usage_user_weekly_limit_usd",
+            "usage_user_monthly_limit_usd",
+        ):
+            monkeypatch.setattr(module.usage_settings, field, None)
+        yield module
+        module.configure_usage_limit_provider(None)
+
+    def test_no_provider_and_no_configured_limit_means_no_limit(
+        self, unlimited: ModuleType
+    ) -> None:
+        assert not unlimited.usage_limits_are_possible()
+
+    def test_a_configured_limit_is_enough(
+        self, unlimited: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            unlimited.usage_settings, "usage_user_weekly_limit_usd", 10.0
+        )
+
+        assert unlimited.usage_limits_are_possible()
+
+    def test_a_registered_billing_provider_is_enough(
+        self, unlimited: ModuleType
+    ) -> None:
+        # Registered the way `lemma-cloud` registers one, not by reaching into
+        # the module for the name it keeps the factory under.
+        unlimited.configure_usage_limit_provider(lambda _uow: None)
+
+        assert unlimited.usage_limits_are_possible()

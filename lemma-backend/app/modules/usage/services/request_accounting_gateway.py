@@ -7,7 +7,7 @@ from uuid import UUID
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.usage.config import UsageSettings
+from app.modules.usage.config import UsageSettings, usage_settings
 from app.modules.usage.domain.accounting import (
     BudgetWindow,
     MeteringIdentity,
@@ -62,6 +62,23 @@ class PostgresRequestAccountingGateway:
             if window.limit is not None
         ]
 
+    @staticmethod
+    def _refuses_unpriced() -> bool:
+        """Whether a limit this deployment cannot measure should stop the work.
+
+        `refuse` is right where the usage is billed to somebody else: a limit
+        that cannot be measured is not a limit. `allow` is right where the
+        deployment is capping its own provider spend -- it is billed directly
+        by the provider, so refusing protects nobody's money and only stops the
+        product working. Which one is a deployment's decision, and until it was
+        one, every self-hosted deployment that pointed at an OpenAI-compatible
+        gateway and set any USD limit had every request refused: the catalog
+        resolves a price for the *vendor* of the model, not for the gateway
+        serving it, so `enforceable` is false for `gpt-4o` there as surely as
+        for anything else.
+        """
+        return usage_settings.usage_unpriced_limit_policy == "refuse"
+
     async def begin(
         self,
         request_id: UUID,
@@ -87,15 +104,16 @@ class PostgresRequestAccountingGateway:
         `require_reconciliation` -- so the run is stopped at the next request
         boundary rather than in the middle of answering, and the spend that
         could not be priced is still visible in the ledger.
+
+        Whether a request that *starts* a run is refused at all is the
+        deployment's own policy (`_refuses_unpriced`). Either way the condition
+        is reported, because an admitted one is spend nobody is counting.
         """
         async with self.factory() as uow:
             windows = self._windows(await self._limits(uow), now)
             limited = bool(windows)
-            if (
-                limited
-                and (not priceable or not self.pricing.priceable)
-                and not in_flight
-            ):
+            unpriceable = not priceable or not self.pricing.priceable
+            if unpriceable and limited and not in_flight and self._refuses_unpriced():
                 # Two very different deployments produce this one refusal, and
                 # the message cannot tell them apart: a request whose message
                 # shape has no price, or a model whose rate card is not

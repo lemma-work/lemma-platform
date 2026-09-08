@@ -25,6 +25,8 @@ EXPECTED = [
     ("usage_org_monthly_limit_usd", "USAGE_ORG_MONTHLY_LIMIT_USD", None),
     ("usage_user_weekly_limit_usd", "USAGE_USER_WEEKLY_LIMIT_USD", None),
     ("usage_user_monthly_limit_usd", "USAGE_USER_MONTHLY_LIMIT_USD", None),
+    # What a limit does when the cost of the work cannot be established.
+    ("usage_unpriced_limit_policy", "USAGE_UNPRICED_LIMIT_POLICY", "refuse"),
 ]
 
 
