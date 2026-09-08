@@ -160,19 +160,11 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          # Falls back to CI's cache from main. Releases are rare, so this key is
-          # cold most times it is read; CI's is warm from the last merge, and the
-          # lockfile hash still decides whether the restore is usable.
-          restore-keys: |
-            desktop-cargo-${{ runner.os }}-
-            desktop-ci-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Download and verify native runtime artifacts
         shell: bash
@@ -753,14 +745,11 @@ jobs:
               path.write_text(json.dumps(config, indent=2) + "\n")
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
-          restore-keys: desktop-cargo-${{ runner.os }}-
+          workspaces: desktop
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Download and verify native runtime artifacts
         shell: pwsh

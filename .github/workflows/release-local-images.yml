@@ -946,7 +946,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-share
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Resolve nightly tag
         id: tag
@@ -1248,7 +1249,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-share
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
 
       - name: Resolve nightly tag
         id: tag

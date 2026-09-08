@@ -10,6 +10,58 @@ def _read(path: str) -> str:
     return (_REPO_ROOT / path).read_text()
 
 
+def test_native_desktop_dependency_caches_are_shared_across_build_workflows() -> None:
+    import yaml
+
+    native_caches = set()
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-desktop.yml",
+        ".github/workflows/release-local-images.yml",
+    ):
+        workflow = yaml.safe_load(_read(path))
+        for name, job in workflow["jobs"].items():
+            for index, step in enumerate(job.get("steps", [])):
+                settings = step.get("with", {})
+                if settings.get("prefix-key") != "desktop-native":
+                    continue
+                assert step["uses"] == "Swatinem/rust-cache@v2"
+                assert settings["workspaces"] == "desktop"
+                assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
+                assert "save-if" not in settings, "PRs need merge-ref cache reuse"
+                assert not settings.get("cache-all-crates", False)
+                assert not settings.get("cache-workspace-crates", False)
+                assert any(
+                    previous.get("uses", "").startswith("dtolnay/rust-toolchain@")
+                    for previous in job["steps"][:index]
+                ), "the cache must key the selected compiler, not the runner default"
+                native_caches.add((path, name))
+    assert native_caches == {
+        (".github/workflows/ci.yml", "desktop"),
+        (".github/workflows/ci.yml", "desktop-windows"),
+        (".github/workflows/release-desktop.yml", "build-dmg"),
+        (".github/workflows/release-desktop.yml", "build-windows"),
+        (".github/workflows/release-local-images.yml", "share-desktop-dmg"),
+        (".github/workflows/release-local-images.yml", "share-desktop-exe"),
+    }
+
+
+def test_desktop_npm_cache_tracks_settings_and_cli_dependencies() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    for name in ("desktop", "desktop-windows"):
+        node = next(
+            step
+            for step in workflow["jobs"][name]["steps"]
+            if step.get("uses", "").startswith("actions/setup-node@")
+        )
+        assert node["with"]["cache"] == "npm"
+        inputs = node["with"]["cache-dependency-path"].splitlines()
+        assert "desktop/ui-tests/package-lock.json" in inputs
+        assert "desktop/scripts/tauri-cli-version.txt" in inputs
+
+
 def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
     """Every ecosystem is monthly, grouped, and has somewhere to put a fix.
 

@@ -1300,6 +1300,69 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn concurrent_checkpoints_and_event_reads_make_progress() {
+        // A SQLite mutex deadlock cannot be cancelled by a Tokio timeout on
+        // the same thread. Isolate the workload so a regression fails promptly
+        // and the parent reaps it instead of hanging the entire test job.
+        if std::env::var_os("LEMMA_JOURNAL_CONCURRENCY_CHILD").is_none() {
+            let thread = std::thread::current();
+            let test_name = thread.name().expect("the test runner names its thread");
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_name, "--nocapture"])
+                .env("LEMMA_JOURNAL_CONCURRENCY_CHILD", "1")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            if let Ok(status) = tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+                assert!(status.unwrap().success());
+            } else {
+                child.kill().await.unwrap();
+                panic!("concurrent journal operations deadlocked");
+            }
+            return;
+        }
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    journal
+                        .checkpoint(
+                            target,
+                            spec.agent_run_id,
+                            1,
+                            RunState::Running,
+                            &JsonMap::new(),
+                        )
+                        .unwrap();
+                    journal
+                        .append_event(
+                            target,
+                            spec.agent_run_id,
+                            1,
+                            EventType::AgentMessageChunk,
+                            None,
+                            JsonMap::new(),
+                        )
+                        .unwrap();
+                }
+            });
+            scope.spawn(|| {
+                for _ in 0..200 {
+                    journal.pending_events(target, 256).unwrap();
+                    journal.pending_control(target).unwrap();
+                }
+            });
+        });
+        assert_eq!(
+            journal.pending_events(target, 256).unwrap()[0].events.len(),
+            200
+        );
+    }
+
     #[test]
     fn dispatch_intent_survives_reopen_and_prevents_blind_retry() {
         let (directory, journal, target, command, spec) = fixture();

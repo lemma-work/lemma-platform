@@ -180,6 +180,19 @@ Build Desktop sidecars:
 make desktop-sidecars
 ```
 
+Native sidecars share Cargo's `target/release` dependency tree with the Tauri
+build; cross builds retain their explicit target directory. CI, stable and
+nightly native jobs share compiler/platform-keyed Rust dependency caches.
+PR caches remain scoped to their merge ref, and failed desktop checks retain
+dependencies for the next attempt. The npm cache includes both the Tauri pin
+and the settings lockfile. Cached build output does not bypass tests, signing
+or runtime verification.
+
+The journal concurrency regression runs in a bounded child process, so a
+SQLite lock regression fails without hanging the entire suite. It reproduces
+the concurrent WAL open/close deadlock in bundled SQLite 3.51.1; the upgraded
+dependency includes SQLite's upstream fix.
+
 On Windows there is no `make`, so the same verbs live in a PowerShell
 dispatcher over the same underlying scripts:
 

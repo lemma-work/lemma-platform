@@ -759,7 +759,9 @@ jobs:
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -803,10 +805,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-ci
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -1117,9 +1120,7 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: desktop-guestd
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # PR merge-ref caches cannot be restored by main or release refs.
 
       - name: Lint
         working-directory: desktop
@@ -1155,7 +1156,9 @@ jobs:
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -1173,10 +1176,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-win
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs

@@ -17,9 +17,17 @@ mkdir -p "$OUT_DIR"
 # target directories; now they share one, and asking cargo for them separately
 # would resolve features over three different package sets — rebuilding reqwest,
 # tokio and hyper from scratch each time, every time.
-cargo build --manifest-path desktop/Cargo.toml --release --target "$TRIPLE" \
-  -p lemma-locald -p lemma-agent-host -p lemma-runtime
-BUILT="desktop/target/$TRIPLE/release"
+# Native Tauri builds use target/release. Reuse that dependency tree instead
+# of compiling a second release tree solely because --target was explicit.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+BUILD_ARGS=(--manifest-path desktop/Cargo.toml --locked --release
+  -p lemma-locald -p lemma-agent-host -p lemma-runtime)
+BUILT="desktop/target/release"
+if [[ "$TRIPLE" != "$HOST_TRIPLE" || -n "${CARGO_BUILD_TARGET:-}" ]]; then
+  BUILD_ARGS+=(--target "$TRIPLE")
+  BUILT="desktop/target/$TRIPLE/release"
+fi
+cargo build "${BUILD_ARGS[@]}"
 cp "$BUILT/lemma-locald" "$OUT_DIR/lemma-locald-$TRIPLE"
 cp "$BUILT/lemma-agent-host" "$OUT_DIR/lemma-agent-host-$TRIPLE"
 cp "$BUILT/lemma-runtime" "$OUT_DIR/lemma-runtime-$TRIPLE"
