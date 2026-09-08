@@ -155,13 +155,16 @@ class ConversationRepository(
         self,
         conversation_id: UUID,
         key: str,
+        *,
+        for_update: bool = False,
     ) -> JsonValue | None:
         """Read a single key out of a conversation's metadata JSON blob."""
-        result = await self.session.execute(
-            select(ConversationModel.conversation_metadata).where(
-                ConversationModel.id == conversation_id
-            )
+        statement = select(ConversationModel.conversation_metadata).where(
+            ConversationModel.id == conversation_id
         )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self.session.execute(statement)
         metadata = result.scalar_one_or_none()
         if not isinstance(metadata, dict):
             return None

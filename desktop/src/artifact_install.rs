@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 const MANIFEST_SCHEMA_VERSION: u64 = 1;
 const MAX_ARCHIVE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u128 = 12 * 1024 * 1024 * 1024;
-const MAX_COMBINED_COMPRESSED_BYTES: u64 = 750 * 1024 * 1024;
-const MAX_COMBINED_EXPANDED_BYTES: u64 = 2250 * 1024 * 1024;
+const MAX_COMBINED_COMPRESSED_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const MAX_COMBINED_EXPANDED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const INSTALLED_ARTIFACTS_FILE: &str = ".lemma-runtime-artifacts.json";
 const OPERATING_HEADROOM_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -99,6 +99,37 @@ pub fn install_from_manifest(
     required_release: &str,
     progress: &mut dyn FnMut(InstallProgress<'_>),
 ) -> io::Result<InstalledRuntime> {
+    stage_from_manifest(
+        manifest_path,
+        install_root,
+        required_release,
+        true,
+        progress,
+    )
+}
+
+pub fn reinstall_from_manifest(
+    manifest_path: &Path,
+    install_root: &Path,
+    required_release: &str,
+    progress: &mut dyn FnMut(InstallProgress<'_>),
+) -> io::Result<InstalledRuntime> {
+    stage_from_manifest(
+        manifest_path,
+        install_root,
+        required_release,
+        false,
+        progress,
+    )
+}
+
+fn stage_from_manifest(
+    manifest_path: &Path,
+    install_root: &Path,
+    required_release: &str,
+    reuse_existing: bool,
+    progress: &mut dyn FnMut(InstallProgress<'_>),
+) -> io::Result<InstalledRuntime> {
     let allow_local_artifacts = local_artifacts_enabled(manifest_path);
     let manifest = load_manifest_with_policy(manifest_path, allow_local_artifacts)?;
     if manifest.version != required_release {
@@ -121,11 +152,38 @@ pub fn install_from_manifest(
     )?;
     validate_artifact_target(guest, "linux", host_architecture(), "managed guest runtime")?;
     let identity = artifact_identity(&manifest.version, host, guest);
-    let destination = install_root.join("releases").join(&manifest.version);
+    let releases = install_root.join("releases");
+    let legacy = releases.join(&manifest.version);
+    let legacy_runtime = installed_runtime(&legacy, &manifest.version);
+    if reuse_existing
+        && legacy_runtime.is_complete()
+        && installed_artifacts_match(&legacy, &identity)
+    {
+        return Ok(legacy_runtime);
+    }
+    let identity_bytes = serde_json::to_vec(&identity).map_err(io::Error::other)?;
+    let destination = releases.join(format!(
+        "{}-{:x}",
+        manifest.version,
+        Sha256::digest(&identity_bytes)
+    ));
     let installed = installed_runtime(&destination, &manifest.version);
-    if installed.is_complete() && installed_artifacts_match(&destination, &identity) {
+    if reuse_existing
+        && installed.is_complete()
+        && installed_artifacts_match(&destination, &identity)
+    {
         return Ok(installed);
     }
+    let destination = if destination.try_exists()? {
+        releases.join(format!(
+            "{}-{}-{}",
+            destination.file_name().unwrap().to_string_lossy(),
+            std::process::id(),
+            unix_millis()?
+        ))
+    } else {
+        destination
+    };
 
     let download_total = host
         .size
@@ -135,17 +193,8 @@ pub fn install_from_manifest(
         .expanded_size
         .checked_add(guest.expanded_size)
         .ok_or_else(|| invalid("combined expanded artifact size overflow"))?;
-    if download_total > MAX_COMBINED_COMPRESSED_BYTES {
-        return Err(invalid(
-            "combined runtime archives exceed the 750 MiB product limit",
-        ));
-    }
-    if expanded_total > MAX_COMBINED_EXPANDED_BYTES {
-        return Err(invalid(
-            "expanded immutable runtime exceeds the 2.25 GiB product limit",
-        ));
-    }
-    preflight_free_space(install_root, expanded_total)?;
+    let required_space = installation_space_required(download_total, expanded_total)?;
+    preflight_free_space(install_root, required_space)?;
     let downloads = install_root.join("downloads").join(&manifest.version);
     fs::create_dir_all(&downloads)?;
     let client = download_client()?;
@@ -234,9 +283,8 @@ pub fn install_from_manifest(
                 .parent()
                 .ok_or_else(|| invalid("release destination has no parent"))?,
         )?;
-        if destination.exists() {
-            let quarantined = quarantine_path(&destination)?;
-            fs::rename(&destination, quarantined)?;
+        if destination.try_exists()? {
+            return Err(invalid("candidate runtime destination already exists"));
         }
         fs::rename(&staging, &destination)?;
         sync_directory(
@@ -260,50 +308,7 @@ pub fn install_from_manifest(
             "installed runtime artifact identity does not match the signed manifest",
         ));
     }
-    prune_superseded_releases(install_root, &manifest.version);
     Ok(installed)
-}
-
-/// Stop the runtime cache growing by one whole release per update.
-///
-/// Every release extracts into `releases/<version>` -- 1.7 GiB of host pack and
-/// guest images -- and until now nothing ever removed the one it replaced. That
-/// was survivable while a version arrived every few weeks. A build that updates
-/// itself nightly turns it into 1.7 GiB a day, silently, in Application
-/// Support, which is the sort of thing a user discovers from a full disk.
-///
-/// The release just installed is never a candidate. The most recent of the rest
-/// is kept, so stepping back -- to stable, or to yesterday's nightly -- does not
-/// have to download it all again. Everything older goes.
-///
-/// Failures are deliberately ignored: this is housekeeping that runs after the
-/// install has already succeeded, and a file that will not delete is not a
-/// reason to fail an install that worked.
-fn prune_superseded_releases(install_root: &Path, keep: &str) {
-    for parent in [
-        install_root.join("releases"),
-        install_root.join("downloads"),
-    ] {
-        let Ok(entries) = fs::read_dir(&parent) else {
-            continue;
-        };
-        let mut superseded: Vec<(SystemTime, PathBuf)> = entries
-            .flatten()
-            .filter(|entry| entry.file_name().to_string_lossy() != keep)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| {
-                let modified = entry
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(UNIX_EPOCH);
-                (modified, entry.path())
-            })
-            .collect();
-        superseded.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        for (_, path) in superseded.into_iter().skip(1) {
-            let _ = fs::remove_dir_all(path);
-        }
-    }
 }
 
 pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
@@ -339,20 +344,6 @@ pub fn runtime_matches_manifest(
         .ok_or_else(|| invalid("installed runtime has no release root"))?;
     Ok(runtime.is_complete()
         && installed_artifacts_match(root, &artifact_identity(required_release, host, guest)))
-}
-
-pub fn quarantine_runtime(runtime: &InstalledRuntime) -> io::Result<PathBuf> {
-    validate_installed(runtime)?;
-    let root = runtime
-        .host_pack_root
-        .parent()
-        .ok_or_else(|| invalid("installed runtime has no release root"))?;
-    if runtime.managed_runtime_root.parent() != Some(root) {
-        return Err(invalid("installed runtime roots do not share one release"));
-    }
-    let quarantined = quarantine_path(root)?;
-    fs::rename(root, &quarantined)?;
-    Ok(quarantined)
 }
 
 impl InstalledRuntime {
@@ -1042,11 +1033,26 @@ fn copy_sparse(input: &mut impl Read, output: &mut File) -> io::Result<u64> {
     Ok(copied)
 }
 
-fn preflight_free_space(install_root: &Path, expanded_total: u64) -> io::Result<()> {
+fn installation_space_required(download_total: u64, expanded_total: u64) -> io::Result<u64> {
+    if download_total > MAX_COMBINED_COMPRESSED_BYTES {
+        return Err(invalid(
+            "combined runtime archives exceed the 6 GiB supported size",
+        ));
+    }
+    if expanded_total > MAX_COMBINED_EXPANDED_BYTES {
+        return Err(invalid(
+            "expanded immutable runtime exceeds the 8 GiB supported size",
+        ));
+    }
+    // Downloads coexist with extracted candidate files until installation commits.
+    download_total
+        .checked_add(expanded_total)
+        .and_then(|bytes| bytes.checked_add(OPERATING_HEADROOM_BYTES))
+        .ok_or_else(|| invalid("runtime free-space requirement overflow"))
+}
+
+fn preflight_free_space(install_root: &Path, required: u64) -> io::Result<()> {
     fs::create_dir_all(install_root)?;
-    let required = expanded_total
-        .checked_add(OPERATING_HEADROOM_BYTES)
-        .ok_or_else(|| invalid("runtime free-space requirement overflow"))?;
     let available = available_space(install_root)?;
     if available < required {
         return Err(io::Error::other(format!(
@@ -1317,6 +1323,31 @@ fn guest_target() -> &'static str {
 mod tests {
     use super::*;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn runtime_above_previous_limits_reserves_downloads_extraction_and_headroom() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(installation_space_required(gib, 3 * gib).unwrap(), 8 * gib);
+    }
+
+    #[test]
+    fn runtime_size_boundaries_are_inclusive() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(
+            installation_space_required(6 * gib, 8 * gib).unwrap(),
+            18 * gib
+        );
+        for (download, expanded, message) in [
+            (6 * gib + 1, 8 * gib, "archives exceed the 6 GiB"),
+            (6 * gib, 8 * gib + 1, "runtime exceeds the 8 GiB"),
+            (u64::MAX, 1, "archives exceed the 6 GiB"),
+            (1, u64::MAX, "runtime exceeds the 8 GiB"),
+        ] {
+            let error = installation_space_required(download, expanded).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8], u32)]) {
         let mut writer = zip::ZipWriter::new(File::create(path).unwrap());
@@ -1722,17 +1753,8 @@ mod tests {
         })
     }
 
-    /// Installing a release must not leave the one before last on disk.
-    ///
-    /// A release directory is 1.7 GiB. Nothing used to remove it, which a
-    /// version every few weeks hid; a nightly that updates itself would have
-    /// added that much every day. The contract is bounded, not empty: the
-    /// release in use always survives, and so does the most recent other one,
-    /// so a step back to stable or to yesterday's nightly is free.
-    ///
-    /// Serialised with the other env-var tests in this module.
     #[test]
-    fn installing_a_release_prunes_all_but_the_one_it_replaced() {
+    fn staging_candidates_retains_every_prior_runtime_until_health_validation() {
         let _guard = env_lock();
         let root = tempfile::tempdir().unwrap();
         let install_root = root.path().join("runtime");
@@ -1777,38 +1799,15 @@ mod tests {
             std::env::set_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS", "1");
             std::env::set_var("LEMMA_DESKTOP_RELEASE_MANIFEST", &manifest_path);
             install_from_manifest(&manifest_path, &install_root, release, &mut |_| {})
-                .unwrap_or_else(|error| panic!("{release} installs: {error}"));
+                .unwrap_or_else(|error| panic!("{release} installs: {error}"))
         };
 
-        // Three nightlies in a row, the way a self-updating build arrives at
-        // them. Each install is stamped a little later than the last so "most
-        // recent" is decided by real timestamps, not by filesystem ordering.
         let releases = ["0.7.1-nightly.1", "0.7.1-nightly.2", "0.7.1-nightly.3"];
-        for release in releases {
-            install(release);
+        let installed: Vec<_> = releases.iter().map(|release| install(release)).collect();
+        for runtime in installed {
+            assert!(runtime.is_complete());
+            assert!(runtime.has_recorded_artifact_identity());
         }
-
-        let present = |release: &str| install_root.join("releases").join(release).is_dir();
-        assert!(present(releases[2]), "the release just installed is kept");
-        assert!(
-            present(releases[1]),
-            "the release it replaced is kept, so stepping back is free",
-        );
-        assert!(
-            !present(releases[0]),
-            "the release before that is gone, or the cache grows forever",
-        );
-
-        // And the one still there has to be usable, not just a surviving name:
-        // pruning must never reach into a release it decided to keep.
-        let kept = installed_runtime(
-            &install_root.join("releases").join(releases[1]),
-            releases[1],
-        );
-        assert!(
-            kept.is_complete() && kept.has_recorded_artifact_identity(),
-            "the kept release is still a runtime that could be launched",
-        );
 
         std::env::remove_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS");
         std::env::remove_var("LEMMA_DESKTOP_RELEASE_MANIFEST");
@@ -1934,6 +1933,69 @@ mod tests {
             "reinstalling did work it did not need to: {second_stages:?}",
         );
 
+        let original_root = installed.host_pack_root.parent().unwrap();
+        let legacy_root = install_root.join("releases").join(release);
+        fs::rename(original_root, &legacy_root).unwrap();
+        let legacy = install_from_manifest(&manifest_path, &install_root, release, &mut |_| {
+            panic!("verified legacy runtime must be reused without downloading")
+        })
+        .unwrap();
+        assert_eq!(legacy.host_pack_root.parent(), Some(legacy_root.as_path()));
+
+        let mut changed_entries = host_entries.clone();
+        changed_entries.push(("local-runtime/candidate.txt".into(), b"new build".to_vec()));
+        let changed_zip = zip_of(
+            &changed_entries
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+        let mut changed_manifest = manifest.clone();
+        changed_manifest["host_packs"][host_target()] = artifact_for_bytes(
+            &host_path,
+            &changed_zip,
+            changed_entries
+                .iter()
+                .map(|(_, bytes)| bytes.len() as u64)
+                .sum(),
+            host_platform(),
+            release,
+        );
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&changed_manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            install_from_manifest(&manifest_path, &install_root, release, &mut |_| {}).is_err()
+        );
+        assert!(legacy.is_complete());
+        assert!(legacy.has_recorded_artifact_identity());
+
+        fs::write(&host_path, &changed_zip).unwrap();
+        let candidate =
+            install_from_manifest(&manifest_path, &install_root, release, &mut |_| {}).unwrap();
+        assert_ne!(candidate.host_pack_root, legacy.host_pack_root);
+        assert!(candidate.host_pack_root.join("candidate.txt").is_file());
+        assert!(!legacy.host_pack_root.join("candidate.txt").exists());
+        assert!(legacy.is_complete());
+        assert!(legacy.has_recorded_artifact_identity());
+
+        fs::remove_file(candidate.host_pack_root.join("release.json")).unwrap();
+        let repaired =
+            install_from_manifest(&manifest_path, &install_root, release, &mut |_| {}).unwrap();
+        assert_ne!(repaired.host_pack_root, candidate.host_pack_root);
+        assert!(repaired.is_complete());
+        assert!(candidate.host_pack_root.join("candidate.txt").is_file());
+        assert!(legacy.is_complete());
+
+        let fresh =
+            reinstall_from_manifest(&manifest_path, &install_root, release, &mut |_| {}).unwrap();
+        assert_ne!(fresh.host_pack_root, repaired.host_pack_root);
+        assert!(fresh.is_complete());
+        assert!(repaired.is_complete());
+        assert!(legacy.is_complete());
+
         std::env::remove_var("LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS");
         std::env::remove_var("LEMMA_DESKTOP_RELEASE_MANIFEST");
     }
@@ -2054,23 +2116,6 @@ mod tests {
         };
         write_installed_artifacts(&release, &wrong_target).unwrap();
         assert!(!runtime.has_recorded_artifact_identity());
-    }
-
-    #[test]
-    fn quarantine_moves_only_one_verified_immutable_release() {
-        let root = tempfile::tempdir().unwrap();
-        let release = root.path().join("1.2.3");
-        let runtime = complete_runtime(&release, "1.2.3");
-
-        let quarantined = quarantine_runtime(&runtime).unwrap();
-
-        assert!(!release.exists());
-        assert!(quarantined.is_dir());
-        assert!(quarantined
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with(".1.2.3.invalid-"));
     }
 
     #[test]

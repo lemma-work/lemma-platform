@@ -58,7 +58,8 @@ manifest.
 Installation:
 
 1. Validate manifest schema, release, target, source, digest, and sizes.
-2. Sum expanded sizes and require that amount plus 4 GiB free.
+2. Reserve space for the compressed downloads, expanded sizes, and 4 GiB of
+   working headroom before extraction.
 3. Reuse a verified archive or resume its `.part` file with a strict
    `Content-Range`.
 4. Hash the existing prefix and new bytes as they transfer.
@@ -67,8 +68,13 @@ Installation:
 6. Extract into `.release-pid-time.staging`; create sparse holes for zero-filled
    raw-disk chunks.
 7. Validate host/guest release markers and write artifact identity.
-8. Sync the completed stage and parent directory, then atomically rename.
-9. Keep valid downloads across retry; delete archives only after activation.
+8. Sync the completed stage and parent directory, then atomically rename into
+   a directory identified by the release and artifact digests. A same-version
+   rebuild or repair gets its own directory; existing runtime trees stay in place.
+9. Keep valid downloads across retry; delete archives only after staging succeeds.
+10. Stop the previous runtime only after the candidate has been fully staged,
+    then save the candidate binding. Retain previous releases; staging does not
+    establish database compatibility or health and never authorizes pruning.
 
 No file inside the archive is individually fsynced.
 
@@ -79,20 +85,45 @@ On macOS, `lemma-vz` receives separate `--release` and `--runtime` roots.
 The disk is attached read-only and the kernel boots with `ro` plus volatile
 system state.
 
+Both disk attachments explicitly use host caching with full synchronization,
+so guest flushes retain their durability semantics. Automatic caching is
+avoided on Apple Silicon; see the same disk-cache workaround in
+[Lima's VZ driver](https://github.com/lima-vm/lima/blob/master/pkg/driver/vz/vm_darwin.go).
+
 `locald/runtime/macos/data.raw` is the sole sparse mutable disk. Guest mount
 setup binds persistent paths for PostgreSQL, Redis, SuperTokens, containerd,
 and sandbox workspaces from that disk. Ephemeral runtime paths use tmpfs.
 
-The build creates a 1.25 GiB maximum ext4 image, populates it with numeric
-ownership preserved, shrinks it to minimum contents, adds 128 MiB headroom,
-and verifies the final logical size. ZIP extraction preserves sparse zero
-regions.
+The build creates a 2 GiB maximum ext4 image, populates it with numeric
+ownership preserved, shrinks it to minimum contents, and verifies the final
+logical size. Boot files ship separately from the immutable root; the root
+needs no space for in-place updates. ZIP extraction preserves sparse zero regions.
 
-Windows imports the versioned root as Lemma’s private WSL distribution and
-keeps persistent application state separate from replaceable release
-artifacts.
+Windows imports the versioned root as Lemma’s private WSL distribution.
+Persistent guest data currently lives inside that distribution. Replacing an
+existing guest release is blocked until a data-preserving migration is available.
 
 ## 4. Lifecycle protocol
+
+Guest readiness and host connectivity are separate startup gates. After the
+guest starts PostgreSQL and Redis, locald checks their private service connections
+before launching migrations or the backend. On macOS, database, cache, and auth
+traffic uses Virtualization.framework's virtual sockets, independently of the
+guest's NAT address. systemd owns fixed guest service listeners and its standard
+socket proxy forwards each to the corresponding service. The VM helper exposes
+private Unix sockets; locald publishes the assigned loopback ports for the host
+backend. Each connection requires a guest acknowledgement before forwarding any
+application bytes. Connections and buffers are bounded, and shutdown closes and
+joins owned forwarding work. Sandbox callbacks and downloads still use normal
+networking. Windows retains the private WSL service route.
+This check also runs when migrations are cached. Authentication starts alongside
+the backend, and all private services must be reachable before reporting ready.
+Connectivity waits honor cancellation and their overall deadline. Failures name
+the unavailable service and distinguish a denied connection, missing route,
+refused connection, and timeout without presenting a backend traceback.
+The app rejects macOS runtime packs without the matching service transport
+version before launching or changing guest data; repair must install a compatible
+pack. There is no silent fallback to a guest IP for internal Mac services.
 
 Every mutating operation has an `operation_id`. Events include:
 
@@ -131,11 +162,57 @@ The guest operations are retained individually and `core.ensure` remains a
 compatibility aggregate. Successful image/archive work is cached between
 retries.
 
+After startup, macOS polls `core.sandbox_images_status` to prepare missing
+workspace and function images. Downloads, entrypoint checks, and image repair
+run outside the persistent control stream, allowing health and clock requests
+to continue. Each response reports
+`ready: false` until downloads and runtime-entrypoint checks complete. Polling
+has a deadline, honors shutdown cancellation, and reports failed preparation
+without restarting healthy infrastructure. A cache that remains corrupt after
+repair still requests the existing recovery restart. WSL retains the blocking
+`core.sandbox_images` request because its independent guest process exits with
+the response.
+
 The daemon watches each child during its health gate. Exit returns immediately
 with status and a redacted tail. Crash recovery retains the current runtime
 generation; a new user start creates a new one. After stable Ready, transient
 recovery stays in the workspace. A sustained terminal failure opens recovery
 after a grace interval.
+
+Recovery is available from the welcome screen, desktop settings, and the tray,
+including cloud mode and daemon failures. Restart into Recovery pauses automatic
+service startup and runtime downloads. Force cleanup requires an app-owned
+confirmation with Cancel focused. It deletes this installation's local data,
+credentials, runtime downloads, Agent Host pairings and managed working folders;
+external project folders and cloud data are retained. It is separate from updates
+and makes no automatic backup. Failed runtime or credential cleanup preserves
+its recovery records for a retry. The standalone daemon reset command requires
+`--confirm=erase-local-lemma` and refuses an active control endpoint even if its
+authentication token is corrupt.
+
+Confirmations and menu errors use a bundled app overlay, with a single pending
+operation and a dedicated IPC capability. Escape, Enter on the default Cancel,
+and window close cancel the operation; old responses cannot authorize a later
+operation. Closing the main window keeps services and the tray running. Confirmed
+Quit closes daemon lifecycle admission even during startup. Startup checks for
+cancellation between stages; a running migration finishes before cancellation
+prevents application services from starting. Shutdown waits for active lifecycle
+and Agent Host operations before stopping services, and recovery cannot admit new
+work once shutdown starts. The Agent Host's desired-running preference is retained.
+Background authentication and image requests use cancellable, owned bridge
+processes; shutdown cancels their requests and joins their workers before stopping
+the private VM. Service reconciliation and Stop are serialized so a restart cannot
+leave a replacement child behind cleanup.
+
+The shell observes shutdown under its own operation ID and ignores superseded
+startup events. Slow shutdown offers an in-app choice to keep waiting or quit
+with an explicit interruption/recovery warning. Repeating the Quit shortcut does
+not silently take that fallback. Cleanup runs on a worker; the final event-loop exit
+handler never waits on daemon I/O or process cleanup. A daemon handshake has both
+a deadline and an allocation limit, including Windows named pipes.
+The exit watchdog must exceed the combined sharing, handshake, graceful stop,
+and verified VM/process fallback deadlines. A shorter watchdog can terminate
+the cleanup worker itself and leave this installation's processes running.
 
 ## 5. Host process contract
 
@@ -189,6 +266,15 @@ The native host-pack renderer derives:
 - `FUNCTION_RUNTIME_GATEWAY_URL`;
 - `host.lemma.internal`.
 
+Guest-to-host callback relays own their connections in one asynchronous runtime
+per listener. Admission is bounded; stopping a relay cancels and joins its
+connection tasks, including idle and backpressured streams, before releasing
+the runtime. An upstream half-close still allows the other direction to finish.
+
+The backend bridge receives the runtime manager's configured WSL distribution
+alongside the installation's control socket and capability file. It must not
+fall back to the default distribution for a separate installation.
+
 The same `app.lemma.localhost` hostname is used for frontend and API on
 different ports to satisfy WKWebView cookie behavior. The CLI obtains endpoints
 from locald status/state.
@@ -234,23 +320,79 @@ full-client-size `control` child webview on demand. Creation always begins on a
 worker thread before `add_child`, avoiding Tauri's synchronous child-webview
 deadlock on Windows. Auto-resize follows the parent.
 
-The child loads only `tauri://localhost/control.html` in release builds. Debug
+The child loads only the bundled `control.html` in release builds, served at
+`tauri://localhost/control.html` on macOS and
+`http://tauri.localhost/control.html` on Windows by Tauri's protocol handler.
+Navigation and privileged IPC use the same platform-specific origin check;
+lookalike domains, other ports and credential-bearing URLs are denied. Debug
 builds additionally accept the exact Tauri asset server URL
 `http://127.0.0.1:1430/control.html`; other hosts, ports, and paths remain
 denied. Privileged commands verify both webview label and current URL.
 Escape, Close, and Back to Lemma destroy the child and focus the original
 workspace.
 
+Unsaved settings and public-sharing decisions use the same trusted confirmation
+webview as recovery and Quit. It opens with Cancel focused and traps keyboard
+focus until answered. Decisions are typed and bound to the requesting operation;
+Discard is accepted only for a settings prompt. A close request cannot interrupt
+an admitted save. Save applies dirty sections sequentially and retains the page
+after an error or newer edits, with an inline explanation. Cancel preserves the
+draft and restores focus to Back to Lemma.
+
 The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
 dependencies. Navigation is Overview; AI provider; Sharing,
 Integrations/Channels; Runtime, Updates/Diagnostics.
 
-Local settings exists only in local mode, so it is deliberately not the
-canonical home for anything a cloud workspace also needs. The Agent Host is the
-case in point: its Runtime panel shows status, restart, and the log - what is
-useful when the workspace itself will not load - while connecting, choosing
-agents, and turning it off live in the workspace page, which a hosted user can
-also reach. See [Agent Host in the desktop app](agent-host.md).
+Desktop settings is available in both cloud and local modes through the app
+menu and tray. This computer shows Agent Host status, restart, and logs, plus
+a link back to agent setup in the workspace. Local installation sections are
+enabled in local mode. Connecting and choosing agents still live in the
+workspace page, which both modes can reach. See
+[Agent Host in the desktop app](agent-host.md).
+
+Settings content paints immediately without a page-entry fade. A child webview
+can suspend animation frames while its parent changes; starting the page at
+zero opacity can leave usable controls in the accessibility tree while the
+window looks blank. Native qualification checks both the visible page and its
+accessibility tree, including opening settings before deployment setup.
+
+Native credential reads, writes and removals run in a short-lived copy of
+`lemma-locald`, retaining its signed identity. A bounded supervisor owns and
+reaps that process on timeout; retry cannot accumulate blocked native calls.
+The helper also enforces its own deadline and exits if its Unix parent dies;
+Windows uses the supervisor's owned Job Object.
+Requests and credential values use private stdin/stdout pipes, never command
+arguments, files or logs. Malformed input fails before accessing the store;
+native errors are reported without their potentially sensitive details.
+The encrypted vault serializes unlock and migration. A timed-out read cannot
+populate its cache. A timed-out mutation reports an uncertain outcome rather
+than success: pending empty-vault initialization remains recoverable, and the
+user must recheck or retry the change. No timeout resets application data.
+Destructive credential cleanup stops on the first failure and retains the
+installation identity and wrapping key for a deliberate retry.
+
+The first screen recommends Lemma Cloud, with team collaboration, hosted
+integrations, and cloud agents that can run while this computer is off. Its
+primary button has initial keyboard focus; choosing a mode remains explicit.
+It describes both deployment choices before sign-in: Lemma Cloud stores
+workspace data online and can use this computer's agents; Local Lemma
+stores application data and runs services on this computer. Both can send
+requested data to configured providers and connectors. Agents executing on
+this computer require it to remain on in either mode. Local setup requires a
+separate install action; returning to the choices performs no installation.
+The shell owns automatic startup on launch and mode changes. Loading or
+reloading the splash only observes state, so it cannot race a second start
+against the shell. Start and Retry remain explicit user actions.
+
+On macOS, host services connect to the private VM through its local IP address.
+The app and daemon carry `NSLocalNetworkUsageDescription`, and local setup
+explains this permission before installation. A blocked or unreachable guest
+connection offers Local Network settings guidance and a retry without deleting
+data; that socket error alone does not establish that permission was denied.
+Terminal connectivity does not prove app connectivity because macOS attributes
+helper access to its responsible app. Candidate qualification must exercise the
+installed app with its release signing identity and both allowed and denied
+access. See Apple's [local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
 ## 7.2 Sharing and canonical origin
 
@@ -301,20 +443,15 @@ active.
 
 ## 8. VM memory
 
-The macOS VM ceiling is adaptive from 4 GiB to 8 GiB based on host memory.
-There is exactly one traditional virtio balloon device.
+The macOS VM uses a fixed 4 GiB allocation and no balloon device. Readiness
+polls do not change guest memory. An empty sandbox count cannot distinguish
+idle time from image pulls, database initialization, migrations or shutdown.
 
-The helper state machine:
-
-- boot/initialization target: ceiling;
-- `sandbox.ensure`: restore ceiling immediately;
-- observed active sandboxes: retain ceiling;
-- zero active sandboxes for 60 seconds: request 1.5 GiB;
-- unsupported/refused request: report degraded balloon state, continue.
-
-Guest health adds active sandbox count. Locald exposes that plus balloon state
-and target. Sandbox resource admission must preserve a core-service
-reservation and return capacity errors rather than induce guest OOM.
+Guest health includes the active sandbox count. Sandbox resource admission must
+preserve a core-service reservation and return capacity errors rather than
+induce guest OOM. Changes to the allocation require guest lifecycle and workload
+qualification, including repeated startup, shutdown and existing-data checks;
+see [the native guest checks](../local-runtime-vm.md).
 
 Explicit full stop shuts down the VM and releases its memory.
 
@@ -331,6 +468,10 @@ Redaction covers passwords, secrets, tokens, bearer values, API keys, cookies,
 and credential-bearing URLs. locald also redacts child-log excerpts before
 placing them in lifecycle errors. Guest console is captured and rotated before
 the VM is discarded so infrastructure failures remain diagnosable.
+Kernel Oops, bad-page and machine-check failures reject new guest work and
+health checks. The host also inspects the current boot's bounded console tail
+when guestd cannot answer. Recovery restarts or repairs the runtime; a kernel
+crash does not request a data reset.
 
 Logs are append-only with bounded rotation. The UI provides source tabs, live
 refresh, timestamps, copy, and Open logs folder without covering action
@@ -348,13 +489,72 @@ Desktop injects a local context before application scripts. Local mode:
 
 Hosted mode retains browser handoff and production auth policy.
 
-Operator configuration is schema validated. Secrets are stored in the OS vault.
-Apply writes a candidate, probes the provider, restarts only the backend,
-health-checks it, and commits; failure restores prior config and secrets.
+Operator configuration is schema validated. Operator secrets and the backend
+encryption keyset live in `locald/credentials.enc`, encrypted with AES-256-GCM
+and bound to the installation identity. One random encryption key is kept in
+the OS credential vault and loaded once per daemon process. Legacy per-secret
+vault items migrate on access; migration failures preserve the existing items.
+Explicit removal clears both stores. A missing key or damaged encrypted file
+blocks access rather than minting a replacement key or overwriting credentials.
+The desktop shell serializes its own configuration writes, replaces the file
+atomically, and refuses to overwrite malformed saved configuration. Window and
+navigation updates cannot erase a concurrently saved runtime binding. Recovery
+remains available when this file is damaged.
+The native settings page keeps saved configuration, drafts, and live health
+separate. Snapshot refreshes preserve dirty sections. Each save sends one
+section with its expected revision; the daemon serializes writes and rejects a
+stale revision with `config-conflict`. The legacy whole-config command also
+checks its revision. Credentials use explicit `keep`, `replace`, and `remove`
+actions. Reusing a saved AI key requires the same protocol and provider URL;
+changing the destination requires a replacement or explicit removal.
+
+Apply validates the provider, persists configuration, and restarts only the
+backend when it is running. Reconfiguration holds crash-reconciliation ownership
+without setting the global Stop flag, so the restarted backend must pass its
+normal health gate. A real Stop cancels that wait and cannot be reversed by a
+late restart. The frontend stays running. Failed activation restores the prior configuration
+and secrets. `locald/config-operations.json` records operation IDs and outcomes
+without credential values. A snapshot exposes these outcomes so settings can
+recover after missing an event. A daemon restart marks unfinished writes
+interrupted; it does not replay them or claim that activation succeeded.
+Review the saved configuration before retrying an interrupted save. Unreadable
+operation history disables settings writes while keeping other services usable.
+
+The section payload for `config.apply` is:
+
+```json
+{
+  "expected_revision": 3,
+  "section": {
+    "name": "integrations",
+    "value": {
+      "composio_enabled": false,
+      "google_client_id": "",
+      "microsoft_client_id": "",
+      "github_client_id": "",
+      "slack_client_id": ""
+    }
+  },
+  "secrets": {"integrations.deepgram_api_key": {"action": "remove"}}
+}
+```
+
+`value` is the selected section's full schema; it never includes other sections.
+Valid names are `ai`, `integrations`, and `surfaces`. Credential names must
+belong to that section. Replacement requires a nonempty `value` alongside
+`action: "replace"`.
 
 A local model is reached the same way as any other provider: Ollama and LM
 Studio prefill a loopback OpenAI-compatible endpoint that the user already
 runs, so Lemma never owns, downloads, or supervises a model process.
+
+Onboarding binds model discovery to the selected provider and credential draft.
+Switching either invalidates the pending result and its model choices. A failed
+apply preserves the draft with an inline error; an admitted apply freezes its
+fields until completion. A saved coding agent counts as ready only while its
+profile is active and the host reports it available. First-pod default selection
+skips unavailable agents, and the setup banner links saved-agent failures to
+Models rather than asking for an unrelated installation provider.
 
 The backend exposes safe capability health. The frontend local banner calls
 the validated native `open_control_center` command with `ai`; accepted
@@ -369,7 +569,7 @@ updates, and diagnostics.
 - builds/prunes host packs;
 - builds/shrinks guest runtimes;
 - writes archive sidecars and size breakdown;
-- enforces 750 MiB compressed and 2.25 GiB expanded gates;
+- enforces 6 GiB compressed and 8 GiB expanded gates;
 - publishes runtime assets for a release;
 - on manual non-publish dispatch, builds the compressed PR test DMG.
 

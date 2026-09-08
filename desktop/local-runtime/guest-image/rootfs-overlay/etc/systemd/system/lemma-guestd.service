@@ -13,4 +13,4 @@ Restart=always
 RestartSec=2
 
 [Install]
-WantedBy=lemma-runtime.target
+WantedBy=multi-user.target

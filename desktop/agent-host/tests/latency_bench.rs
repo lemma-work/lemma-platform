@@ -150,6 +150,7 @@ fn start_command(state: &BenchState, harness_id: Uuid, revision: String) -> Valu
         system_prompt: "Follow the runtime instructions exactly.".to_owned(),
         prompt: vec![json!({"type": "text", "text": state.prompt})],
         resume_session_id: None,
+        workspace_cwd: None,
         context: std::collections::BTreeMap::new(),
         mcp: state.mcp.clone(),
         run_deadline: Utc::now() + chrono::Duration::minutes(5),

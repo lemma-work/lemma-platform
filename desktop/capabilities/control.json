@@ -23,10 +23,12 @@
     "allow-sharing-action",
     "allow-close-local-settings",
     "allow-confirm-destructive-action",
+    "allow-confirm-settings-changes",
     "allow-open-developer-tools",
     "allow-local-recovery-options",
     "allow-reset-local-data",
     "allow-reset-full-reinstall",
+    "allow-restart-into-recovery",
     "allow-check-for-app-update",
     "allow-install-app-update"
   ]

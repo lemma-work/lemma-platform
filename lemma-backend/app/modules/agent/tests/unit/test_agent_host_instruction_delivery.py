@@ -18,6 +18,7 @@ at all.
 from __future__ import annotations
 
 from uuid import uuid4, uuid7
+from datetime import datetime, timezone
 
 import pytest
 
@@ -145,11 +146,12 @@ async def test_instructions_count_as_delivered_only_once_the_host_prompted(
     losing a user's edit for the rest of the conversation.
     """
     conversation_id, harness_id = uuid4(), uuid4()
-    dispatched_run, other_run = uuid7(), uuid7()
+    other_run, dispatched_run = uuid7(), uuid7()
+    created_at = datetime.now(timezone.utc)
 
     class _Result:
         def one_or_none(self):
-            return (conversation_id, harness_id)
+            return (conversation_id, harness_id, created_at, harness_id)
 
     class _Session:
         async def execute(self, *_args, **_kwargs):
@@ -187,9 +189,11 @@ class TestASessionIdIsNotProofThePromptLanded:
 
     @staticmethod
     def _uow(conversation_id, harness_id):
+        created_at = datetime.now(timezone.utc)
+
         class _Result:
             def one_or_none(self):
-                return (conversation_id, harness_id)
+                return (conversation_id, harness_id, created_at, harness_id)
 
         class _Session:
             async def execute(self, *_args, **_kwargs):

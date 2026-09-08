@@ -230,10 +230,8 @@ def _prompt_payload(
         agent=agent,
         conversation=conversation,
         ctx=ctx,
-        # This module builds the prompt for exactly one kind of run: a coding
-        # agent driven over ACP as a real process on a user's own machine. Its
-        # own cwd is therefore never the workspace, and it is the only harness
-        # for which that is true.
+        # Agent Host resolves the native cwd. This prompt separately names the
+        # sandbox cwd used by Lemma MCP execution tools.
         runs_as_remote_process=True,
     )
     if instructions:

@@ -23,6 +23,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostEventType,
     AgentHostRunState,
+    AgentHostRunCheckpoint,
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -34,6 +35,10 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
+from app.modules.agent.infrastructure.agent_host.session_memory import (
+    remember_provider_session,
+)
+from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
@@ -408,6 +413,25 @@ class RemoteHarness:
                         sequence=entry.sequence,
                     )
                 )
+        if entry.type == AgentHostEventType.RUN_STATE.value:
+            session_id = entry.payload.get("provider_session_id")
+            state = entry.payload.get("state")
+            if isinstance(session_id, str) and session_id and isinstance(state, str):
+                # Session establishment precedes the prompt in the ordered
+                # event stream. Save it before consuming any answer events.
+                async with self.uow_factory() as uow:
+                    lease = await uow.session.get(AgentHostRunLeaseModel, agent_run_id)
+                    if lease is not None:
+                        await remember_provider_session(
+                            uow,
+                            AgentHostRunCheckpoint(
+                                run_id=agent_run_id,
+                                lease_epoch=lease.lease_epoch,
+                                state=AgentHostRunState(state),
+                                detail=entry.payload,
+                            ),
+                        )
+                        await uow.commit()
         if entry.type == AgentHostEventType.TERMINAL.value:
             await adopt_recorded_final_answer(
                 self.uow_factory, normalizer, agent_run_id=agent_run_id

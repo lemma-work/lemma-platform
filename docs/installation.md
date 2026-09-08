@@ -20,9 +20,9 @@ first needed, so this release is not an air-gapped installer.
 Intel Macs, Windows on Arm, and Desktop Linux are not release targets yet,
 and Windows on x86-64 is experimental rather than published — see below.
 
-Allow at least the expanded runtime size shown during setup plus 4 GiB of
-working headroom. The immutable host and guest runtimes are gated at 2.25 GiB
-combined; user databases, files, images, and workspace sandboxes grow
+Allow space for both downloaded archives and the expanded runtime shown during
+setup, plus 4 GiB of working headroom. The immutable host and guest runtimes are
+gated at 8 GiB combined; user databases, files, images, and workspace sandboxes grow
 separately.
 
 ## macOS installation
@@ -31,7 +31,13 @@ separately.
 2. Download `Lemma_<version>_aarch64-online.dmg`.
 3. Open the DMG and drag **Lemma** into **Applications**.
 4. Eject the DMG and open `/Applications/Lemma.app`.
-5. Choose **Local** and select **Install local services**.
+5. Choose **Use Local Lemma** and select **Install local services**.
+
+macOS may ask for Local Network access to let Lemma reach its private virtual
+machine on this Mac. If setup cannot connect to local services, check Lemma in
+**System Settings → Privacy & Security → Local Network**, then return to Lemma
+and select **Try again**. A connection failure does not require deleting local
+data. If access is already allowed, restart Lemma and check VPN or firewall rules.
 
 Run Lemma from Applications, not from the mounted DMG. The public application
 contains only the Desktop shell, `lemma-locald`, native runtime helpers, and
@@ -50,7 +56,7 @@ To try it:
    [Actions](https://github.com/lemma-work/lemma-platform/actions/workflows/release-desktop.yml).
 2. Download the `lemma-desktop-windows-<version>` artifact and unzip it.
 3. Run the signed installer and open Lemma.
-4. Choose **Local** and select **Install local services**.
+4. Choose **Use Local Lemma** and select **Install local services**.
 
 Lemma imports a private `LemmaRuntime` WSL2 distribution. It does not install
 Ubuntu, Docker Desktop, or Podman, and it does not change the default WSL
@@ -319,6 +325,17 @@ for the health timeout.
 
 ## Updates, data, and uninstall
 
+Local Lemma stores application data and runs Lemma services on your computer.
+Configured LLM providers, connectors, and online features can send requested
+prompts, tool results, and connector payloads to external services. Local mode
+does not mean offline operation.
+
+Settings refreshes preserve unsaved drafts. Save applies the selected section;
+Discard reloads that section from the saved configuration. If another save
+changed the revision, review the conflict and discard/re-enter the affected
+draft. Changing an API provider's destination requires entering a credential
+for that destination or explicitly removing the saved key.
+
 Managed state lives under:
 
 - macOS: `~/Library/Application Support/Lemma`
@@ -326,7 +343,9 @@ Managed state lives under:
 
 Important subpaths include:
 
-- `runtime/releases/<version>` — immutable installed host/guest release;
+- `runtime/releases/<version>-<artifact-identity>` — immutable installed
+  host/guest candidates and retained releases; older installations also use
+  version-only directory names;
 - `locald/network.json` — resolved loopback ports;
 - `locald/processes.json` — exact owned-process ledger;
 - `locald/runtime/macos/data.raw` — sparse macOS persistent data disk;
@@ -334,8 +353,15 @@ Important subpaths include:
 
 The active macOS guest root is attached directly from its release directory as
 read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
-containerd, and workspace sandboxes use the separate data disk. Updates replace
-the immutable release and preserve data.
+containerd, and workspace sandboxes use the separate data disk.
+
+App updates never reset local data. An unsupported database migration or unknown
+compatibility with an installed runtime blocks installation and keeps the
+current version. Windows runtime upgrades are blocked until a data-preserving
+migration is available. Matching PostgreSQL versions alone does not certify
+an upgrade: consistent backup, migration recovery, and packaged-app upgrade
+qualification remain required before a release can promise that guarantee.
+Factory reset remains a separate, explicitly destructive recovery action.
 
 Removing the app does not silently remove user data. Quit Lemma, back up
 anything important, remove the application, and only then remove the platform
@@ -358,10 +384,10 @@ This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and
 sandbox OCI images still require network access. CI rejects:
 
-- combined host/guest compressed archives above 750 MiB;
-- the PR application resources above 850 MiB;
-- expanded immutable runtimes above 2.25 GiB;
-- a macOS guest root above 1.25 GiB.
+- combined host/guest compressed archives above 6 GiB;
+- the PR application resources above 7 GiB;
+- expanded immutable runtimes above 8 GiB;
+- a macOS guest root above 2 GiB.
 
 Download the artifact for the exact commit, copy Lemma to Applications, and
 perform the clean-install checklist in
