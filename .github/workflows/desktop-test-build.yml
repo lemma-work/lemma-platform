@@ -146,7 +146,38 @@ jobs:
           test -n "${tag}" || { echo "::error::no release carries a host pack for ${HOST_TARGET}"; exit 1; }
           echo "host pack from ${tag}"
           gh release download "${tag}" \
-            --pattern "lemma-host-pack-${HOST_TARGET}.zip" --dir runtime-artifacts
+            --pattern "lemma-host-pack-${HOST_TARGET}.zip" \
+            --pattern lemma-local.json --dir runtime-artifacts
+
+      # The manifest came from a release and names that release's guest
+      # runtime; the guest runtime beside it was built from this branch. The
+      # staging script verifies every payload against the manifest -- rightly,
+      # that is a packaging integrity check -- so the manifest has to describe
+      # what is actually here before it can pass.
+      #
+      # Only the guest entry moves, and only from the sidecar the guest build
+      # writes next to its own zip. The host pack is still checked against the
+      # release it came from.
+      - name: Say which guest runtime this build actually carries
+        shell: python
+        env:
+          GUEST_TARGET: ${{ inputs.platform == 'macos' && 'macos-aarch64' || 'windows-x86_64' }}
+        run: |
+          import json, os, pathlib
+          target = os.environ["GUEST_TARGET"]
+          root = pathlib.Path("runtime-artifacts")
+          sidecar = json.loads(
+              (root / f"lemma-guest-runtime-{target}.zip.json").read_text()
+          )
+          manifest_path = root / "lemma-local.json"
+          manifest = json.loads(manifest_path.read_text())
+          entry = manifest["guest_runtimes"][target]
+          for field in ("sha256", "size", "expanded_size"):
+              entry[field] = sidecar[field]
+          # Built here, so there is nothing to fetch it from.
+          entry.pop("url", None)
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          print(f"guest runtime for {target}: {sidecar['sha256']} ({sidecar['size']} bytes)")
 
       - name: Stage the runtime inside the app
         shell: bash
