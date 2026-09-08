@@ -77,7 +77,9 @@ async def test_a_wrong_verifier_is_refused_without_burning_the_request():
     redis = _FakeRedis()
     store = _store(redis, create_limit=5)
     verifier = "v" * 43
-    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    request = await store.create(
+        challenge_for_verifier(verifier), client_key="127.0.0.1"
+    )
     user = uuid4()
     await store.complete(request.request_id, user)
 
@@ -99,7 +101,9 @@ async def test_consuming_before_the_browser_finishes_reveals_nothing():
     redis = _FakeRedis()
     store = _store(redis, create_limit=5)
     verifier = "v" * 43
-    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    request = await store.create(
+        challenge_for_verifier(verifier), client_key="127.0.0.1"
+    )
 
     with pytest.raises(DesktopAuthRequestPending):
         await store.consume(request.request_id, verifier)
@@ -117,7 +121,9 @@ async def test_a_consumed_handoff_cannot_be_replayed_by_anybody():
     redis = _FakeRedis()
     store = _store(redis, create_limit=5)
     verifier = "v" * 43
-    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    request = await store.create(
+        challenge_for_verifier(verifier), client_key="127.0.0.1"
+    )
     await store.complete(request.request_id, uuid4())
     await store.consume(request.request_id, verifier)
 
@@ -140,7 +146,9 @@ async def test_an_expired_handoff_is_indistinguishable_from_one_that_never_exist
     redis = _FakeRedis()
     store = _store(redis, create_limit=5, ttl_seconds=45)
     verifier = "v" * 43
-    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    request = await store.create(
+        challenge_for_verifier(verifier), client_key="127.0.0.1"
+    )
 
     key = next(iter(redis.hashes))
     assert redis.expires[key] == 45, "the record must not outlive the configured window"
