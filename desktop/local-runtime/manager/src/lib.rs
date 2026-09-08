@@ -473,13 +473,10 @@ impl ManagedRuntime {
             // than systemd poweroff. Ask the guest to stop every managed
             // container first so databases and sandboxes flush cleanly.
             let _ = self.request("system.shutdown", json!({}));
-            let output = Command::new(&self.config.wsl_executable)
-                .no_console_window()
-                .args(["--terminate", self.wsl_distribution()])
-                .output()?;
-            if !output.status.success() {
-                return Err(io::Error::other(wsl_message(&output.stderr)));
-            }
+            // Through the shared runner rather than its own `.output()`. This
+            // was a second unbounded wait, on the path where a hang is most
+            // visible to a person: they are watching a window refuse to close.
+            self.wsl(&["--terminate", self.wsl_distribution()], None)?;
         }
         Ok(())
     }
@@ -803,41 +800,13 @@ impl ManagedRuntime {
         arguments: &[&str],
         input: Option<&[u8]>,
     ) -> io::Result<std::process::Output> {
-        let log_path = self.config.local_root.join("logs/wsl.log");
-        rotate_log(&log_path, 5 * 1024 * 1024)?;
-        let mut command = Command::new(&self.config.wsl_executable);
-        command
-            .no_console_window()
-            .args(arguments)
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
-        if let Some(input) = input {
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| io::Error::other("WSL stdin unavailable"))?
-                .write_all(input)?;
-        }
-        let output = child.wait_with_output()?;
-        {
-            let mut log = private_appending_log(&log_path)?;
-            writeln!(
-                log,
-                "lemma-runtime: wsl.exe {} -> {}",
-                arguments.join(" "),
-                output.status
-            )?;
-            if !output.stderr.is_empty() {
-                writeln!(log, "{}", wsl_message(&output.stderr))?;
-            }
-        }
-        Ok(output)
+        run_wsl_command(
+            &self.config.wsl_executable,
+            arguments,
+            input,
+            wsl_budget(arguments),
+            &self.config.local_root.join("logs/wsl.log"),
+        )
     }
 
     /// Refuse to run this release's host against a guest from another one.
@@ -1008,16 +977,16 @@ impl ManagedRuntime {
         Ok(())
     }
 
+    /// Whether WSL 2 is installed and its service will answer.
+    ///
+    /// The first wsl.exe call `start_windows` makes, and so the one a wedged
+    /// WSL blocks first. It ran unbounded and discarded stderr, which is the
+    /// worst combination available: the start path stopped here with nothing
+    /// written anywhere. Now it is bounded, and logged like every other call.
     #[cfg(windows)]
     fn windows_wsl_ready(&self) -> bool {
-        Command::new(&self.config.wsl_executable)
-            .no_console_window()
-            .arg("--status")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+        self.wsl_allowing_failure(&["--status"], None)
+            .is_ok_and(|output| output.status.success())
     }
 
     #[cfg(windows)]
@@ -1430,6 +1399,131 @@ fn decode_wsl_output(value: &[u8]) -> String {
     // `trim()` leaves it on the first line -- enough to stop the first
     // distribution listed from ever matching its own name.
     decoded.replace('\u{feff}', "")
+}
+
+/// How long a `wsl.exe` invocation is given before it is killed.
+///
+/// Backstops against a hang, not performance targets, so deliberately
+/// generous: a budget that is too tight fails a slow machine that would have
+/// succeeded, and that is a worse trade than the wait it saves.
+#[cfg(any(windows, test))]
+fn wsl_budget(arguments: &[&str]) -> Duration {
+    match arguments.first().copied().unwrap_or_default() {
+        // Unpacks a several-hundred-megabyte rootfs onto a fresh ext4.vhdx.
+        "--import" => Duration::from_secs(20 * 60),
+        // Deletes that disk again.
+        "--unregister" => Duration::from_secs(10 * 60),
+        // Questions about state. These are what a wedged WSL service hangs,
+        // and what the start path is waiting on when it does, so this budget
+        // is what decides how long a broken installation stays silent.
+        "--list" | "--status" | "--version" => Duration::from_secs(60),
+        "--terminate" | "--shutdown" => Duration::from_secs(2 * 60),
+        // `--distribution <name> --exec ...`: work inside the guest, up to and
+        // including lemma-runtime-init bringing the whole stack up.
+        _ => Duration::from_secs(15 * 60),
+    }
+}
+
+/// Run wsl.exe under a time limit, and record what it said.
+///
+/// Every call used to end in `child.wait_with_output()` with nothing bounding
+/// it. A wedged WSL service -- the most ordinary Windows failure there is, and
+/// the state the machine is in for as long as a `wsl --shutdown` is in flight
+/// -- makes even `--status` block forever. The start path then stopped dead:
+/// no error, no log line, no way for the user to tell a hang from slow work,
+/// and no way for the daemon to give up and say so.
+///
+/// Feeding stdin was unbounded in a second way. The bytes went out through a
+/// blocking `write_all` *before* anything drained stdout, so a child that
+/// filled its output pipe while this end was still filling its input pipe
+/// deadlocked both halves. Today's only input is a 32-byte capability file, so
+/// it fits; nothing said it had to keep fitting.
+///
+/// `lemma_desktop_process` answers both: it pumps stdin, stdout and stderr
+/// concurrently, and on expiry kills the job object rather than leaving a
+/// wsl.exe running that outlives the daemon which started it.
+#[cfg(any(windows, test))]
+fn run_wsl_command(
+    executable: &Path,
+    arguments: &[&str],
+    input: Option<&[u8]>,
+    budget: Duration,
+    log_path: &Path,
+) -> io::Result<std::process::Output> {
+    rotate_log(log_path, 5 * 1024 * 1024)?;
+    let mut command = Command::new(executable);
+    command.no_console_window().args(arguments);
+    let outcome = match input {
+        Some(input) => lemma_desktop_process::run_with_input(
+            command,
+            input.to_vec(),
+            budget,
+            MAX_RESPONSE_BYTES,
+        ),
+        None => lemma_desktop_process::run(command, budget, MAX_RESPONSE_BYTES),
+    };
+    let mut log = private_appending_log(log_path)?;
+    let output = match outcome {
+        Ok(output) => output,
+        Err(error) => {
+            // Written before returning. The point of bounding these is that a
+            // hang leaves evidence behind, and by the time the error reaches a
+            // person it has usually been reshaped into something friendlier
+            // that no longer names the command.
+            writeln!(
+                log,
+                "lemma-runtime: wsl.exe {} -> {error}",
+                arguments.join(" ")
+            )?;
+            return Err(wsl_run_failure(error, arguments, budget));
+        }
+    };
+    writeln!(
+        log,
+        "lemma-runtime: wsl.exe {} -> {}",
+        arguments.join(" "),
+        output.status
+    )?;
+    if !output.stderr.is_empty() {
+        writeln!(log, "{}", wsl_message(&output.stderr))?;
+    }
+    Ok(output)
+}
+
+/// Turn a supervision failure into the `io::Error` the callers expect.
+///
+/// The `Io` arm hands the original error back rather than restating it. Its
+/// kind is load-bearing: `unregister_windows_guest` treats a `NotFound` from
+/// spawning wsl.exe as "there is no WSL here to unregister from", and wrapping
+/// it in `io::Error::other` would turn a clean uninstall into a failure.
+#[cfg(any(windows, test))]
+fn wsl_run_failure(
+    error: lemma_desktop_process::SetupProcessError,
+    arguments: &[&str],
+    budget: Duration,
+) -> io::Error {
+    use lemma_desktop_process::SetupProcessError;
+    match error {
+        SetupProcessError::Io(error) => error,
+        SetupProcessError::TimedOut => io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "Windows did not answer `wsl {}` within {} seconds. WSL itself \
+                 is usually stuck when this happens: run `wsl --shutdown` in a \
+                 terminal, then start Lemma again.",
+                arguments.join(" "),
+                budget.as_secs()
+            ),
+        ),
+        SetupProcessError::OutputLimit => io::Error::other(format!(
+            "`wsl {}` produced more output than Lemma will read",
+            arguments.join(" ")
+        )),
+        SetupProcessError::Cancelled => io::Error::new(
+            io::ErrorKind::Interrupted,
+            format!("`wsl {}` was cancelled", arguments.join(" ")),
+        ),
+    }
 }
 
 /// The first line of something wsl.exe said, in a form a person can read.
@@ -1936,5 +2030,120 @@ mod tests {
             .flat_map(u16::to_le_bytes)
             .collect();
         assert!(decode_wsl_output(&encoded).contains("LemmaRuntime"));
+    }
+    #[test]
+    fn budgets_leave_room_for_slow_work_without_letting_a_query_hang() {
+        assert!(wsl_budget(&["--import", "LemmaRuntime"]) >= Duration::from_secs(15 * 60));
+        // The queries are what a wedged WSL blocks, and what the start path
+        // waits on when it does, so their budget is how long a broken install
+        // stays silent.
+        assert!(wsl_budget(&["--list", "--quiet"]) <= Duration::from_secs(2 * 60));
+        assert!(wsl_budget(&["--status"]) <= Duration::from_secs(2 * 60));
+        // Guest work is not a query: `--exec lemma-runtime-init` brings the
+        // whole stack up and must not be held to the query budget.
+        assert!(
+            wsl_budget(&[
+                "--distribution",
+                "LemmaRuntime",
+                "--exec",
+                "/usr/local/bin/lemma-runtime-init",
+            ]) >= Duration::from_secs(10 * 60)
+        );
+        assert!(wsl_budget(&[]) > Duration::ZERO);
+    }
+
+    /// A wedged WSL service hangs even `--status`, and every wsl.exe call used
+    /// to end in an unbounded `wait_with_output()`. The start path stopped
+    /// there with no error and no log line, and the daemon had no way to give
+    /// up and report one.
+    ///
+    /// Driven against `/bin/sh` rather than wsl.exe, because the defect was
+    /// never in wsl.exe -- it was in waiting for it. That also makes this the
+    /// only executed coverage the Windows runner has anywhere.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_never_returns_is_killed_and_reported() {
+        let root = tempdir().unwrap();
+        let log = root.path().join("wsl.log");
+        let started = Instant::now();
+        let error = run_wsl_command(
+            Path::new("/bin/sh"),
+            &["-c", "sleep 120"],
+            None,
+            Duration::from_millis(400),
+            &log,
+        )
+        .expect_err("a command past its budget must fail, not be waited on");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "waited {:?}, so nothing bounded it",
+            started.elapsed()
+        );
+        let recorded = fs::read_to_string(&log).unwrap();
+        assert!(
+            recorded.contains("sleep 120"),
+            "a hang has to leave evidence behind; the log says {recorded:?}"
+        );
+    }
+
+    /// `wsl_allowing_failure` exists so a non-zero exit can be an *answer*:
+    /// `--terminate` against a distribution that is not running fails, and
+    /// that failure means "already stopped".
+    #[cfg(unix)]
+    #[test]
+    fn a_non_zero_exit_is_returned_rather_than_raised() {
+        let root = tempdir().unwrap();
+        let output = run_wsl_command(
+            Path::new("/bin/sh"),
+            &["-c", "echo nope >&2; exit 3"],
+            None,
+            Duration::from_secs(20),
+            &root.path().join("wsl.log"),
+        )
+        .expect("a failing command is still a completed command");
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(wsl_message(&output.stderr), "nope");
+    }
+
+    /// stdin used to be written with a blocking `write_all` before anything
+    /// drained stdout. A child that echoes what it reads fills its output pipe
+    /// at 64 KiB and blocks; this end is still blocked filling the input pipe;
+    /// neither side moves again. A megabyte through `cat` is exactly that
+    /// shape, and hangs forever against the old implementation.
+    #[cfg(unix)]
+    #[test]
+    fn input_larger_than_a_pipe_buffer_does_not_deadlock() {
+        let root = tempdir().unwrap();
+        let payload = vec![b'x'; 1024 * 1024];
+        let output = run_wsl_command(
+            Path::new("/bin/sh"),
+            &["-c", "cat"],
+            Some(&payload),
+            Duration::from_secs(30),
+            &root.path().join("wsl.log"),
+        )
+        .expect("a megabyte of stdin must not wedge the runner");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), payload.len());
+    }
+
+    /// The kind of a spawn failure is load-bearing: `unregister_windows_guest`
+    /// reads `NotFound` as "there is no WSL on this machine to unregister
+    /// from" and completes the uninstall. Wrapping it would turn a clean
+    /// uninstall into a failure the user cannot clear.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_wsl_executable_keeps_its_not_found_kind() {
+        let root = tempdir().unwrap();
+        let error = run_wsl_command(
+            &root.path().join("no-such-wsl"),
+            &["--list", "--quiet"],
+            None,
+            Duration::from_secs(5),
+            &root.path().join("wsl.log"),
+        )
+        .expect_err("a missing executable cannot succeed");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }
