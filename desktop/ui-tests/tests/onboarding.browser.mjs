@@ -123,6 +123,49 @@ test('stopping ignores stale readiness instead of opening the workspace it is sh
     'the screen must keep saying what is actually happening');
 });
 
+// Keyboard and screen-reader users, on the two screens everybody sees first.
+test('choosing local keeps focus on screen and announces a failure', async t => {
+  const page = await onboarding(t, { initialState: { mode: 'undecided' } });
+
+  await page.getByRole('button', { name: /Use Local Lemma/ }).click();
+  // Clicking hid the button that had focus. Without a move, focus falls to
+  // <body>: nothing is announced and Tab restarts from the top of the page.
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    'confirm-local',
+    'focus must follow the user to the screen they just opened',
+  );
+
+  // A failure has to be spoken, not merely drawn.
+  assert.equal(
+    await page.locator('#local-setup-error').getAttribute('role'),
+    'alert',
+  );
+  assert.equal(await page.locator('#errwrap').getAttribute('role'), 'alert');
+});
+
+test('every control on the splash shows keyboard focus', async t => {
+  const page = await onboarding(t, { initialState: { mode: 'undecided' } });
+  // `all: unset` on the corner controls removed the user-agent ring too, so
+  // these were the only things on screen a keyboard user could not locate.
+  for (const id of ['toggle-log', 'open-recovery', 'switch-mode']) {
+    // Reached with the keyboard, because that is what `:focus-visible` is for;
+    // then read from the element itself, since a pseudo-class cannot be asked
+    // for through getComputedStyle's pseudo-element argument.
+    const ring = await page.evaluate((target) => {
+      const button = document.getElementById(target);
+      if (!button) return 'missing';
+      button.hidden = false;
+      button.focus({ focusVisible: true });
+      const style = getComputedStyle(button);
+      return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0
+        ? 'ring'
+        : `none (${style.outlineStyle} ${style.outlineWidth})`;
+    }, id);
+    assert.equal(ring, 'ring', `${id} must show where the keyboard is`);
+  }
+});
+
 test('opening or reloading the splash never duplicates shell-owned startup', async t => {
   for (const windows of [false, true]) {
     for (const phaseKey of ['boot', 'stopped']) {

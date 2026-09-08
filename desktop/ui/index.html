@@ -33,7 +33,7 @@
     color-scheme: light dark;
     --ink: #1c1812;
     --ink-soft: rgba(28, 24, 18, 0.62);
-    --ink-faint: rgba(28, 24, 18, 0.38);
+    --ink-faint: rgba(28, 24, 18, 0.66);
     --gold: #5a3fd4;
     --gold-deep: #4630b0;
     --bad: #b3382c;
@@ -61,7 +61,7 @@
     :root {
       --ink: #f2efe9;
       --ink-soft: rgba(242, 239, 233, 0.66);
-      --ink-faint: rgba(242, 239, 233, 0.40);
+      --ink-faint: rgba(242, 239, 233, 0.66);
       --gold: #9583ee;
       --gold-deep: #b3a5f5;
       --bad: #f08a72;
@@ -538,11 +538,10 @@
     font-family: var(--mono);
     font-size: 0.68rem;
     letter-spacing: 0.08em;
-    color: var(--ink-faint);
-    opacity: 0.4;
-    transition: opacity 0.3s ease;
+    color: var(--ink-soft);
+    transition: color 0.3s ease;
   }
-  .corner:hover { opacity: 1; }
+  .corner:hover { color: var(--ink); }
   .corner.left { left: 22px; display: flex; gap: 18px; }
   .corner.right { right: 22px; }
   .corner button {
@@ -551,6 +550,15 @@
     color: inherit;
   }
   .corner button:hover { color: var(--ink); }
+  /* `all: unset` removes the user-agent focus ring too, so these were the only
+     controls on the screen a keyboard user could not see themselves on. */
+  .corner button:focus-visible,
+  .log-header button:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--gold) 45%, transparent);
+    outline-offset: 3px;
+    border-radius: 3px;
+    color: var(--ink);
+  }
 
   button.cta {
     font: inherit;
@@ -697,6 +705,14 @@
       filter: none;
     }
     .progress > div { transition: none; }
+    /* Naming the animations individually left the ones that never stop --
+       `progress-shine` on every install, `button-spin` on every busy button,
+       `bloom` when the stack comes up. control.css already does it this way. */
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
   }
 </style>
 </head>
@@ -761,7 +777,7 @@
         <li>AI models and connected integrations may send data to their providers.</li>
         <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
-      <p class="setup-error" id="local-setup-error" hidden></p>
+      <p class="setup-error" id="local-setup-error" role="alert" hidden></p>
       <div class="confirm-actions">
         <button id="back-to-choices" type="button">Back</button>
         <button class="primary" id="confirm-local" type="button">Install local services</button>
@@ -777,7 +793,7 @@
   <p class="whisper" id="whisper"></p>
 
   <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
-  <div id="errwrap" hidden>
+  <div id="errwrap" role="alert" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
@@ -1535,6 +1551,11 @@
     hideOperationStatus();
     say("Set up Lemma on this Mac?");
     truth.textContent = "review before installation";
+    // The button that was focused has just been hidden, which drops focus to
+    // <body>: a keyboard user lands nowhere and a screen reader announces
+    // nothing. `showChooser` already moves focus on the way in; this is the
+    // same courtesy on the way forward.
+    confirmLocalBtn.focus({ preventScroll: true });
   }
   function hideConnectionChoice() {
     scene.classList.remove("choosing", "welcoming");

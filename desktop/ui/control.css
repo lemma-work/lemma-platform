@@ -35,7 +35,7 @@
   --panel-raised: #f7f5ef;
   --ink: #17181a;
   --muted: #62666b;
-  --faint: #888b90;
+  --faint: #676b71;
 
   /* Alpha hairline rules, not opaque borders: they hold on white, on cream,
      and on a tinted row alike. */
@@ -76,7 +76,7 @@
     --panel-raised: #212120;
     --ink: #f2f0ea;
     --muted: #a3a29c;
-    --faint: #78776f;
+    --faint: #97968d;
     --border: rgb(245 243 237 / 0.13);
     --border-strong: rgb(245 243 237 / 0.30);
     --accent-rgb: 139 122 245;
