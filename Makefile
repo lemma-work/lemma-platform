@@ -1144,6 +1144,26 @@ desktop-runtime-fetch:
 # half a gigabyte a run. CI publishes the signed online DMG instead
 # (`release-local-images.yml` with `share`); this is the one you install
 # yourself, from the runtime artifacts that workflow uploads.
+# QA=1 builds the same DMG as a separate application: its own name, its own
+# bundle identifier, and -- the part that matters -- its own data directory.
+#
+# Qualifying a candidate means running it on the same Mac as the real
+# installation, and two builds sharing `Application Support/Lemma` is not a
+# tidiness problem: locald's process ledger, its runtime and its reset command
+# are all keyed on that directory, so a candidate would stop the user's daemon,
+# adopt its runtime, and erase its pods on cleanup. The name is baked into the
+# binary at build time rather than passed at launch, so it holds however the
+# candidate is started.
+ifeq ($(QA),1)
+DESKTOP_DMG_CONFIG   := tauri.qa.conf.json
+DESKTOP_DMG_DATA_DIR := Lemma Candidate QA
+DESKTOP_DMG_APP_NAME := Lemma Candidate QA
+else
+DESKTOP_DMG_CONFIG   := tauri.dist.conf.json
+DESKTOP_DMG_DATA_DIR :=
+DESKTOP_DMG_APP_NAME := Lemma
+endif
+
 desktop-dmg:
 	@test "$$(uname -s)" = "Darwin" || ( \
 		echo "  ✗ desktop-dmg builds a macOS DMG"; \
@@ -1182,10 +1202,11 @@ desktop-dmg:
 	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
 	@echo "→ Bundling the self-contained DMG…"
 	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
-		npx -y $(TAURI_CLI) build --config tauri.dist.conf.json
+		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
+		npx -y $(TAURI_CLI) build --config $(DESKTOP_DMG_CONFIG)
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app
 	@echo ""
-	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/Lemma_*.dmg 2>/dev/null | head -1); \
+	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/*_*.dmg 2>/dev/null | head -1); \
 	echo "  ✓ $$dmg"
 	@test -n "$${APPLE_SIGNING_IDENTITY:-}" || ( \
 		echo "    Ad-hoc signed: Gatekeeper will ask on first open, and locald"; \
@@ -1345,7 +1366,7 @@ desktop-clean:
 # locald identifier check, which a local build is the likeliest place to lose.
 _desktop-verify-dist-app:
 	@set -eu; \
-	app="$(DESKTOP_DIR)/target/release/bundle/macos/Lemma.app"; \
+	app="$(DESKTOP_DIR)/target/release/bundle/macos/$(DESKTOP_DMG_APP_NAME).app"; \
 	test -x "$$app/Contents/MacOS/lemma-locald"; \
 	test -x "$$app/Contents/MacOS/lemma-agent-host"; \
 	test -x "$$app/Contents/MacOS/lemma-runtime"; \

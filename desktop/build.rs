@@ -56,6 +56,17 @@ fn main() {
     // refuses to self-update.
     println!("cargo:rerun-if-env-changed=LEMMA_RELEASE_CHANNEL");
     println!("cargo:rerun-if-env-changed=LEMMA_BUILD_SHA");
+    // Which directory this build keeps its data in, when it must not be the
+    // one the user's installed Lemma is using.
+    //
+    // Qualifying a candidate means running it on the same Mac as the real
+    // installation, and the two sharing `Application Support/Lemma` would let
+    // a test build stop the user's daemon, adopt its runtime, and reset its
+    // data. Baked at build time rather than passed at launch so the isolation
+    // is a property of the artifact: a candidate that is handed to somebody,
+    // or double-clicked from the Finder, stays isolated with no environment to
+    // remember.
+    println!("cargo:rerun-if-env-changed=LEMMA_DESKTOP_DATA_DIR_NAME");
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),

@@ -720,12 +720,35 @@ impl Daemon {
             failures.push(format!("could not stop the Agent Host: {error}"));
         }
         if let Some(sharing) = self.sharing.as_ref() {
-            if let Err(error) = self.disable_sharing_transaction(sharing) {
-                // Full Desktop exit must close the exposure even if restoring
-                // the app origin failed. It is safer to leave the local stack
-                // stopped/misconfigured than to leave a public tunnel alive.
+            // Under the lifecycle, because closing the exposure restarts the
+            // backend and frontend to put their origins back -- and `stop_all`
+            // runs whether or not a start is in progress. Quitting during
+            // startup therefore killed the very processes that start was
+            // health-gating, and the user who had just asked to quit was shown
+            // "process exited" for their trouble.
+            if let Some(result) = crate::lifecycle::guarded(&self.lifecycle, || {
+                self.disable_sharing_transaction(sharing)
+            }) {
+                if let Err(error) = result {
+                    // Full Desktop exit must close the exposure even if
+                    // restoring the app origin failed. It is safer to leave
+                    // the local stack stopped or misconfigured than to leave a
+                    // public tunnel alive.
+                    sharing.force_disable();
+                    failures.push(format!("could not stop sharing: {error}"));
+                }
+            } else {
+                // Something else owns the lifecycle. Waiting for it would hold
+                // the exposure open for as long as that takes, so close the
+                // tunnel on its own and say the origins were not restored --
+                // the app is exiting, and this is the half that must not
+                // outlive it.
                 sharing.force_disable();
-                failures.push(format!("could not stop sharing: {error}"));
+                failures.push(
+                    "closed sharing without restoring local origins, because another \
+                     local operation was running"
+                        .to_owned(),
+                );
             }
         }
         let failure = (!failures.is_empty()).then(|| failures.join("; "));

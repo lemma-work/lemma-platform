@@ -356,20 +356,35 @@ fn home_dir() -> PathBuf {
         .expect("HOME/USERPROFILE is not set")
 }
 
+/// The directory name this build keeps its data under.
+///
+/// "Lemma" for a real one. A candidate built for qualification sets
+/// `LEMMA_DESKTOP_DATA_DIR_NAME` so it cannot share a data directory with the
+/// installation already on the machine -- which would let it stop that
+/// installation's daemon, adopt its runtime, and reset its pods. Baked in at
+/// compile time, so the isolation travels with the artifact instead of
+/// depending on how it was launched.
+const DATA_DIR_NAME: &str = match option_env!("LEMMA_DESKTOP_DATA_DIR_NAME") {
+    Some(name) => name,
+    None => "Lemma",
+};
+
 fn app_support_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("LEMMA_DESKTOP_APP_SUPPORT_DIR") {
         return PathBuf::from(path);
     }
     #[cfg(target_os = "macos")]
     {
-        home_dir().join("Library/Application Support/Lemma")
+        home_dir()
+            .join("Library/Application Support")
+            .join(DATA_DIR_NAME)
     }
     #[cfg(target_os = "windows")]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(home_dir)
-            .join("Lemma")
+            .join(DATA_DIR_NAME)
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -9731,6 +9746,28 @@ mod tests {
     /// succeeded, so a wedged VM left the app running on "Winding down." with
     /// the user's quit unanswered -- and the error screen's button read "Try
     /// again", offering to *start* Lemma to somebody who had asked to leave.
+    /// A build keeps its data where its own name says, not where "Lemma" does.
+    ///
+    /// Qualifying a candidate means running it on the same Mac as the real
+    /// installation. Sharing `Application Support/Lemma` would let the
+    /// candidate stop the user's daemon, adopt its runtime and reset its pods
+    /// -- so a QA build bakes in a different directory, and a release build
+    /// must keep the one every existing installation already uses.
+    #[test]
+    fn a_release_build_keeps_its_data_where_installed_lemma_already_has_it() {
+        assert_eq!(
+            option_env!("LEMMA_DESKTOP_DATA_DIR_NAME"),
+            None,
+            "a build with this set is a qualification candidate, not a release"
+        );
+        assert_eq!(DATA_DIR_NAME, "Lemma");
+        assert!(
+            app_support_dir().ends_with("Lemma"),
+            "moving this orphans every existing installation's data: {}",
+            app_support_dir().display()
+        );
+    }
+
     /// An update that fails after the stack is stopped must say the previous
     /// version survived, and whether it is running.
     ///
