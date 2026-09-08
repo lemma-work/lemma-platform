@@ -3852,6 +3852,15 @@ async fn install_app_update(
         .await
         .map_err(|error| error.to_string())??;
 
+    // Written before `install`, because on Windows `install` launches the
+    // NSIS installer and exits this process: there is no line after it in
+    // which to record anything. Without it, an installer the user cancelled,
+    // or one interrupted by a reboot, left the app running the old version
+    // with nothing anywhere saying an update had been attempted at all.
+    if cfg!(windows) {
+        record_update_attempt(&app, &update.version.to_string());
+    }
+
     if let Err(error) = update.install(bytes) {
         // The stack is down and the update did not happen. Leaving it there
         // stranded the user in Local settings over a workspace whose backend
@@ -3859,6 +3868,9 @@ async fn install_app_update(
         // only re-shows the splash when the settings window is absent, and
         // this command requires it to be open. Put the previous version --
         // still the installed one -- back into service before reporting.
+        // The attempt is over and it is being reported here, so the record
+        // has nothing left to explain on the next launch.
+        clear_update_attempt();
         let handle = app.clone();
         let restarted = tauri::async_runtime::spawn_blocking(move || {
             start_after_runtime_maintenance(&handle, "shell-update-recover")
@@ -3888,6 +3900,125 @@ async fn install_app_update(
         app.restart();
     }
     Ok(())
+}
+
+/// Where an in-flight update records what it was aiming at.
+///
+/// In locald's root rather than beside the app: on Windows the installer
+/// replaces the whole application directory, so anything written there is gone
+/// exactly when it is needed.
+fn update_attempt_path() -> PathBuf {
+    locald_root().join("shell-update.json")
+}
+
+fn record_update_attempt(app: &AppHandle, to: &str) {
+    let from = app.package_info().version.to_string();
+    let to = to.to_owned();
+    if let Err(error) = config_store::update(&update_attempt_path(), |record| {
+        *record = json!({"schema_version": 1, "from": from, "to": to});
+    }) {
+        // Not fatal: failing to record an update is no reason to refuse one.
+        append_bounded_log(
+            &launch_log_path(),
+            &format!("could not record the update attempt: {error}"),
+        );
+    }
+}
+
+fn clear_update_attempt() {
+    let _ = std::fs::remove_file(update_attempt_path());
+}
+
+/// What last launch's update attempt turned out to be.
+#[derive(Debug, PartialEq, Eq)]
+enum UpdateAttempt {
+    /// Nothing was attempted.
+    None,
+    /// The version it was aiming at is the one now running.
+    Landed { to: String },
+    /// Still on the version it started from: the installer never replaced the
+    /// app. Cancelled at the UAC prompt, refused, or interrupted.
+    DidNotLand { to: String },
+    /// A record that explains nothing about the version now running -- damaged,
+    /// or left by an install that has since been replaced by a third version.
+    Unexplained,
+}
+
+/// Read an update record against the version actually running.
+///
+/// Pure, and separate from the file handling, because the interesting part is
+/// the three-way comparison and it is the part worth testing.
+fn classify_update_attempt(record: Option<&Value>, running: &str) -> UpdateAttempt {
+    let Some(record) = record else {
+        return UpdateAttempt::None;
+    };
+    let from = record.get("from").and_then(Value::as_str);
+    let to = record.get("to").and_then(Value::as_str);
+    let (Some(from), Some(to)) = (from, to) else {
+        return UpdateAttempt::Unexplained;
+    };
+    if to == running {
+        UpdateAttempt::Landed { to: to.to_owned() }
+    } else if from == running {
+        UpdateAttempt::DidNotLand { to: to.to_owned() }
+    } else {
+        UpdateAttempt::Unexplained
+    }
+}
+
+/// Settle whatever the last launch's update attempt left behind.
+///
+/// The record is cleared either way. Its only job is to let this launch say
+/// what happened, and a record kept past that would explain the wrong launch.
+fn reconcile_update_attempt(app: &AppHandle) {
+    let record = std::fs::read(update_attempt_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let running = app.package_info().version.to_string();
+    let outcome = classify_update_attempt(record.as_ref(), &running);
+    if outcome != UpdateAttempt::None {
+        clear_update_attempt();
+    }
+    match outcome {
+        UpdateAttempt::None => (),
+        UpdateAttempt::Landed { to } => {
+            append_bounded_log(&launch_log_path(), &format!("update to {to} completed"));
+        }
+        UpdateAttempt::Unexplained => {
+            append_bounded_log(
+                &launch_log_path(),
+                &format!("an update record did not describe this version ({running}); discarded"),
+            );
+        }
+        UpdateAttempt::DidNotLand { to } => {
+            let message = format!(
+                "Lemma {to} was downloaded but its installer did not finish, so this is \
+                 still {running}. Nothing was changed. Check for updates again when you \
+                 are ready."
+            );
+            append_bounded_log(
+                &launch_log_path(),
+                &format!("update to {to} did not finish"),
+            );
+            announce_incomplete_update(app, message);
+        }
+    }
+}
+
+/// Tell the user their update did not happen, once there is a window to tell.
+///
+/// On its own thread with a deadline: `setup` runs before the window is built,
+/// and `report_action_failure` needs one. The launch log has the record either
+/// way, so a window that never appears costs the message and not the evidence.
+fn announce_incomplete_update(app: &AppHandle, message: String) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while handle.get_window("main").is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        report_action_failure(&handle, "Update", &message);
+    });
 }
 
 /// What this Mac still has that a reset could remove.
@@ -7307,6 +7438,10 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
+            // Before anything else reads a version: an update that did not
+            // finish is the reason this launch is on the version it is on.
+            reconcile_update_attempt(&handle);
+
             if !recovery_launch && mode == "hosted" && agent_host_wants_to_run() {
                 // "Runs while Lemma is open" has to hold for a cloud workspace
                 // too, and locald is what supervises the sidecar. An unpaired
@@ -7755,8 +7890,10 @@ mod tests {
     /// job building the installer is what proves it parses.
     #[test]
     fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
-        let config = include_str!("../tauri.windows.conf.json");
-        let hooks = include_str!("../installer/hooks.nsh");
+        // Normalised: CI's Windows runner checks the tree out with CRLF, and a
+        // needle spanning a line break would find nothing there.
+        let config = include_str!("../tauri.windows.conf.json").replace("\r\n", "\n");
+        let hooks = include_str!("../installer/hooks.nsh").replace("\r\n", "\n");
 
         assert!(
             config.contains(r#""installerHooks": "installer/hooks.nsh""#),
@@ -7794,6 +7931,60 @@ mod tests {
             stop < purge,
             "the daemon has to be stopped before the reset, or the reset refuses"
         );
+    }
+
+    /// On Windows the updater exits this process to run the installer, so
+    /// there is no line after `install` in which to record anything. An
+    /// installer cancelled at the UAC prompt, or interrupted by a reboot, left
+    /// the app running the old version with nothing anywhere saying an update
+    /// had been attempted -- so the next launch, and the user, had no account
+    /// of why they were still on the version they were on.
+    #[test]
+    fn an_update_attempt_is_read_against_the_version_actually_running() {
+        let attempt = json!({"schema_version": 1, "from": "0.7.2", "to": "0.7.3"});
+
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.7.3"),
+            UpdateAttempt::Landed { to: "0.7.3".into() },
+            "running the version it aimed at is the update having happened"
+        );
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.7.2"),
+            UpdateAttempt::DidNotLand { to: "0.7.3".into() },
+            "still on the version it started from means the installer never ran"
+        );
+        // Neither end matches: a third version got installed in between, and
+        // this record explains nothing about the launch reading it.
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.8.0"),
+            UpdateAttempt::Unexplained
+        );
+        assert_eq!(
+            classify_update_attempt(Some(&json!({"schema_version": 1})), "0.7.2"),
+            UpdateAttempt::Unexplained,
+            "a record missing its versions cannot be acted on"
+        );
+        assert_eq!(classify_update_attempt(None, "0.7.2"), UpdateAttempt::None);
+    }
+
+    /// The record lives where the installer cannot reach it.
+    ///
+    /// On Windows the installer replaces the whole application directory, so a
+    /// marker written beside the app is gone exactly when it is needed.
+    #[test]
+    fn the_update_record_is_not_kept_inside_the_application_directory() {
+        let path = update_attempt_path();
+        assert!(path.starts_with(locald_root()), "{}", path.display());
+        let beside_the_app = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+        if let Some(beside_the_app) = beside_the_app {
+            assert!(
+                !path.starts_with(&beside_the_app),
+                "the installer replaces this directory: {}",
+                path.display()
+            );
+        }
     }
 
     #[test]
