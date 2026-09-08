@@ -14,7 +14,7 @@ use agent_client_protocol::schema::v1::{
     SessionConfigOption, SessionConfigOptionValue, SessionNotification,
     SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ByteStreams, ConnectionTo};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
@@ -126,10 +126,12 @@ impl AgentDriver for AcpDriver {
     ) -> anyhow::Result<AcpProbeOutcome> {
         std::fs::create_dir_all(&scratch_directory)?;
         let agent = build_agent(&adapter);
+        let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
+        let stderr = capture_stderr(stderr);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host-probe")
-            .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+            .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
                 let initialization = connection
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
                     .block_task()
@@ -154,8 +156,15 @@ impl AgentDriver for AcpDriver {
                     auth_methods,
                 })
             })
-            .await?;
-        Ok(outcome)
+            .await
+            .map_err(anyhow::Error::from);
+        // The protocol is done with the process, so stdout has reached EOF and
+        // everything the agent sent has been dispatched. Only now may the exit
+        // status speak.
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(supervised.explain(&error, stderr).await),
+        }
     }
 
     async fn run(
@@ -166,6 +175,8 @@ impl AgentDriver for AcpDriver {
         std::fs::create_dir_all(&request.scratch_directory)?;
         let adapter_key = request.adapter.spec.key.clone();
         let agent = build_agent(&request.adapter);
+        let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
+        let stderr = capture_stderr(stderr);
         let notification_callbacks = Arc::clone(&callbacks);
         let permission_callbacks = Arc::clone(&callbacks);
         let permission_gate = request.permissions.clone();
@@ -301,7 +312,7 @@ impl AgentDriver for AcpDriver {
                 },
                 agent_client_protocol::on_receive_request!(),
             )
-            .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+            .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
                 connection
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
                     .block_task()
@@ -528,8 +539,15 @@ impl AgentDriver for AcpDriver {
                     message,
                 })
             })
-            .await?;
-        Ok(outcome)
+            .await
+            .map_err(anyhow::Error::from);
+        // See `SupervisedAgent`: the protocol has read to stdout EOF, so every
+        // chunk the agent streamed is already journalled. A non-zero exit
+        // explains the failure; it no longer replaces the answer.
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(supervised.explain(&error, stderr).await),
+        }
     }
 }
 
@@ -644,21 +662,130 @@ fn session_to_resume(run_spec: &RunSpec, can_load_session: bool) -> Option<Strin
         .map(str::to_owned)
 }
 
+/// How long to wait for a finished agent's exit status and stderr tail.
+///
+/// Only reached once the protocol is already over, so nothing the user is
+/// waiting on sits behind it.
+const CHILD_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// Bytes of an agent's stderr kept for its failure message.
+const STDERR_TAIL_LIMIT: usize = 8 * 1024;
+
+/// An ACP agent process this host supervises itself, rather than letting the
+/// protocol library own it.
+///
+/// The library's own transport races the protocol future against the child's
+/// exit. When the exit wins -- which a burst of output followed by an immediate
+/// exit reliably produces on a busy machine -- it returns the non-zero status
+/// *without* draining what the agent had already written, and the helper it
+/// skips is named `await_protocol_shutdown_after_successful_child_exit`. A
+/// crash mid-answer therefore discarded the part of the answer the user had
+/// already been shown: measured at 405 bytes delivered of 1080 sent.
+///
+/// Owning the child inverts that order. The protocol reads to stdout EOF, so
+/// every notification the agent sent has been dispatched, and only then does
+/// the exit status get to explain why the turn ended. See
+/// `a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent`.
+struct SupervisedAgent {
+    child: async_process::Child,
+}
+
+impl SupervisedAgent {
+    /// Spawn the agent and hand back the transport for its stdio.
+    fn spawn(
+        agent: &AcpAgent,
+    ) -> anyhow::Result<(
+        Self,
+        ByteStreams<async_process::ChildStdin, async_process::ChildStdout>,
+        async_process::ChildStderr,
+    )> {
+        let (stdin, stdout, stderr, child) = agent
+            .spawn_process()
+            .map_err(|error| anyhow::anyhow!("could not start the agent: {error}"))?;
+        // `new(outgoing, incoming)`: we write to the child's stdin and read its
+        // stdout.
+        Ok((Self { child }, ByteStreams::new(stdin, stdout), stderr))
+    }
+
+    /// Explain a protocol failure using what the process did, now that the
+    /// protocol has finished with it.
+    ///
+    /// Keeps the library's own message shape ("Process exited with {status}:
+    /// {stderr}"), because `authentication_hint` and `adapter_failure_message`
+    /// both read the agent's own stderr out of this string to tell a signed-out
+    /// harness from a crashed one.
+    async fn explain(
+        &mut self,
+        error: &anyhow::Error,
+        stderr: tokio::task::JoinHandle<String>,
+    ) -> anyhow::Error {
+        let status = tokio::time::timeout(CHILD_EXIT_GRACE, self.child.status()).await;
+        let Ok(Ok(status)) = status else {
+            // Still running, so the protocol ended for its own reason.
+            return anyhow::anyhow!("{error}");
+        };
+        if status.success() {
+            return anyhow::anyhow!("{error}");
+        }
+        let tail = tokio::time::timeout(CHILD_EXIT_GRACE, stderr)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if tail.trim().is_empty() {
+            anyhow::anyhow!("Process exited with {status}")
+        } else {
+            anyhow::anyhow!("Process exited with {status}: {}", tail.trim())
+        }
+    }
+}
+
+impl Drop for SupervisedAgent {
+    fn drop(&mut self) {
+        // The whole group, not just the child: agents ship behind wrapper
+        // launchers (`npx`, `uvx`), and killing only the immediate child
+        // orphans the real agent, which re-parents to pid 1 and does not
+        // reliably exit on stdin EOF.
+        #[cfg(unix)]
+        if let Some(pid) = rustix::process::Pid::from_raw(self.child.id().cast_signed()) {
+            // ESRCH just means the group is already gone.
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
+        let _ = self.child.kill();
+    }
+}
+
+/// Read an agent's stderr into a bounded tail, for its failure message.
+fn capture_stderr(stderr: async_process::ChildStderr) -> tokio::task::JoinHandle<String> {
+    tokio::spawn(async move {
+        use futures_util::AsyncReadExt as _;
+        let mut reader = stderr;
+        let mut captured = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        while let Ok(read) = reader.read(&mut buffer).await {
+            if read == 0 {
+                break;
+            }
+            tracing::debug!(target = "agent_stderr", bytes = read, "ACP adapter stderr");
+            captured.extend_from_slice(&buffer[..read]);
+            if captured.len() > STDERR_TAIL_LIMIT {
+                let excess = captured.len() - STDERR_TAIL_LIMIT;
+                captured.drain(..excess);
+            }
+        }
+        String::from_utf8_lossy(&captured).into_owned()
+    })
+}
+
 fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
     let config = AcpAgentConfig::new(&adapter.command)
         .args(adapter.args())
         .envs(adapter.environment());
-    AcpAgent::new(config).with_debug(|line, direction| {
-        if matches!(direction, agent_client_protocol::LineDirection::Stderr) {
-            tracing::debug!(
-                target = "agent_stderr",
-                bytes = line.len(),
-                "ACP adapter stderr"
-            );
-        } else if matches!(direction, agent_client_protocol::LineDirection::Stdout) {
-            tracing::debug!(bytes = line.len(), "ACP stdout frame received");
-        }
-    })
+    // No `with_debug`: that callback is only consulted by the library's own
+    // transport, and this host supervises the process itself (`SupervisedAgent`).
+    // Leaving it attached would be dead code that reads as live logging. The
+    // stderr half, which is the useful half, is logged in `capture_stderr`.
+    AcpAgent::new(config)
 }
 
 /// The prompt as ACP content blocks.

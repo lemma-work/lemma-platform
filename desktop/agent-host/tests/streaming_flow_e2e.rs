@@ -332,24 +332,15 @@ async fn a_host_restart_preserves_partial_text_without_dispatching_the_prompt_ag
 /// helper's own name says it: the drain only happens after a *successful*
 /// exit.
 ///
-/// `crash.json` hides this because two chunks usually arrive before the exit is
+/// `crash.json` hid this because two chunks usually arrive before the exit is
 /// observed; it failed one loaded full-suite run in five with empty text. This
-/// scenario sends 120 chunks and then exits 23, and when the suite runs its
-/// siblings concurrently the loss is reliable and large: measured at 405 bytes
-/// delivered of 1080 sent, so 675 bytes of a real answer were dropped.
+/// scenario sends 120 chunks and then exits 23, which made the loss reliable
+/// and large: 405 bytes delivered of 1080 sent, then 378 on the next run.
 ///
-/// IGNORED, and deliberately not weakened: the assertion is correct and the
-/// product is wrong. Fixing it means Lemma taking over the child lifecycle from
-/// the SDK -- `AcpAgent::spawn_process` and `ByteStreams` are both public, so
-/// this is supported -- and draining the protocol to EOF *before* reporting a
-/// non-zero exit. That also brings the adapter child under a Windows job
-/// object, which it needs anyway. Until then this is the reproduction:
-///
-///     cargo test -p lemma-agent-host --test streaming_flow_e2e -- --ignored
-///
-/// Run it alongside its siblings rather than alone; on an idle machine the
-/// reader wins the race and it passes.
-#[ignore = "reproduces a confirmed SDK data-loss bug; unignore with the fix"]
+/// Fixed by `SupervisedAgent`, which owns the child so the protocol reaches
+/// stdout EOF before the exit status is looked at. Run it alongside its
+/// siblings rather than alone -- on an idle machine the reader wins the race
+/// and this passed even before the fix.
 #[tokio::test]
 async fn a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent() {
     let (_directory, _shims, control, host) = streaming_run("stream-crash-midstream", false).await;
