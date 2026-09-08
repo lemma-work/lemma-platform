@@ -26,6 +26,7 @@ use crate::protocol::{
 };
 use crate::sharing::{EnableSharingRequest, SharingController, SharingMode, TunnelProvider};
 use crate::state::StateSnapshot;
+use crate::update_transaction::UpdateTransaction;
 use crate::PROTOCOL_VERSION;
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -166,6 +167,26 @@ impl Daemon {
                 None
             }
         };
+        // An update that stopped part-way is the one piece of startup state that
+        // must reach the operator rather than be absorbed. A record left in a
+        // phase that had already moved the database means the version about to
+        // start may not be able to read it -- see `update_transaction`.
+        // Reported, deliberately, rather than held: nothing in this process
+        // performs an update yet, and a stored handle nothing reads is a
+        // promise the code does not keep. Whoever adds `update.begin` loads it
+        // there. What matters at startup is that an interrupted one is said out
+        // loud instead of absorbed.
+        match UpdateTransaction::load(paths.root.join("update.json")) {
+            Ok(transaction) => {
+                if let Some(reason) = transaction.blocking_reason() {
+                    healed.push(reason);
+                }
+            }
+            Err(error) => healed.push(format!(
+                "the record of an in-flight update could not be read: {error}; \
+                 check this installation before updating it again"
+            )),
+        }
         Ok(Arc::new(Self {
             paths,
             token,
@@ -2934,6 +2955,46 @@ mod tests {
                 "{command} must answer even with no sharing controller"
             );
         }
+    }
+
+    /// An update that stopped while it was migrating must be said out loud on
+    /// the next start, not absorbed.
+    ///
+    /// `alembic upgrade head` is forward-only, so the version about to start may
+    /// no longer be able to read its own database. Starting quietly is how that
+    /// becomes a support case instead of a prompt.
+    #[test]
+    fn an_interrupted_update_is_reported_when_the_daemon_next_starts() {
+        let root = tempfile::tempdir().unwrap();
+        let locald = root.path().join("locald");
+        std::fs::create_dir_all(&locald).unwrap();
+
+        let update =
+            crate::update_transaction::UpdateTransaction::load(locald.join("update.json")).unwrap();
+        update.begin("0.7.2", "0.8.0").unwrap();
+        update
+            .advance(crate::update_transaction::UpdatePhase::Migrating)
+            .unwrap();
+        drop(update);
+
+        let daemon = Daemon::new(LocalPaths::new(locald)).expect("a daemon still starts");
+        let healed = daemon.healed.join(" | ");
+        assert!(
+            healed.contains("0.8.0"),
+            "the interrupted update must reach the operator: {healed}"
+        );
+    }
+
+    /// And an ordinary install says nothing, so the report means something when
+    /// it does appear.
+    #[test]
+    fn an_installation_with_no_update_history_starts_quietly() {
+        let (_root, daemon) = daemon();
+        assert!(
+            !daemon.healed.iter().any(|line| line.contains("update")),
+            "a healthy install must not mention updates: {:?}",
+            daemon.healed
+        );
     }
 
     /// A client that holds its socket open and stops reading must not be
