@@ -15,4 +15,4 @@ LimitNOFILE=1048576
 TasksMax=infinity
 
 [Install]
-WantedBy=lemma-runtime.target
+WantedBy=multi-user.target

@@ -40,7 +40,10 @@ worker. Anything else falls back to the splash.
 ## Runtime packaging
 
 Public release apps bundle only `lemma-local.json` and native control helpers.
-The application must remain at or below 25 MiB installed. First launch
+The online application payload has a shared 40 MiB budget, enforced by
+`desktop/scripts/check_online_payload.py` across CI, stable and nightly builds.
+The check includes Agent Host and every configured Windows sidecar/resource;
+on macOS it measures the complete app bundle. First launch
 downloads:
 
 - `lemma-host-pack-<target>.zip`;
@@ -51,24 +54,38 @@ expanded size, archive format, platform target, and release identity. Archives
 are resumable, verified while transferring, extracted into disposable staging,
 validated, and atomically activated.
 
+Candidates are staged beside existing releases before local services stop.
+Artifact digests distinguish builds that share a version number. Repair forces
+a fresh verified extraction without moving or deleting the prior tree; it also
+works when cached runtime marker files are missing. Staging never prunes older
+releases. Retention and installed-app upgrade qualification are separate from
+archive verification.
+
 The PR test DMG embeds the two compressed archives and rewrites only their
 manifest sources to trusted resource names. It must not contain expanded
 `local-runtime` or `managed-runtime` directories.
 
 Current hard gates:
 
-- host plus guest compressed: 750 MiB;
-- PR bundled application: 850 MiB;
-- expanded immutable runtime: 2.25 GiB;
-- macOS root disk: 1.25 GiB;
-- public application: 25 MiB.
+- host plus guest compressed: 6 GiB;
+- PR bundled application: 7 GiB;
+- expanded immutable runtime: 8 GiB;
+- macOS root disk before shrinking: 2 GiB;
+- public application payload: 40 MiB.
 
 OCI infrastructure/sandbox images are not included. Public offline claims and
 offline release artifacts are intentionally removed.
 
 ## Build and test locally
 
-Prerequisites for maintainers are Rust, Node.js 22, Swift/Xcode on macOS,
+The settings tests run the shipped HTML and JavaScript with mocked desktop
+IPC in a disposable Chromium profile. `make desktop-test-browser` installs its
+pinned test dependencies and browser. To use an installed Chrome for the same
+tests, run `LEMMA_TEST_BROWSER_CHANNEL=chrome make desktop-test-browser`.
+These tests do not access the installed Lemma application or its data, and do
+not replace packaged macOS/Windows installation and upgrade qualification.
+
+Prerequisites for maintainers are Rust, the Node.js version in `.nvmrc`, Swift/Xcode on macOS,
 Python/uv, and the repository’s normal build toolchain.
 
 ### Before you push
@@ -80,7 +97,8 @@ make desktop-check
 ```
 
 It is `desktop-fmt`, `desktop-concepts-check`, `desktop-lint`, `desktop-test`,
-and `desktop-check-windows`. Run it rather than the individual targets. It is
+`desktop-check-windows`, and `desktop-test-browser`. Run it rather than the
+individual targets. It is
 not a promise that CI will be green — bundling, codesigning, and the app crate's
 Windows paths have no local equivalent (see below) — but everything it does
 cover fails here in seconds instead of there in minutes. The
@@ -92,7 +110,7 @@ are the two that fail slowest in CI:
 | --- | --- | --- |
 | `make desktop-fmt` | Desktop workspace → Check formatting | `cargo fmt` is **not** part of `desktop-lint`; clippy will not tell you |
 | `make desktop-concepts-check` | Desktop workspace → Verify baked splash concepts | `ui/concepts.gen.json` regenerated but not committed |
-| `make desktop-lint` | Desktop workspace → Lint, plus Memory balloon policy | clippy `-D warnings` across the workspace |
+| `make desktop-lint` | Desktop workspace → Lint | clippy `-D warnings` across the workspace |
 | `make desktop-test` | Desktop workspace → Test, and Desktop contracts | the whole workspace, `--locked` |
 | `make desktop-check-windows` | Windows desktop build check, **in part** | the `cfg(windows)` paths in locald and the runtime manager — no other local step compiles them |
 
@@ -162,6 +180,19 @@ Build Desktop sidecars:
 make desktop-sidecars
 ```
 
+Native sidecars share Cargo's `target/release` dependency tree with the Tauri
+build; cross builds retain their explicit target directory. CI, stable and
+nightly native jobs share compiler/platform-keyed Rust dependency caches.
+PR caches remain scoped to their merge ref, and failed desktop checks retain
+dependencies for the next attempt. The npm cache includes both the Tauri pin
+and the settings lockfile. Cached build output does not bypass tests, signing
+or runtime verification.
+
+The journal concurrency regression runs in a bounded child process, so a
+SQLite lock regression fails without hanging the entire suite. It reproduces
+the concurrent WAL open/close deadlock in bundled SQLite 3.51.1; the upgraded
+dependency includes SQLite's upstream fix.
+
 On Windows there is no `make`, so the same verbs live in a PowerShell
 dispatcher over the same underlying scripts:
 
@@ -171,11 +202,11 @@ pwsh desktop\scripts\desktop.ps1 test
 pwsh desktop\scripts\desktop.ps1 exe
 ```
 
-There is deliberately no `dev` verb: running the app from source is macOS only
-for now. `desktop/local-runtime/manager` names its WSL distribution with a
-global constant, so a dev run in a throwaway state root would adopt and mutate
-the distribution a real install owns. On Windows, build and install the
-installer instead.
+The source-development launcher currently supports macOS. Windows startup and
+confirmed cleanup derive the same installation-specific WSL distribution name;
+only the default installation retains the legacy name. Windows packaged-app
+qualification must still use a disposable user/installation and verify that its
+distribution and data are separate before exercising recovery.
 
 ### Reproducing a flake under CPU load
 
@@ -281,7 +312,7 @@ export APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)"
 
 Without it an otherwise Developer ID build ends up with an ad-hoc daemon, and
 that has a user-visible cost rather than just a Gatekeeper one. locald keeps the
-operator's secrets in the OS credential vault, which ties each stored item to
+credential-file encryption key in the OS credential vault, which ties the item to
 the code identity of whoever created it. An ad-hoc designated requirement is a
 bare `cdhash`, so every rebuild is a new program as far as the vault is
 concerned and the user is asked to re-authorise access on the next launch. A
@@ -295,8 +326,68 @@ Verify with:
 codesign -d -r- desktop/binaries/lemma-locald-aarch64-apple-darwin
 ```
 
-A `designated => cdhash H"..."` line means the vault will re-prompt. A line
-naming `identifier "work.lemma.locald"` means it will not.
+A `designated => cdhash H"..."` line means a rebuild changes the vault identity.
+A Developer ID requirement must bind both `work.lemma.locald` and the expected
+signing team. A stable identifier alone is insufficient. The signed upgrade
+qualification must verify access to an existing credential file without new
+prompts; a locked keychain or changed identity can still require authorization.
+
+All four macOS helpers embed fixed identifiers: `work.lemma.locald`,
+`work.lemma.agent-host`, `work.lemma.runtime`, and `work.lemma.vz`. Backend,
+frontend, and helper code may change without changing these identifiers or the
+release signing team. Release verification rejects ad-hoc signatures, a wrong
+team, and a missing or changed helper identity. To qualify an upgrade, retain
+the previous signed app and check the actual candidate against its designated
+requirements:
+
+```bash
+uv run --no-project python desktop/scripts/check_macos_signing.py candidate/Lemma.app \
+  --team-id "$APPLE_TEAM_ID" --previous-app previous/Lemma.app
+```
+
+This checks code trust, not Keychain consent or database migration. Also launch
+both builds against a disposable installation, store a test credential with the
+first, and verify the second reads it without another prompt, preserves local
+data, and reaches healthy services. Exercise locked, denied, and subsequently
+unlocked Keychain states without deleting the encrypted credential file.
+
+The signing tests build changed native binaries and evaluate their previous
+requirements using macOS itself. They also read a previous binary's credential
+from a disposable Keychain with consent dialogs disabled, and reject access
+after changing the helper identity. They do not use the login Keychain.
+The certificate-backed case is opt-in:
+
+```bash
+LEMMA_SIGNING_TEST_IDENTITY="$APPLE_SIGNING_IDENTITY" \
+LEMMA_SIGNING_TEST_TEAM="$APPLE_TEAM_ID" \
+  uv run --no-project python -m unittest discover -s desktop/scripts -p test_check_macos_signing.py
+```
+
+An explicitly selected Apple Development certificate and `--allow-development`
+support local QA. They do not qualify a release. Changing an old ad-hoc build to
+a certificate-backed build can still require one approval for the new identity.
+
+The actual packaged daemon also has an opt-in native credential check. It uses
+uniquely named test entries in the current OS credential store, checks creation,
+replacement and removal, and starts a disposable daemon twice to verify encrypted
+state and shutdown. It removes only those test entries and that test root. If
+cleanup fails, the root is retained so its installation identity is recoverable.
+The macOS stable and nightly workflows run this against their packaged daemon:
+
+```bash
+LEMMA_NATIVE_CREDENTIAL_TEST_BINARY="candidate/Lemma.app/Contents/MacOS/lemma-locald" \
+LEMMA_SIGNING_TEST_TEAM="$APPLE_TEAM_ID" \
+  uv run --no-project python -m unittest discover -s desktop/scripts -p test_native_credentials.py
+```
+
+For a locally signed development candidate, explicitly add
+`LEMMA_NATIVE_CREDENTIAL_ALLOW_DEVELOPMENT=1`.
+
+Credentials are encrypted in `locald/credentials.enc`; the OS vault retains its
+encryption key. Existing per-secret vault entries migrate on first access and
+remain available for recovery until explicit removal or full cleanup. Do not
+delete that key or the encrypted file to resolve a startup problem. Missing keys
+and failed decryption preserve the file and report an error.
 
 To run Desktop local mode against the code you are editing:
 
@@ -348,34 +439,49 @@ none of those variables is read around it.
 
 ## Build a test installer
 
-CI's **Desktop workspace** and **Windows desktop build check** jobs do *not*
-produce installers. They prove the app compiles, lints, tests, and bundles;
-they build against a placeholder manifest with unresolvable URLs, so the
-resulting app refuses to install and says so. Their artifacts are named
-`lemma-desktop-macos-buildcheck-<sha>`.
+CI's **Desktop workspace** and **Windows desktop build check** jobs prove the
+app compiles, lints, tests, and bundles. The macOS artifact is named
+`lemma-desktop-macos-buildcheck-<sha>`. When Windows packaging runs, its unsigned
+NSIS installer is retained for 14 days as `desktop-windows-x64-buildcheck`,
+alongside a `candidate.json` recording the checked-out commit and installer
+SHA-256. These builds use a placeholder runtime manifest with unresolvable
+URLs. They support shell and installer checks, but cannot qualify Local Lemma
+installation or upgrades; those require the complete runtime build below.
 
 For a build someone else can install, cut a **Release Local Images** run with
 `share`:
 
 ```bash
-gh workflow run release-local-images.yml -f version=0.7.0 -f publish=false -f share=true
+DESKTOP_VERSION=$(jq -r .version desktop/tauri.conf.json)
+gh workflow run release-local-images.yml -f version="$DESKTOP_VERSION" -f publish=false -f share=true
 ```
 
 That publishes the runtime archives and the manifest to a prerelease tagged
-`desktop-nightly-<short-sha>`, then builds the **online** DMG against it —
+`desktop-nightly-<short-sha>-<run>-<attempt>`, then builds the **online** DMG against it —
 signed with Developer ID, notarized and stapled — and attaches it there. The
 download link is printed to the job summary. Prereleases never become "Latest",
 so the version-tag release channel is untouched.
 
-The nightly channel is a **rolling window of the three most recent builds**, not
-an archive. Once a run has published a complete nightly — runtime assets and a
-notarized DMG — it deletes the older nightly prereleases and their tags. Without
-that they accumulated one per shared build, and by 0.7.0 there were twelve of
-them sitting above the newest real release on the releases page. So a nightly
-DMG is good for about three more shared builds: download it, install the runtime,
-and re-share when you need a newer one. Version tags are never touched — the
-prune re-checks the `desktop-nightly-` prefix immediately before deleting,
-because `--cleanup-tag` removes the tag along with the release.
+Both platforms use `<desktop-version>-nightly.<run>.<attempt>`, including a new
+version for a rerun. Their Tauri updater artifacts are signed with the same
+update key as stable builds. The Windows installer is also Authenticode signed
+when the Windows certificate secrets are configured; otherwise it is explicitly
+a test build without publisher signing and Windows may show SmartScreen warnings.
+An absent publisher certificate never disables update signature verification.
+
+After both builds succeed, one job publishes their immutable payloads and then
+`desktop-nightly/latest.json`. An older finishing run cannot replace a newer
+feed. Nightlies accept only newer nightlies; stable builds accept only newer
+stable versions. Local development builds do not self-update. Runtime and app
+assets are retained so an installed nightly is not stranded by automatic pruning.
+
+To qualify the update path, install nightly A, create representative local data,
+and publish nightly B with app/backend/frontend changes. Use Desktop settings →
+Updates to install B, reopen, and verify the version, credentials, data, services,
+and conversation continuity. Repeat with interrupted downloads and installation
+failure. Run this on macOS and Windows; feed publication alone is not upgrade
+qualification. Existing Windows local-data updates remain blocked until the
+data-preserving guest migration is available.
 
 It has to be the online DMG. Apple's notary service unpacks `host-runtime.zip`
 and rejects everything inside: a bundled CPython and `node_modules` are not
@@ -427,11 +533,15 @@ Acceptance flow:
    Confirm the marketing landing page never appears — not before signup, not
    after signing out, and not in a LAN browser (step 10).
 5. Confirm the workspace does not return to the installer after Ready.
-6. Walk local onboarding: it must ask for a provider, then agents on this
-   computer, then who can reach this installation, in that order. Confirm the
-   provider step states that the model is the installation's single default,
-   that **Set this up later** advances without claiming success, and that
-   completing a provider in Local settings advances the step on its own.
+6. Walk local onboarding: choose an installed coding agent, an API provider,
+   or a local model server, then choose who can reach this installation. An
+   API provider is optional when a coding agent is ready. Continuing without
+   either must not claim that AI is ready. At the minimum window size and with
+   enlarged text, confirm every step's Continue/Create action is fully visible
+   without scrolling. Tab through the form: content may scroll, actions stay
+   put. The shared layout regression runs with
+   `node --test desktop/ui-tests/drivers/setup-layout.mjs` and is included in
+   `make desktop-agent-host-browser-e2e`.
 7. Open **Local settings** from the workspace footer, close it with Escape,
    reopen it from the tray, and confirm the underlying workspace state was not
    remounted or lost. It must look like the rest of the product: warm paper,
@@ -441,16 +551,15 @@ Acceptance flow:
    the list — typing a model name must not be required. Apply it and verify
    thinking and structured tool calls. Also verify an API provider can replace
    them, and that a model the provider does not serve is refused.
-9. From the onboarding agents step, and again from **Models**, press
-   confirm the computer pairs on its own -- no code, no terminal, and no
-   button to press.
+9. From the onboarding agents step, and again from **Models**, confirm the
+   computer pairs on its own. A failed start or pairing must display the
+   failure and offer **Retry connection**, without remaining on a loading row.
    Add a detected agent with **Use in chat**, pick it in a chat, run a
    prompt, and approve a permission. Confirm the tray reads
-   `Agent Host: connected`, that turning it off from either the tray or the card
-   stops the process and survives an app restart, and that a full quit stops it
-   without turning it off. A machine with no coding agents installed must say so
-   in one line and still let the step continue. Repeat in hosted mode: no locald
-   appears until the Agent Host is enabled, and no host pack is downloaded.
+   `Agent Host: connected`. Closing the window keeps it running; Quit stops it,
+   and reopening restores the paired host. A machine with no coding agents
+   installed must say so and still let the step continue. Repeat in hosted
+   mode: the Agent Host connects without downloading the complete local stack.
 10. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
     second browser, create/sign into an account, and verify streamed chat, a
     tool call, and a file transfer. Confirm that browser is offered the account
@@ -472,14 +581,21 @@ Acceptance flow:
     remain available from the tray. Then press ⌘Q with sharing on, the Agent
     Host paired, and the stack up: the prompt must name all three, offer closing
     the window as the alternative, and say data stays on this Mac. Cancel, and
-    confirm nothing stopped. Quit again and confirm it stops everything, takes
-    its window off screen immediately rather than leaving a black one, and that
+    confirm nothing stopped. Quit again and confirm it stops everything, shows
+    responsive in-app shutdown progress rather than a black window, and that
     Dock → Quit is asked in the same way. With the stack stopped, no Agent Host
     and no shared link, ⌘Q must exit without asking anything.
+    Repeat during startup and a blocked setup stage: Quit must be admitted,
+    no later startup stage may launch after its cancellation checkpoint, and a
+    migration must reach a known outcome before cleanup. Repeated ⌘Q must not
+    force interruption; the slow-shutdown fallback must explain the recovery risk.
 16. Restart and confirm ports and data persist, but LAN/Public mode does not
-    resume automatically. The restart must reopen the pod you were last on with
-    no installer splash; check **Diagnostics → Launch timing** and confirm the
-    trace says `resume: hit` and reaches the window in well under a second.
+    resume automatically. Close one conversation to the tray, reopen, select a
+    different conversation and Quit. Launch again: the second conversation and
+    its durable transcript must reopen. Repeat with Settings over that page.
+    When the existing services are still healthy, check **Diagnostics → Launch
+    timing** for `resume: hit`. After a full Quit, show actual service startup
+    progress before restoring the remembered page.
 17. Inspect every Diagnostics source and exercise runtime repair.
 18. Quit and confirm the VM also releases its memory — `ps` must show no
     `lemma-vz`, and Activity Monitor no multi-GB helper, once the app is gone.
@@ -489,8 +605,10 @@ and unrelated listeners occupying persisted ports.
 
 ### Recovery and update scenarios
 
-None of these are reachable from a fake engine, so they belong here rather than
-in the Rust suite. Each one is a path that used to have no way out.
+Run these against disposable native installations as well as the Rust and
+browser regressions. Never corrupt or reset an installation containing real
+accounts, credentials, or project work. Passing fixture tests does not qualify
+a shipped artifact.
 
 19. **Incompatible data.** Install a build pinned to an older Postgres major,
     create a pod with data, then install one pinned to a newer major and press
@@ -508,11 +626,16 @@ in the Rust suite. Each one is a path that used to have no way out.
     running. `ps` must show no `lemma-vz` at the moment the disk is discarded,
     and the app must come back to a clean workspace.
 22. **Start over from a wedged installation.** Truncate `locald/control.token`
-    *and* corrupt `operator-config.json`, launch, and confirm the splash names
-    the actual reason. After **Start over**:
-    `security find-generic-password -s work.lemma.local` finds nothing, the
-    locald root and `runtime/releases` are gone, `runtime/install.log`
-    **survives**, and the next launch shows the chooser.
+    *and* corrupt `operator-config.json` in a disposable installation. Open
+    **Recovery** from the welcome screen or tray. **Restart into Recovery**
+    must pause services and downloads. **Force cleanup and reinstall** must
+    open Lemma's in-app confirmation with Cancel focused. Enter, Escape, and
+    closing the window must preserve all fixture data. After explicitly
+    choosing **Erase Local Lemma**, the locald root, downloaded releases,
+    Agent Host pairings and managed folders are gone; external project canaries
+    and the runtime installation log survive, and the chooser returns. Test
+    credential removal with a dedicated test identity only. A live endpoint or
+    failed credential/VM cleanup must report failure and retain retry records.
 23. **Start over with an orphaned VM.** `kill -9` the locald pid, leaving
     `lemma-vz` alive, then start over. The helper must be gone afterwards — it
     is reclaimed by verified identity, not by name.
@@ -544,7 +667,7 @@ Key files:
 desktop-config.json
 runtime/install.log
 runtime/launch.log
-runtime/releases/<version>/
+runtime/releases/<version>-<artifact-identity>/
 locald/network.json
 locald/installation.id
 locald/processes.json

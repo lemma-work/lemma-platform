@@ -119,6 +119,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                     system_prompt: "Be concise.".into(),
                     prompt: vec![serde_json::json!({"type": "text", "text": "Say hello"})],
                     resume_session_id: None,
+                    workspace_cwd: None,
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
@@ -157,4 +158,81 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
     assert!(messages.contains("\"value\":\"fake-2\""));
     assert!(messages.contains("<system>\\nBe concise.\\n</system>"));
     assert!(messages.contains("\"id\":900,\"result\":{\"outcome\":{\"outcome\":\"cancelled\"}}"));
+}
+
+#[tokio::test]
+async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
+    for harness in ["claude-code", "codex", "opencode"] {
+        let directory = TempDir::new().unwrap();
+        let (mut adapter, log) = fake_adapter(&directory);
+        adapter.spec.key = harness.to_owned();
+        let cwd = directory.path().join("lemma/c/2026-09-07/Δ project");
+        let request = AcpRunRequest {
+            adapter,
+            run_spec: RunSpec {
+                agent_run_id: Uuid::new_v4(),
+                conversation_id: Uuid::new_v4(),
+                harness_id: Uuid::new_v4(),
+                profile_revision: "revision".into(),
+                model_name: None,
+                config_selections: JsonMap::new(),
+                system_prompt: "Be concise".into(),
+                prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                resume_session_id: None,
+                workspace_cwd: Some("/workspace/c/2026-09-07/Δ project".into()),
+                context: BTreeMap::new(),
+                mcp: Value::Null,
+                run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
+                system_prompt_delivery: None,
+            },
+            scratch_directory: cwd.clone(),
+            mcp_server: None,
+            can_load_session: true,
+            published_config_options: Vec::new(),
+            permissions: PermissionGate::new(),
+            permission_timeout: Duration::ZERO,
+            cancel: lemma_agent_host::acp::never_cancelled(),
+            cancel_grace: Duration::from_secs(5),
+        };
+        AcpDriver
+            .run(
+                request.clone(),
+                std::sync::Arc::new(CapturingCallbacks::default()),
+            )
+            .await
+            .unwrap();
+        std::fs::write(cwd.join("work.txt"), "first turn").unwrap();
+        let mut resumed = request;
+        resumed.run_spec.agent_run_id = Uuid::new_v4();
+        resumed.run_spec.resume_session_id = Some("fake-session".into());
+        AcpDriver
+            .run(resumed, std::sync::Arc::new(CapturingCallbacks::default()))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(cwd.join("work.txt")).unwrap(),
+            "first turn"
+        );
+        let traffic: Vec<Value> = std::fs::read_to_string(log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let sessions: Vec<_> = traffic
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message["method"].as_str(),
+                    Some("session/new" | "session/load")
+                )
+            })
+            .collect();
+        assert_eq!(sessions.len(), 2, "{harness}");
+        assert_eq!(sessions[0]["method"], "session/new");
+        assert_eq!(sessions[1]["method"], "session/load");
+        assert_eq!(sessions[1]["params"]["sessionId"], "fake-session");
+        for session in sessions {
+            assert_eq!(session["params"]["cwd"], cwd.to_str().unwrap(), "{harness}");
+        }
+    }
 }

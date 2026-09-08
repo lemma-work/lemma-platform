@@ -190,16 +190,9 @@ export function InvitationsStep({
 // multilingual morphing greeting + skyline reveal ahead of this content on a
 // ~7s timer tuned for the old boxed card layout. Disabled for now: revisit
 // once the full-bleed shell settles.
-export function BootStep({ onBegin }: { onBegin: () => void }) {
+export function BootStep({ onBegin, illustration }: { onBegin: () => void; illustration?: React.ReactNode }) {
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col items-center text-center">
-      <h1 className="setup-boot-title font-normal tracking-normal text-[var(--text-primary)]">
-        Welcome to your AI workspace
-      </h1>
-      <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[var(--text-secondary)]">
-        Tell Lemma what you want done and it builds the space around it — bots,
-        apps, the lot. Or just poke around. Nothing to set up first.
-      </p>
+    <SetupStandalonePage footer={(
       <Button variant="primary"
         onClick={onBegin}
         size="lg"
@@ -208,11 +201,23 @@ export function BootStep({ onBegin }: { onBegin: () => void }) {
         <Sparkles className="h-5 w-5" />
         Begin setup
       </Button>
+    )}>
+    <div className="m-auto flex w-full max-w-2xl flex-col items-center text-center">
+      {illustration}
+      <h1 className="setup-boot-title font-normal tracking-normal text-[var(--text-primary)]">
+        Welcome to your AI workspace
+      </h1>
+      <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[var(--text-secondary)]">
+        Tell Lemma what you want done and it builds the space around it — bots,
+        apps, the lot. Or just poke around. Nothing to set up first.
+      </p>
+
       <p className="mx-auto mt-4 max-w-sm font-mono text-xs text-[var(--text-tertiary)]">
         Or run{" "}
         <span className="text-[var(--text-secondary)]">lemma init</span>
       </p>
     </div>
+    </SetupStandalonePage>
   );
 }
 
@@ -291,6 +296,23 @@ export function IdentityStep({
   return (
     <SetupStandalonePage
       onBack={onBack}
+      footer={(
+          <Button variant="primary"
+            type="submit"
+            form="setup-identity"
+            loading={isSaving}
+            loadingLabel={
+              organizationAction === "join"
+                ? "Joining organization"
+                : "Creating organization"
+            }
+            disabled={isResolvingWorkspace}
+            className="setup-primary-action !flex mt-5 h-11 w-full gap-2 text-sm font-medium"
+          >
+            Continue
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+      )}
       meta={email ? <span className="hidden sm:inline">Signed in as {email}</span> : null}
     >
       <div className="m-auto w-full max-w-lg pb-10">
@@ -302,7 +324,7 @@ export function IdentityStep({
           Confirm your name and where your first Lemma workspace should live.
         </p>
 
-        <form onSubmit={onSubmit} className="mt-7 text-left">
+        <form id="setup-identity" onSubmit={onSubmit} className="mt-7 text-left">
           <div className="space-y-2">
             <Label htmlFor="operator-name" className="text-sm text-[var(--text-secondary)]">
               Your name
@@ -361,20 +383,7 @@ export function IdentityStep({
             )}
           </div>
 
-          <Button variant="primary"
-            type="submit"
-            loading={isSaving}
-            loadingLabel={
-              organizationAction === "join"
-                ? "Joining organization"
-                : "Creating organization"
-            }
-            disabled={isResolvingWorkspace}
-            className="setup-primary-action !flex mt-5 h-11 w-full gap-2 text-sm font-medium"
-          >
-            Continue
-            <ArrowRight className="h-4 w-4" />
-          </Button>
+
         </form>
       </div>
     </SetupStandalonePage>
@@ -496,6 +505,17 @@ export function TeamStep({
         />
       }
       onBack={onBack}
+      footer={(
+        <SetupPrimaryButton
+          onClick={onContinue}
+          loading={isCreating}
+          loadingLabel={`Creating ${podTitle}`}
+          disabled={isCreating || !canContinue}
+          className="!mx-0"
+        >
+          Create {podTitle}
+        </SetupPrimaryButton>
+      )}
       currentStep="team"
       steps={steps}
     >
@@ -550,15 +570,7 @@ export function TeamStep({
           </div>
         ) : null}
 
-        <SetupPrimaryButton
-          onClick={onContinue}
-          loading={isCreating}
-          loadingLabel={`Creating ${podTitle}`}
-          disabled={isCreating || !canContinue}
-          className="!mx-0"
-        >
-          Create {podTitle}
-        </SetupPrimaryButton>
+
       </div>
     </SetupSplitPanel>
   );
@@ -639,6 +651,31 @@ export function ConnectStep({
         />
       }
       onBack={onBack}
+      footer={(
+        <div className="space-y-2">
+        <Button variant="primary"
+          type="button"
+          onClick={handleContinue}
+          loading={isSaving}
+          loadingLabel="Connecting"
+          disabled={continueDisabled}
+          className="setup-primary-action !flex mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
+        >
+          Continue
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+
+        {selectedOption === "lemma" ? (
+          <button
+            type="button"
+            onClick={() => onContinue({ kind: "lemma" })}
+            className="setup-defer-button mt-1 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline"
+          >
+            Skip for now
+          </button>
+        ) : null}
+        </div>
+      )}
       currentStep="connect"
       steps={steps}
     >
@@ -775,27 +812,7 @@ export function ConnectStep({
           subtitle="Fastest — no setup. AI runs on Lemma's built-in models."
         />
 
-        <Button variant="primary"
-          type="button"
-          onClick={handleContinue}
-          loading={isSaving}
-          loadingLabel="Connecting"
-          disabled={continueDisabled}
-          className="setup-primary-action !flex mt-6 h-11 min-w-44 gap-2 px-6 text-sm font-medium"
-        >
-          Continue
-          <ArrowRight className="h-4 w-4" />
-        </Button>
 
-        {selectedOption === "lemma" ? (
-          <button
-            type="button"
-            onClick={() => onContinue({ kind: "lemma" })}
-            className="setup-defer-button mt-1 block text-xs text-[var(--text-tertiary)] underline-offset-4 transition hover:text-[var(--text-secondary)] hover:underline"
-          >
-            Skip for now
-          </button>
-        ) : null}
       </div>
     </SetupSplitPanel>
   );
@@ -1001,6 +1018,31 @@ export function StartStep({
 
     return (
       <SetupStandalonePage
+        footer={(
+            <Button variant="quiet"
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(starterPrompt).then(() => {
+                  setPromptCopied(true);
+                  toast.success("Prompt copied");
+                });
+              }}
+              className="setup-primary-action !flex mt-5 h-11 w-full gap-2 text-sm font-medium"
+            >
+              {promptCopied ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+              {promptCopied ? "Prompt copied" : `Copy for ${
+                codingAgent === "claude-code"
+                  ? "Claude Code"
+                  : codingAgent === "opencode"
+                    ? "OpenCode"
+                    : "Codex"
+              }`}
+            </Button>
+        )}
         onBack={() => {
           setShowCodingAgents(false);
           setPromptCopied(false);
@@ -1063,29 +1105,7 @@ export function StartStep({
               />
             </div>
 
-            <Button variant="quiet"
-              type="button"
-              onClick={() => {
-                void navigator.clipboard.writeText(starterPrompt).then(() => {
-                  setPromptCopied(true);
-                  toast.success("Prompt copied");
-                });
-              }}
-              className="setup-primary-action !flex mt-5 h-11 w-full gap-2 text-sm font-medium"
-            >
-              {promptCopied ? (
-                <Check className="h-4 w-4" />
-              ) : (
-                <Copy className="h-4 w-4" />
-              )}
-              {promptCopied ? "Prompt copied" : `Copy for ${
-                codingAgent === "claude-code"
-                  ? "Claude Code"
-                  : codingAgent === "opencode"
-                    ? "OpenCode"
-                    : "Codex"
-              }`}
-            </Button>
+
           </div>
         </SetupStandalonePage>
     );
@@ -1235,6 +1255,27 @@ export function WorkspaceStep({
           </Button>
         ) : null}
         <SetupPanel
+          footer={(<>
+        <SetupPrimaryButton
+          onClick={onJoinSuggested}
+          loading={isJoining}
+          loadingLabel="Joining workspace"
+        >
+          Join {suggestedOrganization.name}
+        </SetupPrimaryButton>
+        <div className="mt-5 text-center">
+          <button
+            type="button"
+            onClick={() => setShowManualCreate(true)}
+            className="setup-secondary-action-button text-sm font-medium text-[var(--text-tertiary)] transition hover:text-[var(--text-primary)]"
+          >
+            Create a separate workspace
+          </button>
+          <p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-[var(--text-soft)]">
+            Use this for a different team, client workspace, or sandbox.
+          </p>
+        </div>
+          </>)}
           title="We found your workspace"
           subtitle={`Your ${teamDomain} email can join this Lemma workspace.`}
         >
@@ -1268,25 +1309,7 @@ export function WorkspaceStep({
             </div>
           </div>
         </div>
-        <SetupPrimaryButton
-          onClick={onJoinSuggested}
-          loading={isJoining}
-          loadingLabel="Joining workspace"
-        >
-          Join {suggestedOrganization.name}
-        </SetupPrimaryButton>
-        <div className="mt-5 text-center">
-          <button
-            type="button"
-            onClick={() => setShowManualCreate(true)}
-            className="setup-secondary-action-button text-sm font-medium text-[var(--text-tertiary)] transition hover:text-[var(--text-primary)]"
-          >
-            Create a separate workspace
-          </button>
-          <p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-[var(--text-soft)]">
-            Use this for a different team, client workspace, or sandbox.
-          </p>
-        </div>
+
         </SetupPanel>
       </>
     );
@@ -1304,6 +1327,17 @@ export function WorkspaceStep({
         />
       }
       onBack={onBack}
+      footer={(
+        <SetupPrimaryButton
+          onClick={onCreateWorkspace}
+          loading={isCreating}
+          loadingLabel="Creating workspace"
+          disabled={!workspaceName.trim()}
+          className="!mx-0"
+        >
+          Create workspace
+        </SetupPrimaryButton>
+      )}
       currentStep="workspace"
       steps={steps}
     >
@@ -1362,15 +1396,7 @@ export function WorkspaceStep({
             </span>
           </button>
         ) : null}
-        <SetupPrimaryButton
-          onClick={onCreateWorkspace}
-          loading={isCreating}
-          loadingLabel="Creating workspace"
-          disabled={!workspaceName.trim()}
-          className="!mx-0"
-        >
-          Create workspace
-        </SetupPrimaryButton>
+
       </div>
     </SetupSplitPanel>
   );
@@ -1399,6 +1425,18 @@ export function IntentStep({
 
   return (
     <SetupPanel
+      footer={(
+          <Button variant="primary"
+            type="button"
+            onClick={onContinue}
+            disabled={!podName.trim() || !intent.trim()}
+            aria-label="Continue"
+            className="setup-primary-action mx-auto h-11 min-w-44 gap-2"
+          >
+            Continue
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+      )}
       title="What should your first pod help with?"
       titleClassName="setup-title-intent"
     >
@@ -1419,16 +1457,7 @@ export function IntentStep({
             className="inline-edit-field min-w-0 flex-1 border-0 bg-transparent p-0 text-base text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
             placeholder="Track investor follow-ups from Gmail and Slack"
           />
-          <Button variant="primary"
-            type="button"
-            size="icon"
-            onClick={onContinue}
-            disabled={!podName.trim() || !intent.trim()}
-            aria-label="Continue"
-            className="setup-round-action h-9 w-9 shrink-0 disabled:pointer-events-none disabled:opacity-40"
-          >
-            <ArrowRight className="h-4 w-4" />
-          </Button>
+
         </div>
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm leading-6 text-[var(--text-tertiary)]">
           <span>Try:</span>
@@ -1496,6 +1525,23 @@ export function BuildPathStep({
 
   return (
     <SetupPanel
+      footer={(
+        <Button variant="primary"
+          type="button"
+          onClick={onContinue}
+          loading={isCreating}
+          loadingLabel="Creating pod"
+          disabled={
+            isCreating ||
+            (buildPath === "ai" && !prompt.trim()) ||
+            (buildPath === "template" && !selectedKit)
+          }
+          className="setup-primary-action !flex mx-auto mt-3 h-11 min-w-44 gap-2 px-6 text-sm font-medium lg:col-span-2"
+        >
+          Create pod
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      )}
       title="Let's configure the pod for you"
       titleClassName="setup-title-path"
     >
@@ -1643,21 +1689,7 @@ export function BuildPathStep({
           )}
         </div>
 
-        <Button variant="primary"
-          type="button"
-          onClick={onContinue}
-          loading={isCreating}
-          loadingLabel="Creating pod"
-          disabled={
-            isCreating ||
-            (buildPath === "ai" && !prompt.trim()) ||
-            (buildPath === "template" && !selectedKit)
-          }
-          className="setup-primary-action !flex mx-auto mt-3 h-11 min-w-44 gap-2 px-6 text-sm font-medium lg:col-span-2"
-        >
-          Create pod
-          <ArrowRight className="h-4 w-4" />
-        </Button>
+
       </div>
     </SetupPanel>
   );

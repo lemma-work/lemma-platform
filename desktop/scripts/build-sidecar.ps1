@@ -17,10 +17,19 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # ...\lemma-locald.exe", which sends whoever hit it looking for a missing file
 # instead of reading the compiler error just above it. Every native call below
 # is checked for the same reason; desktop.ps1 has done this all along.
-cargo build --manifest-path desktop/Cargo.toml --release --target $Triple `
+$RustVersion = rustc -vV
+if ($LASTEXITCODE -ne 0) { throw "rustc host detection failed" }
+$HostTriple = ($RustVersion | Where-Object { $_ -match '^host: ' }) -replace '^host: ', ''
+$TargetArgs = @()
+$Built = "desktop/target/release"
+if ($Triple -ne $HostTriple -or $env:CARGO_BUILD_TARGET) {
+    $TargetArgs = @("--target", $Triple)
+    $Built = "desktop/target/$Triple/release"
+}
+# Share native release dependencies with Tauri; cross builds retain their target.
+cargo build --manifest-path desktop/Cargo.toml --locked --release @TargetArgs `
   -p lemma-locald -p lemma-agent-host -p lemma-runtime
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed (exit $LASTEXITCODE)" }
-$Built = "desktop/target/$Triple/release"
 Copy-Item "$Built/lemma-locald.exe" "$OutDir/lemma-locald-$Triple.exe"
 Copy-Item "$Built/lemma-agent-host.exe" "$OutDir/lemma-agent-host-$Triple.exe"
 Copy-Item "$Built/lemma-runtime.exe" "$OutDir/lemma-runtime-$Triple.exe"

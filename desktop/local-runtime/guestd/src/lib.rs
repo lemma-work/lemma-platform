@@ -451,6 +451,13 @@ fn run_bounded_engine_command(
     })
 }
 
+type SandboxImageSet = (Option<String>, Option<String>);
+
+enum ImageWarmupState {
+    Running,
+    Finished(Result<(), GuestError>),
+}
+
 pub struct GuestService<E: Engine> {
     engine: Arc<E>,
     state_root: PathBuf,
@@ -458,6 +465,23 @@ pub struct GuestService<E: Engine> {
     dynamic_endpoint_host: bool,
     host_gateway: String,
     capability: Option<String>,
+    kernel_taint_path: Option<PathBuf>,
+    image_warmups: Arc<Mutex<HashMap<SandboxImageSet, ImageWarmupState>>>,
+}
+
+impl<E: Engine> Clone for GuestService<E> {
+    fn clone(&self) -> Self {
+        Self {
+            engine: Arc::clone(&self.engine),
+            state_root: self.state_root.clone(),
+            endpoint_host: self.endpoint_host.clone(),
+            dynamic_endpoint_host: self.dynamic_endpoint_host,
+            host_gateway: self.host_gateway.clone(),
+            capability: self.capability.clone(),
+            kernel_taint_path: self.kernel_taint_path.clone(),
+            image_warmups: Arc::clone(&self.image_warmups),
+        }
+    }
 }
 
 impl GuestService<NerdctlEngine> {
@@ -489,6 +513,7 @@ impl GuestService<NerdctlEngine> {
         // online. The host must always receive the address currently assigned
         // to the guest, rather than the address observed when guestd started.
         service.dynamic_endpoint_host = dynamic_endpoint_host;
+        service.kernel_taint_path = Some(PathBuf::from("/proc/sys/kernel/tainted"));
         Ok(service)
     }
 }
@@ -517,6 +542,8 @@ impl<E: Engine + 'static> GuestService<E> {
             dynamic_endpoint_host: false,
             host_gateway,
             capability,
+            kernel_taint_path: None,
+            image_warmups: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -552,6 +579,10 @@ impl<E: Engine + 'static> GuestService<E> {
                 });
             }
         }
+        if request.operation != "system.shutdown" && !request.operation.starts_with("diagnostics.")
+        {
+            self.check_kernel_health()?;
+        }
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
@@ -562,6 +593,11 @@ impl<E: Engine + 'static> GuestService<E> {
             "core.images" => self.ensure_core_stage(request.parameters, CoreStage::Images),
             "core.sandbox_images" => {
                 self.ensure_core_stage(request.parameters, CoreStage::SandboxImages)
+            }
+            "core.sandbox_images_status" => {
+                let parameters = self.parse_core_parameters(request.parameters)?;
+                let ready = self.poll_sandbox_images(&parameters)?;
+                Ok(json!({"ready": ready}))
             }
             "core.postgres" => self.ensure_core_stage(request.parameters, CoreStage::Postgres),
             "core.redis" => self.ensure_core_stage(request.parameters, CoreStage::Redis),
@@ -671,6 +707,52 @@ impl<E: Engine + 'static> GuestService<E> {
             }
             Ok(())
         })
+    }
+
+    // A persistent guest serves health and sandbox requests on this channel
+    // while the workspace opens. Inspection and cache repair can also wait
+    // on the engine, so the entire preparation runs off the control channel.
+    fn poll_sandbox_images(&self, parameters: &CoreParameters) -> Result<bool, GuestError> {
+        let key = (
+            parameters.images.workspace.clone(),
+            parameters.images.function.clone(),
+        );
+        let mut jobs = self
+            .image_warmups
+            .lock()
+            .expect("image warm-up table poisoned");
+        match jobs.get(&key) {
+            Some(ImageWarmupState::Running) => return Ok(false),
+            Some(ImageWarmupState::Finished(Ok(()))) => return Ok(true),
+            Some(ImageWarmupState::Finished(Err(error))) => {
+                let error = error.clone();
+                jobs.remove(&key);
+                return Err(error);
+            }
+            None => {}
+        }
+        jobs.insert(key.clone(), ImageWarmupState::Running);
+        let service = self.clone();
+        let parameters = parameters.clone();
+        let worker_key = key.clone();
+        if thread::Builder::new()
+            .name("lemma-guest-image-warmup".into())
+            .spawn(move || {
+                let result = service.ensure_sandbox_images(&parameters);
+                service
+                    .image_warmups
+                    .lock()
+                    .expect("image warm-up table poisoned")
+                    .insert(worker_key, ImageWarmupState::Finished(result));
+            })
+            .is_err()
+        {
+            jobs.remove(&key);
+            return Err(GuestError::engine(
+                "could not start sandbox image preparation",
+            ));
+        }
+        Ok(false)
     }
 
     fn ensure_core_images(&self, parameters: &CoreParameters) -> Result<(), GuestError> {
@@ -822,6 +904,7 @@ impl<E: Engine + 'static> GuestService<E> {
     }
 
     fn health_at(&self, now: SystemTime) -> Result<Value, GuestError> {
+        self.check_kernel_health()?;
         let marker = self.cache_reset_marker();
         let repair_due = marker
             .metadata()
@@ -856,6 +939,27 @@ impl<E: Engine + 'static> GuestService<E> {
                 .map(|since| since.as_secs())
                 .unwrap_or_default(),
         }))
+    }
+
+    fn check_kernel_health(&self) -> Result<(), GuestError> {
+        let Some(path) = &self.kernel_taint_path else {
+            return Ok(());
+        };
+        let taint = fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok())
+            .ok_or_else(|| GuestError::engine("Could not read Linux guest kernel health"))?;
+        // Linux taint bits: machine check, bad page, and kernel Oops/DIE.
+        // An unsigned module or a warning alone is not evidence of this failure.
+        if taint & ((1 << 4) | (1 << 5) | (1 << 7)) != 0 {
+            return Err(GuestError {
+                code: "guest_kernel_failed".into(),
+                message: "Lemma's Linux guest kernel crashed. Quit and reopen Lemma to restart the local runtime. Your stored data has not been reset. If this repeats, repair the runtime from Updates and recovery.".into(),
+                retryable: false,
+                status_code: 503,
+            });
+        }
+        Ok(())
     }
 
     fn running_sandbox_count(&self) -> Result<usize, GuestError> {
@@ -1973,19 +2077,9 @@ impl<E: Engine + 'static> GuestService<E> {
 
     /// Fetch an image without occupying the guest's only control channel.
     ///
-    /// A pull is minutes of work, and this process serves one request at a
-    /// time -- so pulling inline stops every other sandbox operation on the
-    /// machine until it finishes. This install's own logs show a 243-second
-    /// pull during which a read-only `sandbox.list` timed out after 60s having
-    /// never been read.
-    ///
-    /// So the pull runs on its own thread and the caller is told to come back.
-    /// The retry is cheap: `sandbox.ensure` re-enters, finds the image present
-    /// (or the pull still running) and answers in milliseconds either way.
-    ///
-    /// Deliberately not used by `core.sandbox_images`, which is first-run setup:
-    /// there the host *wants* to block, because its progress screen is
-    /// reporting the download and there is nothing else for the channel to do.
+    /// Persistent guests poll this work so health and other sandbox requests
+    /// remain responsive during registry transfers. One-shot WSL requests use
+    /// the blocking path because their process exits with the response.
     fn start_or_join_pull(&self, image: &str) -> Result<(), GuestError> {
         let pulls = in_flight_pulls();
         {
@@ -3376,61 +3470,197 @@ fn schedule_shutdown() -> Result<Value, GuestError> {
 mod tests {
     use super::*;
 
-    /// A live request must not wait out a download on the shared channel.
-    ///
-    /// One process serves one request at a time, so an inline pull stops every
-    /// other sandbox operation on the machine. Measured on this install: a
-    /// 243-second pull during which a read-only `sandbox.list` timed out after
-    /// sixty seconds having never been read.
-    #[test]
-    fn a_live_request_hands_back_a_download_instead_of_waiting_for_it() {
-        let source = include_str!("lib.rs");
-        let ensure = {
-            let start = source
-                .find("if should_create {")
-                .expect("ensure has a create branch");
-            &source[start..start + 700]
-        };
-        assert!(
-            ensure.contains("parameters.workload_kind, false)"),
-            "sandbox.ensure must take the non-blocking image path",
-        );
-
-        // ...while first-run setup still blocks, because the host is showing a
-        // progress screen for exactly that download and the channel is idle.
-        let setup = {
-            let start = source
-                .find("fn ensure_sandbox_images(")
-                .expect("setup warms both images");
-            &source[start..start + 900]
-        };
-        assert!(
-            setup.contains("kind, true)"),
-            "first-run setup must keep blocking, or its progress screen lies",
-        );
+    struct GatedPullEngine {
+        release: Mutex<std::sync::mpsc::Receiver<bool>>,
+        started: std::sync::mpsc::Sender<String>,
+        present: Mutex<std::collections::HashSet<String>>,
+        invalid: Mutex<std::collections::HashSet<String>>,
     }
 
-    /// A failed download is reported once, then retried -- not remembered.
-    #[test]
-    fn a_failed_pull_does_not_wedge_the_image_for_ever() {
-        let image = "ghcr.io/lemma/pull-test@sha256:dead";
-        in_flight_pulls().lock().unwrap().insert(
-            image.to_owned(),
-            PullState::Failed("no route to host".into()),
-        );
-
-        // The table is cleared as the failure is reported, so the next attempt
-        // pulls again rather than being told about an old failure for ever.
-        {
-            let mut table = in_flight_pulls().lock().unwrap();
-            let remembered = matches!(table.get(image), Some(PullState::Failed(_)));
-            assert!(remembered, "the failure was recorded");
-            table.remove(image);
+    impl Engine for GatedPullEngine {
+        fn run(&self, arguments: &[String]) -> Result<Output, String> {
+            match arguments[0].as_str() {
+                "pull" => {
+                    let image = arguments.last().unwrap().clone();
+                    self.started.send(image.clone()).unwrap();
+                    let success = self
+                        .release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .map_err(|e| e.to_string())?;
+                    if success {
+                        self.invalid.lock().unwrap().remove(&image);
+                        self.present.lock().unwrap().insert(image);
+                        Ok(output(true, ""))
+                    } else {
+                        Err("registry unavailable".into())
+                    }
+                }
+                "image" => Ok(output(
+                    self.present
+                        .lock()
+                        .unwrap()
+                        .contains(arguments.last().unwrap()),
+                    "",
+                )),
+                "run" => Ok(output(
+                    !self.invalid.lock().unwrap().contains(&arguments[6]),
+                    "",
+                )),
+                "rmi" => {
+                    self.present
+                        .lock()
+                        .unwrap()
+                        .remove(arguments.last().unwrap());
+                    Ok(output(true, ""))
+                }
+                "container" | "ps" => Ok(output(true, "")),
+                _ => Err(format!("unexpected engine command {arguments:?}")),
+            }
         }
-        assert!(
-            in_flight_pulls().lock().unwrap().get(image).is_none(),
-            "a reported failure must not outlive its report",
+    }
+
+    #[test]
+    fn cold_image_downloads_leave_the_control_stream_and_health_responsive() {
+        let root = tempdir().unwrap();
+        let (release, receiver) = std::sync::mpsc::channel();
+        let (started, downloads) = std::sync::mpsc::channel();
+        let service = GuestService::new(
+            GatedPullEngine {
+                release: Mutex::new(receiver),
+                started,
+                present: Mutex::new(std::collections::HashSet::new()),
+                invalid: Mutex::new(std::collections::HashSet::new()),
+            },
+            root.path().into(),
+            "192.168.64.2".into(),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+        let workspace = format!("ghcr.io/lemma/workspace@sha256:{}", root.path().display());
+        let function = format!("ghcr.io/lemma/function@sha256:{}", root.path().display());
+        let parameters = json!({
+            "images": {"postgres": "pg@sha256:test", "redis": "redis@sha256:test",
+                "supertokens": "auth@sha256:test", "workspace": workspace, "function": function},
+            "credentials": {"postgres_password": "a".repeat(64), "redis_password": "b".repeat(64)},
+        });
+        let poll = json!({"version": 1, "operation": "core.sandbox_images_status", "parameters": parameters});
+        let stream = format!(
+            "{poll}\n{}\n{poll}\n",
+            json!({"version": 1, "operation": "health", "parameters": {}})
         );
+        let mut replies = Vec::new();
+        handle_stream(stream.as_bytes(), &mut replies, &service).unwrap();
+        let replies: Vec<Value> = String::from_utf8(replies)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(replies[0]["result"]["ready"], false);
+        assert_eq!(replies[1]["result"]["status"], "ready");
+        assert_eq!(replies[2]["result"]["ready"], false);
+        let mut pulled = vec![
+            downloads.recv_timeout(Duration::from_secs(10)).unwrap(),
+            downloads.recv_timeout(Duration::from_secs(10)).unwrap(),
+        ];
+        pulled.sort();
+        assert_eq!(pulled, vec![function.clone(), workspace.clone()]);
+        assert!(
+            downloads.try_recv().is_err(),
+            "polling must not duplicate downloads"
+        );
+        release.send(true).unwrap();
+        release.send(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while service
+            .image_warmups
+            .lock()
+            .unwrap()
+            .values()
+            .any(|state| matches!(state, ImageWarmupState::Running))
+        {
+            assert!(Instant::now() < deadline, "download workers did not finish");
+            thread::sleep(Duration::from_millis(1));
+        }
+        let mut replies = Vec::new();
+        handle_reader(poll.to_string().as_bytes(), &mut replies, &service).unwrap();
+        let response: Value = serde_json::from_slice(&replies).unwrap();
+        assert_eq!(response["result"]["ready"], true);
+    }
+
+    #[test]
+    fn image_repair_and_failed_download_retries_leave_health_responsive() {
+        for initially_corrupt in [false, true] {
+            let root = tempdir().unwrap();
+            let image = "ghcr.io/lemma/workspace@sha256:test".to_owned();
+            let (release, receiver) = std::sync::mpsc::channel();
+            let (started, downloads) = std::sync::mpsc::channel();
+            let present = if initially_corrupt {
+                std::collections::HashSet::from([image.clone()])
+            } else {
+                std::collections::HashSet::new()
+            };
+            let service = GuestService::new(
+                GatedPullEngine {
+                    release: Mutex::new(receiver),
+                    started,
+                    present: Mutex::new(present.clone()),
+                    invalid: Mutex::new(present),
+                },
+                root.path().into(),
+                "192.168.64.2".into(),
+                "192.168.64.1".into(),
+                None,
+            )
+            .unwrap();
+            let parameters = service.parse_core_parameters(json!({
+                "images": {"postgres": "pg@sha256:test", "redis": "redis@sha256:test",
+                    "supertokens": "auth@sha256:test", "workspace": image},
+                "credentials": {"postgres_password": "a".repeat(64), "redis_password": "b".repeat(64)},
+            })).unwrap();
+            assert!(!service.poll_sandbox_images(&parameters).unwrap());
+            assert_eq!(
+                downloads.recv_timeout(Duration::from_secs(10)).unwrap(),
+                image
+            );
+            assert!(!service.poll_sandbox_images(&parameters).unwrap());
+            assert_eq!(service.health().unwrap()["status"], "ready");
+            assert!(downloads.try_recv().is_err());
+            release.send(false).unwrap();
+            wait_for_image_warmup(&service);
+            let error = service.poll_sandbox_images(&parameters).unwrap_err();
+            assert!(error.message.contains("registry unavailable"));
+            assert_eq!(service.health().unwrap()["status"], "ready");
+            assert!(!service.poll_sandbox_images(&parameters).unwrap());
+            assert_eq!(
+                downloads.recv_timeout(Duration::from_secs(10)).unwrap(),
+                image
+            );
+            release.send(true).unwrap();
+            wait_for_image_warmup(&service);
+            assert!(service.poll_sandbox_images(&parameters).unwrap());
+            assert!(service.poll_sandbox_images(&parameters).unwrap());
+            assert!(downloads.try_recv().is_err());
+        }
+    }
+
+    fn wait_for_image_warmup(service: &GuestService<GatedPullEngine>) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while service
+            .image_warmups
+            .lock()
+            .unwrap()
+            .values()
+            .any(|state| matches!(state, ImageWarmupState::Running))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "image preparation did not finish"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// No single request may sit on the guest's only control channel for
@@ -4580,6 +4810,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(health["clock_epoch"], 1_787_249_481_u64);
+    }
+
+    #[test]
+    fn kernel_faults_block_health_and_new_work_before_engine_dispatch() {
+        let (root, mut service) = clock_test_service();
+        let taint = root.path().join("tainted");
+        service.kernel_taint_path = Some(taint.clone());
+        for bits in [16, 32, 128, 128 | 512] {
+            fs::write(&taint, format!("{bits}\n")).unwrap();
+            for operation in ["health", "core.ensure", "sandbox.ensure"] {
+                let response = service.handle(GuestRequest {
+                    version: PROTOCOL_VERSION,
+                    capability: None,
+                    operation: operation.into(),
+                    parameters: json!({}),
+                });
+                assert!(!response.ok);
+                let error = response.error.unwrap();
+                assert_eq!(error.code, "guest_kernel_failed");
+                assert!(!error.retryable);
+                assert_eq!(error.status_code, 503);
+                assert!(!error.message.contains(DATA_RESET_MARKER));
+            }
+        }
+        // Clearing the fault on a fresh boot restores normal engine health.
+        fs::write(&taint, "0\n").unwrap();
+        assert_eq!(service.health().unwrap()["status"], "ready");
+    }
+
+    #[test]
+    fn kernel_warnings_are_not_crashes_and_unreadable_health_is_not_ready() {
+        let (root, mut service) = clock_test_service();
+        let taint = root.path().join("tainted");
+        service.kernel_taint_path = Some(taint.clone());
+        assert!(service.health().is_err());
+        fs::write(&taint, "invalid\n").unwrap();
+        assert!(service.health().is_err());
+        fs::write(&taint, "512\n").unwrap();
+        assert_eq!(service.health().unwrap()["status"], "ready");
     }
 
     /// Returns the temporary root with the service: dropping it early would
