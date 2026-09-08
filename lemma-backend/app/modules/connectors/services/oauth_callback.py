@@ -99,10 +99,6 @@ class OAuthCallbackSeam(InstallServiceSeam, Protocol):
 
     def _provider_value(self, auth_config: AuthConfigEntity) -> str: ...
 
-    async def _load_native_account_profile(
-        self, connector: ConnectorEntity, credentials: OAuthCredentials
-    ) -> ProviderPayload | None: ...
-
     async def _fetch_account_profile(
         self,
         connector: ConnectorEntity,
@@ -247,39 +243,33 @@ async def _resolve_identity(
     provider_account_id = provider_account_id_from_credentials(
         connector.id, credentials
     )
-    native_profile = await service._load_native_account_profile(connector, credentials)
-    if native_profile:
-        credentials = credentials.model_copy(
-            update={
-                "user_data": {
-                    **(credentials.user_data or {}),
-                    "profile": native_profile,
-                }
-            }
-        )
-    email_profile = await service._fetch_account_profile(
+    account_profile = await service._fetch_account_profile(
         connector,
         service._provider_value(auth_config),
         credentials,
     )
-    # The one profile this app actually populates. The catalog-driven fetch
-    # works for any connector with a profile operation configured; the
-    # Lemma-native one covers Gmail/Drive/Slack alone, and only one of the two
-    # is ever populated for a given app.
-    #
-    # Reading the identity from `native_profile` only meant every `http`-kind
-    # connector with a profile operation -- GitHub, and every native connector
-    # after it -- stored an account with no provider identity. That is the value
-    # the duplicate-connect guard and re-auth matching key on, so without it a
-    # second identity's re-auth is matched to the user's default account and
-    # overwrites its credentials.
-    account_profile = email_profile or native_profile
+    # One source now, for every kind. There used to be a second -- a hardcoded
+    # pair of vendored-client calls covering Gmail, Drive and Slack -- and
+    # reading the identity from that one only meant every `http`-kind connector
+    # with a profile operation stored an account with no provider identity. That
+    # is the value the duplicate-connect guard and re-auth matching key on, so
+    # without it a second identity's re-auth was matched to the user's default
+    # account and overwrote its credentials.
+    if account_profile:
+        # `resolve_account_identity` reads `user_data.profile.email_address` for
+        # Gmail, so this is load-bearing rather than decoration.
+        credentials = credentials.model_copy(
+            update={
+                "user_data": {
+                    **(credentials.user_data or {}),
+                    "profile": account_profile,
+                }
+            }
+        )
     provider_account_id = provider_account_id or provider_account_id_from_profile(
         connector.id, account_profile
     )
-    email = account_email_from(
-        connector.id, credentials, email_profile
-    ) or account_email_from(connector.id, credentials, native_profile)
+    email = account_email_from(connector.id, credentials, account_profile)
 
     # Human-friendly label for the account list (team name / mailbox / …),
     # falling back to the email when the app has no better label.

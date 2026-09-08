@@ -10,6 +10,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.surface_connectors import (
+    surface_connector_binding,
+)
 from app.modules.agent_surfaces.services.managed_bot_identity import (
     link_managed_bot_creator,
 )
@@ -18,7 +21,6 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
 )
-from app.modules.connectors.contracts import AuthProvider
 from app.modules.connectors.infrastructure.repositories.account_repository import (
     AccountRepository,
 )
@@ -50,7 +52,11 @@ async def persist_managed_bot(
                 AuthConfigEntity(
                     organization_id=setup.organization_id,
                     connector_id="telegram",
-                    provider=AuthProvider.LEMMA,
+                    # Named, not inferred. This used to say
+                    # `provider=AuthProvider.LEMMA` and relied on a legacy
+                    # validator to turn that into a kind -- which resolved to
+                    # the vendored-package kind, the one thing Telegram is not.
+                    kind=surface_connector_binding(SurfacePlatform.TELEGRAM).kind,
                     config_source=AuthConfigSource.SYSTEM_DEFAULT,
                     name="telegram",
                     created_by_user_id=setup.user_id,

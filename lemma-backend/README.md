@@ -35,7 +35,6 @@ The repository does not use submodules. Backend code depends on sibling packages
 | `../lemma-pod-bundle/` | The pod bundle format, shared with the CLI |
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
-| `lemma-connectors/` | Backend-local editable Python connector package |
 | `sandbox_runtime/` | The runtime inside sandbox images, and its protocol |
 | `sandbox-images/` | Dockerfiles and templates for the sandbox images |
 
@@ -185,9 +184,11 @@ New ORM models must be imported in `migrations/env.py` before autogenerate can d
 The connector catalog (apps, operations, and triggers) is managed via
 [`scripts/import_connector_catalog.py`](scripts/import_connector_catalog.py).
 
-- **Native (Lemma) apps** are always imported — those in `scripts/lemma_apps_config.json`
-  (Slack, Jira, Confluence) and the `lemma-connectors` package (Gmail, Google
-  Calendar, Google Drive, …).
+- **Native (Lemma) apps** are always imported — every entry in
+  `scripts/lemma_apps_config.json`. Those with curated `static_operations`
+  (GitHub, Slack, Gmail) run as `http`-kind connectors against the provider's
+  own OpenAPI description; the operation sets are regenerated offline by
+  `scripts/generate_*_static_operations.py` from the specs in `openapi_specs/`.
 - **Composio apps** are imported only when `COMPOSIO_API_KEY` is set (skipped
   gracefully otherwise).
 

@@ -1850,7 +1850,6 @@ dependencies = [
     { name = "jmespath" },
     { name = "jsonpath-ng" },
     { name = "jsonschema" },
-    { name = "lemma-connectors" },
     { name = "lemma-pod-bundle" },
     { name = "markdown" },
     { name = "obstore" },
@@ -1943,7 +1942,6 @@ requires-dist = [
     { name = "jsonpath-ng", specifier = ">=1.6.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "keyring", marker = "extra == 'keychain'", specifier = ">=25.0.0" },
-    { name = "lemma-connectors", editable = "lemma-connectors" },
     { name = "lemma-pod-bundle", editable = "../lemma-pod-bundle" },
     { name = "markdown", specifier = ">=3.8.2" },
     { name = "obstore", specifier = ">=0.8.2" },
@@ -1993,33 +1991,6 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.6.1" },
     { name = "ruff", specifier = ">=0.14.8,<0.17" },
-]
-
-[[package]]
-name = "lemma-connectors"
-version = "0.7.1"
-source = { editable = "lemma-connectors" }
-dependencies = [
-    { name = "attrs" },
-    { name = "httpx" },
-    { name = "json-schema-to-pydantic" },
-    { name = "pydantic" },
-    { name = "python-dateutil" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "attrs", specifier = ">=25.3.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "json-schema-to-pydantic", specifier = ">=0.4.11" },
-    { name = "pydantic", specifier = ">=2.11.9" },
-    { name = "python-dateutil", specifier = ">=2.9.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "datamodel-code-generator", specifier = ">=0.64.0" },
-    { name = "openapi-python-client", specifier = ">=0.29.0" },
 ]
 
 [[package]]

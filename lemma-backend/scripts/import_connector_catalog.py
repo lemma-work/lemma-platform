@@ -42,7 +42,6 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from types import SimpleNamespace
 
 from dotenv import load_dotenv
 
@@ -87,12 +86,8 @@ from app.core.config import settings
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.connectors.infrastructure.adapters.lemma_connector_factory import (
-    create_lemma_info_client,
-    describe_lemma_connector,
-    supported_lemma_connectors,
-)
 from app.modules.connectors.domain.connector import (
+    kind_to_provider,
     ConnectorEntity,
     AuthMethod,
     AuthProvider,
@@ -100,13 +95,10 @@ from app.modules.connectors.domain.connector import (
     ConnectorKind,
     DiscoveryMode,
     HttpKindSpec,
-    LemmaProviderCapability,
     McpKindSpec,
     OAuth2Defaults,
-    PackageKindSpec,
     SqlKindSpec,
     SystemOAuthCredentialRef,
-    provider_to_kind,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigStatus
 from app.modules.connectors.services.auth_config_schemas import (
@@ -159,13 +151,11 @@ COMPOSIO_CONNECTOR_ID_TO_TOOLKIT = {
     for toolkit_slug, connector_id in COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.items()
 }
 COMPOSIO_NATIVE_CONNECTOR_IDS = set(COMPOSIO_TOOLKIT_TO_CONNECTOR_ID.values())
-NATIVE_OPERATION_CONNECTOR_IDS = supported_lemma_connectors()
 NATIVE_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
     "apollo": AuthMethod.API_KEY,
     "airtable": AuthMethod.API_KEY,
     "clickup": AuthMethod.API_KEY,
 }
-LEMMA_AUTH_PROVIDER_CONNECTOR_IDS = NATIVE_OPERATION_CONNECTOR_IDS | {"confluence"}
 COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
     "splitwise",
@@ -189,6 +179,12 @@ CONNECTOR_ID_RENAMES: dict[str, str] = {
     "teams": "microsoft_teams",
 }
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
+    # Jira and Confluence were served by vendored clients until those were
+    # removed. Composio's slugs for both match our connector ids, so no entry
+    # in COMPOSIO_TOOLKIT_TO_CONNECTOR_ID is needed -- `_resolve_composio_
+    # toolkit_slug` falls through to the id.
+    "jira",
+    "confluence",
     "gmail",
     # Meeting notes and warehouse queries, by their Composio slugs rather than
     # the names people use: Granola is `granola_mcp`, and BigQuery is
@@ -345,9 +341,6 @@ def _build_operation_search_document(
         normalized_chunks.append(normalized)
         seen.add(lowered)
     return "\n".join(normalized_chunks)
-
-
-get_native_info_client = create_lemma_info_client
 
 
 def _parse_args() -> argparse.Namespace:
@@ -577,9 +570,7 @@ def _existing_capabilities(
 ) -> dict[ConnectorKind, object]:
     if not existing:
         return {}
-    return {
-        capability.kind: capability for capability in existing.provider_capabilities
-    }
+    return {capability.kind: capability for capability in existing.kinds}
 
 
 def _capability_order(kind: ConnectorKind) -> tuple[int, str]:
@@ -592,39 +583,6 @@ def _capability_order(kind: ConnectorKind) -> tuple[int, str]:
     return (1 if kind is ConnectorKind.COMPOSIO else 0, kind.value)
 
 
-def _is_unusable_carried_package_kind(capability: object, connector_id: str) -> bool:
-    """A `package` OAuth spec left behind by an import that no longer makes one.
-
-    The merge below preserves every kind a connector has ever been written
-    with, which is right for a real one and wrong for this: a connector that
-    dropped out of the native-operations set keeps a `package` spec that names
-    no package, has no OAuth endpoints and no system client, and cannot be
-    installed by any route. It is not inert. `supports_org_custom_oauth` was
-    set on it unconditionally, so the UI offered "use my own OAuth app", took a
-    client id and secret, created the install, and only then failed at sign-in
-    with "OAuth2 defaults are not configured" -- with the install left behind.
-
-    Recognised by what it lacks rather than by a list of connector ids, because
-    the next connector to leave that set would otherwise arrive in the same
-    state and nobody would think to add it.
-    """
-    if getattr(capability, "kind", None) is not ConnectorKind.PACKAGE:
-        return False
-    if getattr(capability, "auth_scheme", None) != AuthMethod.OAUTH2:
-        return False
-    # The Google apps are the reason the registry is consulted here: they store
-    # no `oauth2_defaults` and no `system_oauth` either, and resolve both at
-    # runtime from `NATIVE_LEMMA_OAUTH2_DEFAULTS`. By the shape test alone they
-    # are indistinguishable from the dead specs, and pruning gmail would be a
-    # far worse bug than the one this fixes.
-    return not (
-        getattr(capability, "package_name", None)
-        or getattr(capability, "oauth2_defaults", None)
-        or getattr(capability, "system_oauth", None)
-        or connector_id in NATIVE_LEMMA_OAUTH2_DEFAULTS
-    )
-
-
 def _merge_provider_capabilities(
     existing: ConnectorEntity | None,
     *capabilities: object | None,
@@ -632,59 +590,16 @@ def _merge_provider_capabilities(
     """Merge kind specs by *kind*, not by the two-valued auth provider.
 
     Keying by provider collapsed every native kind onto one slot, because
-    ``kind_to_provider`` maps http/sql/mcp/package alike to ``LEMMA``. A
-    connector that gained a second native spec silently lost the first --
-    exactly what a package-to-http migration does.
-
-    Carrying is not unconditional, though: a `package` spec this import would
-    no longer produce, and which nothing can install, is dropped rather than
-    preserved forever. See `_is_unusable_carried_package_kind`.
+    ``kind_to_provider`` maps http/sql/mcp alike to ``LEMMA``. A connector that
+    gained a second native spec silently lost the first -- exactly what the
+    package-to-http migration did.
     """
     merged = _existing_capabilities(existing)
     for capability in capabilities:
         if capability is None:
             continue
         merged[capability.kind] = capability
-    replaced = {
-        capability.kind for capability in capabilities if capability is not None
-    }
-    connector_id = existing.id if existing else ""
-    return [
-        merged[kind]
-        for kind in sorted(merged, key=_capability_order)
-        if kind in replaced
-        or not _is_unusable_carried_package_kind(merged[kind], connector_id)
-    ]
-
-
-def _native_package_provider_capability(
-    connector_id: str,
-    existing: ConnectorEntity | None,
-    *,
-    profile_operation_names: list[str] | None = None,
-) -> LemmaProviderCapability:
-    auth_method = _infer_native_auth_method(connector_id, existing)
-    if existing:
-        try:
-            capability = existing.capability_for(AuthProvider.LEMMA)
-            if isinstance(capability, LemmaProviderCapability):
-                updates: dict[str, object] = {
-                    "auth_scheme": auth_method,
-                    "profile_operation_names": profile_operation_names,
-                }
-                if capability.auth_config_schema is None:
-                    updates["auth_config_schema"] = default_auth_config_schema(
-                        auth_method, connector_id
-                    )
-                return capability.model_copy(update=updates)
-        except ValueError:
-            pass
-
-    return _native_kind_spec(
-        connector_id=connector_id,
-        auth_method=auth_method,
-        profile_operation_names=profile_operation_names,
-    )
+    return [merged[kind] for kind in sorted(merged, key=_capability_order)]
 
 
 def _native_kind_spec(
@@ -699,6 +614,13 @@ def _native_kind_spec(
     kind: str | None = None,
 ):
     """Build the spec for a connector's native install kind.
+
+    ``kind`` defaults to ``http``, the one native kind. It used to default to
+    the vendored-package kind, which is how `sql`, `mcp` and `github`
+    operations all came to be labelled `package` and then missed by the
+    execute route's strict (connector, kind, name) lookup. A
+    `lemma_apps_config.json` entry must still name its kind -- that check is at
+    the point the entry is read, where the connector id is worth reporting.
 
     `kind` comes from the catalog entry and selects which spec class -- and so
     which executor, discoverer and installer -- an install of this connector
@@ -723,7 +645,7 @@ def _native_kind_spec(
         "sql": SqlKindSpec,
         "mcp": McpKindSpec,
         "http": HttpKindSpec,
-    }.get(kind or "", PackageKindSpec)
+    }[kind or ConnectorKind.HTTP.value]
     discovery = {
         "mcp": DiscoveryMode.MCP,
         # An `http` install discovers only when it points at a spec; a connector
@@ -770,14 +692,8 @@ def _composio_provider_capability(
     )
 
 
-def _operation_id(
-    connector_id: str,
-    provider: AuthProvider,
-    operation_name: str,
-    kind: str | None = None,
-) -> str:
-    resolved = kind or provider_to_kind(provider).value
-    return f"{connector_id}:{resolved}:{operation_name}"
+def _operation_id(connector_id: str, kind: str, operation_name: str) -> str:
+    return f"{connector_id}:{kind}:{operation_name}"
 
 
 def _trigger_id(connector_id: str, kind: str, trigger_slug: str) -> str:
@@ -837,7 +753,15 @@ def _resolve_composio_connector_id(toolkit_slug: str) -> str:
 
 
 def _uses_native_operations(connector_id: str) -> bool:
-    return _normalize_connector_id(connector_id) in NATIVE_OPERATION_CONNECTOR_IDS
+    """Whether Lemma serves this connector's operations itself.
+
+    A `lemma_apps_config.json` entry is the whole answer: its
+    `static_operations` are what GitHub, Slack and Gmail run on. This used to
+    also mean "has a vendored client", and reading only that returned False the
+    moment a connector migrated -- whereupon the Composio pass overwrote the
+    curated title, description and icon with the toolkit's own.
+    """
+    return _normalize_connector_id(connector_id) in _native_catalog_ids()
 
 
 def _resolve_composio_provider_operation_name(tool) -> str:
@@ -942,7 +866,7 @@ def _is_excluded_composio_connector(entity: ConnectorEntity) -> bool:
     normalized_ids = {
         _normalize_connector_id(entity.id),
     }
-    for capability in entity.provider_capabilities:
+    for capability in entity.kinds:
         toolkit_slug = getattr(capability, "toolkit_slug", None)
         if toolkit_slug:
             normalized_ids.add(_normalize_connector_id(toolkit_slug))
@@ -954,10 +878,7 @@ def _is_excluded_composio_connector(entity: ConnectorEntity) -> bool:
 
     return bool(normalized_ids & COMPOSIO_EXCLUDED_CONNECTOR_IDS) and (
         AuthProvider.COMPOSIO
-        in {
-            AuthProvider(capability.provider.value)
-            for capability in entity.provider_capabilities
-        }
+        in {kind_to_provider(capability.kind) for capability in entity.kinds}
     )
 
 
@@ -1018,7 +939,7 @@ async def _upsert_operation(
     operation_repository: ConnectorOperationRepository,
     connector_id: str,
     *,
-    provider: AuthProvider,
+    kind: str,
     public_name: str,
     provider_operation_name: str,
     display_name: str | None,
@@ -1028,15 +949,11 @@ async def _upsert_operation(
     search_document: str | None,
     normalize_name: bool = True,
     execution: dict | None = None,
-    kind: str | None = None,
 ) -> None:
-    # `provider` only unambiguously determines `kind` for Composio (->COMPOSIO)
-    # and true vendored-package installs (->PACKAGE). A static-operations
-    # connector (sql/mcp/http) knows its real kind and must pass it explicitly
-    # -- falling back to provider_to_kind(LEMMA) silently mislabels every such
-    # operation as `package`, so a strict (connector_id, kind, name) lookup
-    # like the execute-operation route's never finds it.
-    resolved_kind = kind or provider_to_kind(provider).value
+    # The kind is named, never inferred. It used to be derived from `provider`,
+    # which could only distinguish Composio from everything else -- so every
+    # sql/mcp/http operation was labelled `package`, and the execute route's
+    # strict (connector_id, kind, name) lookup never found one.
     operation_name = (
         _normalize_operation_name(public_name)
         if normalize_name
@@ -1044,26 +961,15 @@ async def _upsert_operation(
     )
     existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
-        resolved_kind,
+        kind,
         operation_name,
     )
-    if existing is None and resolved_kind != provider_to_kind(provider).value:
-        # This connector's operations were seeded before its kind was carried
-        # through, so they sit under `package`. Retag that row in place rather
-        # than writing a second one: the unique index is (connector, kind,
-        # name), so both would survive and the catalog would list each
-        # operation twice.
-        existing = await operation_repository.get_by_connector_kind_and_name(
-            connector_id,
-            provider_to_kind(provider).value,
-            operation_name,
-        )
     entity = ConnectorOperationEntity(
         id=existing.id
         if existing
-        else _operation_id(connector_id, provider, operation_name, resolved_kind),
+        else _operation_id(connector_id, kind, operation_name),
         connector_id=connector_id,
-        kind=resolved_kind,
+        kind=kind,
         name=operation_name,
         provider_operation_name=provider_operation_name,
         display_name=display_name,
@@ -1103,7 +1009,6 @@ async def _sync_static_operations(
             operation_repository,
             connector_id,
             kind=kind,
-            provider=AuthProvider.LEMMA,
             public_name=public_name,
             provider_operation_name=_normalize_operation_name(public_name),
             display_name=display_name,
@@ -1126,19 +1031,17 @@ async def _upsert_trigger(
     connector_id: str,
     trigger,
     *,
-    provider: AuthProvider,
+    kind: str,
 ) -> None:
     existing = await trigger_repository.get_by_connector_kind_and_name(
         connector_id,
-        provider_to_kind(provider).value,
+        kind,
         trigger.slug,
     )
     entity = ConnectorTriggerEntity(
-        id=existing.id
-        if existing
-        else _trigger_id(connector_id, provider_to_kind(provider).value, trigger.slug),
+        id=existing.id if existing else _trigger_id(connector_id, kind, trigger.slug),
         connector_id=connector_id,
-        provider=provider,
+        kind=kind,
         event_type=trigger.slug,
         description=trigger.description,
         config_schema=trigger.config,
@@ -1206,21 +1109,17 @@ def _paginate_triggers(composio: Composio, *, toolkit_slug: str, page_size: int)
         cursor = response.next_cursor
 
 
-def _list_native_apps(app_filters: set[str] | None) -> list[str]:
-    app_slugs = sorted(NATIVE_OPERATION_CONNECTOR_IDS)
-    if app_filters:
-        normalized_filters = {_normalize_connector_id(slug) for slug in app_filters}
-        app_slugs = [slug for slug in app_slugs if slug in normalized_filters]
-    return app_slugs
-
-
-def _list_native_sync_targets(app_filters: set[str] | None) -> list[str]:
-    configured_app_slugs = {
+def _native_catalog_ids() -> set[str]:
+    """Every connector `lemma_apps_config.json` describes."""
+    return {
         _normalize_connector_id(app_config["name"])
         for app_config in _load_lemma_apps_config()
         if app_config.get("name")
     }
-    available_app_slugs = configured_app_slugs | set(_list_native_apps(None))
+
+
+def _list_native_sync_targets(app_filters: set[str] | None) -> list[str]:
+    available_app_slugs = _native_catalog_ids()
     if app_filters:
         normalized_filters = {_normalize_connector_id(slug) for slug in app_filters}
         available_app_slugs &= normalized_filters
@@ -1292,19 +1191,24 @@ async def _sync_native_catalog(
         existing = await connector_repository.get(connector_id)
 
         auth_method = AuthMethod(app_config.get("auth_method", "OAUTH2"))
-        # The catalog entry's own kind. Absent, the connector is a vendored
-        # package, which is what every native entry was before sql/mcp/http
-        # existed. Present, it decides which executor, installer and discoverer
-        # an install gets -- so dropping it here silently turns the SQL
-        # connector into a package one that no executor can run.
+        # The catalog entry's own kind. It decides which executor, installer and
+        # discoverer an install gets, and it is required rather than defaulted:
+        # it used to fall back to the vendored-package kind, which is how the
+        # SQL connector's operations came to be labelled `package` and then
+        # missed by the execute route's strict (connector, kind, name) lookup.
         native_kind = app_config.get("kind")
+        if not native_kind:
+            raise SystemExit(
+                f"lemma_apps_config.json entry {connector_id!r} declares no "
+                "'kind'. Add one of: http, sql, mcp."
+            )
 
         entity = ConnectorEntity(
             id=connector_id,
             title=app_config.get("title"),
             description=app_config.get("description"),
             icon=app_config.get("icon") or (existing.icon if existing else None),
-            provider_capabilities=_merge_provider_capabilities(
+            kinds=_merge_provider_capabilities(
                 existing,
                 _native_kind_spec(
                     connector_id=connector_id,
@@ -1351,7 +1255,7 @@ async def _sync_native_catalog(
         # the *install's* kind, so a trigger written under the wrong one exists
         # in the table and is invisible through the API.
         _reject_duplicate_trigger_events(connector_id, app_config.get("triggers", []))
-        trigger_kind = native_kind or ConnectorKind.PACKAGE.value
+        trigger_kind = native_kind or ConnectorKind.HTTP.value
         for trigger_data in app_config.get("triggers", []):
             from app.modules.connectors.domain.connector_trigger import (
                 ConnectorTriggerEntity,
@@ -1383,124 +1287,6 @@ async def _sync_native_catalog(
             else:
                 await trigger_repository.create(trigger_entity)
             total_triggers += 1
-
-    # Then sync native package apps that still run through Lemma packages.
-    for app_slug in _list_native_apps(app_filters):
-        connector_id = _normalize_connector_id(app_slug)
-        existing = await connector_repository.get(connector_id)
-
-        app_description = None
-        app_title = existing.title if existing else None
-        operation_descriptors = []
-        try:
-            info_client = get_native_info_client(connector_id)
-            if asyncio.iscoroutine(info_client):
-                info_client = await info_client
-            metadata = describe_lemma_connector(connector_id)
-            app_title = app_title or metadata["title"]
-            app_description = metadata["description"]
-            if hasattr(info_client, "list_operations"):
-                operation_descriptors = await info_client.list_operations()
-            elif hasattr(info_client, "list_available_operations"):
-                operation_names = await info_client.list_available_operations()
-                operation_descriptors = [
-                    SimpleNamespace(
-                        name=operation_name,
-                        **(
-                            await info_client.get_operation_details(operation_name)
-                        ).__dict__,
-                    )
-                    for operation_name in operation_names
-                ]
-        except Exception as exc:
-            logger.warning(
-                "connector_catalog.native_package.unavailable",
-                connector_id=connector_id,
-                error_type=type(exc).__name__,
-            )
-
-        entity = ConnectorEntity(
-            id=connector_id,
-            title=app_title or connector_id.replace("_", " ").title(),
-            description=(
-                app_description or (existing.description if existing else None)
-            ),
-            icon=existing.icon if existing else None,
-            provider_capabilities=_merge_provider_capabilities(
-                existing,
-                _native_package_provider_capability(
-                    connector_id,
-                    existing,
-                    profile_operation_names=_profile_operation_names(
-                        profile_operations, connector_id, AuthProvider.LEMMA
-                    ),
-                ),
-            ),
-            agent_instruction=existing.agent_instruction if existing else None,
-            is_active=True,
-        )
-        await _upsert_connector(connector_repository, entity)
-        total_apps += 1
-
-        prepared_operations: list[dict[str, object]] = []
-        for descriptor in operation_descriptors:
-            operation_name = getattr(descriptor, "name", None)
-            if operation_name is None:
-                continue
-            description = _resolve_operation_description(
-                operation_name,
-                description=descriptor.description,
-            )
-            input_schema = (
-                descriptor.input_schema()
-                if hasattr(descriptor, "input_schema")
-                else (
-                    schema_compiler.to_json_schema(descriptor.input_schema_content)
-                    if getattr(descriptor, "input_schema_content", None)
-                    else None
-                )
-            )
-            output_schema = (
-                descriptor.output_schema()
-                if hasattr(descriptor, "output_schema")
-                else (
-                    schema_compiler.to_json_schema(descriptor.output_schema_content)
-                    if getattr(descriptor, "output_schema_content", None)
-                    else None
-                )
-            )
-            prepared_operations.append(
-                {
-                    "public_name": operation_name,
-                    "provider_operation_name": _normalize_operation_name(
-                        operation_name
-                    ),
-                    "display_name": operation_name,
-                    "description": description,
-                    "input_schema": input_schema,
-                    "output_schema": output_schema,
-                    "search_document": _build_operation_search_document(
-                        public_name=operation_name,
-                        display_name=operation_name,
-                        description=description,
-                    ),
-                }
-            )
-
-        for operation_data in prepared_operations:
-            await _upsert_operation(
-                operation_repository,
-                connector_id,
-                provider=AuthProvider.LEMMA,
-                public_name=str(operation_data["public_name"]),
-                provider_operation_name=str(operation_data["provider_operation_name"]),
-                display_name=operation_data["display_name"],
-                description=operation_data["description"],
-                input_schema=operation_data["input_schema"],
-                output_schema=operation_data["output_schema"],
-                search_document=str(operation_data["search_document"]),
-            )
-            total_operations += 1
 
     return total_apps, total_operations, total_triggers
 
@@ -1615,7 +1401,7 @@ async def _sync_single_composio_toolkit(
             if supports_native and existing and existing.icon
             else _toolkit_meta_value(toolkit_item, "logo")
         ),
-        provider_capabilities=_merge_provider_capabilities(
+        kinds=_merge_provider_capabilities(
             existing,
             _composio_provider_capability(
                 auth_method=composio_auth_method,
@@ -1648,7 +1434,7 @@ async def _sync_single_composio_toolkit(
         await _upsert_operation(
             operation_repository,
             connector_id,
-            provider=AuthProvider.COMPOSIO,
+            kind=ConnectorKind.COMPOSIO.value,
             public_name=str(tool.slug).strip(),
             provider_operation_name=_resolve_composio_provider_operation_name(tool),
             display_name=tool.name,
@@ -1678,7 +1464,7 @@ async def _sync_single_composio_toolkit(
             trigger_repository,
             connector_id,
             trigger,
-            provider=AuthProvider.COMPOSIO,
+            kind=ConnectorKind.COMPOSIO.value,
         )
         total_triggers += 1
         if trigger_index % IMPORT_BATCH_OPERATION_CHUNK_SIZE == 0:
@@ -1802,9 +1588,7 @@ async def _retire_composio_capabilities(connector_repository, session) -> int:
         if existing is None:
             continue
         remaining = [
-            spec
-            for spec in existing.kinds
-            if AuthProvider(spec.provider.value) is not AuthProvider.COMPOSIO
+            spec for spec in existing.kinds if spec.kind is not ConnectorKind.COMPOSIO
         ]
         if len(remaining) == len(existing.kinds):
             continue
@@ -1815,7 +1599,7 @@ async def _retire_composio_capabilities(connector_repository, session) -> int:
             )
             continue
 
-        composio_kind = provider_to_kind(AuthProvider.COMPOSIO).value
+        composio_kind = ConnectorKind.COMPOSIO.value
         for table in ("connector_operations", "connector_triggers"):
             result = await session.execute(
                 text(
@@ -2095,7 +1879,7 @@ async def _generate_skill_doc(
 
 def _app_providers(app) -> list[str]:
     """Return list of provider values for a connector."""
-    caps = getattr(app, "provider_capabilities", None) or []
+    caps = getattr(app, "kinds", None) or []
     providers: list[str] = []
     for cap in caps:
         if isinstance(cap, dict):

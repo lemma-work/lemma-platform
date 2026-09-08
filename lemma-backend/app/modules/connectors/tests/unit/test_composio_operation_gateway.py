@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.modules.connectors.domain.connector import AuthProvider, ConnectorKind
+
 os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 
 from app.modules.connectors.domain.errors import (
@@ -32,7 +34,7 @@ async def _run(gateway):
         operation_name="OPENWEATHER_API_GET_CURRENT_WEATHER",
         payload={"q": "London"},
         third_party_credentials={"connection_id": "ca_test"},
-        provider="COMPOSIO",
+        provider=AuthProvider.COMPOSIO,
     )
 
 
@@ -228,7 +230,6 @@ def test_the_backstop_does_not_pre_empt_the_routed_timeouts():
     """
     from app.modules.connectors.config import connector_settings
     from app.modules.connectors.services.execution.dispatcher import _TIMEOUT_BY_KIND
-    from app.modules.connectors.domain.connector import ConnectorKind
 
     backstop = connector_settings.connector_composio_deadline_seconds
 

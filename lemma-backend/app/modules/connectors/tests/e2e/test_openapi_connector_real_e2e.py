@@ -238,9 +238,7 @@ async def discovered(api):
 
 
 def _dispatcher():
-    return KindDispatcher(
-        build_kind_registry(composio_gateway=AsyncMock(), package_gateway=AsyncMock())
-    )
+    return KindDispatcher(build_kind_registry(composio_gateway=AsyncMock()))
 
 
 async def _run(api, discovered, name, payload, credentials):

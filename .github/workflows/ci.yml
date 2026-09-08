@@ -331,8 +331,6 @@ jobs:
         working-directory: .
         run: make quality
       # Not part of `quality`: these two run code rather than reading it.
-      - name: Connector package tests
-        run: make test-connectors
       # The static gates check the shapes they can see. This one runs the flows
       # and measures: a connection checked out with no statement running is a
       # hold, whatever the code looks like. Deliberately a small marked subset

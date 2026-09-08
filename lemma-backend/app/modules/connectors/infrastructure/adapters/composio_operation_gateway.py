@@ -112,7 +112,7 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             # shared thread pool and stall unrelated (CPU) offloads.
             #
             # A backstop, and only that. Callers arriving through
-            # `RoutingOperationGateway` are already wrapped in a `wait_for` at
+            # `BoundedComposioGateway` are already wrapped in a `wait_for` at
             # `connector_operation_timeout_seconds` (45s), and the kind
             # dispatcher has its own Composio ceiling of 90s — both fire long
             # before this does, so their behaviour is unchanged.

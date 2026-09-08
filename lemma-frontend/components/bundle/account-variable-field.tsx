@@ -38,7 +38,7 @@ interface AccountVariableFieldProps {
      * `connectorId` (not `connector`) to avoid shadowing the resolved
      * Connector entity this component looks up below. */
     connectorId: string;
-    /** Which of the connector's kinds ("composio", "package", "mcp", ...)
+    /** Which of the connector's kinds ("composio", "http", "mcp", ...)
      * the bundle needs. When set, only accounts/auth configs of that kind are
      * offered — an org can have both a native and a Composio-backed auth
      * config for the same connector, and only one is the right fit here. */

@@ -20,8 +20,8 @@ class VariableSpecResponse:
         connector (None | str | Unset): For a connector account variable, the connector the account must belong to (e.g.
             'slack'), so the importer can connect the right connector. Null for non-connector variables.
         connector_kind (None | str | Unset): For a connector account variable, which of the connector's kinds the source
-            install used ('composio', 'package', 'mcp', 'sql', 'http'), so the importer selects an account of the same kind.
-            Null for non-connector variables.
+            install used ('composio', 'http', 'mcp', 'sql'), so the importer selects an account of the same kind. Null for
+            non-connector variables.
         default (None | str | Unset):
         description (None | str | Unset):
         required (bool | Unset):  Default: False.

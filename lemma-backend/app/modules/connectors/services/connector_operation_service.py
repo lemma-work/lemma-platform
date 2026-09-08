@@ -550,7 +550,7 @@ class ConnectorOperationService:
             provider=(
                 kind_to_provider(kind).value if kind else AuthProvider.LEMMA.value
             ),
-            kind=kind or ConnectorKind.PACKAGE.value,
+            kind=kind or ConnectorKind.HTTP.value,
             connection_config=(
                 getattr(auth_config, "config", None) if auth_config else None
             ),

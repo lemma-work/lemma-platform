@@ -21,8 +21,8 @@ from app.modules.connectors.domain.ports import PodFileGatewayPort
 from app.modules.connectors.infrastructure.adapters.organization_access import (
     SqlAlchemyOrganizationAccessAdapter,
 )
-from app.modules.connectors.infrastructure.adapters.routing_operation_gateway import (
-    RoutingOperationGateway,
+from app.modules.connectors.infrastructure.adapters.bounded_composio_gateway import (
+    BoundedComposioGateway,
 )
 from app.modules.connectors.infrastructure.adapters.oauth_redirect_uri_builder import (
     OAuthRedirectUriBuilder,
@@ -124,7 +124,7 @@ def get_connector_service(uow: UoWDep) -> ConnectorService:
         redirect_uri_builder=OAuthRedirectUriBuilder(),
         organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
         system_oauth_config=EnvSystemOAuthConfigAdapter(),
-        operation_gateway=RoutingOperationGateway(
+        operation_gateway=BoundedComposioGateway(
             connector_repository=connector_repository
         ),
         operation_repository=_operation_repository(uow),
@@ -151,7 +151,7 @@ def build_connector_operation_service(
         auth_config_operation_repository=_auth_config_operation_repository(uow),
         connector_repository=connector_repository,
         operation_repository=_operation_repository(uow),
-        operation_gateway=RoutingOperationGateway(
+        operation_gateway=BoundedComposioGateway(
             connector_repository=connector_repository
         ),
         account_resolution_service=get_account_resolution_service(uow),

@@ -312,3 +312,235 @@ def test_default_headers_propagate():
     assert ops["users_get_authenticated"].execution["default_headers"] == {
         "User-Agent": "lemma"
     }
+
+
+# --- what Slack and Gmail needed that GitHub did not ------------------------
+
+FORM_SPEC = {
+    "openapi": "3.0.0",
+    "servers": [{"url": "https://slack.com/api"}],
+    "paths": {
+        "/chat.postMessage": {
+            "post": {
+                "operationId": "chat_postMessage",
+                "summary": "Send a message",
+                "parameters": [
+                    {
+                        "name": "token",
+                        "in": "header",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "channel": {"type": "string"},
+                                    "text": {"type": "string"},
+                                },
+                                "required": ["channel"],
+                            }
+                        }
+                    }
+                },
+                "responses": {"200": {"content": {"application/json": {"schema": {}}}}},
+            }
+        },
+        "/conversations.list": {
+            "get": {
+                "operationId": "conversations_list",
+                "parameters": [
+                    {"name": "token", "in": "query", "schema": {"type": "string"}},
+                    {"name": "limit", "in": "query", "schema": {"type": "integer"}},
+                ],
+                "responses": {"200": {"content": {"application/json": {"schema": {}}}}},
+            }
+        },
+    },
+}
+
+
+def _form_ops(**kwargs):
+    return _by_name(
+        build_operation_descriptors(
+            FORM_SPEC, server_url="https://slack.com/api", allowlist=None, **kwargs
+        )
+    )
+
+
+def test_a_form_urlencoded_body_becomes_form_fields_not_a_single_blob():
+    """Slack's 89 POST operations were every one of them declared a file.
+
+    Anything that was not JSON or multipart fell through to the blob case, so
+    the descriptor named the whole body a binary field and the executor sent
+    raw bytes to an API that wanted form values.
+    """
+    body = _form_ops()["chat_post_message"].execution["request_body"]
+
+    assert body["content_type"] == "application/x-www-form-urlencoded"
+    assert body["binary_fields"] == []
+    assert sorted(body["form_fields"]) == ["channel", "text"]
+
+
+def test_a_form_body_keeps_its_properties_in_the_input_schema():
+    props = _form_ops()["chat_post_message"].input_schema["properties"]["body"]
+
+    assert sorted(props["properties"]) == ["channel", "text"]
+    assert props["required"] == ["channel"]
+
+
+def test_drop_parameters_removes_the_name_from_every_place_it_appears():
+    """`token` is a credential the executor supplies as a bearer header.
+
+    Left in, the tool schema asks an agent for it, and on the operations that
+    mark it required validation fails before the call is ever made.
+    """
+    ops = _form_ops(drop_parameters={"token"})
+
+    post = ops["chat_post_message"]
+    assert "token" not in post.input_schema["properties"]
+    assert "token" not in post.input_schema.get("required", [])
+    assert post.execution["header_params"] == []
+
+    get = ops["conversations_list"]
+    assert "token" not in get.input_schema["properties"]
+    assert [q["name"] for q in get.execution["query_params"]] == ["limit"]
+
+
+def test_without_drop_parameters_the_declared_token_is_still_there():
+    post = _form_ops()["chat_post_message"]
+
+    assert "token" in post.input_schema["properties"]
+    assert post.execution["header_params"] == ["token"]
+
+
+def test_a_response_envelope_is_recorded_on_every_operation():
+    envelope = {"success_field": "ok", "error_field": "error", "default_status": 400}
+    ops = _form_ops(response_envelope=envelope)
+
+    for op in ops.values():
+        assert op.execution["response"]["envelope"] == envelope
+
+
+def test_no_envelope_is_recorded_when_none_is_declared():
+    for op in _form_ops().values():
+        assert "envelope" not in op.execution["response"]
+
+
+MEDIA_SPEC = {
+    "openapi": "3.0.0",
+    "servers": [{"url": "https://gmail.googleapis.com"}],
+    "paths": {
+        "/gmail/v1/users/{userId}/messages/send": {
+            "post": {
+                "operationId": "gmail.users.messages.send",
+                "parameters": [
+                    {
+                        "name": "userId",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                # Twenty `message/*` variants and no JSON, exactly as Gmail
+                # declares it. `pick_content_schema` takes the first entry.
+                "requestBody": {
+                    "content": {
+                        "message/cpim": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {"raw": {"type": "string"}},
+                            }
+                        },
+                        "message/rfc822": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {"raw": {"type": "string"}},
+                            }
+                        },
+                    }
+                },
+                "responses": {"200": {"content": {"application/json": {"schema": {}}}}},
+            }
+        }
+    },
+}
+
+
+def test_body_content_type_override_sends_a_media_typed_body_as_json():
+    ops = _by_name(
+        build_operation_descriptors(
+            MEDIA_SPEC,
+            server_url="https://gmail.googleapis.com",
+            allowlist=None,
+            overrides={
+                "gmail.users.messages.send": {
+                    "name": "messages_send",
+                    "body_content_type": "application/json",
+                }
+            },
+        )
+    )
+    op = ops["messages_send"]
+    body = op.execution["request_body"]
+
+    assert body["content_type"] == "application/json"
+    assert body["binary_fields"] == []
+    # The schema still comes from the media-typed entry, which is where Gmail
+    # documents the message shape.
+    assert "raw" in op.input_schema["properties"]["body"]["properties"]
+
+
+def test_without_the_override_gmails_send_body_collapses_to_a_file():
+    """Records the defect the override exists to avoid."""
+    body = _by_name(
+        build_operation_descriptors(
+            MEDIA_SPEC, server_url="https://gmail.googleapis.com", allowlist=None
+        )
+    )["gmail_users_messages_send"].execution["request_body"]
+
+    assert body["content_type"] == "message/cpim"
+    assert body["binary_fields"] == ["body"]
+
+
+def test_a_path_param_default_is_recorded_and_stops_being_required():
+    ops = _by_name(
+        build_operation_descriptors(
+            MEDIA_SPEC,
+            server_url="https://gmail.googleapis.com",
+            allowlist=None,
+            overrides={
+                "gmail.users.messages.send": {
+                    "name": "messages_send",
+                    "path_param_defaults": {"userId": "me"},
+                }
+            },
+        )
+    )
+    op = ops["messages_send"]
+
+    assert op.execution["path_param_defaults"] == {"userId": "me"}
+    assert "userId" not in op.input_schema.get("required", [])
+    # Still offered, so a caller can address another mailbox.
+    assert "userId" in op.input_schema["properties"]
+
+
+def test_a_default_for_a_parameter_the_operation_does_not_have_is_ignored():
+    ops = _by_name(
+        build_operation_descriptors(
+            MEDIA_SPEC,
+            server_url="https://gmail.googleapis.com",
+            allowlist=None,
+            overrides={
+                "gmail.users.messages.send": {
+                    "name": "messages_send",
+                    "path_param_defaults": {"userId": "me", "nonsense": "x"},
+                }
+            },
+        )
+    )
+
+    assert ops["messages_send"].execution["path_param_defaults"] == {"userId": "me"}
