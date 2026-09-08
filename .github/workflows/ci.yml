@@ -66,6 +66,12 @@ jobs:
               - 'lemma-cli/lemma_cli/cli_core/assets/app_vite_template/**'
               - 'lemma-cli/lemma_cli/cli_core/app_scaffold.py'
               - 'lemma-typescript/**'
+              # The job compiles the starter with this Node, and a version this
+              # repo has already been bitten by -- see the desktop pack job's
+              # note on three days of red main. `.nvmrc` reaches no other
+              # filter, so no other Node job reruns on a bump; that gap is
+              # older than this job and is not addressed here.
+              - '.nvmrc'
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'

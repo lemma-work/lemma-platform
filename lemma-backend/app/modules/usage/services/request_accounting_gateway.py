@@ -41,6 +41,7 @@ class PostgresRequestAccountingGateway:
             pricing,
             settings,
         )
+        self._reported_unpriceable = False
 
     async def _limits(self, uow: SqlAlchemyUnitOfWork) -> UsageLimitValues:
         provider = build_usage_limit_port(uow)
@@ -62,9 +63,41 @@ class PostgresRequestAccountingGateway:
             if window.limit is not None
         ]
 
+    def _report_unpriceable(self, *, priceable: bool, refused: bool) -> None:
+        """Say that a limit is not being applied, and which condition did it.
+
+        Once per gateway -- one per model per metering scope, so at most a line
+        per model per run rather than one per request. That matters now the
+        default is to admit: an admitted request is a limit not binding, which
+        is quiet by construction and is the thing an operator most needs told.
+
+        Two unrelated deployments reach here and the refusal message cannot
+        tell them apart: a request whose message shape has no price, or a model
+        whose rate card is not enforceable at all. The second is a deployment
+        that has to state its own prices -- an OpenAI-compatible gateway
+        reselling somebody else's models resolves a price for the *vendor*, and
+        is correctly refused the right to hold a budget to it -- and nothing
+        said so, so it read as a bug in the request.
+        """
+        if self._reported_unpriceable:
+            return
+        self._reported_unpriceable = True
+        logger.warning(
+            "usage.request_accounting_gateway.request_not_priceable.degraded",
+            model=self.pricing.model,
+            provider=self.pricing.provider,
+            request_shape_priceable=priceable,
+            rate_card_enforceable=self.pricing.enforceable,
+            refused=refused,
+        )
+
     @staticmethod
     def _refuses_unpriced() -> bool:
-        """Whether a limit this deployment cannot measure should stop the work.
+        """Whether an unenforceable *rate card* should stop the work.
+
+        Only the rate card. A request whose shape has no price is refused
+        whatever this says, because that shape is the request asking the
+        provider for billable work nobody can account for.
 
         `refuse` is right where the usage is billed to somebody else: a limit
         that cannot be measured is not a limit. `allow` is right where the
@@ -112,32 +145,30 @@ class PostgresRequestAccountingGateway:
 
         Whether a request that *starts* a run is refused at all is the
         deployment's own policy (`_refuses_unpriced`). Either way the condition
-        is reported, because an admitted one is spend nobody is counting.
+        is reported once per gateway, because an admitted one is a limit that
+        is not binding and nothing else would say so.
         """
         async with self.factory() as uow:
             windows = self._windows(await self._limits(uow), now)
             limited = bool(windows)
-            unpriceable = not priceable or not self.pricing.priceable
-            if unpriceable and limited and not in_flight and self._refuses_unpriced():
-                # Two very different deployments produce this one refusal, and
-                # the message cannot tell them apart: a request whose message
-                # shape has no price, or a model whose rate card is not
-                # enforceable at all. The second is a deployment that has to
-                # state its own prices -- an OpenAI-compatible gateway reselling
-                # somebody else's models resolves a price for the *vendor* and
-                # is correctly refused the right to enforce a budget with it --
-                # and nothing said so, so it read as a bug in the request.
-                logger.warning(
-                    "usage.request_accounting_gateway.request_not_priceable.degraded",
-                    model=self.pricing.model,
-                    provider=self.pricing.provider,
-                    request_shape_priceable=priceable,
-                    rate_card_enforceable=self.pricing.enforceable,
+            # Two unrelated reasons, and only one of them is this deployment's
+            # to have an opinion about. An unenforceable rate card is a fact
+            # about the prices available here. A request whose *shape* has no
+            # price is a fact about what this request asked the provider to do
+            # -- `extra_body`, a priority tier, 1h cache writes -- and those add
+            # billable work the adapter never sees, so no policy relaxes them.
+            shape_unpriceable = not priceable
+            card_unenforceable = not self.pricing.priceable
+            if (shape_unpriceable or card_unenforceable) and limited:
+                refusing = not in_flight and (
+                    shape_unpriceable or self._refuses_unpriced()
                 )
-                raise UsageLimitExceededError(
-                    "This request needs supported usage reporting and a known price to run with monetary limits",
-                    reason="configuration",
-                )
+                self._report_unpriceable(priceable=priceable, refused=refusing)
+                if refusing:
+                    raise UsageLimitExceededError(
+                        "This request needs supported usage reporting and a known price to run with monetary limits",
+                        reason="configuration",
+                    )
             await request_accounting.begin(
                 uow.session, request_id, self.identity, self.pricing, windows, now
             )

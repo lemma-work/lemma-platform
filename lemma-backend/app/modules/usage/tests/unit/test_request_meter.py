@@ -10,6 +10,10 @@ import pytest
 
 from app.modules.usage.domain.accounting import RequestReceipt, TokenCounts
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.infrastructure.price_catalog import RateCard
+from app.modules.usage.services.request_accounting_gateway import (
+    PostgresRequestAccountingGateway,
+)
 from app.modules.usage.services.request_meter import RequestMeter
 
 
@@ -253,3 +257,67 @@ class TestLimitsArePossible:
         unlimited.configure_usage_limit_provider(lambda _uow: None)
 
         assert unlimited.usage_limits_are_possible()
+
+
+class TestUnpriceableIsAlwaysReported:
+    """An admitted request is a limit that is not binding, and says nothing.
+
+    The report lived inside the refusal branch, so the moment `allow` became
+    the default the case that most needs telling — a spend cap quietly not
+    applying — was the one case that logged nothing at all.
+    """
+
+    @pytest.fixture
+    def gateway(self) -> PostgresRequestAccountingGateway:
+        """A gateway built for reporting alone.
+
+        `_report_unpriceable` reads the rate card and its own once-flag and
+        nothing else, so the three collaborators it never reaches are not stood
+        up. Passing them as None keeps the real constructor in the test rather
+        than skipping it.
+        """
+        return PostgresRequestAccountingGateway(
+            None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            RateCard(model="deepseek-v4-flash", provider="deepseek"),
+            None,  # type: ignore[arg-type]
+        )
+
+    @staticmethod
+    def _reports(caplog: pytest.LogCaptureFixture) -> list[dict]:
+        return [
+            record.msg
+            for record in caplog.records
+            if isinstance(record.msg, dict)
+            and record.msg["event"]
+            == "usage.request_accounting_gateway.request_not_priceable.degraded"
+        ]
+
+    def test_an_admitted_request_is_reported(
+        self,
+        gateway: PostgresRequestAccountingGateway,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.DEBUG):
+            gateway._report_unpriceable(priceable=True, refused=False)
+
+        reported = self._reports(caplog)
+        assert len(reported) == 1
+        assert reported[0]["refused"] is False
+        assert reported[0]["model"] == "deepseek-v4-flash"
+
+    def test_it_reports_once_per_gateway_not_once_per_request(
+        self,
+        gateway: PostgresRequestAccountingGateway,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """One line per model per run, not a wall of them under a live agent."""
+        import logging
+
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(5):
+                gateway._report_unpriceable(priceable=True, refused=False)
+
+        assert len(self._reports(caplog)) == 1

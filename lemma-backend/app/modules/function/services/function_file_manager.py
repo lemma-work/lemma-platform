@@ -81,7 +81,12 @@ class FunctionFileManager:
             return
 
     async def list_prefix(self, prefix: str) -> tuple[str, ...]:
-        """Every path under ``prefix``, oldest page first.
+        """Every path under ``prefix``, in whatever order the store yields them.
+
+        `obstore` documents no ordering across pages, so none is promised here.
+        The one caller does not need one: it matches on the filename, which is
+        the artifact's content digest, so every candidate it can find is the
+        same bytes.
 
         Async listing for `delete_prefix`'s reason: the sync ListStream blocks
         the event loop on each page fetch against a cloud store.

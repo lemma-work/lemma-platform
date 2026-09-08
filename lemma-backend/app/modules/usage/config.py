@@ -59,11 +59,16 @@ class UsageSettings(BaseSettings):
     usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(
         default="allow",
         description=(
-            "What to do when a monetary limit applies to a request whose cost "
-            "cannot be established. `allow` runs it and records it unpriced: "
-            "the limit does not bind that request. `refuse` rejects it, which "
+            "What to do when a monetary limit applies but this deployment has "
+            "no enforceable price for the model. `allow` runs the request and "
+            "meters it, priced with whatever rate the catalog holds, so the "
+            "limit still binds approximately. `refuse` rejects it, which "
             "a deployment billing somebody else for the usage should set, "
-            "because a limit it cannot measure is not a limit. "
+            "because a limit it cannot measure is not a limit. This "
+            "covers the rate card only -- a request whose *shape* has no price "
+            "(a priority tier, `extra_body`, 1h cache writes) asks the provider "
+            "for billable work the adapter never sees, and is refused whatever "
+            "this is set to. "
             "The default is `allow` because refusing is almost always the "
             "wrong answer for the deployment that hits this: a model served "
             "through an OpenAI-compatible gateway is never enforceable -- the "

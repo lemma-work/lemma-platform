@@ -541,8 +541,9 @@ these and model work that would take an organization or a person past the limit
 is refused with `USAGE_LIMIT_EXCEEDED`, naming which limit was reached. A
 billing or plan module, where one is installed, takes precedence over all of it.
 
-A limit binds only the work whose cost can be established, and by default the
-rest runs — see [When the cost of the work cannot be
+A limit is enforced against a price, and there is not always a trustworthy one.
+By default that work runs rather than being refused — see [When the cost of the
+work cannot be
 established](#when-the-cost-of-the-work-cannot-be-established) below, which
 every deployment that bills for usage needs to read.
 
@@ -576,11 +577,13 @@ what the gateway charges to serve it, and is deliberately not enforceable.
 USAGE_UNPRICED_LIMIT_POLICY=allow
 ```
 
-`allow` runs the request and records it unpriced, so the tokens stay in the
-ledger even though no money can be attributed to them — the limit simply does
-not bind that request. It is the default because refusing is almost always the
-wrong answer for whoever reaches this: a spend cap set as a guardrail became a
-total outage the moment it was pointed at a gateway.
+`allow` drops the refusal, not the accounting. The request runs and is metered,
+and is still priced with whatever rate the catalog holds — which for a gateway
+is the vendor's list price, so the limit goes on binding *approximately* rather
+than not at all. Only a model the catalog knows no rate for at all is recorded
+with no cost. It is the default because refusing is almost always the wrong
+answer for whoever reaches this: a spend cap set as a guardrail became a total
+outage the moment it was pointed at a gateway.
 
 **`refuse` is what you want if you bill somebody else for this usage** — a
 limit you cannot measure is not a limit — and you have to set it, because the
@@ -593,6 +596,11 @@ USAGE_UNPRICED_LIMIT_POLICY=refuse
 Either way, the API and worker report at startup which models cannot back a
 limit, so a deployment on the default is told when its limits have stopped
 binding rather than discovering it from a bill.
+
+This setting covers the **price** and nothing else. A request whose *shape* has
+no price — a priority service tier, `extra_body` raising the output ceiling, 1h
+cache writes — is asking the provider for billable work the adapter never sees,
+and is refused under a monetary limit whatever this is set to.
 
 The third option is to state the prices yourself, which makes them enforceable
 and keeps the limit binding:
