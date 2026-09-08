@@ -33,6 +33,7 @@ on:
   workflow_run:
     workflows:
       - CI
+      - Nightly Desktop
       - Backend E2E
       - Backend protected E2E
       - Security

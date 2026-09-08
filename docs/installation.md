@@ -375,10 +375,12 @@ digest-verified runtime archives to a prerelease tagged
 `desktop-nightly-<short-sha>`, then attaches a signed, notarized online DMG
 built against them — installable by anyone, with no version tag cut.
 
-Only the three most recent nightly prereleases are kept; each successful shared
-build deletes the ones before them. Install the runtime from a nightly DMG while
-it is current, because once its prerelease is pruned the first-launch download
-has nothing to fetch.
+Nightly prereleases are currently kept indefinitely. Earlier builds pruned all
+but the three most recent, and that pruning was removed; nothing replaced it, so
+the releases page and the update feed's assets both grow without bound. Whether
+to restore it is an open retention decision, and it is a real trade either way:
+pruning a prerelease leaves any nightly still installed against it with nothing
+to fetch on first launch, and not pruning grows storage for ever.
 
 This is not a public offline installer. It exercises the same first-launch
 installer using trusted application resources, while infrastructure and

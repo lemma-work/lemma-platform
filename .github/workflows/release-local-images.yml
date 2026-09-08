@@ -928,6 +928,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # An installed nightly updates to the next nightly automatically, so a
+      # broken one reaches machines rather than a pull request. This job builds,
+      # signs and notarizes but runs no tests of its own, and it is dispatchable
+      # from any branch -- so without this, "did anything check this commit?"
+      # had no answer. `CI passed` is the aggregator every merge goes behind, so
+      # one question covers the whole required set.
+      - name: Refuse to publish a nightly from a commit CI has not passed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
+          echo "CI passed for ${GITHUB_SHA}: ${conclusion}"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error title=Refusing to publish an unverified nightly::" \
+                 "'CI passed' for ${GITHUB_SHA} is ${conclusion}."
+            exit 1
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -1230,6 +1251,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      # Same reason as the macOS nightly above: this job publishes an installer
+      # to a channel that updates itself, and runs no tests of its own.
+      - name: Refuse to publish a nightly from a commit CI has not passed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
+          echo "CI passed for ${GITHUB_SHA}: ${conclusion}"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error title=Refusing to publish an unverified nightly::" \
+                 "'CI passed' for ${GITHUB_SHA} is ${conclusion}."
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
