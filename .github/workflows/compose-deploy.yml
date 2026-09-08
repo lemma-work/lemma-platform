@@ -1,0 +1,165 @@
+name: Compose deployment
+
+# Does the self-hosted compose stack still install and serve?
+#
+# On releases, not on pull requests. The stack it exercises is built from
+# published images pinned by digest in the release manifest, so before a release
+# exists there is nothing to test — and a per-PR run would pull ~4 GB to tell us
+# something about the *previous* release either way.
+#
+# This exists because the thing it guards is exactly the kind that rots quietly.
+# `lemma-backend/nginx.conf` sat in the tree for months describing a compose
+# service no compose file defined, and nothing noticed, because nothing ran it.
+#
+# A failure here means somebody following docs/self-hosting.md today gets a
+# stack that does not come up. It reaches Slack through notify-failure.yml.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to install (e.g. 0.8.0). Defaults to the latest."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Install and smoke test
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # The workspace sandbox image alone is 2.5 GB, and a stock runner has
+      # about 14 GB free. The preinstalled Android SDK, .NET and GHC are ~20 GB
+      # of things nothing here uses.
+      - name: Make room for the images
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Bootstrap
+        working-directory: deploy/compose
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # 127.0.0.1.sslip.io resolves to loopback, so the runner reaches the
+          # stack on the same hostnames a real deployment uses — including the
+          # app subdomains, which is the half a plain localhost test misses.
+          if [ -n "$VERSION" ]; then
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io --version "$VERSION"
+          else
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io
+          fi
+
+          # The abuse controls a real deployment wants on, and a test cast of
+          # @example.com addresses cannot get past. Appended here rather than
+          # weakened in .env.example: the shipped defaults are the correct ones.
+          cat >>.env <<'EOF'
+          AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false
+          AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false
+          AUTH_ABUSE_PROTECTION_ENABLED=false
+          AUTH_ALTCHA_ENABLED=false
+          EOF
+
+          sed -E 's/^(POSTGRES_PASSWORD|SECRET_ENCRYPTION_KEY|WORKSPACE_RUNTIME_CREDENTIAL_KEY)=.*/\1=<generated>/' .env
+
+      - name: Start the stack
+        working-directory: deploy/compose
+        shell: bash
+        run: docker compose up -d --wait --wait-timeout 900
+
+      - name: It serves
+        working-directory: deploy/compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Caddy's own CA by default, so the suite and curl need its root.
+          docker compose exec -T caddy \
+            cat /data/caddy/pki/authorities/local/root.crt >"$RUNNER_TEMP/caddy-root.crt"
+
+          check() {
+            printf '%-46s' "$1"
+            code="$(curl -sS --cacert "$RUNNER_TEMP/caddy-root.crt" \
+                      -o /dev/null -w '%{http_code}' --max-time 30 "$2")"
+            echo "$code"
+            [ "$code" = "$3" ] || { echo "expected $3"; exit 1; }
+          }
+
+          check "API readiness"          https://127.0.0.1.sslip.io:8443/health/ready 200
+          check "UI"                     https://127.0.0.1.sslip.io/ 200
+          # A hostname under the apps domain has to reach the backend's app
+          # routing and be told the app does not exist — not reach the UI, and
+          # not fail TLS. That is the whole pod-app ingress path in one request.
+          check "app subdomain routing"  https://nosuchapp.apps.127.0.0.1.sslip.io/ 404
+
+          # Migrations ran as their own container and succeeded.
+          test "$(docker compose ps -a --format '{{.Service}} {{.ExitCode}}' \
+                  | awk '$1 == "migrate" {print $2}')" = "0"
+
+          # Sandboxes must not be able to reach the database. This is a claim
+          # docs/self-hosting.md makes, so it is a claim worth a test.
+          docker run --rm --network lemma-sandbox busybox:stable \
+            nc -z -w 3 api 8000
+          if docker run --rm --network lemma-sandbox busybox:stable \
+               nc -z -w 3 db 5432; then
+            echo "the sandbox network can reach Postgres; it must not" >&2
+            exit 1
+          fi
+
+      - name: Product scenarios against the deployment
+        working-directory: tests/scenarios
+        shell: bash
+        env:
+          SSL_CERT_FILE: ${{ runner.temp }}/caddy-root.crt
+          REQUESTS_CA_BUNDLE: ${{ runner.temp }}/caddy-root.crt
+          # A fresh deployment has no cast, which is the one case where making
+          # one is right. Against a deployment that already has one this guard
+          # is what stops a second, parallel cast being created.
+          SCENARIOS_ALLOW_NEW_CAST: "1"
+          # The stack really is ENVIRONMENT=production — that is the point of
+          # testing it. The suite refuses a production target by default so a
+          # mistyped host cannot write into somebody's real deployment; here the
+          # target was created two steps ago and is destroyed two steps later.
+          SCENARIOS_ALLOW_PRODUCTION: "1"
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Provisioning is itself the test: it registers five people, signs
+          # them in, and builds an organization and its pods over real HTTP.
+          # Nothing in it needs a model, so it runs on every release.
+          uv run python -m harness.provision --base-url https://127.0.0.1.sslip.io:8443
+
+      - name: What went wrong
+        if: failure()
+        working-directory: deploy/compose
+        shell: bash
+        run: |
+          docker compose ps -a
+          for service in migrate sandbox-images api worker caddy frontend supertokens db; do
+            echo "::group::$service"
+            docker compose logs --tail=200 "$service" || true
+            echo "::endgroup::"
+          done
+
+      - name: Stop
+        if: always()
+        working-directory: deploy/compose
+        shell: bash
+        run: docker compose down -v || true

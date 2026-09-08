@@ -1,0 +1,140 @@
+# Deploy Lemma on DigitalOcean App Platform.
+#
+# DigitalOcean reads this file from .do/ at the repository root — it cannot live
+# under deploy/. See deploy/README.md.
+#
+# READ THIS FIRST: App Platform gives a container no Docker socket, so Lemma
+# cannot provision agent sandboxes on the platform itself. Agents, functions and
+# workflows are all sandbox work, so this deployment needs E2B — set
+# E2B_API_KEY after the first deploy. Without it the product runs but its agents
+# cannot.
+#
+# A Droplet running the compose stack (deploy/cloud-init/lemma.yaml) needs no
+# E2B account, costs less, and provisions sandboxes locally. Prefer it unless
+# you specifically want a managed platform.
+
+spec:
+  name: lemma
+  region: nyc
+  features:
+    - buildpack-stack=ubuntu-22
+
+  databases:
+    # Two, because Lemma keeps pod data in its own database rather than another
+    # schema of the platform one. SuperTokens shares the first, in its own
+    # schema.
+    - name: lemma-db
+      engine: PG
+      version: "17"
+      production: true
+    - name: lemma-datastore
+      engine: PG
+      version: "17"
+      production: true
+    - name: lemma-redis
+      engine: REDIS
+      version: "7"
+      production: true
+
+  services:
+    - name: api
+      image:
+        registry_type: GHCR
+        registry: lemma-work
+        repository: lemma-backend
+        tag: latest
+      http_port: 8000
+      instance_size_slug: professional-xs
+      instance_count: 1
+      health_check:
+        http_path: /health/ready
+        initial_delay_seconds: 60
+      envs: &backend_envs
+        - {key: ENVIRONMENT, value: production}
+        - {key: DEBUG, value: "false"}
+        # Required in production. Set it to the commit the image was built from;
+        # images published from a release already carry it.
+        - {key: LEMMA_RELEASE_SHA, value: "", type: GENERAL}
+        - {key: DATABASE_URL, value: "${lemma-db.DATABASE_URL}"}
+        - {key: DATASTORE_DATABASE_URL, value: "${lemma-datastore.DATABASE_URL}"}
+        - {key: REDIS_URL, value: "${lemma-redis.DATABASE_URL}"}
+        - {key: SUPERTOKENS_CORE_URL, value: "http://supertokens:3567"}
+        # No Docker socket here — sandboxes are rented.
+        - {key: WORKSPACE_PROVIDER, value: e2b}
+        - {key: E2B_API_KEY, value: "", type: SECRET}
+        # Must be unique to this deployment: two deployments sharing an E2B
+        # account and a namespace each destroy the other's live sandboxes.
+        - {key: E2B_METADATA_NAMESPACE, value: "", type: GENERAL}
+        - {key: SECRET_ENCRYPTION_KEY, value: "", type: SECRET}
+        - {key: WORKSPACE_RUNTIME_CREDENTIAL_KEY, value: "", type: SECRET}
+        - {key: API_URL, value: "${APP_URL}"}
+        - {key: FRONTEND_URL, value: "${APP_URL}"}
+        - {key: AUTH_FRONTEND_URL, value: "${APP_URL}/auth"}
+        # Pod apps are served at <slug>.<APP_BASE_DOMAIN> and need a wildcard
+        # domain on this app. The assigned ondigitalocean.app hostname cannot
+        # carry one, so pod apps need a domain you own.
+        - {key: APP_BASE_DOMAIN, value: "", type: GENERAL}
+        - {key: SESSION_COOKIE_SECURE, value: "true"}
+        - {key: STORAGE_BACKEND, value: s3}
+        - {key: LEMMA_DEFAULT_MODEL_TYPE, value: openai_compat}
+        - {key: LEMMA_OPENAI_API_KEY, value: "", type: SECRET}
+        - {key: LEMMA_OPENAI_DEFAULT_MODEL, value: "", type: GENERAL}
+
+    - name: supertokens
+      image:
+        registry_type: DOCKER_HUB
+        registry: supertokens
+        repository: supertokens-postgresql
+        tag: 11.4.5
+      http_port: 3567
+      internal_ports: [3567]
+      instance_size_slug: basic-xxs
+      instance_count: 1
+      envs:
+        - {key: POSTGRESQL_CONNECTION_URI, value: "${lemma-db.DATABASE_URL}"}
+        - {key: POSTGRESQL_TABLE_SCHEMA, value: supertokens}
+
+    - name: frontend
+      image:
+        registry_type: GHCR
+        registry: lemma-work
+        repository: lemma-frontend
+        tag: latest
+      http_port: 8080
+      instance_size_slug: basic-xs
+      instance_count: 1
+      routes:
+        - path: /
+      envs:
+        - {key: NEXT_PUBLIC_API_URL, value: "${APP_URL}"}
+        - {key: NEXT_PUBLIC_SITE_URL, value: "${APP_URL}"}
+        - {key: NEXT_PUBLIC_AUTH_URL, value: "${APP_URL}/auth"}
+        - {key: NEXT_PUBLIC_SESSION_TOKEN_DOMAIN, value: ""}
+
+  workers:
+    - name: worker
+      image:
+        registry_type: GHCR
+        registry: lemma-work
+        repository: lemma-backend
+        tag: latest
+      run_command: python -m app.worker
+      instance_size_slug: professional-xs
+      instance_count: 1
+      envs: *backend_envs
+
+  jobs:
+    # Runs before the new version serves; a failed migration fails the deploy,
+    # which is the same guarantee the compose stack gets from a one-shot
+    # migrate container.
+    - name: migrate
+      kind: PRE_DEPLOY
+      image:
+        registry_type: GHCR
+        registry: lemma-work
+        repository: lemma-backend
+        tag: latest
+      run_command: alembic upgrade head
+      instance_size_slug: basic-xs
+      instance_count: 1
+      envs: *backend_envs

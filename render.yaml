@@ -1,0 +1,140 @@
+# Deploy Lemma on Render.
+#
+# Render reads this file from the repository root — it cannot live under
+# deploy/, which is why it is here. See deploy/README.md for what this costs and
+# what it cannot do.
+#
+# READ THIS FIRST: Render gives a container no Docker socket, so Lemma cannot
+# provision agent sandboxes on the platform itself. Agents, functions and
+# workflows are all sandbox work, so a Render deployment needs E2B — set
+# E2B_API_KEY in the dashboard after the first deploy. Without it the product
+# runs but its agents cannot.
+#
+# A VM with the compose stack (deploy/cloud-init/lemma.yaml) needs no E2B
+# account and no per-service billing. Prefer it unless you specifically want a
+# managed platform.
+
+previewsEnabled: false
+
+databases:
+  # Two Postgres instances, because Lemma keeps pod data in its own database
+  # rather than another schema of the platform one. SuperTokens shares the
+  # first, in its own schema.
+  - name: lemma-postgres
+    databaseName: lemma
+    user: lemma
+    plan: basic-256mb
+    postgresMajorVersion: "17"
+
+  - name: lemma-datastore
+    databaseName: lemma_datastore
+    user: lemma
+    plan: basic-256mb
+    postgresMajorVersion: "17"
+
+services:
+  - type: keyvalue
+    name: lemma-redis
+    plan: starter
+    ipAllowList: []
+
+  # SuperTokens: private, reachable only from the other services here.
+  - type: pserv
+    name: lemma-supertokens
+    runtime: image
+    plan: starter
+    image:
+      url: docker.io/supertokens/supertokens-postgresql:11.4.5
+    envVars:
+      - key: POSTGRESQL_CONNECTION_URI
+        fromDatabase: {name: lemma-postgres, property: connectionString}
+      - key: POSTGRESQL_TABLE_SCHEMA
+        value: supertokens
+
+  - type: web
+    name: lemma-api
+    runtime: image
+    plan: standard
+    image:
+      url: ghcr.io/lemma-work/lemma-backend:latest
+    healthCheckPath: /health/ready
+    # Migrations before the new instance serves. On compose this is a separate
+    # one-shot container so a failure stops the deploy; Render's equivalent is
+    # this hook, which fails the deploy the same way.
+    preDeployCommand: alembic upgrade head
+    envVars: &backend_env
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LEMMA_RELEASE_SHA
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase: {name: lemma-postgres, property: connectionString}
+      - key: DATASTORE_DATABASE_URL
+        fromDatabase: {name: lemma-datastore, property: connectionString}
+      - key: REDIS_URL
+        fromService: {type: keyvalue, name: lemma-redis, property: connectionString}
+      - key: SUPERTOKENS_CORE_URL
+        fromService: {type: pserv, name: lemma-supertokens, property: hostport}
+      # Sandboxes are rented: there is no Docker socket here to run them on.
+      - key: WORKSPACE_PROVIDER
+        value: e2b
+      - key: E2B_API_KEY
+        sync: false
+      # Must be unique to this deployment. Two deployments sharing an E2B
+      # account and a namespace each destroy the other's live sandboxes.
+      - key: E2B_METADATA_NAMESPACE
+        sync: false
+      - key: SECRET_ENCRYPTION_KEY
+        generateValue: true
+      - key: WORKSPACE_RUNTIME_CREDENTIAL_KEY
+        generateValue: true
+      # Set these to your Render URLs after the first deploy — Render assigns
+      # the hostnames, and Lemma never infers its own.
+      - key: API_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: AUTH_FRONTEND_URL
+        sync: false
+      # Pod apps are served at <slug>.<APP_BASE_DOMAIN> and need a wildcard
+      # custom domain on this service. Render's assigned onrender.com hostname
+      # cannot carry one, so pod apps need a domain you own.
+      - key: APP_BASE_DOMAIN
+        sync: false
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: LEMMA_DEFAULT_MODEL_TYPE
+        value: openai_compat
+      - key: LEMMA_OPENAI_API_KEY
+        sync: false
+      - key: LEMMA_OPENAI_DEFAULT_MODEL
+        sync: false
+
+  - type: worker
+    name: lemma-worker
+    runtime: image
+    plan: standard
+    image:
+      url: ghcr.io/lemma-work/lemma-backend:latest
+    dockerCommand: python -m app.worker
+    envVars: *backend_env
+
+  - type: web
+    name: lemma-frontend
+    runtime: image
+    plan: starter
+    image:
+      url: ghcr.io/lemma-work/lemma-frontend:latest
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_SITE_URL
+        sync: false
+      - key: NEXT_PUBLIC_AUTH_URL
+        sync: false
+      - key: NEXT_PUBLIC_SESSION_TOKEN_DOMAIN
+        sync: false

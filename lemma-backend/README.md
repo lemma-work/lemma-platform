@@ -73,9 +73,9 @@ lemma servers select local-dev
 lemma auth login
 ```
 
-### Run API / worker / scheduler separately (prod topology)
+### Run API and worker separately (prod topology)
 
-Production runs the API and the worker as **separate** processes (and the scheduler as a third). To mirror that locally, start infra, then run each process yourself from `lemma-backend/`:
+Production runs the API and the worker as **two** processes. There is no third scheduler process — time triggers are streaq crons on the worker's lanes. To mirror the split locally, start infra, then run each process yourself from `lemma-backend/`:
 
 ```bash
 docker compose up -d                  # infra: postgres, redis, supertokens
@@ -84,14 +84,12 @@ uv run alembic upgrade head           # apply migrations
 # API only
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
-# streaq worker — agent runs, file (re)indexing, surface ingest, datastore cleanup tasks
+# streaq worker — agent runs, file (re)indexing, surface ingest, datastore
+# cleanup, and every cron/time/webhook schedule
 uv run python -m app.worker
-
-# scheduler — cron / time / webhook schedules
-uv run python -m app.scheduler
 ```
 
-A Dockerized, resource-capped version of this split (api + worker as separate 1-CPU/2-GB containers) lives in the load-test compose — see [Load testing](#load-testing).
+Two Dockerized versions of this split exist: `deploy/compose/` is the real self-hosted deployment (see [self-hosting](../docs/self-hosting.md)), and the load-test compose is a resource-capped copy for measurement — see [Load testing](#load-testing).
 
 ## Testing
 
