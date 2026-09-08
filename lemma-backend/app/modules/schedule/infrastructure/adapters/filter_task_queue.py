@@ -19,13 +19,11 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
     async def enqueue(
         self,
         *,
-        schedule_id: UUID | None = None,
+        schedule_id: UUID,
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
         source_event_id: str,
     ) -> None:
-        if schedule_id is None:
-            raise ValueError("schedule_id is required")
         await self._job_queue.enqueue(
             "handle_llm_filter_task",
             schedule_id=str(schedule_id),
