@@ -2637,16 +2637,10 @@ mod tests {
         drop(probe);
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
 
-        // What holding it used to do.
-        let listening = TcpListener::bind(address).unwrap();
-        assert!(
-            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
-            "a listening socket nobody accepts on still completes the handshake, \
-             which is what turned 'the backend is not running' into a timeout"
-        );
-        drop(listening);
-
-        // What it does now.
+        // What it does now. First, because a completed connection leaves the
+        // port in TIME_WAIT, and a reservation deliberately sets no
+        // SO_REUSEADDR -- so demonstrating the old behaviour first would make
+        // this half fail to bind for a reason that is not the point.
         let held = bind_idle_port(port).expect("the port is free to hold");
         assert!(
             TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err(),
@@ -2656,6 +2650,15 @@ mod tests {
         // And it really is held: nothing else could take it meanwhile.
         assert!(TcpListener::bind(address).is_err());
         drop(held);
+
+        // What holding it used to do.
+        let listening = TcpListener::bind(address).unwrap();
+        assert!(
+            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
+            "a listening socket nobody accepts on still completes the handshake, \
+             which is what turned 'the backend is not running' into a timeout"
+        );
+        drop(listening);
     }
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::{tempdir, TempDir};
