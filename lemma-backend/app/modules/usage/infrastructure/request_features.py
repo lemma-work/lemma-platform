@@ -58,7 +58,20 @@ def _text_part(part: ModelRequestPart | ModelResponsePart) -> bool:
     if isinstance(part, ToolCallPart):
         return _json_content(part.args)
     if isinstance(part, ToolReturnPart):
-        return _json_content(part.content)
+        # `files` is pydantic-ai's own split: everything that is not one of
+        # `BinaryContent`/`ImageUrl`/`AudioUrl`/`DocumentUrl`/`VideoUrl` reaches
+        # the provider through `model_response_str`, as ordinary text, priced by
+        # `input_mtok` like any other text. Only the files need a price this
+        # rate card does not carry.
+        #
+        # Testing the content for JSON primitives instead treated everything
+        # else as unpriceable -- and a tool returning a dataclass or a pydantic
+        # model, which is most of them (`ExecCommandResult`, for one), is
+        # neither JSON nor a file. So an agent answered the opening prompt and
+        # was refused on the continuation carrying its first tool result, after
+        # the tokens for both had been spent, and the refusal was reported as a
+        # usage limit the account had not reached.
+        return not part.files
     if isinstance(part, ThinkingPart):
         # Signed or redacted reasoning still uses ordinary input/output tokens.
         return True

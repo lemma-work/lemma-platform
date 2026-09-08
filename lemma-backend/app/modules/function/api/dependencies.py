@@ -46,6 +46,9 @@ from app.modules.pod.contracts.detached_reads import (
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
 )
+from app.modules.function.infrastructure.execution_repository import (
+    FunctionExecutionRepository,
+)
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
 )
@@ -150,6 +153,7 @@ def get_function_runtime_gateway(
         uow_factory=uow_factory,
         storage_factory=get_function_storage_factory(),
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+        repository_factory=FunctionExecutionRepository,
     )
 
 

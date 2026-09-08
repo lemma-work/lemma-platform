@@ -192,3 +192,28 @@ def test_receipt_tiers_use_actual_input_and_start_only_above_threshold() -> None
     assert card.price(TokenCounts(input_tokens=101, output_tokens=10)) == Decimal(
         ".000262"
     )
+
+
+def test_a_price_that_is_not_the_gateway_s_own_cannot_enforce_a_budget() -> None:
+    """A resolved price and an enforceable one are different things.
+
+    An OpenAI-compatible gateway reselling somebody else's model resolves a
+    price for the *vendor* — DeepSeek's own rate for `deepseek-v4-flash`, not
+    what the gateway charges to serve it. Holding a budget to that number would
+    enforce a limit against a price the deployment does not pay, so the card
+    carries the rates and refuses to be enforceable. A deployment that wants
+    monetary limits here has to state its prices
+    (`LEMMA_SYSTEM_MODEL_METADATA_JSON`), which is the override path.
+    """
+    card = RateCard(
+        model="deepseek-v4-flash",
+        provider="deepseek",
+        enforceable=False,
+        rates={
+            "input_mtok": Rate(base=Decimal("0.14")),
+            "output_mtok": Rate(base=Decimal("0.28")),
+        },
+    )
+
+    assert card.rates, "a price was found"
+    assert not card.priceable, "but not one this deployment may enforce against"

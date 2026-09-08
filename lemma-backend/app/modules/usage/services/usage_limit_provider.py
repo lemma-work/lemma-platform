@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from app.modules.usage.config import usage_settings
 from app.modules.usage.domain.ports import UsageLimitPort
 
 # A factory takes a unit of work (so the adapter can read plans/subscriptions
@@ -40,3 +41,23 @@ def build_usage_limit_port(uow: object) -> Optional[UsageLimitPort]:
     )
 
     return configured_usage_limit_port(uow)
+
+
+def usage_limits_are_possible() -> bool:
+    """Whether this deployment can apply a monetary limit to anything.
+
+    Startup-knowable, unlike whether a limit applies to a *particular* org: a
+    plan-backed provider answers that per subscription. Either a provider is
+    registered, or settings state a limit. Neither, and unpriced models cost
+    nothing -- metering still records tokens, and there is no budget to enforce.
+    """
+    if _factory is not None:
+        return True
+    return any(
+        limit is not None
+        for limit in (
+            usage_settings.usage_org_monthly_limit_usd,
+            usage_settings.usage_user_weekly_limit_usd,
+            usage_settings.usage_user_monthly_limit_usd,
+        )
+    )

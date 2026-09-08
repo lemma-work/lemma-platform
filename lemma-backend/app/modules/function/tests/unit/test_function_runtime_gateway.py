@@ -62,9 +62,9 @@ def test_runtime_timeout_without_detail_has_stable_user_facing_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
-    monkeypatch,
-) -> None:
+async def test_gateway_uses_standard_principal_and_releases_uow_before_storage() -> (
+    None
+):
     artifact = b"immutable artifact"
     context = _context(artifact)
     state = _UowState()
@@ -112,12 +112,6 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
             terminal_calls.append((received, kwargs))
             return None, True, duplicate
 
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_gateway."
-        "FunctionExecutionRepository",
-        _Repository,
-    )
-
     class _Storage:
         async def read_file(self, path):  # pragma: no cover - the artifact
             raise AssertionError(
@@ -134,6 +128,7 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
         uow_factory=state.factory,
         storage_factory=lambda _function_id: _Storage(),
         delegated_tokens_enabled=True,
+        repository_factory=_Repository,
     )
     assert (
         await gateway.definition_artifact(
@@ -167,9 +162,9 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage(
 
 
 @pytest.mark.asyncio
-async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_hash(
-    monkeypatch,
-) -> None:
+async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_hash() -> (
+    None
+):
     """The gateway re-hashes the stored bytes before serving them, so storage
     corruption (or a path collision) never gets handed to a sandbox as if it
     matched the immutable revision it asked for."""
@@ -194,12 +189,6 @@ async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_ha
         async def authorize_definition_artifact(self, *_args, **_kwargs):
             return True
 
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_gateway."
-        "FunctionExecutionRepository",
-        _Repository,
-    )
-
     class _CorruptStorage:
         async def read_bytes(self, path):
             del path
@@ -210,6 +199,7 @@ async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_ha
         uow_factory=state.factory,
         storage_factory=lambda _function_id: _CorruptStorage(),
         delegated_tokens_enabled=True,
+        repository_factory=_Repository,
     )
 
     with pytest.raises(RuntimeArtifactCorrupt):
@@ -221,9 +211,7 @@ async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_ha
 
 
 @pytest.mark.asyncio
-async def test_gateway_terminal_rejects_when_completion_is_not_accepted(
-    monkeypatch,
-) -> None:
+async def test_gateway_terminal_rejects_when_completion_is_not_accepted() -> None:
     """A run that ``complete`` declines to transition (already terminal in a
     conflicting state, revoked, etc.) must surface as a rejection rather than a
     silent success."""
@@ -253,16 +241,11 @@ async def test_gateway_terminal_rejects_when_completion_is_not_accepted(
         async def complete(self, _received, **_kwargs):
             return None, False, False
 
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_gateway."
-        "FunctionExecutionRepository",
-        _Repository,
-    )
-
     gateway = FunctionRuntimeGateway(
         uow_factory=state.factory,
         storage_factory=lambda _function_id: None,
         delegated_tokens_enabled=True,
+        repository_factory=_Repository,
     )
     request = RuntimeTerminalRequest(
         status="completed",
@@ -274,3 +257,121 @@ async def test_gateway_terminal_rejects_when_completion_is_not_accepted(
     with pytest.raises(RuntimeStateRejected):
         await gateway.terminal(context.run_id, principal, request)
     assert state.active == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_finds_a_staged_artifact_when_no_generation_is_supplied() -> None:
+    """A sandbox older than the generation contract must still build functions.
+
+    The artifact of a build in flight is under `artifact-uploads/<generation>/`,
+    and the two ways to learn that generation are both unavailable there: a
+    runtime predating the contract sends no `X-Lemma-Artifact-Generation`, and
+    the `function_revisions` row that records it is written only once schema
+    extraction has already succeeded. Resolving the pre-generation path instead
+    missed, returned 503, and left the function in DRAFT for good.
+    """
+    artifact = b"PK\x03\x04 staged bundle"
+    context = _context(artifact)
+    generation = uuid4()
+    staged_path = (
+        f"artifact-uploads/{generation}/"
+        f"{context.revision_hash.removeprefix('sha256:')}.zip"
+    )
+    state = _UowState()
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id=str(uuid4()),
+        actor_name=context.function_name,
+        scope=(),
+    )
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def authorize_definition_artifact(self, *_args, **_kwargs):
+            return True
+
+        async def artifact_generation(self, *_args):
+            # The revision row does not exist yet: this *is* the build.
+            return None
+
+    class _Storage:
+        def __init__(self) -> None:
+            self.listed: list[str] = []
+
+        async def read_bytes(self, path):
+            if path == staged_path:
+                return artifact
+            raise FileNotFoundError(f"File {path} not found")
+
+        async def list_prefix(self, prefix):
+            self.listed.append(prefix)
+            return (
+                f"artifact-uploads/{uuid4()}/{'0' * 64}.zip",
+                staged_path,
+            )
+
+    storage = _Storage()
+    gateway = FunctionRuntimeGateway(
+        uow_factory=state.factory,
+        storage_factory=lambda _function_id: storage,
+        delegated_tokens_enabled=True,
+        repository_factory=_Repository,
+    )
+
+    assert (
+        await gateway.definition_artifact(
+            context.function_id, context.revision_hash, principal
+        )
+        == artifact
+    )
+    # Only the one prefix is walked, and the digest picks the entry out of it.
+    assert storage.listed == ["artifact-uploads"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_reports_a_genuinely_absent_artifact_as_missing() -> None:
+    """The fallback locates a staged artifact; it does not invent one."""
+    artifact = b"PK\x03\x04 never written"
+    context = _context(artifact)
+    state = _UowState()
+    principal = FunctionSessionPrincipal(
+        user_id=context.user_id,
+        pod_id=context.pod_id,
+        function_id=context.function_id,
+        session_id=str(uuid4()),
+        actor_name=context.function_name,
+        scope=(),
+    )
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def authorize_definition_artifact(self, *_args, **_kwargs):
+            return True
+
+        async def artifact_generation(self, *_args):
+            return None
+
+    class _EmptyStorage:
+        async def read_bytes(self, path):
+            raise FileNotFoundError(f"File {path} not found")
+
+        async def list_prefix(self, _prefix):
+            return ()
+
+    gateway = FunctionRuntimeGateway(
+        uow_factory=state.factory,
+        storage_factory=lambda _function_id: _EmptyStorage(),
+        delegated_tokens_enabled=True,
+        repository_factory=_Repository,
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await gateway.definition_artifact(
+            context.function_id, context.revision_hash, principal
+        )
