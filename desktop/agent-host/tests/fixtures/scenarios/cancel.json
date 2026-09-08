@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "stopReason": "cancelled",
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Started the requested work.\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "await_cancel": true
+    },
+    {
+      "await_release": true
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Stopped as requested."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
-use crate::adapters::{AdapterManifest, ResolvedAdapter};
+use crate::adapters::{AdapterManifest, AdapterWarmup, ResolvedAdapter};
 use crate::api::{ApiError, PublishedHarness, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
@@ -28,6 +28,30 @@ use crate::protocol::{
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// A supervisor owns its tasks even when its future is cancelled or errors.
+/// Dropping Tokio's bare handle would detach the task and its subprocesses.
+struct OwnedTask<T>(JoinHandle<T>);
+
+impl<T> OwnedTask<T> {
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+
+    fn abort(&self) {
+        self.0.abort();
+    }
+
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        (&mut self.0).await
+    }
+}
+
+impl<T> Drop for OwnedTask<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 /// How soon to try again when publishing harnesses fails.
 ///
 /// The refresh interval is tuned for "has anything about the installed agents
@@ -211,6 +235,11 @@ impl HostRuntime {
         })
     }
 
+    pub fn start_adapter_installation(&self) -> std::io::Result<AdapterWarmup> {
+        self.manifest
+            .start_cache_warmup(self.paths.adapters.clone())
+    }
+
     #[cfg(test)]
     #[must_use]
     pub fn with_driver(mut self, driver: Arc<dyn AgentDriver>) -> Self {
@@ -236,7 +265,7 @@ impl HostRuntime {
         }
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
-            HashMap::<Uuid, (watch::Sender<bool>, JoinHandle<anyhow::Result<()>>)>::new();
+            HashMap::<Uuid, (watch::Sender<bool>, OwnedTask<anyhow::Result<()>>)>::new();
         let mut scan = tokio::time::interval(DISK_SCAN_INTERVAL);
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // One sweep for the process, announced to every worker.
@@ -291,7 +320,7 @@ impl HostRuntime {
                     for target_id in stopped {
                         if let Some((shutdown, handle)) = targets.remove(&target_id) {
                             let _ = shutdown.send(true);
-                            match handle.await {
+                            match handle.join().await {
                                 Ok(Ok(())) => {}
                                 Ok(Err(error)) => {
                                     // A rejected credential never recovers by
@@ -348,7 +377,7 @@ impl HostRuntime {
                         )?;
                         targets.insert(target_id, (
                             shutdown_tx,
-                            tokio::spawn(async move { worker.run().await }),
+                            OwnedTask(tokio::spawn(async move { worker.run().await })),
                         ));
                     }
                 }
@@ -358,7 +387,7 @@ impl HostRuntime {
             let _ = shutdown.send(true);
         }
         for (target_id, (_, handle)) in targets {
-            if let Ok(Err(error)) = handle.await {
+            if let Ok(Err(error)) = handle.join().await {
                 tracing::warn!(%target_id, %error, "target worker failed during shutdown");
             }
         }
@@ -507,6 +536,7 @@ struct TargetWorker {
         mpsc::UnboundedSender<Option<ProbedHarnesses>>,
         mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
+    probe_task: Option<OwnedTask<()>>,
 }
 
 /// Delivery of journaled events to Lemma, off the poll loop.
@@ -687,7 +717,7 @@ async fn deliver_events(
 /// the next turn resumes from. `kill_at` is the backstop for an adapter that
 /// ignores it, and is only set once a cancellation has actually been asked for.
 struct ActiveRun {
-    handle: JoinHandle<anyhow::Result<()>>,
+    handle: OwnedTask<anyhow::Result<()>>,
     cancel: watch::Sender<bool>,
     kill_at: Option<tokio::time::Instant>,
 }
@@ -769,6 +799,7 @@ impl TargetWorker {
             transient_backoff: TransientBackoff::new(),
             events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
+            probe_task: None,
         })
     }
 
@@ -778,11 +809,11 @@ impl TargetWorker {
         // Aborted at the end of this function; the shutdown path takes the same
         // lock and does the last flush itself, so nothing in the journal is left
         // behind by stopping it.
-        let delivery = tokio::spawn(deliver_events(
+        let delivery = OwnedTask(tokio::spawn(deliver_events(
             Arc::clone(&self.flusher),
             Arc::clone(&self.events_ready),
             self.shutdown.clone(),
-        ));
+        )));
         let outcome = self.poll_loop().await;
         delivery.abort();
         outcome
@@ -796,7 +827,7 @@ impl TargetWorker {
         // still waiting when it next reaches the select.
         let mut agents_changed = self.agents_changed.clone();
         loop {
-            if *self.shutdown.borrow() {
+            if *self.shutdown.borrow() || self.shutdown.has_changed().is_err() {
                 return self.graceful_shutdown().await;
             }
             self.reap_finished().await;
@@ -855,7 +886,10 @@ impl TargetWorker {
                 // so noticing a newly installed agent waited out a held poll and
                 // took up to `POLL_HOLD` rather than the two seconds the
                 // interval reads as.
-                _ = agents_changed.changed() => {
+                changed = agents_changed.changed() => {
+                    if changed.is_err() {
+                        return self.graceful_shutdown().await;
+                    }
                     self.refresh_due = std::time::Instant::now();
                     None
                 }
@@ -1217,7 +1251,7 @@ impl TargetWorker {
 
     fn spawn_run(
         &mut self,
-        spec: RunSpec,
+        mut spec: RunSpec,
         adapter: ResolvedAdapter,
         can_load_session: bool,
         published_config_options: Vec<ConfigOption>,
@@ -1265,11 +1299,27 @@ impl TargetWorker {
                 )?;
                 return Ok(());
             }
-            let scratch = scratch_directory(&paths, target_id, spec.conversation_id);
-            if let Some(parent) = scratch.parent() {
-                prune_stale_scratch(parent);
-            }
-            std::fs::create_dir_all(&scratch)?;
+            let scratch = match prepare_run_directory(&paths, target_id, &spec) {
+                Ok(path) => path,
+                Err(error) => {
+                    terminal_failure(
+                        &journal,
+                        target_id,
+                        run_id,
+                        lease_epoch,
+                        RunState::Failed,
+                        &format!("could not open the conversation working directory: {error}"),
+                    )?;
+                    events_ready.notify_one();
+                    return Ok(());
+                }
+            };
+            let host_cwd = scratch
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("conversation directory is not valid Unicode"))?
+                .to_owned();
+            spec.system_prompt
+                .push_str(&host_directory_instructions(&host_cwd));
             // The name Lemma published for this run's server, not a name of our
             // own. An agent namespaces every MCP tool with the server it came
             // from, so registering a different name here made the same tool
@@ -1298,11 +1348,12 @@ impl TargetWorker {
                     ])
                     .env(vec![EnvVariable::new("LEMMA_AGENT_HOST_BRIDGE", "1")]),
             );
-            let callbacks: Arc<dyn AcpCallbacks> = Arc::new(JournalCallbacks {
+            let callbacks = Arc::new(JournalCallbacks {
                 journal: journal.clone(),
                 target_id,
                 run_id,
                 lease_epoch,
+                host_cwd: Some(host_cwd),
                 provider_seen: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: Arc::clone(&events_ready),
@@ -1323,7 +1374,7 @@ impl TargetWorker {
                 cancel_grace: CANCEL_GRACE,
             };
             let outcome =
-                tokio::time::timeout(remaining, driver.run(request, Arc::clone(&callbacks))).await;
+                tokio::time::timeout(remaining, driver.run(request, callbacks.clone())).await;
             if matches!(outcome, Ok(Ok(_)))
                 && let Err(error) = publish_generated_images(&scratch, callbacks.as_ref())
             {
@@ -1333,6 +1384,10 @@ impl TargetWorker {
                     "could not publish a generated image artifact"
                 );
             }
+            // Terminal events bypass the ACP callback. Seal the final text on
+            // every exit path so a crash or an answer ending in a text chunk
+            // cannot leave its transcript only in the transient live lane.
+            callbacks.flush_stream_segments()?;
             // Deliberately kept. It is the conversation's working directory, and
             // the next turn resumes the session that lives in it; deleting it
             // here is what made every resumption fail.
@@ -1372,9 +1427,6 @@ impl TargetWorker {
                         RunState::Failed
                     };
                     let raw = error.to_string();
-                    // A recognised failure is one we are restating in our own
-                    // words -- and the adapter has already streamed its own
-                    // into the transcript, so Lemma is told to drop that.
                     if authentication_hint(&adapter_name, &raw).is_some() {
                         // The freshest evidence anyone has that this agent is
                         // signed out. Probing is what publishes AUTH_REQUIRED,
@@ -1386,7 +1438,10 @@ impl TargetWorker {
                     }
                     let rewritten = authentication_hint(&adapter_name, &raw)
                         .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)));
-                    let supersedes = rewritten.is_some();
+                    // Rewriting an internal error does not mean the text it
+                    // interrupted was an error. Drop only a proven duplicate.
+                    let supersedes =
+                        rewritten.is_some() && callbacks.stream_matches_failure(&raw)?;
                     let message = rewritten.unwrap_or_else(|| redact_error(&raw));
                     terminal_failure_detail(
                         &journal,
@@ -1418,7 +1473,7 @@ impl TargetWorker {
         self.active_runs.insert(
             run_id,
             ActiveRun {
-                handle,
+                handle: OwnedTask(handle),
                 cancel: cancel_tx,
                 kill_at: None,
             },
@@ -1546,6 +1601,24 @@ impl TargetWorker {
 
     fn recover_interrupted_runs(&self) -> anyhow::Result<()> {
         for run in self.journal.recoverable_runs(self.target.target_id)? {
+            let mut segments = StreamSegments::default();
+            self.journal.visit_run_events(
+                self.target.target_id,
+                run.run_id,
+                run.lease_epoch,
+                |event| segments.recover_event(&event),
+            )?;
+            JournalCallbacks {
+                journal: self.journal.clone(),
+                target_id: self.target.target_id,
+                run_id: run.run_id,
+                lease_epoch: run.lease_epoch,
+                host_cwd: None,
+                provider_seen: AtomicBool::new(true),
+                stream_segments: std::sync::Mutex::new(segments),
+                events_ready: Arc::clone(&self.events_ready),
+            }
+            .flush_stream_segments()?;
             if run.prompt_dispatched {
                 terminal_failure(
                     &self.journal,
@@ -1584,6 +1657,16 @@ impl TargetWorker {
     /// after another. The machine appears with its agents almost immediately;
     /// their config options arrive a moment later.
     fn refresh_harnesses(&mut self) {
+        if self
+            .probe_task
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            // Coalesce refresh requests while a probe is still running. A
+            // changed installation is checked once more after it completes.
+            self.reprobe_requested.store(true, Ordering::SeqCst);
+            return;
+        }
         let client = self.client.clone();
         let sender = self.probed.0.clone();
         // Everything the spawned work needs, taken before the task is built:
@@ -1698,7 +1781,7 @@ impl TargetWorker {
         // failed validation as "unknown configuration selection". Getting the
         // machine online is what the poll does; the harnesses can wait for
         // their probe.
-        tokio::spawn(async move {
+        self.probe_task = Some(OwnedTask(tokio::spawn(async move {
             let discovered = discover_manifest.discover();
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
             let probes = enriched
@@ -1777,7 +1860,7 @@ impl TargetWorker {
                     let _ = sender.send(None);
                 }
             }
-        });
+        })));
     }
 
     fn store_published(&mut self, probed: ProbedHarnesses) {
@@ -1976,7 +2059,7 @@ impl TargetWorker {
             .collect::<Vec<_>>();
         for run_id in finished {
             if let Some(active) = self.active_runs.remove(&run_id)
-                && let Err(error) = active.handle.await
+                && let Err(error) = active.handle.join().await
                 && !error.is_cancelled()
             {
                 tracing::error!(%run_id, %error, "agent run task terminated unexpectedly");
@@ -2068,7 +2151,7 @@ impl TargetWorker {
         self.active_runs.insert(
             run_id,
             ActiveRun {
-                handle,
+                handle: OwnedTask(handle),
                 cancel: watch::channel(false).0,
                 kill_at: None,
             },
@@ -2114,6 +2197,7 @@ struct JournalCallbacks {
     target_id: Uuid,
     run_id: Uuid,
     lease_epoch: u32,
+    host_cwd: Option<String>,
     provider_seen: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
     /// Raised whenever this run journals an event, so the poll loop stops
@@ -2134,6 +2218,18 @@ struct JournalCallbacks {
 struct StreamSegments {
     message: String,
     thought: String,
+}
+
+impl StreamSegments {
+    fn recover_event(&mut self, event: &crate::protocol::Event) {
+        match event.event_type {
+            EventType::AgentMessageChunk => self.message.push_str(&chunk_text(&event.payload)),
+            EventType::AgentThoughtChunk => self.thought.push_str(&chunk_text(&event.payload)),
+            EventType::AgentMessageUpsert => self.message.clear(),
+            EventType::AgentThoughtUpsert => self.thought.clear(),
+            _ => {}
+        }
+    }
 }
 
 impl JournalCallbacks {
@@ -2175,6 +2271,32 @@ impl JournalCallbacks {
         self.flush_stream_segment(true)?;
         self.flush_stream_segment(false)
     }
+
+    fn stream_matches_failure(&self, error: &str) -> anyhow::Result<bool> {
+        let expected = error
+            .strip_prefix("Internal error: ")
+            .unwrap_or(error)
+            .trim();
+        if expected.is_empty() {
+            return Ok(false);
+        }
+        let mut text = String::new();
+        let mut differs = false;
+        self.journal
+            .visit_run_events(self.target_id, self.run_id, self.lease_epoch, |event| {
+                if event.event_type == EventType::AgentMessageUpsert && !differs {
+                    let segment = chunk_text(&event.payload);
+                    // A reply longer than the error cannot be its duplicate;
+                    // avoid retaining an entire long conversation to compare it.
+                    if text.len().saturating_add(segment.len()) > expected.len() {
+                        differs = true;
+                    } else {
+                        text.push_str(&segment);
+                    }
+                }
+            })?;
+        Ok(!differs && text == expected)
+    }
 }
 
 impl AcpCallbacks for JournalCallbacks {
@@ -2185,11 +2307,27 @@ impl AcpCallbacks for JournalCallbacks {
             self.lease_epoch,
             provider_session_id,
         )?;
-        // `mark_dispatch_intent` just made the session id durable, and
-        // `pending_control` puts it on every checkpoint this run reports. Waking
-        // the poll here gets it upstream on the first one rather than a whole
-        // long poll later, so Lemma has the conversation's session before the
-        // user's next message arrives.
+        let mut detail = JsonMap::from([
+            ("state".to_owned(), Value::String("DISPATCHING".to_owned())),
+            (
+                "provider_session_id".to_owned(),
+                Value::String(provider_session_id.to_owned()),
+            ),
+        ]);
+        if let Some(cwd) = &self.host_cwd {
+            detail.insert("host_cwd".to_owned(), Value::String(cwd.clone()));
+        }
+        // Control polling and streaming are independent. Put the binding at
+        // the head of this run's event stream so the backend saves it before
+        // processing any answer, even while its control poll is waiting.
+        self.journal.append_event(
+            self.target_id,
+            self.run_id,
+            self.lease_epoch,
+            EventType::RunState,
+            None,
+            detail,
+        )?;
         self.events_ready.notify_one();
         Ok(())
     }
@@ -2354,6 +2492,20 @@ fn terminal_failure_detail(
     Ok(())
 }
 
+fn host_directory_instructions(cwd: &str) -> String {
+    // Encode the path as data: a folder name may contain quotes or newlines.
+    let encoded = serde_json::to_string(cwd).expect("strings serialize to JSON");
+    format!(
+        "\n\n# Native Working Directory\nYour native tools run on this computer in \
+         {encoded} (JSON-encoded path). This directory belongs to this conversation \
+         and is reused across turns. Use relative paths here for native file and \
+         shell tools. Lemma MCP execution tools use their separate sandbox cwd; \
+         never pass its /workspace paths to native tools or this host path to \
+         sandbox tools. A reported path is not an access grant. Respect tool \
+         approvals; access outside this directory requires separate permission."
+    )
+}
+
 /// The working directory a conversation's provider session lives in.
 ///
 /// Keyed on the conversation, not the run. ACP's `session/load` takes a working
@@ -2388,27 +2540,34 @@ fn publish_generated_images(
     Ok(())
 }
 
-/// How long a conversation's working directory outlives its last turn.
-const SCRATCH_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+fn prepare_conversation_directory(
+    paths: &HostPaths,
+    target_id: Uuid,
+    conversation_id: Uuid,
+) -> anyhow::Result<PathBuf> {
+    // Keep the lexical path stable: provider session indexes can distinguish a
+    // symlink from its destination even when both name the same directory.
+    let path = std::path::absolute(scratch_directory(paths, target_id, conversation_id))?;
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
+}
 
-/// Drop conversation directories nothing has touched in a fortnight.
-///
-/// These used to be deleted after every run, so nothing needed pruning. Keeping
-/// them is what makes session resumption possible, and this is what keeps that
-/// from becoming an unbounded pile of working directories on someone's disk.
-fn prune_stale_scratch(target_root: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(target_root) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let stale = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > SCRATCH_RETENTION));
-        if stale {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
+fn prepare_run_directory(
+    paths: &HostPaths,
+    target: Uuid,
+    spec: &RunSpec,
+) -> anyhow::Result<PathBuf> {
+    let legacy = scratch_directory(paths, target, spec.conversation_id);
+    // Provider session indexes may include the lexical cwd. Never move an
+    // existing session's files behind its back during an app upgrade.
+    if legacy.exists() || spec.workspace_cwd.is_none() {
+        return prepare_conversation_directory(paths, target, spec.conversation_id);
     }
+    crate::conversation_directory::prepare(
+        &crate::conversation_directory::workspace_root()?,
+        target,
+        spec.workspace_cwd.as_deref().expect("checked above"),
+    )
 }
 
 fn generated_image_payloads(
@@ -2582,7 +2741,7 @@ fn adapter_failure_message(harness: &str, error: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{harness} failed to start a session on this computer. \
+        "{harness} encountered an error on this computer. \
          Check that it runs on its own in a terminal, then try again. \
          Its own error was: {}",
         error.trim()
@@ -2601,6 +2760,35 @@ fn redact_error(value: &str) -> String {
         }
     }
     redacted.chars().take(2048).collect()
+}
+
+#[cfg(test)]
+mod adapter_installation_tests {
+    use super::{HostConfig, HostPaths, HostRuntime};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn background_cache_failure_invalidates_the_serving_hosts_discovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = HostPaths::under(directory.path());
+        let config = HostConfig::load_or_create(&paths).unwrap();
+        // An old installation may leave a file where the cache directory belongs.
+        // This fails before npm is launched and must remain available for repair.
+        std::fs::write(&paths.adapters, b"existing installation").unwrap();
+        let runtime = HostRuntime::new(config, paths.clone()).unwrap();
+        let before = runtime.manifest.installed_fingerprint();
+        let warmup = runtime.start_adapter_installation().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.manifest.installed_fingerprint() == before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(warmup);
+        assert_ne!(runtime.manifest.installed_fingerprint(), before);
+        assert_eq!(
+            std::fs::read(&paths.adapters).unwrap(),
+            b"existing installation"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2824,6 +3012,7 @@ mod target_worker_tests {
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
                 resume_session_id: None,
+                workspace_cwd: None,
                 context: JsonMap::new(),
                 mcp: serde_json::json!({}),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -2881,6 +3070,78 @@ mod target_worker_tests {
         fn drop(&mut self) {
             self.server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn a_closed_supervisor_channel_stops_the_worker_without_refreshing() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        harness.worker.refresh_due = std::time::Instant::now() + Duration::from_secs(60);
+        // This fixture's change sender has already gone away, as it does when
+        // the supervisor errors or is cancelled. Closure is not an install.
+        tokio::time::timeout(Duration::from_secs(2), harness.worker.poll_loop())
+            .await
+            .expect("a closed channel must not spin the poll loop")
+            .unwrap();
+        assert!(harness.worker.probe_task.is_none());
+        assert!(harness.worker.draining);
+    }
+
+    #[tokio::test]
+    async fn repeated_refreshes_share_one_probe_and_worker_drop_cancels_its_tasks() {
+        let mut harness = Harness::with_manifest(echo_manifest()).await;
+        let (probe_owner, probe_dropped) = tokio::sync::oneshot::channel::<()>();
+        let probe = tokio::spawn(async move {
+            let _owner = probe_owner;
+            std::future::pending::<()>().await;
+        });
+        let probe_id = probe.id();
+        harness.worker.probe_task = Some(super::OwnedTask(probe));
+        let (run_owner, run_dropped) = tokio::sync::oneshot::channel::<()>();
+        harness.worker.track_run(
+            Uuid::new_v4(),
+            tokio::spawn(async move {
+                let _owner = run_owner;
+                std::future::pending::<anyhow::Result<()>>().await
+            }),
+        );
+        for _ in 0..20 {
+            harness.worker.refresh_harnesses();
+        }
+        assert_eq!(harness.worker.probe_task.as_ref().unwrap().0.id(), probe_id);
+        assert!(
+            harness
+                .worker
+                .reprobe_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        drop(harness);
+        for dropped in [probe_dropped, run_dropped] {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), dropped)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_task_join_does_not_detach_the_child() {
+        let (owner, dropped) = tokio::sync::oneshot::channel::<()>();
+        let child = super::OwnedTask(tokio::spawn(async move {
+            let _owner = owner;
+            std::future::pending::<()>().await;
+        }));
+        let parent = tokio::spawn(child.join());
+        tokio::task::yield_now().await;
+        parent.abort();
+        assert!(parent.await.unwrap_err().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), dropped)
+                .await
+                .unwrap()
+                .is_err()
+        );
     }
 
     /// Wait for `predicate`, or fail rather than hang.
@@ -3319,6 +3580,7 @@ mod target_worker_tests {
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             // Not an object, so the spawned run journals its failure and ends
             // without going anywhere near a driver. This test is about whether
@@ -3798,6 +4060,7 @@ mod stream_upsert_tests {
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
             resume_session_id: None,
+            workspace_cwd: None,
             context: JsonMap::new(),
             mcp: Value::Null,
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -3820,6 +4083,7 @@ mod stream_upsert_tests {
             target_id,
             run_id,
             lease_epoch: 1,
+            host_cwd: Some("/test/Projects/Δ workspace".to_owned()),
             provider_seen: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
             events_ready: Arc::new(tokio::sync::Notify::new()),
@@ -3836,6 +4100,81 @@ mod stream_upsert_tests {
             .flat_map(|batch| batch.events)
             .map(|event| (event.sequence, event.event_type, event.payload))
             .collect()
+    }
+
+    #[test]
+    fn session_binding_is_durable_before_any_answer_or_control_poll() {
+        let (directory, callbacks, _) = fixture();
+        callbacks.before_prompt("claude-session-42").unwrap();
+        let established = journaled_events(&callbacks);
+        assert_eq!(established.len(), 1);
+        assert_eq!(established[0].1, EventType::RunState);
+        assert_eq!(established[0].2["state"], "DISPATCHING");
+        assert_eq!(established[0].2["provider_session_id"], "claude-session-42");
+        assert_eq!(established[0].2["host_cwd"], "/test/Projects/Δ workspace");
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("answer"))
+            .unwrap();
+        callbacks.flush_stream_segments().unwrap();
+        let reopened = Journal::open(directory.path().join("journal.db")).unwrap();
+        let batch = reopened.pending_events(callbacks.target_id, 256).unwrap();
+        let events = &batch[0].events;
+        assert_eq!(
+            events[0].payload["provider_session_id"],
+            "claude-session-42"
+        );
+        assert!(
+            events
+                .iter()
+                .skip(1)
+                .any(|event| event.event_type == EventType::AgentMessageUpsert)
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+    }
+
+    #[test]
+    fn only_the_exact_streamed_failure_can_be_replaced_by_an_error_hint() {
+        for (streamed, error, matches) in [
+            (
+                "Failed to authenticate",
+                "Internal error: Failed to authenticate",
+                true,
+            ),
+            ("Failed to authenticate", "Failed to authenticate", true),
+            (
+                "Here is the partial answer",
+                "Internal error: connection closed",
+                false,
+            ),
+            (
+                "Useful work. Failed to authenticate",
+                "Internal error: Failed to authenticate",
+                false,
+            ),
+            ("", "Internal error: Failed to authenticate", false),
+            ("", "", false),
+        ] {
+            let (_directory, callbacks, _run_id) = fixture();
+            for character in streamed.chars() {
+                callbacks
+                    .event(
+                        EventType::AgentMessageChunk,
+                        None,
+                        payload(&character.to_string()),
+                    )
+                    .unwrap();
+            }
+            callbacks.flush_stream_segments().unwrap();
+            assert_eq!(
+                callbacks.stream_matches_failure(error).unwrap(),
+                matches,
+                "{streamed:?}, {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -3885,6 +4224,65 @@ mod stream_upsert_tests {
             .filter_map(|(_, _, payload)| payload.get("text").and_then(Value::as_str))
             .collect::<String>();
         assert_eq!(durable_text, "hello world");
+    }
+
+    #[test]
+    fn recovery_seals_only_text_after_each_kinds_last_upsert() {
+        let (_directory, callbacks, run_id) = fixture();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("already saved"))
+            .unwrap();
+        callbacks
+            .event(
+                EventType::ToolCallUpsert,
+                Some("tool".into()),
+                JsonMap::new(),
+            )
+            .unwrap();
+        callbacks
+            .event(
+                EventType::AgentThoughtChunk,
+                None,
+                payload("unfinished thought"),
+            )
+            .unwrap();
+        callbacks
+            .event(
+                EventType::AgentMessageChunk,
+                None,
+                payload("unfinished answer"),
+            )
+            .unwrap();
+        let last_sequence = journaled_events(&callbacks).last().unwrap().0;
+        callbacks
+            .journal
+            .acknowledge_events(
+                callbacks.target_id,
+                &crate::protocol::EventAck {
+                    run_id,
+                    lease_epoch: 1,
+                    acked_through: last_sequence,
+                },
+            )
+            .unwrap();
+        assert!(journaled_events(&callbacks).is_empty());
+        let mut recovered = StreamSegments::default();
+        callbacks
+            .journal
+            .visit_run_events(callbacks.target_id, run_id, 1, |event| {
+                recovered.recover_event(&event);
+            })
+            .unwrap();
+        assert_eq!(recovered.message, "unfinished answer");
+        assert_eq!(recovered.thought, "unfinished thought");
+        let mut another_lease_events = 0;
+        callbacks
+            .journal
+            .visit_run_events(callbacks.target_id, run_id, 2, |_| {
+                another_lease_events += 1;
+            })
+            .unwrap();
+        assert_eq!(another_lease_events, 0);
     }
 
     #[test]
@@ -4072,13 +4470,66 @@ mod adapter_failure_message_tests {
     }
 
     #[test]
+    fn old_conversation_files_survive_reopening_and_other_conversations() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = super::HostPaths::under(directory.path().join("Δ workspace"));
+        let target = uuid::Uuid::new_v4();
+        let conversation = uuid::Uuid::new_v4();
+        let first = super::prepare_conversation_directory(&paths, target, conversation).unwrap();
+        std::fs::write(first.join("user-work.txt"), "keep this work").unwrap();
+        #[cfg(unix)]
+        {
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86400);
+            std::fs::File::open(&first)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        super::prepare_conversation_directory(&paths, target, uuid::Uuid::new_v4()).unwrap();
+        let reopened = super::prepare_conversation_directory(&paths, target, conversation).unwrap();
+        assert_eq!(first, reopened);
+        assert_eq!(
+            std::fs::read_to_string(reopened.join("user-work.txt")).unwrap(),
+            "keep this work"
+        );
+        let spec: super::RunSpec = serde_json::from_value(serde_json::json!({
+            "agent_run_id": uuid::Uuid::new_v4(), "conversation_id": conversation,
+            "harness_id": uuid::Uuid::new_v4(), "profile_revision": "test",
+            "system_prompt": "test", "prompt": [],
+            "workspace_cwd": "/workspace/c/2026-09-07/new-layout",
+            "resume_session_id": "existing-provider-session",
+            "run_deadline": chrono::Utc::now(),
+        }))
+        .unwrap();
+        assert_eq!(
+            super::prepare_run_directory(&paths, target, &spec).unwrap(),
+            first,
+            "an upgrade must not relocate a provider session's existing cwd"
+        );
+    }
+
+    #[test]
+    fn native_directory_instruction_encodes_paths_without_inventing_a_mount() {
+        for cwd in [
+            "/Users/test/Δ project",
+            "C:\\Users\\test\\My Project",
+            "/tmp/quote\"\nfolder",
+        ] {
+            let prompt = super::host_directory_instructions(cwd);
+            assert!(prompt.contains(&serde_json::to_string(cwd).unwrap()));
+            assert!(prompt.contains("separate sandbox cwd"));
+            assert!(prompt.contains("not an access grant"));
+        }
+    }
+
+    #[test]
     fn an_adapter_internal_error_says_whose_it_is() {
         // Verbatim from OpenCode. Names no agent, points nowhere, and reads
         // like a defect in Lemma rather than a session that would not start.
         let raw = r#"Internal error: OpenCode service failure: {"service": "session"}"#;
         let framed = super::adapter_failure_message("OpenCode", raw).expect("framed");
 
-        assert!(framed.starts_with("OpenCode failed to start a session"));
+        assert!(framed.starts_with("OpenCode encountered an error"));
         // The adapter's own words survive: they are the only thing that
         // explains an unfamiliar failure.
         assert!(framed.contains(raw));

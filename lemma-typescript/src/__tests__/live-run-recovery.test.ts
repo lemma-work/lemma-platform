@@ -223,6 +223,48 @@ afterEach(async () => {
 });
 
 describe("a stream the transport gives up on", () => {
+  it("keeps reading the current stream after Stop until its final answer and acknowledgement arrive", async () => {
+    const server = fakeServer({ status: "WAITING" });
+    const stopRun = vi.spyOn(server.client.conversations, "stopRun").mockImplementation(async () => {
+      server.state.status = "STOP_REQUESTED";
+      return conversation("c1", server.state.status);
+    });
+    const controller = await mount(server.client);
+    await act(async () => controller.current?.openConversation("c1"));
+    await act(async () => { void controller.current?.sendMessage("start"); });
+    await waitUntil(() => server.sendStreams.length === 1);
+    server.state.status = "RUNNING";
+    server.sendStreams[0].push({ type: "token", kind: "text", data: "Partial work" });
+    await waitUntil(() => transcript(controller).includes("Partial work"));
+    await act(async () => controller.current?.stop());
+    expect(stopRun).toHaveBeenCalledTimes(1);
+    expect(transcript(controller)).toContain("Partial work");
+    const answer = messageFrame("m-answer", "assistant", "Partial work, then stopped.", 1);
+    server.persisted.push(answer.data);
+    server.state.status = "STOPPED";
+    server.sendStreams[0].push(answer);
+    server.sendStreams[0].push({ type: "completed", data: { status: "STOPPED" } });
+    server.sendStreams[0].close();
+    await waitUntil(() => transcript(controller).includes("Partial work, then stopped."));
+    expect(server.resumeStream).not.toHaveBeenCalled();
+  });
+
+  it("reopens a stopping run and receives its final transcript without starting another run", async () => {
+    const server = fakeServer({ status: "STOP_REQUESTED" });
+    const controller = await mount(server.client);
+    await act(async () => controller.current?.openConversation("c1"));
+    await waitUntil(() => server.resumeStreams.length === 1, { label: "attach to the stopping run" });
+    const answer = messageFrame("m-answer", "assistant", "Work preserved after Stop.", 1);
+    server.persisted.push(answer.data);
+    server.state.status = "STOPPED";
+    server.resumeStreams[0].push(answer);
+    server.resumeStreams[0].push({ type: "completed", data: { status: "STOPPED" } });
+    server.resumeStreams[0].close();
+    await waitUntil(() => transcript(controller).includes("Work preserved after Stop."));
+    expect(server.sendMessageStream).not.toHaveBeenCalled();
+    expect(server.resumeStream).toHaveBeenCalledTimes(1);
+  });
+
   it("reconnects, because `stream_error` is not the run failing", async () => {
     const server = fakeServer({ status: "WAITING" });
     const controller = await mount(server.client);

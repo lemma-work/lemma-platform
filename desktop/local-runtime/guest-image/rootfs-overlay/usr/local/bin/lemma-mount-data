@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-device=/dev/vdb
+device=/dev/nvme0n1
 data_root=/var/lib/lemma-data
 # Bump this only when persisted container metadata is no longer compatible
 # with a refreshed guest OS. Images and container definitions are disposable;

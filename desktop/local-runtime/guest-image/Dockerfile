@@ -3,12 +3,12 @@ FROM ubuntu:24.04 AS runtime
 
 ARG TARGETARCH
 ARG NERDCTL_VERSION=2.3.4
+ARG GUEST_PLATFORM=macos-aarch64
+ARG UBUNTU_KERNEL_RELEASE=6.8.0-138-generic
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Lemma is a versioned appliance, not a general-purpose Ubuntu host. The GA
-# package supplies a distro-compatible initramfs and userspace module tree; the
-# macOS direct-boot kernel is replaced by the hash-pinned Kata container kernel
-# in build_local_guest_runtime.sh.
+# Keep Ubuntu's kernel, modules and generated initramfs together. WSL supplies
+# its own kernel and does not need Linux boot packages in the distribution.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -19,9 +19,6 @@ RUN apt-get update \
         e2fsprogs \
         iproute2 \
         iptables \
-        initramfs-tools \
-        kmod \
-        linux-image-virtual \
         runc \
         systemd \
         systemd-resolved \
@@ -31,6 +28,22 @@ RUN apt-get update \
     && update-alternatives --set iptables /usr/sbin/iptables-legacy \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy \
     && rm -rf /var/lib/apt/lists/*
+
+RUN if [ "$GUEST_PLATFORM" = macos-aarch64 ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends initramfs-tools kmod \
+          "linux-image-${UBUNTU_KERNEL_RELEASE}" \
+          "linux-modules-extra-${UBUNTU_KERNEL_RELEASE}" \
+      && printf '%s\n' rtc-pl031 virtiofs vmw_vsock_virtio_transport \
+          >> /etc/initramfs-tools/modules \
+      && for module in rtc-pl031 virtiofs vmw_vsock_virtio_transport; do \
+           modinfo -k "$UBUNTU_KERNEL_RELEASE" "$module" >/dev/null || exit 1; \
+         done \
+      && update-initramfs -u -k "$UBUNTU_KERNEL_RELEASE" \
+      && mkdir -p /etc/lemma \
+      && printf '%s\n' "$UBUNTU_KERNEL_RELEASE" > /etc/lemma/kernel-release \
+      && rm -rf /var/lib/apt/lists/*; \
+    elif [ "$GUEST_PLATFORM" != windows-x86_64 ]; then exit 1; fi
 
 RUN set -eux; \
     archive="nerdctl-${NERDCTL_VERSION}-linux-${TARGETARCH}.tar.gz"; \
@@ -68,8 +81,17 @@ RUN chmod 0755 \
         /var/lib/lemma/run \
         /var/lib/lemma/workspaces \
     && systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service \
+    && if [ "$GUEST_PLATFORM" = macos-aarch64 ]; then \
+         systemctl enable lemma-guestd.service lemma-data.service lemma-host-clock.service \
+           lemma-service@5432.socket lemma-service@6379.socket lemma-service@3567.socket \
+           containerd.service systemd-logind.service \
+         && test -x /usr/lib/systemd/systemd-socket-proxyd \
+         && systemctl set-default multi-user.target; \
+       fi \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \
     && touch /etc/machine-id
+
+RUN dpkg-query --show --showformat='${binary:Package}\t${Version}\n' > /etc/lemma/packages.txt
 
 FROM scratch AS export
 COPY --from=runtime / /
