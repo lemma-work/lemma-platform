@@ -2949,7 +2949,8 @@ fn control_navigation_allowed(url: &tauri::Url) -> bool {
     trusted_control_url(url)
 }
 
-fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
+/// Normalise a Local settings page name, or say it is not one.
+fn control_center_page(page: Option<&str>) -> Result<String, String> {
     let page = match page.unwrap_or("overview") {
         "connectors" => "integrations",
         "services" => "runtime",
@@ -2971,6 +2972,16 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
     ) {
         return Err(format!("unknown Local settings page: {page}"));
     }
+    Ok(page.to_owned())
+}
+
+/// Bring Local settings up on `page`, and finish only when it is up.
+///
+/// Blocking on purpose, and never to be called from the main thread: Tauri
+/// documents a Windows deadlock when child webviews are created from
+/// synchronous commands or event handlers. Run from a worker, `add_child`
+/// marshals the build onto the main thread by itself.
+fn open_control_center_blocking(app: &AppHandle, page: &str) -> Result<(), String> {
     if let Some(webview) = app.get_webview("control") {
         if let Some(main) = app.get_window("main") {
             restore_dock_presence(app);
@@ -2981,19 +2992,20 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
         let _ = app.emit_to("control", "lemma:control-page", page);
         return Ok(());
     }
+    create_control_child(app, page)
+}
+
+fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
+    let page = control_center_page(page)?;
     let handle = app.clone();
-    let page = page.to_owned();
-    // Tauri documents a Windows deadlock when child webviews are created from
-    // synchronous commands/event handlers. Always create the trusted overlay
-    // from a worker and let add_child marshal the build onto the main thread.
-    std::thread::spawn(move || {
-        if let Err(error) = create_control_child(&handle, &page) {
-            eprintln!("[local-settings] {error}");
-            let _ = handle.emit(
-                "lemma:control-error",
-                format!("Could not open Local settings: {error}"),
-            );
-        }
+    // `menu_background`, rather than a bare thread that swallowed the result.
+    // A failure here used to be announced as `lemma:control-error`, an event
+    // with no listener anywhere in the app: choosing Local settings from the
+    // menu and having it fail produced no window, no message, and nothing in
+    // any log a person could reach. This writes the launch log and puts the
+    // reason on screen, like every other menu action that fails.
+    menu_background(app, "Local settings", move || {
+        open_control_center_blocking(&handle, &page)
     });
     Ok(())
 }
@@ -3525,9 +3537,23 @@ fn collect_secret_json_values(value: &Value, sensitive: bool, output: &mut Vec<S
     }
 }
 
+/// Open Local settings, and tell the caller whether it opened.
+///
+/// Awaited rather than fire-and-forget. This used to spawn a thread, return
+/// `Ok` at once, and report failure by emitting `lemma:control-error` -- which
+/// nothing in the app listens for. The splash's recovery button has a `.catch`
+/// that therefore could never run, so a Local settings window that failed to
+/// open left the user pressing a button that did nothing at all.
+///
+/// Async, so it is dispatched off the main thread and can wait for the answer;
+/// that is also what keeps it clear of the Windows child-webview deadlock,
+/// which is a hazard for *synchronous* commands.
 #[tauri::command]
-fn open_control_center(app: AppHandle, page: Option<String>) -> Result<(), String> {
-    show_control_center_page(&app, page.as_deref())
+async fn open_control_center(app: AppHandle, page: Option<String>) -> Result<(), String> {
+    let page = control_center_page(page.as_deref())?;
+    tauri::async_runtime::spawn_blocking(move || open_control_center_blocking(&app, &page))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn is_control_window_label(label: &str) -> bool {
@@ -7747,7 +7773,6 @@ mod tests {
         const PURE_UI: &[&str] = &[
             "open_developer_tools",
             "close_local_settings",
-            "open_control_center",
             "get_state",
             // One mutex read of state locald has already pushed into the
             // shell. It talks to nothing, so dispatching it on the main

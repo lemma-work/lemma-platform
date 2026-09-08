@@ -233,3 +233,26 @@ test('recovery is still offered when the daemon cannot say what is available', a
   assert.equal(await page.getByRole('button', { name: 'Reset local data', exact: true }).isVisible(), false,
     'the tier that needs the daemon cannot be promised when the daemon is gone');
 });
+
+// `open_control_center` used to return Ok before it had done anything and
+// report failure by emitting `lemma:control-error`, an event nothing in the
+// app listens for -- so this `.catch` could never run. And even once it can,
+// the box it writes into is hidden unless a failing state put it on screen,
+// and a settings window that will not open is not a failing state. Pressing
+// recovery and getting nothing at all was the sum of the two.
+test('a recovery window that will not open says so instead of doing nothing', async t => {
+  const page = await splash(t);
+  await page.evaluate(() => {
+    const inner = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = async (command, args) => {
+      if (command === 'open_control_center') throw new Error('Local settings could not be created');
+      return inner(command, args);
+    };
+  });
+
+  await page.locator('#open-recovery').click();
+  // `waitFor` requires visibility, so a message written into a hidden box
+  // fails this rather than passing on `textContent` alone.
+  await page.getByText('Local settings could not be created', { exact: false }).waitFor();
+  assert.equal(await page.locator('#errwrap').isVisible(), true);
+});
