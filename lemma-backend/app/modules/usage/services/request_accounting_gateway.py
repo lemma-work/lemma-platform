@@ -21,6 +21,10 @@ from app.modules.usage.domain.ports import UsageLimitValues, normalize_limit_val
 from app.modules.usage.infrastructure import request_accounting
 from app.modules.usage.infrastructure.price_catalog import RateCard
 from app.modules.usage.services.usage_limit_provider import build_usage_limit_port
+from app.core.log.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class PostgresRequestAccountingGateway:
@@ -92,6 +96,21 @@ class PostgresRequestAccountingGateway:
                 and (not priceable or not self.pricing.priceable)
                 and not in_flight
             ):
+                # Two very different deployments produce this one refusal, and
+                # the message cannot tell them apart: a request whose message
+                # shape has no price, or a model whose rate card is not
+                # enforceable at all. The second is a deployment that has to
+                # state its own prices -- an OpenAI-compatible gateway reselling
+                # somebody else's models resolves a price for the *vendor* and
+                # is correctly refused the right to enforce a budget with it --
+                # and nothing said so, so it read as a bug in the request.
+                logger.warning(
+                    "usage.request_accounting_gateway.request_not_priceable.degraded",
+                    model=self.pricing.model,
+                    provider=self.pricing.provider,
+                    request_shape_priceable=priceable,
+                    rate_card_enforceable=self.pricing.enforceable,
+                )
                 raise UsageLimitExceededError(
                     "This request needs supported usage reporting and a known price to run with monetary limits",
                     reason="configuration",

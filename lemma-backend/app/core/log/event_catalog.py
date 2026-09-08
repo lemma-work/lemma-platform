@@ -726,6 +726,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'usage.limit_overrides.unparseable': EventSpec('warning', frozenset({'detail'})),
     'usage.pricing.invalid_system_model_usage_metadata.failed': EventSpec('error', frozenset({'error_type'})),
     'usage.pricing.usage_pricing_not_registered_recording.observed': EventSpec('debug', frozenset()),
+    'usage.request_accounting_gateway.request_not_priceable.degraded': EventSpec('warning', frozenset({'model', 'provider', 'rate_card_enforceable', 'request_shape_priceable'})),
     'web_search.request.failed': EventSpec('debug', frozenset()),
     'worker.context.persist_failed': EventSpec('debug', frozenset({'error_type', 'job_id', 'task_name'})),
     'worker.crons.prune_failed.degraded': EventSpec('warning', frozenset({'queue'})),
