@@ -33,6 +33,13 @@ const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // app/host-pack release has not changed (for example, a test-build hotfix).
 const DAEMON_API_REVISION: u64 = 5;
 
+/// Broadcasts held for a subscriber that is not keeping up.
+///
+/// Deep enough to ride out a client busy rendering a burst of progress events,
+/// shallow enough that a client which has stopped reading is noticed rather
+/// than carried for ever. See `broadcast`.
+const SUBSCRIBER_BACKLOG: usize = 512;
+
 struct SupervisorProcess {
     child: Child,
     stdin: ChildStdin,
@@ -42,7 +49,7 @@ pub struct Daemon {
     paths: LocalPaths,
     token: String,
     state: Mutex<StateSnapshot>,
-    subscribers: Mutex<HashMap<u64, mpsc::Sender<String>>>,
+    subscribers: Mutex<HashMap<u64, mpsc::SyncSender<String>>>,
     next_subscriber: AtomicU64,
     supervisor: Mutex<Option<SupervisorProcess>>,
     supervisor_waiters: Mutex<HashMap<String, mpsc::Sender<Value>>>,
@@ -422,7 +429,12 @@ impl Daemon {
         let desktop_client = hello.get("client").and_then(Value::as_str) == Some("desktop");
 
         let subscriber_id = self.next_subscriber.fetch_add(1, Ordering::Relaxed);
-        let (sender, receiver) = mpsc::channel::<String>();
+        // Bounded. An unbounded channel meant a client that held its socket
+        // open and stopped reading accumulated every broadcast for the life of
+        // the daemon -- events reach a megabyte each -- and nothing ever
+        // noticed. The depth is generous for a client that is merely slow; one
+        // that has genuinely stopped is disconnected below rather than carried.
+        let (sender, receiver) = mpsc::sync_channel::<String>(SUBSCRIBER_BACKLOG);
         self.subscribers
             .lock()
             .expect("subscriber lock poisoned")
@@ -505,7 +517,7 @@ impl Daemon {
         Ok(())
     }
 
-    fn dispatch(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) -> bool {
+    fn dispatch(self: &Arc<Self>, request: Value, client: &mpsc::SyncSender<String>) -> bool {
         let command = request
             .get("cmd")
             .and_then(Value::as_str)
@@ -700,7 +712,7 @@ impl Daemon {
     // app, so anything that must not survive the app - an open LAN or public
     // exposure, and the Agent Host - is torn down here rather than at daemon
     // shutdown.
-    fn release_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::Sender<String>) {
+    fn release_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::SyncSender<String>) {
         self.send_direct(
             client,
             json!({
@@ -783,7 +795,7 @@ impl Daemon {
         self: &Arc<Self>,
         command: String,
         request: Value,
-        client: mpsc::Sender<String>,
+        client: mpsc::SyncSender<String>,
     ) {
         let id = request.get("id").cloned();
         if self.agent_lifecycle.begin().is_err() {
@@ -925,7 +937,7 @@ impl Daemon {
         Ok(event)
     }
 
-    fn sharing_preflight(&self, request: Value, client: &mpsc::Sender<String>) {
+    fn sharing_preflight(&self, request: Value, client: &mpsc::SyncSender<String>) {
         let id = request.get("id");
         let provider = match request
             .get("provider")
@@ -964,7 +976,7 @@ impl Daemon {
         }
     }
 
-    fn start_sharing_enable(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+    fn start_sharing_enable(self: &Arc<Self>, request: Value, client: mpsc::SyncSender<String>) {
         let id = request.get("id").cloned();
         let Some(sharing) = self.sharing.as_ref().cloned() else {
             self.send_direct(
@@ -1128,7 +1140,11 @@ impl Daemon {
         Ok(())
     }
 
-    fn start_sharing_disable(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {
+    fn start_sharing_disable(
+        self: &Arc<Self>,
+        id: Option<Value>,
+        client: mpsc::SyncSender<String>,
+    ) {
         let Some(sharing) = self.sharing.as_ref().cloned() else {
             self.send_direct(
                 &client,
@@ -1238,7 +1254,7 @@ impl Daemon {
         (state.url.clone(), state.api_url.clone())
     }
 
-    fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+    fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::SyncSender<String>) {
         let id = request.get("id").cloned();
         if self.lifecycle.begin().is_err() {
             self.send_direct(
@@ -1405,7 +1421,7 @@ impl Daemon {
     /// the runtime. Keeping that narrow is the reason this is its own command
     /// rather than a `config.apply` with the rest of the configuration echoed
     /// back by the caller.
-    fn set_ai_profile(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+    fn set_ai_profile(self: &Arc<Self>, request: Value, client: &mpsc::SyncSender<String>) {
         let id = request.get("id").cloned();
         if self.lifecycle.begin().is_err() {
             self.send_direct(
@@ -1450,7 +1466,11 @@ impl Daemon {
     /// Deliberately not guarded by `lifecycle` — it mutates
     /// nothing, and making a read-only lookup wait behind an unrelated start is
     /// how a model picker ends up feeling broken.
-    fn discover_provider_models(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+    fn discover_provider_models(
+        self: &Arc<Self>,
+        request: Value,
+        client: &mpsc::SyncSender<String>,
+    ) {
         let id = request.get("id").cloned();
         let payload = request.get("payload").cloned().unwrap_or(Value::Null);
         let daemon = Arc::clone(self);
@@ -1474,7 +1494,11 @@ impl Daemon {
         });
     }
 
-    fn start_daemon_shutdown(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {
+    fn start_daemon_shutdown(
+        self: &Arc<Self>,
+        id: Option<Value>,
+        client: mpsc::SyncSender<String>,
+    ) {
         if self.shutdown_running.swap(true, Ordering::AcqRel) {
             self.send_direct(
                 &client,
@@ -1567,7 +1591,7 @@ impl Daemon {
         self: &Arc<Self>,
         command: String,
         request: Value,
-        client: mpsc::Sender<String>,
+        client: mpsc::SyncSender<String>,
     ) {
         let id = request.get("id").cloned();
         if self.lifecycle.begin().is_err() {
@@ -1654,7 +1678,7 @@ impl Daemon {
         });
     }
 
-    fn start_runtime_prepare(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+    fn start_runtime_prepare(self: &Arc<Self>, request: Value, client: mpsc::SyncSender<String>) {
         let id = request.get("id").cloned();
         let Some(runtime) = self.managed_runtime.as_ref().cloned() else {
             self.send_direct(
@@ -1740,7 +1764,7 @@ impl Daemon {
     /// fail it is already gone. A failed restart afterwards therefore reports
     /// that plainly and leaves the full-reinstall option on screen, rather than
     /// retrying and pretending.
-    fn start_local_data_reset(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+    fn start_local_data_reset(self: &Arc<Self>, request: Value, client: mpsc::SyncSender<String>) {
         let id = request.get("id").cloned();
         if request.get("confirm").and_then(Value::as_str) != Some("reset-local-data") {
             self.send_direct(
@@ -2194,7 +2218,7 @@ impl Daemon {
         result
     }
 
-    fn send_direct(&self, client: &mpsc::Sender<String>, event: Value) {
+    fn send_direct(&self, client: &mpsc::SyncSender<String>, event: Value) {
         let _ = client.send(event.to_string());
     }
 
@@ -2366,7 +2390,14 @@ impl Daemon {
         self.subscribers
             .lock()
             .expect("subscriber lock poisoned")
-            .retain(|_, subscriber| subscriber.send(line.clone()).is_ok());
+            .retain(|_, subscriber| match subscriber.try_send(line.clone()) {
+                Ok(()) => true,
+                // Full means this client has stopped draining. Dropping it ends
+                // its reader thread and closes its socket, which is the honest
+                // outcome: it is no longer receiving anything either way, and
+                // the alternative is holding its backlog for ever.
+                Err(mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_)) => false,
+            });
     }
 
     /// One implementation, two callers: a running daemon writes through here,
@@ -2780,6 +2811,45 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 
 #[cfg(test)]
 mod tests {
+    use super::SUBSCRIBER_BACKLOG;
+    use std::sync::mpsc;
+
+    /// A client that holds its socket open and stops reading must not be
+    /// carried for ever.
+    ///
+    /// Subscribers used to get an unbounded channel, so every broadcast for the
+    /// rest of the daemon's life queued behind a reader that had gone away --
+    /// and events reach a megabyte each. Bounding it turns a slow client into a
+    /// disconnected one, which is what it already was.
+    #[test]
+    fn a_subscriber_that_stopped_reading_is_dropped_rather_than_queued_for_ever() {
+        let (sender, receiver) = mpsc::sync_channel::<String>(SUBSCRIBER_BACKLOG);
+
+        // Fill the backlog without draining, as a wedged client does.
+        for index in 0..SUBSCRIBER_BACKLOG {
+            sender
+                .try_send(format!("event {index}"))
+                .expect("the backlog should accept up to its depth");
+        }
+
+        assert!(
+            matches!(
+                sender.try_send("one too many".to_owned()),
+                Err(mpsc::TrySendError::Full(_))
+            ),
+            "past its depth the send must fail rather than grow"
+        );
+
+        // Which is what `broadcast`'s retain reads as "drop this subscriber".
+        drop(receiver);
+        assert!(
+            matches!(
+                sender.try_send("after the reader has gone".to_owned()),
+                Err(mpsc::TrySendError::Disconnected(_))
+            ),
+            "a departed reader must also be dropped, not retried"
+        );
+    }
     use std::collections::HashMap;
 
     use tempfile::tempdir;
