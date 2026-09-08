@@ -32,6 +32,10 @@ import subprocess
 import sys
 import time
 
+# ACP uses UTF-8 even when Windows gives redirected Python pipes a legacy codec.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 LOG_PATH = pathlib.Path(sys.argv[1])
 MODE = sys.argv[2] if len(sys.argv) > 2 else "mcp"
 SESSION_ID = "scripted-session"

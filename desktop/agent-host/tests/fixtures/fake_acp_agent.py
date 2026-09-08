@@ -5,6 +5,9 @@ import json
 import pathlib
 import sys
 
+# ACP uses UTF-8 even when Windows gives redirected Python pipes a legacy codec.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 
 log_path = pathlib.Path(sys.argv[1])
 
